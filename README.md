@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a realistic proof of concept showing that agent/runtime hints can reduce KV cache resume stalls in agentic LLM workloads......
+Build a realistic proof of concept showing that agent/runtime hints can reduce KV cache resume stalls in agentic LLM workloads.........
 
 The key question:
 
