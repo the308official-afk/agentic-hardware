@@ -10,6 +10,8 @@ The key question:
 
 This prototype does not require new GPU hardware. Instead, it emulates hardware-assisted behavior in software using real LLM serving, real KV tensors, real tool gaps, and real GPU memory pressure.
 
+See also: [Hardware Emulation Environment](HARDWARE_EMULATION_ENVIRONMENT.md)
+
 ## Workload Scenario
 
 Use coding-agent-style workflows inspired by SWE-bench:
