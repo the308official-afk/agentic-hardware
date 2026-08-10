@@ -15,18 +15,19 @@ The goal is not to claim that software cannot prefetch KV cache. The goal is to 
 This project will track each hardware idea in its own README:
 
 ```text
-1. KV Page Tagging
-2. Semantic Prefetch Command Interface
-3. Deadline/Priority-Aware Migration Engine
-4. Eviction Protection / Residency Hints
-5. Tier-Aware KV Memory Manager
-6. Optional KV Compression Path
-7. KV-Aware Telemetry
+1. Hint-Aware KV Metadata and Prefetch Interface
+2. Deadline/Priority-Aware Migration Engine
+3. Eviction Protection / Residency Hints
+4. Tier-Aware KV Memory Manager
+5. Optional KV Compression Path
+6. KV-Aware Telemetry
 ```
 
 Current detailed notes:
 
 - [KV Page Tagging](KV_PAGE_TAGGING.md)
+- [Semantic Prefetch Command Interface](SEMANTIC_PREFETCH_COMMAND_INTERFACE.md)
+- [Deadline/Priority-Aware Migration Engine](DEADLINE_PRIORITY_AWARE_MIGRATION_ENGINE.md)
 
 ## Required Hardware-Oriented Features
 
