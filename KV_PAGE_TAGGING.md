@@ -49,6 +49,26 @@ This measures the baseline cost of cold KV cache resume.
 
 The runtime uses ordinary software logic to prefetch KV during tool waits.
 
+This is the realistic software-only baseline on today's GPUs. The runtime can use existing generic mechanisms such as async copies, memory prefetch, offload, and reload. However, the hardware still treats the operation as ordinary memory movement.
+
+In this mode, today's hardware sees something closer to:
+
+```text
+copy this memory range
+prefetch this address range
+move this allocation closer to the GPU
+```
+
+It does not natively know:
+
+```text
+this is KV cache
+this KV belongs to Agent 42
+Agent 42 is waiting on run_tests()
+this KV is high priority
+protect this KV until the tool returns
+```
+
 Example policy:
 
 ```python
@@ -56,7 +76,7 @@ if session.state == "tool_wait":
     prefetch(session.kv_blocks)
 ```
 
-This mode is intentionally simple. It can copy KV blocks back to GPU memory, but it does not use rich session priority, deadlines, protection, or bandwidth-aware scheduling.
+This mode is intentionally simple. Software can copy KV blocks back to GPU memory, but the hardware does not use rich session priority, deadlines, protection, or bandwidth-aware scheduling.
 
 Example:
 
@@ -122,6 +142,12 @@ This answers:
 > Would semantic, hardware-style support make KV prefetch more reliable and efficient than generic software prefetch?
 
 ## Concrete Difference Between Mode 2 and Mode 3
+
+Today's hardware provides generic address/block-level memory movement.
+
+Mode 2 uses those existing hardware mechanisms from software.
+
+Mode 3 emulates future hardware support where the memory system can act on KV/session semantics.
 
 Mode 2 says:
 
