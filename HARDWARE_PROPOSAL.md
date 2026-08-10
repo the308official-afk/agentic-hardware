@@ -30,7 +30,7 @@ Current detailed notes:
 
 ## Hardware-Oriented Features
 
-### 1. Hint-Aware KV Metadata and Prefetch Interface
+### 1. Hint-Aware KV Metadata and Prefetch Interface (High Value Proposition)
 
 Problem statement:
 
@@ -74,7 +74,7 @@ Why it matters:
 
 This lets the runtime request "make this agent's KV ready" instead of only "copy these bytes."
 
-### 2. Deadline/Priority-Aware Migration Engine
+### 2. Deadline/Priority-Aware Migration Engine (High Value Proposition)
 
 Problem statement:
 
@@ -120,7 +120,7 @@ Why it matters:
 
 This moves urgent KV first and prevents prefetch from blindly stealing bandwidth from active decode.
 
-### 3. Eviction Protection / Residency Hints
+### 3. Eviction Protection / Residency Hints (High Value Proposition)
 
 Problem statement:
 
@@ -246,7 +246,7 @@ Why it matters:
 
 Compression reduces memory capacity pressure and transfer bandwidth for cold KV. This is useful for scaling, but not required for the first prototype.
 
-### 6. KV-Aware Telemetry
+### 6. KV-Aware Telemetry (High Value Proposition)
 
 Problem statement:
 
