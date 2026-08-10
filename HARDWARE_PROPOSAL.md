@@ -26,149 +26,275 @@ This project will track each hardware idea in its own README:
 Current detailed notes:
 
 - [KV Page Tagging](KV_PAGE_TAGGING.md)
-- [Semantic Prefetch Command Interface](SEMANTIC_PREFETCH_COMMAND_INTERFACE.md)
 - [Deadline/Priority-Aware Migration Engine](DEADLINE_PRIORITY_AWARE_MIGRATION_ENGINE.md)
 
-## Required Hardware-Oriented Features
+## Hardware-Oriented Features
 
-### 1. KV Page Tagging
+### 1. Hint-Aware KV Metadata and Prefetch Interface
 
-Add hardware-visible metadata tags to KV cache pages or page-table entries.
+Problem statement:
 
-Example fields:
+Today's GPUs mostly see addresses and memory ranges. They do not know that a memory block is KV cache for an agent session that is likely to resume soon.
+
+Proposed feature:
 
 ```text
-session_id
-priority
-deadline
-reuse_confidence
-protection_window
-tier
+KV/session tags
++ semantic PREFETCH_KV command
++ priority, deadline, confidence, and protection fields
+```
+
+Without this feature:
+
+```text
+0 ms: Agent 42 starts run_tests()
+20 ms: Agent 42 KV is offloaded
+200 ms: software wants to prefetch Agent 42
+210 ms: system issues generic prefetch for address range X
+300 ms: memory system treats X like ordinary pages
+350 ms: another copy request arrives first in the queue
+500 ms: run_tests() returns
+500-620 ms: Agent 42 waits for KV reload
+620 ms: first token starts
+```
+
+With this feature:
+
+```text
+0 ms: Agent 42 starts run_tests()
+20 ms: runtime tags Agent 42 KV as tool_wait, high priority
+200 ms: runtime submits PREFETCH_KV for Agent 42
+210 ms: memory system sees deadline = 500 ms, priority = high
+300 ms: Agent 42 KV is prioritized for HBM
+500 ms: run_tests() returns
+505 ms: first token starts
 ```
 
 Why it matters:
 
-Today, the GPU mostly sees memory addresses. With tags, the memory system can distinguish:
+This lets the runtime request "make this agent's KV ready" instead of only "copy these bytes."
+
+### 2. Deadline/Priority-Aware Migration Engine
+
+Problem statement:
+
+Many KV prefetches may happen at the same time. A generic copy engine may move a low-priority KV block before an urgent one.
+
+Proposed feature:
 
 ```text
-old inactive KV
-high-priority agent KV
-KV likely needed after a tool returns
-KV that should not be evicted yet
+priority-aware copy queues
++ deadline-aware scheduling
++ preemptible or throttleable migration
++ progress tracking
 ```
 
-### 2. Semantic Prefetch Command Interface
-
-Add a GPU command queue or API for semantic KV prefetch requests.
-
-Example:
+Without this feature:
 
 ```text
-PREFETCH_KV(session=42, pages=[...], deadline=500ms, priority=high)
+0 ms: Agent C starts long_build()
+20 ms: Agent C low-priority KV copy begins
+50 ms: Agent A starts run_tests()
+80 ms: Agent A becomes likely to resume in 300 ms
+90 ms: Agent A prefetch request is queued behind Agent C
+300 ms: run_tests() returns
+300-500 ms: Agent A waits for Agent C copy to finish and KV reload
+500 ms: first token starts
 ```
 
-Why it matters:
-
-This is stronger than a generic address-range prefetch because the memory system can schedule by urgency, priority, and expected reuse.
-
-### 3. Deadline/Priority-Aware Migration Engine
-
-Add or extend a copy/DMA engine so it can move KV cache using deadlines and priorities.
-
-It should support:
+With this feature:
 
 ```text
-prioritize urgent KV pages
-throttle around active decode
-pause and resume migrations
-track partial completion
-```
-
-Why it matters:
-
-KV prefetch should not blindly steal bandwidth from live decode. The migration engine should move useful KV early while limiting interference with active requests.
-
-### 4. Eviction Protection / Residency Hints
-
-Add page states or residency hints for prefetched KV.
-
-Example states:
-
-```text
-prefetched
-protected
-evictable
-cold
+0 ms: Agent C starts long_build()
+20 ms: Agent C low-priority KV copy begins
+50 ms: Agent A starts run_tests()
+80 ms: Agent A high-priority prefetch request arrives
+90 ms: migration engine pauses or throttles Agent C copy
+100 ms: migration engine starts Agent A KV copy
+260 ms: Agent A KV is ready in HBM
+300 ms: run_tests() returns
+305 ms: first token starts
 ```
 
 Why it matters:
 
-This prevents a common failure mode:
+This moves urgent KV first and prevents prefetch from blindly stealing bandwidth from active decode.
+
+### 3. Eviction Protection / Residency Hints
+
+Problem statement:
+
+Prefetch can be correct but still wasted if the KV is evicted before the agent resumes.
+
+Proposed feature:
 
 ```text
-prefetch was correct
-KV arrived in GPU memory
-HBM pressure increased
-KV was evicted before reuse
-tool returned
-agent stalled anyway
+prefetched/protected/evictable/cold states
++ temporary protection windows
++ priority-aware eviction choices
 ```
 
-### 5. Tier-Aware KV Memory Manager
-
-Support KV movement across memory tiers:
+Without this feature:
 
 ```text
-HBM
-peer GPU memory
-CXL memory
-CPU DRAM
+0 ms: Agent 42 starts run_tests()
+20 ms: Agent 42 KV is offloaded
+200 ms: prefetch starts
+300 ms: Agent 42 KV arrives in HBM
+350 ms: HBM pressure increases
+360 ms: Agent 42 KV is evicted
+500 ms: run_tests() returns
+500-620 ms: KV must be reloaded again
+620 ms: first token starts
 ```
 
-The runtime decides which sessions matter. Hardware helps enforce migration, locality, and residency efficiently.
-
-Example use case:
+With this feature:
 
 ```text
-Turn A ran on GPU 0.
-The session's KV is still on GPU 0.
-Turn B should preferably route to GPU 0, or prefetch KV to the target GPU before resume.
-```
-
-### 6. Optional KV Compression Path
-
-Add compression/decompression support for cold or warm KV pages, especially when moving KV to CXL memory or CPU DRAM.
-
-Why it matters:
-
-KV cache is large. Compression can reduce capacity and bandwidth pressure, but it should be framed as an extension rather than a minimum requirement.
-
-### 7. KV-Aware Telemetry
-
-Expose counters that show whether prefetching helped or hurt.
-
-Example counters:
-
-```text
-prefetch hit rate
-late prefetches
-wasted prefetches
-evicted-before-use pages
-decode bandwidth interference
-time-to-first-token improvement
+0 ms: Agent 42 starts run_tests()
+20 ms: Agent 42 KV is offloaded
+200 ms: prefetch starts with protect_after_prefetch = 400 ms
+300 ms: Agent 42 KV arrives in HBM and is protected
+350 ms: HBM pressure increases
+360 ms: lower-priority unprotected KV is evicted instead
+500 ms: run_tests() returns
+505 ms: first token starts
 ```
 
 Why it matters:
 
-Without telemetry, the runtime cannot tune prefetch policy or prove that hint-guided prefetch is improving agent performance.
+This prevents the failure mode: correct prefetch, immediate eviction, no latency benefit.
+
+### 4. Tier-Aware KV Memory Manager
+
+Problem statement:
+
+Not all paused agents should be treated the same. Warm KV should stay closer to HBM than cold KV, especially when tool gaps differ.
+
+Proposed feature:
+
+```text
+HBM/CXL/CPU/peer-GPU placement policy
++ hardware-supported migration across tiers
++ locality and transfer-cost visibility
+```
+
+Without this feature:
+
+```text
+0 ms: Agent 42 starts repo_search()
+20 ms: HBM pressure increases
+30 ms: Agent 42 KV is moved from HBM to CPU DRAM
+180 ms: repo_search() returns
+180-320 ms: KV reloads from CPU DRAM to HBM
+320 ms: first token starts
+```
+
+With this feature:
+
+```text
+0 ms: Agent 42 starts repo_search()
+20 ms: HBM pressure increases
+30 ms: runtime marks Agent 42 KV as warm, expected reuse soon
+40 ms: Agent 42 KV is moved to CXL or kept partially in HBM
+180 ms: repo_search() returns
+180-220 ms: small reload or promotion completes
+220 ms: first token starts
+```
+
+Why it matters:
+
+This keeps soon-to-be-used KV closer to the GPU while moving long-idle KV to cheaper tiers.
+
+### 5. Optional KV Compression Path
+
+Problem statement:
+
+KV cache is large. Cold sessions can consume too much capacity and bandwidth even when they are unlikely to resume soon.
+
+Proposed feature:
+
+```text
+compress cold/warm KV on offload
++ store compressed KV in CXL or CPU DRAM
++ decompress near HBM before reuse
+```
+
+Without this feature:
+
+```text
+0 ms: Agent 99 starts long_build()
+20 ms: Agent 99 KV is offloaded to CPU DRAM
+20-120 ms: full 4 GB KV is copied out
+10,000 ms: long_build() returns
+10,000-10,120 ms: full 4 GB KV is copied back
+10,120 ms: first token starts
+```
+
+With this feature:
+
+```text
+0 ms: Agent 99 starts long_build()
+20 ms: Agent 99 KV is classified cold
+30-90 ms: KV is compressed from 4 GB to 2 GB and offloaded
+10,000 ms: long_build() returns
+10,000-10,070 ms: compressed KV is copied back and decompressed
+10,070 ms: first token starts
+```
+
+Why it matters:
+
+Compression reduces memory capacity pressure and transfer bandwidth for cold KV. This is useful for scaling, but not required for the first prototype.
+
+### 6. KV-Aware Telemetry
+
+Problem statement:
+
+Without KV-aware counters, the runtime cannot tell whether prefetch helped, arrived late, was evicted, or slowed active decode.
+
+Proposed feature:
+
+```text
+prefetch hit/miss counters
++ late prefetch counters
++ evicted-before-use counters
++ bandwidth interference counters
++ stall-avoided estimates
+```
+
+Without this feature:
+
+```text
+0 ms: Agent 42 starts run_tests()
+200 ms: prefetch starts
+300 ms: KV arrives in HBM
+500 ms: run_tests() returns
+620 ms: first token starts
+700 ms: runtime only sees end-to-end delay
+```
+
+With this feature:
+
+```text
+0 ms: Agent 42 starts run_tests()
+200 ms: prefetch starts
+300 ms: KV arrives in HBM
+360 ms: telemetry records protected residency
+500 ms: run_tests() returns
+505 ms: first token starts
+510 ms: telemetry reports prefetch_hit = true, stall_avoided = 115 ms
+```
+
+Why it matters:
+
+Telemetry makes the system tunable and gives evidence that hint-guided prefetch improves agent resume latency.
 
 ## Minimal Required Set
 
 The strongest minimum hardware-assisted design is:
 
 ```text
-KV tags
-+ semantic prefetch queue
+hint-aware KV metadata and prefetch interface
 + priority-aware migration
 + eviction protection
 + telemetry
