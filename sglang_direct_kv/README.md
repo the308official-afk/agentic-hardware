@@ -492,6 +492,54 @@ Mode 2: generic software prefetch
 Mode 3: hint-aware direct KV prefetch/protection
 ```
 
+Mode setup:
+
+| Mode | Extra action | When it happens | Simple meaning |
+| --- | --- | --- | --- |
+| `no_prefetch` | No extra target warming request | Never | Let SGLang handle KV only when the real resume request arrives. |
+| `generic_prefetch` | Send extra target warming requests | Early, before pressure | Warm target KV/prefix early, but it may be evicted again before resume. |
+| `hint_aware` | Send extra high-priority target warming requests | Late, after pressure and close to resume | Warm target KV/prefix closer to when the agent actually needs it. |
+
+Mode timelines:
+
+```text
+Mode 1: no_prefetch
+0 ms: target_0 and target_1 run
+500 ms: target agents wait on tool
+600 ms: filler requests create KV pressure
+900 ms: target agents resume
+900+ ms: measure resume TTFT
+```
+
+```text
+Mode 2: generic_prefetch
+0 ms: target_0 and target_1 run
+500 ms: target agents wait on tool
+520 ms: generic prefetch warms target KV/prefix early
+600 ms: filler requests create KV pressure
+900 ms: target agents resume
+900+ ms: measure resume TTFT
+```
+
+```text
+Mode 3: hint_aware
+0 ms: target_0 and target_1 run
+500 ms: target agents wait on tool
+501 ms: hint says target agents are high priority and likely to resume soon
+600 ms: filler requests create KV pressure
+850 ms: hint-aware prefetch warms target KV/prefix close to resume
+900 ms: target agents resume
+900+ ms: measure resume TTFT
+```
+
+Important clarification:
+
+```text
+Milestone 5 does not yet call an internal SGLang API like "load exact KV block IDs into GPU memory."
+It emulates prefetch by sending extra real SGLang requests that touch the target agent prefix.
+This tests the policy timing question: is warming close to resume better than warming early or doing nothing?
+```
+
 Run it:
 
 ```bash
