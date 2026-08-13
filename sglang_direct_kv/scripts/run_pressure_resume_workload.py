@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -38,6 +39,25 @@ def write_trace_event(event: dict[str, Any]) -> None:
     event.setdefault("pid", os.getpid())
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def prompt_hash(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+
+
+def session_id_from_label(label: str) -> str:
+    parts = label.split("_")
+    if len(parts) >= 2 and parts[0] in {"target", "filler"}:
+        return f"{parts[0]}_{parts[1]}"
+    return label
+
+
+def request_role_from_label(label: str) -> str:
+    if label.startswith("target_"):
+        return "target"
+    if label.startswith("filler_"):
+        return "filler"
+    return "unknown"
 
 
 def make_prompt(label: str, target_tokens: int) -> str:
@@ -124,6 +144,12 @@ async def main_async() -> None:
         help="When hint_aware mode sends target warm/prefetch requests.",
     )
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
+    parser.add_argument(
+        "--prefetch-action",
+        choices=("request_warm", "direct_probe"),
+        default="request_warm",
+        help="request_warm sends a normal SGLang warm request; direct_probe only records the intended direct KV load.",
+    )
     parser.add_argument("--out", default="artifacts/results/pressure_resume_metrics.jsonl")
     args = parser.parse_args()
     args.hint_prefetch_timing = canonical_timing(args.hint_prefetch_timing)
@@ -146,25 +172,38 @@ async def main_async() -> None:
     async with httpx.AsyncClient(timeout=None) as client:
         async def run_labeled(label: str, prompt: str, phase: str) -> dict[str, Any]:
             async with sem:
+                session_id = session_id_from_label(label)
+                role = request_role_from_label(label)
+                prefix_hash = prompt_hash(prompt)
                 write_trace_event(
                     {
                         "event": "agent.request.start",
                         "label": label,
+                        "session_id": session_id,
+                        "request_role": role,
                         "phase": phase,
+                        "prompt_hash": prefix_hash,
                         "prompt_chars": len(prompt),
+                        "prompt_tokens_target": args.prompt_tokens,
                     }
                 )
                 row = await chat_once(client, args.base_url, args.model, prompt, args.max_tokens, label)
                 row["phase"] = phase
                 row["mode"] = args.mode
                 row["hint_prefetch_timing"] = args.hint_prefetch_timing
+                row["prefetch_action"] = args.prefetch_action
+                row["session_id"] = session_id
+                row["prompt_hash"] = prefix_hash
                 row["filler_sessions"] = args.filler_sessions
                 row["prompt_tokens"] = args.prompt_tokens
                 write_trace_event(
                     {
                         "event": "agent.request.end",
                         "label": label,
+                        "session_id": session_id,
+                        "request_role": role,
                         "phase": phase,
+                        "prompt_hash": prefix_hash,
                         "ttft_ms": row["ttft_ms"],
                         "total_latency_ms": row["total_latency_ms"],
                     }
@@ -175,14 +214,44 @@ async def main_async() -> None:
 
         async def prefetch_targets(event_prefix: str, timing: str, phase: str, label_suffix: str) -> None:
             for idx, prompt in enumerate(target_prompts):
+                session_id = f"target_{idx}"
+                prefix_hash = prompt_hash(prompt)
                 write_trace_event(
                     {
                         "event": f"{event_prefix}_start",
-                        "session_id": f"target_{idx}",
+                        "session_id": session_id,
                         "priority": "high",
                         "timing": timing,
+                        "prefetch_action": args.prefetch_action,
+                        "prompt_hash": prefix_hash,
+                        "prompt_chars": len(prompt),
                     }
                 )
+                if args.prefetch_action == "direct_probe" and event_prefix == "agent.hint_prefetch":
+                    write_trace_event(
+                        {
+                            "event": "agent.direct_kv_prefetch_probe",
+                            "session_id": session_id,
+                            "priority": "high",
+                            "timing": timing,
+                            "prompt_hash": prefix_hash,
+                            "prompt_chars": len(prompt),
+                            "probe_only": True,
+                            "intended_action": "direct_host_to_gpu_kv_load",
+                        }
+                    )
+                    write_trace_event(
+                        {
+                            "event": f"{event_prefix}_end",
+                            "session_id": session_id,
+                            "priority": "high",
+                            "timing": timing,
+                            "prefetch_action": args.prefetch_action,
+                            "prompt_hash": prefix_hash,
+                            "probe_only": True,
+                        }
+                    )
+                    continue
                 row = await chat_once(
                     client,
                     args.base_url,
@@ -194,15 +263,20 @@ async def main_async() -> None:
                 row["phase"] = phase
                 row["mode"] = args.mode
                 row["hint_prefetch_timing"] = args.hint_prefetch_timing
+                row["prefetch_action"] = args.prefetch_action
+                row["session_id"] = session_id
+                row["prompt_hash"] = prefix_hash
                 row["filler_sessions"] = args.filler_sessions
                 row["prompt_tokens"] = args.prompt_tokens
                 rows.append(row)
                 write_trace_event(
                     {
                         "event": f"{event_prefix}_end",
-                        "session_id": f"target_{idx}",
+                        "session_id": session_id,
                         "priority": "high",
                         "timing": timing,
+                        "prefetch_action": args.prefetch_action,
+                        "prompt_hash": prefix_hash,
                         "ttft_ms": row["ttft_ms"],
                         "total_latency_ms": row["total_latency_ms"],
                     }
@@ -222,17 +296,30 @@ async def main_async() -> None:
                 "event": "agent.mode_start",
                 "mode": args.mode,
                 "hint_prefetch_timing": args.hint_prefetch_timing,
+                "prefetch_action": args.prefetch_action,
                 "filler_sessions": args.filler_sessions,
                 "prompt_tokens": args.prompt_tokens,
             }
         )
         for idx, prompt in enumerate(target_prompts):
+            prefix_hash = prompt_hash(prompt)
             write_trace_event(
                 {
                     "event": "agent.session_warm",
                     "session_id": f"target_{idx}",
                     "priority": "high",
+                    "prompt_hash": prefix_hash,
                     "prompt_chars": len(prompt),
+                }
+            )
+            write_trace_event(
+                {
+                    "event": "agent.session_prefix_map",
+                    "session_id": f"target_{idx}",
+                    "request_role": "target",
+                    "prompt_hash": prefix_hash,
+                    "prompt_chars": len(prompt),
+                    "prompt_tokens_target": args.prompt_tokens,
                 }
             )
             await run_labeled(f"target_{idx}_warm", prompt, "target_warm")
@@ -249,6 +336,8 @@ async def main_async() -> None:
                         "expected_resume_ms": args.tool_wait_ms,
                         "reuse_confidence": 0.9,
                         "prefetch_timing": args.hint_prefetch_timing,
+                        "prefetch_action": args.prefetch_action,
+                        "prompt_hash": prompt_hash(target_prompts[idx]),
                     }
                 )
             if args.hint_prefetch_timing == "very_early_before_pressure":
@@ -321,6 +410,7 @@ async def main_async() -> None:
                     "session_id": f"target_{idx}",
                     "priority": "high",
                     "hint_expected_resume_ms": args.tool_wait_ms,
+                    "prompt_hash": prompt_hash(prompt),
                 }
             )
             await run_labeled(f"target_{idx}_resume", prompt + resume_suffix, "target_resume")

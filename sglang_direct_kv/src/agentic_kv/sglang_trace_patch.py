@@ -41,6 +41,13 @@ def _tensor_summary(value: Any) -> dict[str, Any]:
     return summary
 
 
+def _safe_len(value: Any) -> int | None:
+    try:
+        return len(value)
+    except Exception:
+        return None
+
+
 def _safe_summary(value: Any) -> Any:
     if value is None:
         return None
@@ -55,6 +62,75 @@ def _safe_summary(value: Any) -> Any:
     if hasattr(value, "shape") and hasattr(value, "numel"):
         return _tensor_summary(value)
     return {"type": type(value).__name__, "repr": repr(value)[:200]}
+
+
+def _interesting_attr_summary(obj: Any) -> dict[str, Any]:
+    """Collect small, stable-looking cache metadata without walking large graphs."""
+
+    attrs = (
+        "size",
+        "page_size",
+        "dtype",
+        "device",
+        "mem_layout",
+        "hicache_size",
+        "write_policy",
+        "disable",
+        "enable_hierarchical_cache",
+    )
+    nested_attrs = (
+        "device_pool",
+        "host_pool",
+        "token_to_kv_pool",
+        "token_to_kv_pool_host",
+        "req_to_token_pool",
+        "tree_cache",
+        "hicache_controller",
+    )
+    out: dict[str, Any] = {
+        "object_id": hex(id(obj)),
+        "object_type": type(obj).__name__,
+    }
+    for attr in attrs:
+        if hasattr(obj, attr):
+            try:
+                out[attr] = _safe_summary(getattr(obj, attr))
+            except Exception:
+                pass
+    for attr in nested_attrs:
+        if not hasattr(obj, attr):
+            continue
+        try:
+            value = getattr(obj, attr)
+        except Exception:
+            continue
+        nested: dict[str, Any] = {
+            "type": type(value).__name__,
+            "object_id": hex(id(value)),
+        }
+        value_len = _safe_len(value)
+        if value_len is not None:
+            nested["len"] = value_len
+        for nested_attr in ("size", "page_size", "dtype", "device"):
+            if hasattr(value, nested_attr):
+                try:
+                    nested[nested_attr] = _safe_summary(getattr(value, nested_attr))
+                except Exception:
+                    pass
+        out[attr] = nested
+    return out
+
+
+def _result_metadata(result: Any) -> dict[str, Any]:
+    if result is None:
+        return {"result_type": "None"}
+    metadata = {"result_type": type(result).__name__}
+    result_len = _safe_len(result)
+    if result_len is not None:
+        metadata["result_len"] = result_len
+    if isinstance(result, tuple):
+        metadata["tuple_item_types"] = [type(item).__name__ for item in result[:8]]
+    return metadata
 
 
 def _write_event(event: dict[str, Any]) -> None:
@@ -78,6 +154,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             "event": f"{event_name}.start",
             "class": cls.__name__,
             "method": method_name,
+            "self": _interesting_attr_summary(self),
             "args": [_safe_summary(arg) for arg in args],
             "kwargs": {key: _safe_summary(value) for key, value in kwargs.items()},
         }
@@ -103,6 +180,8 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                 "class": cls.__name__,
                 "method": method_name,
                 "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
+                "self": _interesting_attr_summary(self),
+                "result_metadata": _result_metadata(result),
                 "result": _safe_summary(result),
             }
         )

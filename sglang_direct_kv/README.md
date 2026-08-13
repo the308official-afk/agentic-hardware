@@ -879,7 +879,118 @@ At least one region where benefit shrinks, showing the limit of software-only em
 Enough evidence to pick the best next hardware feature to emulate more directly.
 ```
 
-### Milestone 7: Manager Demo Results
+### Milestone 7: Direct KV Movement Hooks
+
+Status: implemented and smoke-tested on EC2 as a safe direct-hook probe.
+
+What it is:
+
+```text
+Move beyond request-level warming and start wiring toward direct SGLang KV movement control.
+This milestone does not yet force a real host-to-GPU KV load.
+It creates the safe instrumentation and session mapping needed before calling internal SGLang movement functions.
+```
+
+Why we need it:
+
+```text
+Milestone 6 showed that near-resume policy helps.
+But it still used request-level warming.
+The hardware proposal is really about direct movement: "load this session's KV before resume."
+Before we can call SGLang internals safely, we need to map agent sessions to prefix/cache evidence and see the relevant cache objects.
+```
+
+What changed:
+
+```text
+The SGLang trace hook now records compact object metadata for HiCache/Radix calls.
+The workload now emits session_id, prompt_hash, request_role, and prompt_tokens metadata.
+The workload supports --prefetch-action direct_probe.
+direct_probe records where a direct host-to-GPU KV load should happen, but does not call the unsafe internal load yet.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Small smoke version:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone7_smoke \
+FILLER_SESSIONS=2 \
+PROMPT_TOKENS=256 \
+bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Smoke result:
+
+```text
+Trace events: 142
+agent.session_prefix_map events: 2
+agent.direct_kv_prefetch_probe events: 2
+cache event types observed: 10
+session_cache_map.json and session_cache_map.md were generated
+```
+
+Output files:
+
+```text
+artifacts/results/milestone7/direct_hooks_trace.jsonl
+artifacts/results/milestone7/direct_hooks_metrics.jsonl
+artifacts/results/milestone7/direct_hooks_server.log
+artifacts/results/milestone7/session_cache_map.json
+artifacts/results/milestone7/session_cache_map.md
+```
+
+Smoke output files use:
+
+```text
+artifacts/results/milestone7_smoke/
+```
+
+Important events to observe:
+
+```text
+agent.session_prefix_map
+agent.hint_submitted
+agent.direct_kv_prefetch_probe
+agent.resume_start
+hicache.load.start / hicache.load.end
+hicache.write.start / hicache.write.end
+hicache.evict_device.start / hicache.evict_device.end
+hiradix.match_prefix.start / hiradix.match_prefix.end
+```
+
+Success criteria for this milestone:
+
+```text
+Trace includes target session_id and prompt_hash.
+Trace includes direct KV prefetch probe events.
+Trace includes richer SGLang cache object metadata.
+session_cache_map.md summarizes target sessions, prompt hashes, direct probe points, cache event counts, and cache objects.
+```
+
+What this does not prove yet:
+
+```text
+It does not yet directly move exact KV blocks.
+It does not yet replace request-level warming with a real HiCacheController.load call.
+That is the next substep after we inspect the cache object metadata and method arguments.
+```
+
+Next substep:
+
+```text
+Use session_cache_map.md plus the raw trace to identify the exact SGLang object and arguments needed for a controlled HiCache load.
+Then add a guarded direct_load mode and compare it against request_warm near_resume.
+```
+
+### Milestone 8: Manager Demo Results
 
 Status: planned.
 
@@ -948,10 +1059,12 @@ sglang_direct_kv/
     run_milestone4_pressure_trace.sh
     run_milestone5_compare_modes.sh
     run_milestone6_design_space.sh
+    run_milestone7_direct_hooks.sh
     run_pressure_resume_workload.py
     summarize_mode_comparison.py
     summarize_design_space.py
     plot_design_space.py
+    build_session_cache_map.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py
