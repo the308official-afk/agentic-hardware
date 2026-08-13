@@ -55,10 +55,22 @@ def summarize_case(metrics_path: Path) -> dict[str, Any] | None:
     trace = read_jsonl(trace_path)
     event_counts = Counter(str(event.get("event")) for event in trace)
 
+    mode = str(first.get("mode", "unknown"))
+    hint_timing = canonical_timing(str(first.get("hint_prefetch_timing", "unknown")))
+    prefetch_action = str(first.get("prefetch_action", "request_warm"))
+    if mode == "no_prefetch":
+        strategy = "no_prefetch"
+    elif mode == "hint_aware":
+        strategy = f"{prefetch_action}_{hint_timing}"
+    else:
+        strategy = f"{mode}_{prefetch_action}_{hint_timing}"
+
     return {
         "case": metrics_path.name.removesuffix("_metrics.jsonl"),
-        "mode": first.get("mode", "unknown"),
-        "hint_timing": canonical_timing(str(first.get("hint_prefetch_timing", "unknown"))),
+        "mode": mode,
+        "hint_timing": hint_timing,
+        "prefetch_action": prefetch_action,
+        "strategy": strategy,
         "filler_sessions": int(first.get("filler_sessions", 0)),
         "prompt_tokens": int(first.get("prompt_tokens", 0)),
         "warm_count": count_phase(metrics, "target_warm"),
@@ -71,6 +83,10 @@ def summarize_case(metrics_path: Path) -> dict[str, Any] | None:
         "hicache_load": event_counts.get("hicache.load.end", 0),
         "hicache_evict_device": event_counts.get("hicache.evict_device.end", 0),
         "hiradix_evict": event_counts.get("hiradix.evict.end", 0),
+        "hiradix_init_load_back": event_counts.get("hiradix.init_load_back.end", 0),
+        "hiradix_load_back": event_counts.get("hiradix.load_back.end", 0),
+        "direct_load_attempts": event_counts.get("agent.direct_kv_load_attempt", 0),
+        "direct_load_misses": event_counts.get("agent.direct_kv_load_miss", 0),
         "agent_hint_prefetch": event_counts.get("agent.hint_prefetch_end", 0),
     }
 
@@ -104,11 +120,21 @@ def main() -> None:
             else 0.0
         )
 
-    rows.sort(key=lambda row: (row["prompt_tokens"], row["filler_sessions"], row["mode"], row["hint_timing"]))
+    rows.sort(
+        key=lambda row: (
+            row["prompt_tokens"],
+            row["filler_sessions"],
+            row["mode"],
+            row["prefetch_action"],
+            row["hint_timing"],
+        )
+    )
 
     fields = [
         "mode",
         "hint_timing",
+        "prefetch_action",
+        "strategy",
         "filler_sessions",
         "prompt_tokens",
         "warm_ttft_avg_ms",
@@ -118,6 +144,10 @@ def main() -> None:
         "benefit_vs_no_prefetch_pct",
         "hicache_load",
         "hicache_evict_device",
+        "hiradix_init_load_back",
+        "hiradix_load_back",
+        "direct_load_attempts",
+        "direct_load_misses",
     ]
     widths = {field: max(len(field), *(len(str(row[field])) for row in rows)) for field in fields}
     print(" | ".join(field.ljust(widths[field]) for field in fields))

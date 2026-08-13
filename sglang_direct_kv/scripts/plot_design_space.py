@@ -26,6 +26,18 @@ COLORS = {
     "late_after_pressure": "#dc2626",
     "near_resume": "#dc2626",
     "no_prefetch": "#111827",
+    "request_warm_pre_pressure": "#16a34a",
+    "request_warm_near_resume": "#dc2626",
+    "direct_load_pre_pressure": "#2563eb",
+    "direct_load_near_resume": "#7c3aed",
+}
+
+STRATEGY_LABELS = {
+    "no_prefetch": "no prefetch",
+    "request_warm_pre_pressure": "request warm, pre-pressure",
+    "request_warm_near_resume": "request warm, near-resume",
+    "direct_load_pre_pressure": "direct load, pre-pressure",
+    "direct_load_near_resume": "direct load, near-resume",
 }
 
 TIMING_ALIASES = {
@@ -52,9 +64,19 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
             "prefetch_ttft_avg_ms",
             "hicache_load",
             "hicache_evict_device",
+            "hiradix_init_load_back",
+            "hiradix_load_back",
+            "direct_load_attempts",
+            "direct_load_misses",
         ):
-            row[key] = float(row[key])
+            row[key] = float(row.get(key, 0.0) or 0.0)
         row["hint_timing"] = canonical_timing(str(row["hint_timing"]))
+        row.setdefault("prefetch_action", "request_warm")
+        if "strategy" not in row or not row["strategy"]:
+            if row["mode"] == "no_prefetch":
+                row["strategy"] = "no_prefetch"
+            else:
+                row["strategy"] = f"{row['prefetch_action']}_{row['hint_timing']}"
     return rows
 
 
@@ -99,17 +121,21 @@ def render_chart(
     plot_h = height - top - bottom
 
     fillers = sorted({row["filler_sessions"] for row in rows})
-    y_values = [row[y_key] for row in rows if include_baseline or row["mode"] == "hint_aware"]
+    y_values = [row[y_key] for row in rows if include_baseline or row["mode"] != "no_prefetch"]
     y_min, y_max = nice_range(y_values)
     x_min, x_max = min(fillers), max(fillers)
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    multiple_actions = len({row.get("prefetch_action") for row in rows if row["mode"] != "no_prefetch"}) > 1
     for row in rows:
         if row["mode"] == "no_prefetch":
             if include_baseline:
                 grouped["no_prefetch"].append(row)
             continue
-        grouped[str(row["hint_timing"])].append(row)
+        if multiple_actions:
+            grouped[str(row["strategy"])].append(row)
+        else:
+            grouped[str(row["hint_timing"])].append(row)
 
     lines: list[str] = []
     lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
@@ -144,7 +170,10 @@ def render_chart(
             for row in series
         ]
         color = COLORS.get(name, "#6b7280")
-        label = TIMING_LABELS.get(name, "no prefetch" if name == "no_prefetch" else name)
+        label = STRATEGY_LABELS.get(
+            name,
+            TIMING_LABELS.get(name, "no prefetch" if name == "no_prefetch" else name),
+        )
         if len(points) >= 2:
             lines.append(f'<polyline points="{polyline(points)}" fill="none" stroke="{color}" stroke-width="3"/>')
         for x, y in points:
@@ -163,6 +192,20 @@ def row_for(rows: list[dict[str, Any]], *, mode: str, filler: float, timing: str
         if row["mode"] != mode or row["filler_sessions"] != filler:
             continue
         if timing is not None and row["hint_timing"] != timing:
+            continue
+        return row
+    return None
+
+
+def strategy_row(rows: list[dict[str, Any]], *, filler: float, action: str, timing: str) -> dict[str, Any] | None:
+    for row in rows:
+        if row["mode"] == "no_prefetch":
+            continue
+        if row["filler_sessions"] != filler:
+            continue
+        if row.get("prefetch_action") != action:
+            continue
+        if row["hint_timing"] != timing:
             continue
         return row
     return None
@@ -197,6 +240,100 @@ def render_table(headers: list[str], rows: list[list[str]]) -> str:
 def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
     fillers = sorted({row["filler_sessions"] for row in rows})
     table_rows: list[list[str]] = []
+    multiple_actions = len({row.get("prefetch_action") for row in rows if row["mode"] != "no_prefetch"}) > 1
+
+    if multiple_actions and section == "Benefit vs Cache Pressure":
+        for filler in fillers:
+            baseline = row_for(rows, mode="no_prefetch", filler=filler)
+            req_pre = strategy_row(rows, filler=filler, action="request_warm", timing="pre_pressure")
+            direct_pre = strategy_row(rows, filler=filler, action="direct_load", timing="pre_pressure")
+            req_near = strategy_row(rows, filler=filler, action="request_warm", timing="near_resume")
+            direct_near = strategy_row(rows, filler=filler, action="direct_load", timing="near_resume")
+            table_rows.append(
+                [
+                    str(int(filler)),
+                    fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(req_pre["benefit_vs_no_prefetch_ms"] if req_pre else None),
+                    fmt_ms(direct_pre["benefit_vs_no_prefetch_ms"] if direct_pre else None),
+                    fmt_ms(req_near["benefit_vs_no_prefetch_ms"] if req_near else None),
+                    fmt_ms(direct_near["benefit_vs_no_prefetch_ms"] if direct_near else None),
+                    fmt_pct(direct_near["benefit_vs_no_prefetch_pct"] if direct_near else None),
+                ]
+            )
+        return render_table(
+            [
+                "fillers",
+                "first TTFT",
+                "resume base",
+                "req pre benefit",
+                "direct pre benefit",
+                "req near benefit",
+                "direct near benefit",
+                "direct near %",
+            ],
+            table_rows,
+        )
+
+    if multiple_actions and section == "Resume TTFT vs Cache Pressure":
+        for filler in fillers:
+            baseline = row_for(rows, mode="no_prefetch", filler=filler)
+            req_pre = strategy_row(rows, filler=filler, action="request_warm", timing="pre_pressure")
+            direct_pre = strategy_row(rows, filler=filler, action="direct_load", timing="pre_pressure")
+            req_near = strategy_row(rows, filler=filler, action="request_warm", timing="near_resume")
+            direct_near = strategy_row(rows, filler=filler, action="direct_load", timing="near_resume")
+            table_rows.append(
+                [
+                    str(int(filler)),
+                    fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(req_pre["resume_ttft_avg_ms"] if req_pre else None),
+                    fmt_ms(direct_pre["resume_ttft_avg_ms"] if direct_pre else None),
+                    fmt_ms(req_near["resume_ttft_avg_ms"] if req_near else None),
+                    fmt_ms(direct_near["resume_ttft_avg_ms"] if direct_near else None),
+                ]
+            )
+        return render_table(
+            [
+                "fillers",
+                "first TTFT",
+                "resume base",
+                "req pre resume",
+                "direct pre resume",
+                "req near resume",
+                "direct near resume",
+            ],
+            table_rows,
+        )
+
+    if multiple_actions and section == "Prefetch Cost vs Cache Pressure":
+        for filler in fillers:
+            baseline = row_for(rows, mode="no_prefetch", filler=filler)
+            req_pre = strategy_row(rows, filler=filler, action="request_warm", timing="pre_pressure")
+            direct_pre = strategy_row(rows, filler=filler, action="direct_load", timing="pre_pressure")
+            req_near = strategy_row(rows, filler=filler, action="request_warm", timing="near_resume")
+            direct_near = strategy_row(rows, filler=filler, action="direct_load", timing="near_resume")
+            table_rows.append(
+                [
+                    str(int(filler)),
+                    fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(req_pre["prefetch_ttft_avg_ms"] if req_pre else None),
+                    fmt_ms(direct_pre["prefetch_ttft_avg_ms"] if direct_pre else None),
+                    fmt_ms(req_near["prefetch_ttft_avg_ms"] if req_near else None),
+                    fmt_ms(direct_near["prefetch_ttft_avg_ms"] if direct_near else None),
+                ]
+            )
+        return render_table(
+            [
+                "fillers",
+                "first TTFT",
+                "req pre cost",
+                "direct pre cost",
+                "req near cost",
+                "direct near cost",
+            ],
+            table_rows,
+        )
 
     if section == "Benefit vs Cache Pressure":
         for filler in fillers:
@@ -271,7 +408,7 @@ def render_dashboard(charts: list[tuple[str, Path, list[dict[str, Any]]]], out_p
         "<head>",
         '  <meta charset="utf-8">',
         '  <meta name="viewport" content="width=device-width, initial-scale=1">',
-        "  <title>Milestone 6 Design-Space Charts</title>",
+        "  <title>Design-Space Charts</title>",
         "  <style>",
         "    body { font-family: Arial, sans-serif; margin: 32px; color: #111827; background: #f9fafb; }",
         "    h1 { margin: 0 0 8px; font-size: 28px; }",
@@ -293,8 +430,8 @@ def render_dashboard(charts: list[tuple[str, Path, list[dict[str, Any]]]], out_p
         "  </style>",
         "</head>",
         "<body>",
-        "  <h1>Milestone 6 Design-Space Charts</h1>",
-        "  <p>Each chart uses cache pressure on the x-axis. Lines represent prefetch timing choices. Separate panels represent prompt sizes. Positive benefit means hint-aware prefetch reduced resume TTFT compared with no_prefetch.</p>",
+        "  <h1>Design-Space Charts</h1>",
+        "  <p>Each chart uses cache pressure on the x-axis. Lines represent timing/action choices. Separate panels represent prompt sizes. Positive benefit means the prefetch path reduced resume TTFT compared with no_prefetch.</p>",
     ]
 
     for section in ("Benefit vs Cache Pressure", "Resume TTFT vs Cache Pressure", "Prefetch Cost vs Cache Pressure"):
@@ -329,7 +466,7 @@ def render_dashboard(charts: list[tuple[str, Path, list[dict[str, Any]]]], out_p
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create SVG charts for the Milestone 6 design-space sweep.")
+    parser = argparse.ArgumentParser(description="Create SVG charts for a design-space sweep.")
     parser.add_argument("--root", default="artifacts/results/milestone6_design_space")
     args = parser.parse_args()
 
@@ -346,7 +483,7 @@ def main() -> None:
             (
                 "Benefit vs Cache Pressure",
                 render_chart(
-                    title=f"Hint-Aware Benefit vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
+                    title=f"Benefit vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
                     rows=prompt_rows,
                     y_key="benefit_vs_no_prefetch_ms",
                     y_label="Benefit vs no_prefetch (ms)",

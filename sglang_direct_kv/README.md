@@ -1226,7 +1226,169 @@ With direct_load, target resume TTFT was about 49 ms.
 The expensive host-to-GPU KV reload moved from resume time into the tool-gap trigger request.
 ```
 
-### Milestone 8: Manager Demo Results
+### Milestone 8: Direct Load Design-Space Sweep
+
+Status: implemented as the next sweep.
+
+What it is:
+
+```text
+Repeat the Milestone 6 design-space sweep, but add the direct SGLang load-back path.
+This compares three cases:
+1. no_prefetch
+2. request_warm
+3. direct_load
+```
+
+Why we need it:
+
+```text
+Milestone 6 showed that request-level warming can help.
+Milestone 7D showed that direct_load can move real SGLang load_back work into the tool gap.
+Milestone 8 asks the bigger question:
+Across cache pressure, prompt size, and timing, how much better is direct_load than no_prefetch and request_warm?
+```
+
+Default design planes:
+
+| Plane | Knob | Default Values | Simple Meaning |
+| --- | --- | --- | --- |
+| Prefetch timing | `TIMINGS` | `pre_pressure near_resume` | Whether the prefetch happens before pressure or close to resume. |
+| Cache pressure | `FILLER_LIST` | `12 24 96 192` | How many unrelated sessions compete for KV space. |
+| Request size | `PROMPT_TOKEN_LIST` | `1024 1536` | How large target and filler prompts are. |
+| Prefetch action | `PREFETCH_ACTIONS` | `request_warm direct_load` | Whether we use normal request warming or the direct SGLang load-back trigger. |
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone8_direct_load_design_space \
+FILLER_LIST="12 24 96 192" \
+PROMPT_TOKEN_LIST="1024 1536" \
+TIMINGS="pre_pressure near_resume" \
+PREFETCH_ACTIONS="request_warm direct_load" \
+bash scripts/run_milestone8_direct_load_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+What the default sweep runs:
+
+```text
+2 request sizes x 4 pressure levels x 5 cases
+
+For each request size and pressure level:
+1 no_prefetch baseline
+2 request_warm timing choices
+2 direct_load timing choices
+```
+
+That is 40 total SGLang server runs by default.
+Each design point starts a fresh SGLang server, runs one case, writes metrics/traces, then stops the server.
+This avoids cache state leaking from one design point into the next.
+
+Progress shown in the terminal:
+
+```text
+Total cases: 40
+==== Milestone 8 case [1/40]: no_prefetch_request_warm_near_resume_f12_p1024 ====
+...
+==== Completed Milestone 8 case [1/40]: no_prefetch_request_warm_near_resume_f12_p1024 ====
+```
+
+Output files:
+
+```text
+artifacts/results/milestone8_direct_load_design_space/*_metrics.jsonl
+artifacts/results/milestone8_direct_load_design_space/*_trace.jsonl
+artifacts/results/milestone8_direct_load_design_space/*_server.log
+artifacts/results/milestone8_direct_load_design_space/summary.json
+artifacts/results/milestone8_direct_load_design_space/summary.csv
+artifacts/results/milestone8_direct_load_design_space/charts/*.svg
+artifacts/results/milestone8_direct_load_design_space/charts/all_charts.html
+```
+
+Charts produced:
+
+```text
+benefit_vs_pressure_p1024.svg
+benefit_vs_pressure_p1536.svg
+resume_ttft_vs_pressure_p1024.svg
+resume_ttft_vs_pressure_p1536.svg
+prefetch_cost_vs_pressure_p1024.svg
+prefetch_cost_vs_pressure_p1536.svg
+all_charts.html
+```
+
+Chart meaning:
+
+```text
+x-axis = cache pressure, measured by filler sessions
+y-axis = latency metric
+lines = request_warm/direct_load timing choices
+separate charts = prompt size
+tables show first TTFT, no_prefetch resume TTFT, request_warm resume TTFT, direct_load resume TTFT, and benefit values
+```
+
+Important events to observe:
+
+```text
+agent.direct_kv_load_attempt
+agent.direct_kv_load_request.end
+hiradix.init_load_back
+hiradix.load_back
+hicache.load
+agent.resume_start
+target resume TTFT
+```
+
+Expected story:
+
+```text
+no_prefetch pays the host-to-GPU KV load cost at resume time.
+request_warm may help, but it warms through a normal generation request.
+direct_load should move real SGLang load_back work into the tool gap.
+If direct_load works well, resume TTFT should be lower and hicache.load calls should appear during the prefetch phase instead of the resume phase.
+```
+
+How to run a small smoke sweep:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone8_smoke \
+FILLER_LIST="12" \
+PROMPT_TOKEN_LIST="1024" \
+TIMINGS="near_resume" \
+PREFETCH_ACTIONS="request_warm direct_load" \
+bash scripts/run_milestone8_direct_load_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Smoke result observed on EC2:
+
+```text
+filler_sessions: 12
+prompt_tokens: 1024
+timing: near_resume
+
+no_prefetch resume TTFT: 52.389 ms
+request_warm resume TTFT: 43.744 ms
+direct_load resume TTFT: 42.790 ms
+
+request_warm benefit: 8.645 ms, 16.50%
+direct_load benefit: 9.599 ms, 18.32%
+
+direct_load attempts: 2
+direct_load misses: 0
+hiradix.init_load_back events in direct_load case: 3
+hiradix.load_back events in direct_load case: 3
+```
+
+Smoke dashboard:
+
+```text
+artifacts/results/milestone8_smoke/charts/all_charts.html
+```
+
+### Milestone 9: Manager Demo Results
 
 Status: planned.
 
@@ -1296,6 +1458,7 @@ sglang_direct_kv/
     run_milestone5_compare_modes.sh
     run_milestone6_design_space.sh
     run_milestone7_direct_hooks.sh
+    run_milestone8_direct_load_design_space.sh
     run_pressure_resume_workload.py
     summarize_mode_comparison.py
     summarize_design_space.py
