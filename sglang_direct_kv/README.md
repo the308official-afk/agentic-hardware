@@ -34,22 +34,49 @@ Mode 2: generic software prefetch
 Mode 3: hint-aware direct KV prefetch/protection
 ```
 
-## First Milestone
+## Milestones
 
-The first milestone is not performance yet. It is mapping SGLang internals on the GPU EC2 machine.
+### Milestone 0: Testbed Scaffold - Completed
 
-We need to answer:
+Status: completed locally and uploaded to EC2.
+
+What this proved:
+
+```text
+The project has a clean direct-SGLang testbed structure.
+The EC2 upload/download/SSH scripts work.
+The Python package installs in editable mode.
+```
+
+Key files:
+
+```text
+scripts/setup_ec2.sh
+scripts/run_sglang_server.sh
+scripts/run_sglang_hicache_server.sh
+scripts/probe_sglang_kv_paths.py
+scripts/extract_sglang_kv_targets.py
+scripts/run_workload.py
+src/agentic_kv/instrumentation.py
+```
+
+### Milestone 1: SGLang Internals Map - Completed
+
+Status: completed on EC2.
+
+This milestone was not about performance. It was about finding where SGLang keeps and moves KV cache data.
+
+What we answered:
 
 ```text
 Where are KV blocks allocated?
 Where are prefix/radix cache entries stored?
 Where does eviction happen?
 Is HiCache or CPU offload available in this install?
-Can we associate KV blocks with a request/session?
-Can we force, promote, prefetch, or protect selected KV blocks?
+Which functions look useful for direct KV instrumentation?
 ```
 
-Run:
+Commands used:
 
 ```bash
 python scripts/probe_sglang_kv_paths.py --out artifacts/sglang_probe.json
@@ -58,19 +85,172 @@ python scripts/extract_sglang_kv_targets.py \
   --out-md artifacts/sglang_kv_targets.md
 ```
 
-The probe creates a JSON map of SGLang modules/classes/functions related to:
+Result:
 
 ```text
-kv
-cache
-radix
-prefix
-hicache
-offload
-evict
-memory
-page
-block
+SGLang package scanned successfully.
+Matched files: 633
+Total line hits: 19707
+Artifacts written under artifacts/.
+```
+
+Important SGLang targets found:
+
+```text
+HiCacheController.load()
+HiCacheController.write()
+HiCacheController.evict_device()
+HiCacheController.evict_host()
+HiRadixCache
+RadixCache
+KVCache
+MHATokenToKVPool
+MHATokenToKVPoolHost
+scheduler._prefetch_kvcache()
+```
+
+### Milestone 2: Real SGLang + HiCache Smoke Test - Completed
+
+Status: completed on EC2.
+
+This milestone proved that the testbed can run a real model, on a real GPU, with SGLang hierarchical KV cache enabled.
+
+What we proved:
+
+```text
+SGLang runs on the EC2 GPU.
+Qwen/Qwen2.5-1.5B-Instruct loads successfully.
+Hierarchical KV cache can be enabled.
+SGLang allocates real device KV cache.
+SGLang allocates real host HiCache memory.
+A real OpenAI-compatible chat request completes.
+```
+
+Successful smoke result:
+
+```text
+model: Qwen/Qwen2.5-1.5B-Instruct
+response: OK
+hierarchical cache: enabled
+hicache_size: 14 GB
+attention backend: triton
+prefill attention backend: triton
+decode attention backend: triton
+```
+
+Important fixes made during this milestone:
+
+```text
+Use Python 3.11 instead of Python 3.9.
+Install Python development headers.
+Install minimal CUDA 12.8 JIT dependencies.
+Auto-export CUDA_HOME when nvcc is available.
+Disable CUDA graph and overlap scheduling for smoke tests.
+Force Triton attention for prefill and decode.
+Lower HiCache host pool from 16 GB to 14 GB on g5.2xlarge.
+Prune old Docker state to free disk space.
+```
+
+### Milestone 3: Log Real KV Movement - Next
+
+Status: next milestone.
+
+Goal:
+
+```text
+Instrument SGLang's real HiCache path and log KV movement events.
+```
+
+Events we want to capture:
+
+```text
+request/session observed
+KV allocated
+KV written from GPU HBM to host memory
+KV loaded from host memory back to GPU HBM
+KV evicted from GPU
+KV evicted from host
+tokens/pages affected
+time spent in each movement
+```
+
+Why this matters:
+
+```text
+Before we claim prefetch benefits, we need proof that we can observe the real KV movement path.
+```
+
+### Milestone 4: Add Direct Hint Hooks
+
+Status: planned.
+
+Goal:
+
+```text
+Connect agent/session hints to SGLang KV movement decisions.
+```
+
+Example hint:
+
+```text
+Agent 42 entered tool_wait.
+Expected return: 500 ms.
+Priority: high.
+Reuse confidence: high.
+```
+
+Target behavior:
+
+```text
+Mark this session as likely to resume.
+Prefer loading its KV before the resume request arrives.
+Avoid evicting it immediately after loading.
+Record whether the hint helped.
+```
+
+### Milestone 5: Compare Three Modes
+
+Status: planned.
+
+Goal:
+
+```text
+Run the same agentic workload under three modes.
+```
+
+Modes:
+
+```text
+Mode 1: no prefetch
+Mode 2: generic software prefetch
+Mode 3: hint-aware direct KV prefetch/protection
+```
+
+Main question:
+
+```text
+Does hint-aware KV movement reduce post-tool resume latency compared with no prefetch and generic prefetch?
+```
+
+### Milestone 6: Manager Demo Results
+
+Status: planned.
+
+Goal:
+
+```text
+Produce a small, credible result table and timeline traces.
+```
+
+Outputs:
+
+```text
+TTFT after tool return
+P50/P95/P99 resume latency
+KV load/write/eviction counts
+prefetch hit/late/wasted rate
+bandwidth or decode interference signal if available
+short timeline examples for Agent 42-style workflows
 ```
 
 ## Directory Layout
@@ -185,7 +365,7 @@ This enables SGLang's host/device KV cache path:
 --disable-overlap-schedule
 ```
 
-The launcher uses the Triton attention backend for prefill and decode, and disables CUDA graph plus overlap scheduling by default. Some SGLang/FlashInfer/TVM paths still JIT compile kernels and require `CUDA_HOME`/`nvcc`, so `setup_ec2.sh` installs CUDA Toolkit 12.8 on Amazon Linux 2023 by default. Later performance runs can enable CUDA graphs and overlap scheduling again.
+The launcher uses the Triton attention backend for prefill and decode, and disables CUDA graph plus overlap scheduling by default. Some SGLang/FlashInfer/TVM paths still JIT compile kernels and require `CUDA_HOME`/`nvcc`, so `setup_ec2.sh` installs the minimal CUDA 12.8 JIT packages on Amazon Linux 2023 by default. Later performance runs can enable CUDA graphs and overlap scheduling again.
 
 For `g5.2xlarge`, the launcher defaults to:
 
