@@ -682,7 +682,148 @@ This is a promising signal, not yet a final conclusion, because there were only 
 The next step is to run larger repetitions and package the results for the manager demo.
 ```
 
-### Milestone 6: Manager Demo Results
+### Milestone 6: Design-Space Sweep
+
+Status: implemented and smoke-tested on EC2.
+
+What it is:
+
+```text
+Run a grid of experiments that varies:
+1. when hint-aware prefetch happens
+2. how much cache pressure exists before tool return
+3. how large each request is
+```
+
+Why we need it:
+
+```text
+One comparison run is only one point.
+The design-space sweep tells us when hint-aware prefetch helps, when it does not help, and when software emulation is not enough.
+This helps estimate the minimum and maximum benefit we might get from real hardware/runtime support.
+```
+
+Three planes:
+
+| Plane | Knob | Default Values | Simple Meaning |
+| --- | --- | --- | --- |
+| Prefetch timing | `TIMINGS` | `early_before_pressure middle_during_pressure late_after_pressure` | When target KV/prefix warming happens during the tool gap. |
+| Cache pressure | `FILLER_LIST` | `18 36 48` | How many unrelated sessions compete for KV space. |
+| Request size | `PROMPT_TOKEN_LIST` | `1024 1536` | How large each target/filler prompt is. |
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Tiny smoke test used during implementation:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone6_smoke \
+FILLER_LIST="2" \
+PROMPT_TOKEN_LIST="256" \
+TIMINGS="late_after_pressure" \
+bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Smoke result:
+
+```text
+The sweep runner completed.
+The summarizer wrote summary.json and summary.csv.
+With only 2 fillers, cache pressure was low, so the benefit was intentionally small.
+```
+
+What the default sweep runs:
+
+```text
+2 request sizes x 3 pressure levels x 4 cases
+
+For each request size and pressure level:
+1 no_prefetch baseline
+3 hint_aware timing choices
+```
+
+That is 24 total SGLang server runs by default.
+
+Output files:
+
+```text
+artifacts/results/milestone6_design_space/*_metrics.jsonl
+artifacts/results/milestone6_design_space/*_trace.jsonl
+artifacts/results/milestone6_design_space/*_server.log
+artifacts/results/milestone6_design_space/summary.json
+artifacts/results/milestone6_design_space/summary.csv
+```
+
+Summary columns:
+
+```text
+warm_ttft_avg_ms = first target request TTFT
+prefetch_ttft_avg_ms = cost of the hint-aware warm request
+resume_ttft_avg_ms = target resume TTFT after tool wait and pressure
+benefit_vs_no_prefetch_ms = no_prefetch resume TTFT - hint_aware resume TTFT
+benefit_vs_no_prefetch_pct = percentage improvement over no_prefetch
+hicache_load = host-to-GPU KV load events observed
+hicache_evict_device = GPU-side KV eviction events observed
+```
+
+How to run a smaller sweep:
+
+```bash
+FILLER_LIST="18 36" \
+PROMPT_TOKEN_LIST="1024" \
+TIMINGS="early_before_pressure late_after_pressure" \
+bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+How to run a harsher sweep:
+
+```bash
+MAX_TOTAL_TOKENS=3072 \
+FILLER_LIST="36 48 60" \
+PROMPT_TOKEN_LIST="1536 2048" \
+bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Important events to observe:
+
+```text
+agent.hint_submitted
+agent.hint_prefetch_start
+agent.hint_prefetch_end
+agent.pressure_start
+agent.resume_start
+hicache.load
+hicache.write
+hicache.evict_device
+hiradix.evict
+```
+
+Expected story:
+
+```text
+Low pressure: hint-aware prefetch may not help much because SGLang already keeps enough KV hot.
+Medium/high pressure: timing starts to matter.
+Early prefetch can be wasted because filler requests arrive after it.
+Late prefetch should usually be stronger because it happens closer to target resume.
+Very high pressure may expose the limit of software emulation because we still cannot protect exact KV blocks in hardware.
+```
+
+Success criteria:
+
+```text
+A table showing benefit across timing, pressure, and request-size settings.
+At least one region where hint-aware timing clearly improves resume TTFT.
+At least one region where benefit shrinks, showing the limit of software-only emulation.
+Enough evidence to pick the best next hardware feature to emulate more directly.
+```
+
+### Milestone 7: Manager Demo Results
 
 Status: planned.
 
@@ -750,8 +891,10 @@ sglang_direct_kv/
     smoke_hicache_request.sh
     run_milestone4_pressure_trace.sh
     run_milestone5_compare_modes.sh
+    run_milestone6_design_space.sh
     run_pressure_resume_workload.py
     summarize_mode_comparison.py
+    summarize_design_space.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py

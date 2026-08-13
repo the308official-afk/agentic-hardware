@@ -100,6 +100,12 @@ async def main_async() -> None:
         choices=("no_prefetch", "generic_prefetch", "hint_aware"),
         default="no_prefetch",
     )
+    parser.add_argument(
+        "--hint-prefetch-timing",
+        choices=("early_before_pressure", "middle_during_pressure", "late_after_pressure"),
+        default="late_after_pressure",
+        help="When hint_aware mode sends target warm/prefetch requests.",
+    )
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
     parser.add_argument("--out", default="artifacts/results/pressure_resume_metrics.jsonl")
     args = parser.parse_args()
@@ -133,6 +139,9 @@ async def main_async() -> None:
                 row = await chat_once(client, args.base_url, args.model, prompt, args.max_tokens, label)
                 row["phase"] = phase
                 row["mode"] = args.mode
+                row["hint_prefetch_timing"] = args.hint_prefetch_timing
+                row["filler_sessions"] = args.filler_sessions
+                row["prompt_tokens"] = args.prompt_tokens
                 write_trace_event(
                     {
                         "event": "agent.request.end",
@@ -146,8 +155,59 @@ async def main_async() -> None:
                 rows.append(row)
                 return row
 
+        async def prefetch_targets(event_prefix: str, timing: str, phase: str, label_suffix: str) -> None:
+            for idx, prompt in enumerate(target_prompts):
+                write_trace_event(
+                    {
+                        "event": f"{event_prefix}_start",
+                        "session_id": f"target_{idx}",
+                        "priority": "high",
+                        "timing": timing,
+                    }
+                )
+                row = await chat_once(
+                    client,
+                    args.base_url,
+                    args.model,
+                    prompt,
+                    args.prefetch_max_tokens,
+                    f"target_{idx}_{label_suffix}",
+                )
+                row["phase"] = phase
+                row["mode"] = args.mode
+                row["hint_prefetch_timing"] = args.hint_prefetch_timing
+                row["filler_sessions"] = args.filler_sessions
+                row["prompt_tokens"] = args.prompt_tokens
+                rows.append(row)
+                write_trace_event(
+                    {
+                        "event": f"{event_prefix}_end",
+                        "session_id": f"target_{idx}",
+                        "priority": "high",
+                        "timing": timing,
+                        "ttft_ms": row["ttft_ms"],
+                        "total_latency_ms": row["total_latency_ms"],
+                    }
+                )
+
+        async def run_fillers(prompts: list[str], start_idx: int) -> None:
+            await asyncio.gather(
+                *(
+                    run_labeled(f"filler_{start_idx + idx}", prompt, "pressure_filler")
+                    for idx, prompt in enumerate(prompts)
+                )
+            )
+
         print("Phase 1: warm target sessions", flush=True)
-        write_trace_event({"event": "agent.mode_start", "mode": args.mode})
+        write_trace_event(
+            {
+                "event": "agent.mode_start",
+                "mode": args.mode,
+                "hint_prefetch_timing": args.hint_prefetch_timing,
+                "filler_sessions": args.filler_sessions,
+                "prompt_tokens": args.prompt_tokens,
+            }
+        )
         for idx, prompt in enumerate(target_prompts):
             write_trace_event(
                 {
@@ -170,35 +230,28 @@ async def main_async() -> None:
                         "priority": "high",
                         "expected_resume_ms": args.tool_wait_ms,
                         "reuse_confidence": 0.9,
+                        "prefetch_timing": args.hint_prefetch_timing,
                     }
                 )
         await asyncio.sleep(args.tool_wait_ms / 1000)
 
         if args.mode == "generic_prefetch":
             print("Generic prefetch: warm targets early before pressure", flush=True)
-            for idx, prompt in enumerate(target_prompts):
-                write_trace_event(
-                    {
-                        "event": "agent.generic_prefetch_start",
-                        "session_id": f"target_{idx}",
-                        "timing": "early_before_pressure",
-                    }
-                )
-                await chat_once(
-                    client,
-                    args.base_url,
-                    args.model,
-                    prompt,
-                    args.prefetch_max_tokens,
-                    f"target_{idx}_generic_prefetch",
-                )
-                write_trace_event(
-                    {
-                        "event": "agent.generic_prefetch_end",
-                        "session_id": f"target_{idx}",
-                        "timing": "early_before_pressure",
-                    }
-                )
+            await prefetch_targets(
+                "agent.generic_prefetch",
+                "early_before_pressure",
+                "generic_prefetch",
+                "generic_prefetch",
+            )
+
+        if args.mode == "hint_aware" and args.hint_prefetch_timing == "early_before_pressure":
+            print("Hint-aware prefetch: warm high-priority targets before pressure", flush=True)
+            await prefetch_targets(
+                "agent.hint_prefetch",
+                "early_before_pressure",
+                "hint_prefetch",
+                "hint_prefetch",
+            )
 
         print("Phase 2: create KV pressure with filler sessions", flush=True)
         write_trace_event(
@@ -208,40 +261,28 @@ async def main_async() -> None:
                 "prompt_tokens_target": args.prompt_tokens,
             }
         )
-        await asyncio.gather(
-            *(
-                run_labeled(f"filler_{idx}", prompt, "pressure_filler")
-                for idx, prompt in enumerate(filler_prompts)
+        if args.mode == "hint_aware" and args.hint_prefetch_timing == "middle_during_pressure":
+            midpoint = max(1, len(filler_prompts) // 2)
+            await run_fillers(filler_prompts[:midpoint], 0)
+            print("Hint-aware prefetch: warm high-priority targets during pressure", flush=True)
+            await prefetch_targets(
+                "agent.hint_prefetch",
+                "middle_during_pressure",
+                "hint_prefetch",
+                "hint_prefetch",
             )
-        )
+            await run_fillers(filler_prompts[midpoint:], midpoint)
+        else:
+            await run_fillers(filler_prompts, 0)
 
-        if args.mode == "hint_aware":
+        if args.mode == "hint_aware" and args.hint_prefetch_timing == "late_after_pressure":
             print("Hint-aware prefetch: warm high-priority targets close to resume", flush=True)
-            for idx, prompt in enumerate(target_prompts):
-                write_trace_event(
-                    {
-                        "event": "agent.hint_prefetch_start",
-                        "session_id": f"target_{idx}",
-                        "priority": "high",
-                        "timing": "after_pressure_before_resume",
-                    }
-                )
-                await chat_once(
-                    client,
-                    args.base_url,
-                    args.model,
-                    prompt,
-                    args.prefetch_max_tokens,
-                    f"target_{idx}_hint_prefetch",
-                )
-                write_trace_event(
-                    {
-                        "event": "agent.hint_prefetch_end",
-                        "session_id": f"target_{idx}",
-                        "priority": "high",
-                        "timing": "after_pressure_before_resume",
-                    }
-                )
+            await prefetch_targets(
+                "agent.hint_prefetch",
+                "late_after_pressure",
+                "hint_prefetch",
+                "hint_prefetch",
+            )
 
         print("Phase 3: resume target sessions", flush=True)
         resume_suffix = "\nTool result: pytest failed again. " + make_prompt(
