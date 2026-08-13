@@ -40,6 +40,20 @@ Mode 3: hint-aware direct KV prefetch/protection
 
 Status: completed locally and uploaded to EC2.
 
+What it is:
+
+```text
+Create the project folder, scripts, Python package, configs, and EC2 sync workflow.
+```
+
+Why we need it:
+
+```text
+Before touching SGLang internals, we need a repeatable place to run experiments.
+This prevents the project from becoming a set of one-off shell commands.
+It also lets us upload the same code to EC2, run it, download artifacts, and debug cleanly.
+```
+
 What this proved:
 
 ```text
@@ -64,7 +78,19 @@ src/agentic_kv/instrumentation.py
 
 Status: completed on EC2.
 
-This milestone was not about performance. It was about finding where SGLang keeps and moves KV cache data.
+What it is:
+
+```text
+Scan the installed SGLang package and identify the real KV/cache/HiCache/radix/offload functions.
+```
+
+Why we need it:
+
+```text
+We do not want to guess where KV movement happens.
+To instrument SGLang directly, we first need to know which classes allocate KV, cache prefixes, evict entries, and move pages between GPU and host memory.
+This milestone gives us a map before we edit or wrap anything.
+```
 
 What we answered:
 
@@ -116,7 +142,18 @@ scheduler._prefetch_kvcache()
 
 Status: completed on EC2.
 
-This milestone proved that the testbed can run a real model, on a real GPU, with SGLang hierarchical KV cache enabled.
+What it is:
+
+```text
+Run a real SGLang server on the EC2 GPU with hierarchical KV cache enabled, then send a real chat request.
+```
+
+Why we need it:
+
+```text
+The proposal is only convincing if the testbed uses a real model, real GPU memory, and SGLang's real HiCache path.
+This milestone proves the environment works before we start measuring KV movement or hint policies.
+```
 
 Run it:
 
@@ -175,10 +212,18 @@ Prune old Docker state to free disk space.
 
 Status: completed on EC2 for the initial HiCache write path.
 
-Goal:
+What it is:
 
 ```text
 Instrument SGLang's real HiCache path and log KV movement events.
+```
+
+Why we need it:
+
+```text
+The hardware proposal depends on knowing when KV is written, loaded, evicted, or reused.
+Before we compare prefetch policies, we need evidence that our testbed can observe real SGLang KV/cache behavior.
+This turns SGLang from a black box into something we can measure.
 ```
 
 Run it:
@@ -239,12 +284,6 @@ HiRadixCache.evict()
 HiRadixCache.ready_to_load_host_cache()
 ```
 
-Why this matters:
-
-```text
-Before we claim prefetch benefits, we need proof that we can observe the real KV movement path.
-```
-
 Result from the first traced EC2 run:
 
 ```text
@@ -270,10 +309,18 @@ The next step is to create a pressure/resume workload that forces load and evict
 
 Status: planned.
 
-Goal:
+What it is:
 
 ```text
 Create a pressure/resume workload that triggers host-to-GPU loads and evictions, then connect agent/session hints to SGLang KV movement decisions.
+```
+
+Why we need it:
+
+```text
+The current smoke test proves we can observe HiCache writes, but it is too small to force host-to-GPU reloads or eviction pressure.
+Agentic KV prefetch matters most when a session's KV has moved away from fast GPU memory and must be brought back before the agent resumes.
+This milestone creates that realistic failure mode, then adds hints such as session_id, priority, deadline, and reuse confidence.
 ```
 
 Example hint:
@@ -294,14 +341,30 @@ Avoid evicting it immediately after loading.
 Record whether the hint helped.
 ```
 
+Success criteria:
+
+```text
+The workload produces real load and/or eviction trace events.
+The trace can associate those events with a request/session or prefix-cache path.
+The hint layer can mark a session as likely to resume soon.
+```
+
 ### Milestone 5: Compare Three Modes
 
 Status: planned.
 
-Goal:
+What it is:
 
 ```text
 Run the same agentic workload under three modes.
+```
+
+Why we need it:
+
+```text
+A single optimized run does not prove the idea.
+We need a fair comparison against no prefetch and generic software behavior.
+This is where we show whether hint-aware KV movement helps beyond what SGLang already does by default.
 ```
 
 Modes:
@@ -318,14 +381,30 @@ Main question:
 Does hint-aware KV movement reduce post-tool resume latency compared with no prefetch and generic prefetch?
 ```
 
+Success criteria:
+
+```text
+Same model, same trace, same EC2 machine, same request mix.
+Mode 3 improves tool-return-to-first-token latency or tail latency.
+Mode 3 avoids obvious regressions such as too much wasted prefetch or decode slowdown.
+```
+
 ### Milestone 6: Manager Demo Results
 
 Status: planned.
 
-Goal:
+What it is:
 
 ```text
 Produce a small, credible result table and timeline traces.
+```
+
+Why we need it:
+
+```text
+The goal is not only to build a clever prototype.
+We need evidence that a manager can read quickly and trust: real LLM, real KV behavior, clear baseline, clear benefit, clear limitations.
+This milestone packages the experiment into a concise story for why hardware/runtime co-design may be worth exploring.
 ```
 
 Outputs:
@@ -337,6 +416,14 @@ KV load/write/eviction counts
 prefetch hit/late/wasted rate
 bandwidth or decode interference signal if available
 short timeline examples for Agent 42-style workflows
+```
+
+Success criteria:
+
+```text
+A short table comparing Mode 1, Mode 2, and Mode 3.
+A timeline showing a coding-agent tool gap and KV movement around that gap.
+A clear statement of what is proven, what is only emulated, and what hardware support would make cheaper or more predictable.
 ```
 
 ## Directory Layout
