@@ -295,6 +295,8 @@ def install_sglang_kv_trace() -> None:
             "cache_finished_req": "hiradix.cache_finished_req",
             "cache_unfinished_req": "hiradix.cache_unfinished_req",
             "evict": "hiradix.evict",
+            "load_back": "hiradix.load_back",
+            "init_load_back": "hiradix.init_load_back",
             "ready_to_load_host_cache": "hiradix.ready_to_load_host_cache",
         },
     )

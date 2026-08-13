@@ -907,8 +907,8 @@ The SGLang trace hook now records compact object metadata for HiCache/Radix call
 The workload now emits session_id, prompt_hash, request_role, and prompt_tokens metadata.
 The workload supports --prefetch-action direct_probe.
 direct_probe records where a direct host-to-GPU KV load should happen, but does not call the unsafe internal load yet.
-The workload also supports --prefetch-action direct_load as a guarded placeholder.
-direct_load records an attempted direct load and a miss reason until target host_indices are mapped.
+The workload also supports --prefetch-action direct_load.
+direct_load sends a marked trigger request during the tool gap and lets SGLang's own init_load_back/load_back path reload the full host-backed KV chain.
 ```
 
 Run it:
@@ -969,7 +969,7 @@ Successful calls returned cuda int64 device_indices tensors with the same length
 Some calls returned None when the device allocation was not available
 ```
 
-Guarded direct-load placeholder:
+Direct load-back trigger:
 
 ```bash
 RESULT_ROOT=artifacts/results/milestone7_direct_load_probe \
@@ -979,15 +979,13 @@ PROMPT_TOKENS=1024 \
 bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
-This records `agent.direct_kv_load_attempt` and `agent.direct_kv_load_miss`.
-It intentionally does not call `HiCacheController.load()` until we can map the target session to exact `host_indices`.
-
-Direct-load smoke result:
+This records `agent.direct_kv_load_attempt` and sends a marked trigger request.
+If the target KV has been evicted to host memory, SGLang should naturally call:
 
 ```text
-agent.direct_kv_load_attempt events: 2
-agent.direct_kv_load_miss events: 2
-miss reason: host_indices_not_mapped_yet
+HiRadixCache.init_load_back(...)
+HiRadixCache.load_back(...)
+HiCacheController.load(...)
 ```
 
 Output files:
@@ -1039,16 +1037,16 @@ session_host_indices_map.md maps request windows to match_prefix and hicache.loa
 What this does not prove yet:
 
 ```text
-It does not yet directly move exact KV blocks.
-It does not yet replace request-level warming with a real HiCacheController.load call.
-That is the next substep after we inspect the cache object metadata and method arguments.
+direct_probe does not directly move exact KV blocks.
+direct_load now exercises SGLang's real load_back path, but it is still triggered through a lightweight request.
+It is not yet a clean out-of-band admin command like PREFETCH_KV(session=42).
 ```
 
 Next substep:
 
 ```text
-Use session_cache_map.md plus the raw trace to identify the exact SGLang object and arguments needed for a controlled HiCache load.
-Then add a guarded direct_load mode and compare it against request_warm near_resume.
+Compare direct_load against request_warm and no_prefetch under the same pressure settings.
+Then turn the trigger request into a cleaner in-server control hook.
 ```
 
 Known direct-load function shape from the installed SGLang package:
@@ -1151,14 +1149,81 @@ This proves which host KV pages SGLang naturally loads when a target agent resum
 Once this mapping is stable, the next step is to issue that load before the resume request.
 ```
 
-Next blocker:
+Follow-up after Milestone 7D:
 
 ```text
-The mapping exists in the SGLang scheduler process, not in the external workload driver.
-To truly prefetch before resume, we need an in-server control hook that can:
+The current direct_load path uses a lightweight trigger request.
+To make this closer to future hardware/runtime support, we should eventually replace the trigger request with an in-server control command that can:
 1. match the target prefix,
 2. identify evicted host-backed nodes,
-3. call the same load_back / HiCacheController.load path before the real request arrives.
+3. call the same init_load_back / load_back path before the real request arrives.
+```
+
+### Milestone 7D: Direct Load-Back Trigger
+
+Status: implemented and pressure-tested on EC2.
+
+What it is:
+
+```text
+Replace the old placeholder direct_load path with a real SGLang load-back trigger.
+During the tool gap, the workload sends a marked trigger request for the target session.
+SGLang matches the target prefix and naturally calls init_load_back/load_back for evicted host-backed KV.
+```
+
+Why we need it:
+
+```text
+Milestone 7C showed that a full load can include ancestor KV pages.
+So we should not manually load only last_host_node.host_value.
+Milestone 7D uses SGLang's own load_back path, which collects the full missing KV chain and calls HiCacheController.load with the right host_indices.
+```
+
+Run it:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone7d_direct_load_pressure \
+PREFETCH_ACTION=direct_load \
+FILLER_SESSIONS=96 \
+PROMPT_TOKENS=1024 \
+bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Observed result:
+
+```text
+direct_load attempts: 2
+direct_load misses: 0
+init_load_back events: 11
+hicache.load.start / hicache.load.end: 4 / 4
+
+target_0_direct_load_back:
+  phase: hint_prefetch
+  TTFT: 74.774 ms
+  host_node_id: 212
+  hicache.load host_indices length: 1335
+
+target_1_direct_load_back:
+  phase: hint_prefetch
+  TTFT: 62.191 ms
+  host_node_id: 214
+  hicache.load host_indices length: 1332
+
+target_0_resume:
+  TTFT: 49.196 ms
+  hicache.load calls during resume: 0
+
+target_1_resume:
+  TTFT: 49.081 ms
+  hicache.load calls during resume: 0
+```
+
+What this means:
+
+```text
+In the previous direct_probe pressure run, target resume TTFT was about 81 ms.
+With direct_load, target resume TTFT was about 49 ms.
+The expensive host-to-GPU KV reload moved from resume time into the tool-gap trigger request.
 ```
 
 ### Milestone 8: Manager Demo Results

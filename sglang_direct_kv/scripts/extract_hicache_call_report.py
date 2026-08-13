@@ -17,6 +17,10 @@ INTERESTING_EVENTS = {
     "hiradix.ready_to_load_host_cache.end",
     "hiradix.match_prefix.start",
     "hiradix.match_prefix.end",
+    "hiradix.load_back.start",
+    "hiradix.load_back.end",
+    "hiradix.init_load_back.start",
+    "hiradix.init_load_back.end",
 }
 
 

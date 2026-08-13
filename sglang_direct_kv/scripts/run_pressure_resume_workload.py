@@ -17,6 +17,7 @@ TIMING_ALIASES = {
     "early_before_pressure": "pre_pressure",
     "late_after_pressure": "near_resume",
 }
+DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 
 
 def canonical_timing(timing: str) -> str:
@@ -150,7 +151,7 @@ async def main_async() -> None:
         default="request_warm",
         help=(
             "request_warm sends a normal SGLang warm request; direct_probe records the intended direct KV load; "
-            "direct_load is guarded and currently logs a miss until host_indices are mapped."
+            "direct_load sends a marked trigger request that exercises SGLang's natural init_load_back/load_back path."
         ),
     )
     parser.add_argument("--out", default="artifacts/results/pressure_resume_metrics.jsonl")
@@ -230,15 +231,10 @@ async def main_async() -> None:
                         "prompt_chars": len(prompt),
                     }
                 )
-                if args.prefetch_action in {"direct_probe", "direct_load"} and event_prefix == "agent.hint_prefetch":
-                    probe_event = (
-                        "agent.direct_kv_prefetch_probe"
-                        if args.prefetch_action == "direct_probe"
-                        else "agent.direct_kv_load_attempt"
-                    )
+                if args.prefetch_action == "direct_probe" and event_prefix == "agent.hint_prefetch":
                     write_trace_event(
                         {
-                            "event": probe_event,
+                            "event": "agent.direct_kv_prefetch_probe",
                             "session_id": session_id,
                             "priority": "high",
                             "timing": timing,
@@ -248,18 +244,6 @@ async def main_async() -> None:
                             "intended_action": "direct_host_to_gpu_kv_load",
                         }
                     )
-                    if args.prefetch_action == "direct_load":
-                        write_trace_event(
-                            {
-                                "event": "agent.direct_kv_load_miss",
-                                "session_id": session_id,
-                                "priority": "high",
-                                "timing": timing,
-                                "prompt_hash": prefix_hash,
-                                "reason": "host_indices_not_mapped_yet",
-                                "guarded": True,
-                            }
-                        )
                     write_trace_event(
                         {
                             "event": f"{event_prefix}_end",
@@ -269,6 +253,99 @@ async def main_async() -> None:
                             "prefetch_action": args.prefetch_action,
                             "prompt_hash": prefix_hash,
                             "probe_only": True,
+                        }
+                    )
+                    continue
+                if args.prefetch_action == "direct_load" and event_prefix == "agent.hint_prefetch":
+                    trigger_prompt = (
+                        prompt
+                        + "\n\n"
+                        + f"{DIRECT_LOAD_TRIGGER} session_id={session_id} prompt_hash={prefix_hash}"
+                    )
+                    write_trace_event(
+                        {
+                            "event": "agent.direct_kv_load_attempt",
+                            "session_id": session_id,
+                            "priority": "high",
+                            "timing": timing,
+                            "prompt_hash": prefix_hash,
+                            "prompt_chars": len(prompt),
+                            "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                            "trigger_marker": DIRECT_LOAD_TRIGGER,
+                            "intended_action": "exercise_sglang_init_load_back_path",
+                        }
+                    )
+                    trigger_label = f"target_{idx}_direct_load_back"
+                    write_trace_event(
+                        {
+                            "event": "agent.request.start",
+                            "label": trigger_label,
+                            "session_id": session_id,
+                            "request_role": "target",
+                            "phase": phase,
+                            "prompt_hash": prefix_hash,
+                            "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                            "prompt_chars": len(trigger_prompt),
+                            "prompt_tokens_target": args.prompt_tokens,
+                            "prefetch_action": args.prefetch_action,
+                        }
+                    )
+                    row = await chat_once(
+                        client,
+                        args.base_url,
+                        args.model,
+                        trigger_prompt,
+                        args.prefetch_max_tokens,
+                        trigger_label,
+                    )
+                    row["phase"] = phase
+                    row["mode"] = args.mode
+                    row["hint_prefetch_timing"] = args.hint_prefetch_timing
+                    row["prefetch_action"] = args.prefetch_action
+                    row["session_id"] = session_id
+                    row["prompt_hash"] = prefix_hash
+                    row["trigger_prompt_hash"] = prompt_hash(trigger_prompt)
+                    row["filler_sessions"] = args.filler_sessions
+                    row["prompt_tokens"] = args.prompt_tokens
+                    rows.append(row)
+                    write_trace_event(
+                        {
+                            "event": "agent.request.end",
+                            "label": trigger_label,
+                            "session_id": session_id,
+                            "request_role": "target",
+                            "phase": phase,
+                            "prompt_hash": prefix_hash,
+                            "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                            "ttft_ms": row["ttft_ms"],
+                            "total_latency_ms": row["total_latency_ms"],
+                            "prefetch_action": args.prefetch_action,
+                        }
+                    )
+                    write_trace_event(
+                        {
+                            "event": "agent.direct_kv_load_request.end",
+                            "session_id": session_id,
+                            "priority": "high",
+                            "timing": timing,
+                            "prefetch_action": args.prefetch_action,
+                            "prompt_hash": prefix_hash,
+                            "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                            "ttft_ms": row["ttft_ms"],
+                            "total_latency_ms": row["total_latency_ms"],
+                        }
+                    )
+                    write_trace_event(
+                        {
+                            "event": f"{event_prefix}_end",
+                            "session_id": session_id,
+                            "priority": "high",
+                            "timing": timing,
+                            "prefetch_action": args.prefetch_action,
+                            "prompt_hash": prefix_hash,
+                            "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                            "ttft_ms": row["ttft_ms"],
+                            "total_latency_ms": row["total_latency_ms"],
                         }
                     )
                     continue

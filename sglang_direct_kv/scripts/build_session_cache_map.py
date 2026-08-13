@@ -92,6 +92,9 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
     direct_probes = [event for event in events if event.get("event") == "agent.direct_kv_prefetch_probe"]
     direct_load_attempts = [event for event in events if event.get("event") == "agent.direct_kv_load_attempt"]
     direct_load_misses = [event for event in events if event.get("event") == "agent.direct_kv_load_miss"]
+    init_load_back_events = [
+        event for event in events if event.get("event") == "hiradix.init_load_back.start"
+    ]
     cache_counts = Counter(str(event.get("event")) for event in events if is_cache_event(event))
     return {
         "summary": {
@@ -100,6 +103,7 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
             "direct_probe_events": len(direct_probes),
             "direct_load_attempts": len(direct_load_attempts),
             "direct_load_misses": len(direct_load_misses),
+            "init_load_back_events": len(init_load_back_events),
             "cache_event_types": len(cache_counts),
         },
         "event_counts": dict(counts.most_common()),
