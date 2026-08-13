@@ -32,6 +32,7 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
         for key in (
             "filler_sessions",
             "prompt_tokens",
+            "warm_ttft_avg_ms",
             "resume_ttft_avg_ms",
             "benefit_vs_no_prefetch_ms",
             "benefit_vs_no_prefetch_pct",
@@ -185,17 +186,24 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
 
     if section == "Benefit vs Cache Pressure":
         for filler in fillers:
+            baseline = row_for(rows, mode="no_prefetch", filler=filler)
             early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
             late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
             table_rows.append(
                 [
                     str(int(filler)),
+                    fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(early["warm_ttft_avg_ms"] if early else None),
+                    fmt_ms(late["warm_ttft_avg_ms"] if late else None),
                     fmt_ms(early["benefit_vs_no_prefetch_ms"] if early else None),
                     fmt_ms(late["benefit_vs_no_prefetch_ms"] if late else None),
                     fmt_pct(late["benefit_vs_no_prefetch_pct"] if late else None),
                 ]
             )
-        return render_table(["fillers", "early benefit ms", "late benefit ms", "late benefit pct"], table_rows)
+        return render_table(
+            ["fillers", "first base", "first early", "first late", "early benefit", "late benefit", "late %"],
+            table_rows,
+        )
 
     if section == "Resume TTFT vs Cache Pressure":
         for filler in fillers:
@@ -205,25 +213,38 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
             table_rows.append(
                 [
                     str(int(filler)),
+                    fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(early["warm_ttft_avg_ms"] if early else None),
+                    fmt_ms(late["warm_ttft_avg_ms"] if late else None),
                     fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
                     fmt_ms(early["resume_ttft_avg_ms"] if early else None),
                     fmt_ms(late["resume_ttft_avg_ms"] if late else None),
                 ]
             )
-        return render_table(["fillers", "no_prefetch ms", "early ms", "late ms"], table_rows)
+        return render_table(
+            ["fillers", "first base", "first early", "first late", "resume base", "resume early", "resume late"],
+            table_rows,
+        )
 
     if section == "Prefetch Cost vs Cache Pressure":
         for filler in fillers:
+            baseline = row_for(rows, mode="no_prefetch", filler=filler)
             early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
             late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
             table_rows.append(
                 [
                     str(int(filler)),
+                    fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(early["warm_ttft_avg_ms"] if early else None),
+                    fmt_ms(late["warm_ttft_avg_ms"] if late else None),
                     fmt_ms(early["prefetch_ttft_avg_ms"] if early else None),
                     fmt_ms(late["prefetch_ttft_avg_ms"] if late else None),
                 ]
             )
-        return render_table(["fillers", "early prefetch ms", "late prefetch ms"], table_rows)
+        return render_table(
+            ["fillers", "first base", "first early", "first late", "early prefetch", "late prefetch"],
+            table_rows,
+        )
 
     return ""
 
@@ -246,18 +267,18 @@ def render_dashboard(charts: list[tuple[str, Path, list[dict[str, Any]]]], out_p
         "    p { margin: 0 0 24px; color: #4b5563; line-height: 1.45; }",
         "    section { margin: 28px 0 42px; }",
         "    h2 { font-size: 20px; margin: 0 0 14px; }",
-        "    .grid { display: grid; gap: 18px; }",
-        "    .panel { display: grid; grid-template-columns: minmax(520px, 1.8fr) minmax(320px, 1fr); gap: 16px; align-items: start; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }",
+        "    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }",
+        "    .panel { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }",
         "    .chart { min-width: 0; }",
-        "    .numbers { overflow-x: auto; }",
+        "    .numbers { overflow-x: auto; margin-top: 10px; }",
         "    img { display: block; width: 100%; height: auto; }",
         "    table { width: 100%; border-collapse: collapse; font-size: 13px; }",
-        "    th { text-align: left; background: #f3f4f6; }",
+        "    th { text-align: right; background: #f3f4f6; }",
         "    th, td { border-bottom: 1px solid #e5e7eb; padding: 7px 8px; white-space: nowrap; }",
         "    td { text-align: right; }",
         "    td:first-child, th:first-child { text-align: left; }",
         "    code { background: #eef2ff; padding: 2px 5px; border-radius: 4px; }",
-        "    @media (max-width: 900px) { .panel { grid-template-columns: 1fr; } }",
+        "    @media (max-width: 1180px) { .grid { grid-template-columns: 1fr; } }",
         "  </style>",
         "</head>",
         "<body>",

@@ -805,6 +805,7 @@ y-axis = latency metric
 lines = prefetch timing choices
 separate charts = prompt size
 all_charts.html shows each chart beside an exact-number table
+dashboard tables include first-prompt TTFT and resume/prefetch/benefit values
 ```
 
 Summary columns:
