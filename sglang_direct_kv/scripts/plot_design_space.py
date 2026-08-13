@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,7 @@ def render_chart(
     y_label: str,
     out_path: Path,
     include_baseline: bool = False,
-) -> None:
+) -> Path:
     width = 960
     height = 560
     left = 90
@@ -139,6 +140,62 @@ def render_chart(
 
     lines.append("</svg>")
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_path
+
+
+def render_dashboard(charts: list[tuple[str, Path]], out_path: Path) -> None:
+    grouped: dict[str, list[Path]] = defaultdict(list)
+    for section, path in charts:
+        grouped[section].append(path)
+
+    lines = [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '  <meta charset="utf-8">',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1">',
+        "  <title>Milestone 6 Design-Space Charts</title>",
+        "  <style>",
+        "    body { font-family: Arial, sans-serif; margin: 32px; color: #111827; background: #f9fafb; }",
+        "    h1 { margin: 0 0 8px; font-size: 28px; }",
+        "    p { margin: 0 0 24px; color: #4b5563; line-height: 1.45; }",
+        "    section { margin: 28px 0 42px; }",
+        "    h2 { font-size: 20px; margin: 0 0 14px; }",
+        "    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 18px; }",
+        "    .chart { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }",
+        "    img { display: block; width: 100%; height: auto; }",
+        "    code { background: #eef2ff; padding: 2px 5px; border-radius: 4px; }",
+        "  </style>",
+        "</head>",
+        "<body>",
+        "  <h1>Milestone 6 Design-Space Charts</h1>",
+        "  <p>Each chart uses cache pressure on the x-axis. Lines represent prefetch timing choices. Separate panels represent prompt sizes.</p>",
+    ]
+
+    for section in ("Benefit vs Cache Pressure", "Resume TTFT vs Cache Pressure", "Prefetch Cost vs Cache Pressure"):
+        paths = grouped.get(section, [])
+        if not paths:
+            continue
+        lines.append("  <section>")
+        lines.append(f"    <h2>{html.escape(section)}</h2>")
+        lines.append('    <div class="grid">')
+        for path in sorted(paths):
+            rel = path.relative_to(out_path.parent)
+            alt = path.stem.replace("_", " ")
+            lines.append('      <div class="chart">')
+            lines.append(f'        <img src="{html.escape(str(rel))}" alt="{html.escape(alt)}">')
+            lines.append("      </div>")
+        lines.append("    </div>")
+        lines.append("  </section>")
+
+    lines.extend(
+        [
+            "  <p>Raw data: <code>summary.csv</code> and <code>summary.json</code> in the parent results directory.</p>",
+            "</body>",
+            "</html>",
+        ]
+    )
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -150,34 +207,52 @@ def main() -> None:
     rows = read_rows(root / "summary.csv")
     charts_dir = root / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
+    charts: list[tuple[str, Path]] = []
 
     for prompt_tokens in sorted({row["prompt_tokens"] for row in rows}):
         prompt_rows = [row for row in rows if row["prompt_tokens"] == prompt_tokens]
         suffix = f"p{int(prompt_tokens)}"
-        render_chart(
-            title=f"Hint-Aware Benefit vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
-            rows=prompt_rows,
-            y_key="benefit_vs_no_prefetch_ms",
-            y_label="Benefit vs no_prefetch (ms)",
-            out_path=charts_dir / f"benefit_vs_pressure_{suffix}.svg",
+        charts.append(
+            (
+                "Benefit vs Cache Pressure",
+                render_chart(
+                    title=f"Hint-Aware Benefit vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
+                    rows=prompt_rows,
+                    y_key="benefit_vs_no_prefetch_ms",
+                    y_label="Benefit vs no_prefetch (ms)",
+                    out_path=charts_dir / f"benefit_vs_pressure_{suffix}.svg",
+                ),
+            )
         )
-        render_chart(
-            title=f"Resume TTFT vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
-            rows=prompt_rows,
-            y_key="resume_ttft_avg_ms",
-            y_label="Resume TTFT (ms)",
-            out_path=charts_dir / f"resume_ttft_vs_pressure_{suffix}.svg",
-            include_baseline=True,
+        charts.append(
+            (
+                "Resume TTFT vs Cache Pressure",
+                render_chart(
+                    title=f"Resume TTFT vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
+                    rows=prompt_rows,
+                    y_key="resume_ttft_avg_ms",
+                    y_label="Resume TTFT (ms)",
+                    out_path=charts_dir / f"resume_ttft_vs_pressure_{suffix}.svg",
+                    include_baseline=True,
+                ),
+            )
         )
-        render_chart(
-            title=f"Prefetch Cost vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
-            rows=prompt_rows,
-            y_key="prefetch_ttft_avg_ms",
-            y_label="Prefetch request TTFT (ms)",
-            out_path=charts_dir / f"prefetch_cost_vs_pressure_{suffix}.svg",
+        charts.append(
+            (
+                "Prefetch Cost vs Cache Pressure",
+                render_chart(
+                    title=f"Prefetch Cost vs Cache Pressure, prompt_tokens={int(prompt_tokens)}",
+                    rows=prompt_rows,
+                    y_key="prefetch_ttft_avg_ms",
+                    y_label="Prefetch request TTFT (ms)",
+                    out_path=charts_dir / f"prefetch_cost_vs_pressure_{suffix}.svg",
+                ),
+            )
         )
 
+    render_dashboard(charts, charts_dir / "all_charts.html")
     print(f"Wrote SVG charts to {charts_dir}")
+    print(f"Wrote combined dashboard to {charts_dir / 'all_charts.html'}")
 
 
 if __name__ == "__main__":

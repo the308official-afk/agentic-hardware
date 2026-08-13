@@ -747,7 +747,7 @@ Default sweep result:
 ```text
 The sweep runner writes metrics and traces for all 24 clean SGLang runs.
 The summarizer writes summary.json and summary.csv.
-The chart generator writes SVG charts under charts/.
+The chart generator writes SVG charts and one combined HTML dashboard under charts/.
 ```
 
 What the default sweep runs:
@@ -773,6 +773,7 @@ artifacts/results/milestone6_design_space/*_server.log
 artifacts/results/milestone6_design_space/summary.json
 artifacts/results/milestone6_design_space/summary.csv
 artifacts/results/milestone6_design_space/charts/*.svg
+artifacts/results/milestone6_design_space/charts/all_charts.html
 ```
 
 Charts produced:
@@ -784,6 +785,7 @@ resume_ttft_vs_pressure_p1024.svg
 resume_ttft_vs_pressure_p1536.svg
 prefetch_cost_vs_pressure_p1024.svg
 prefetch_cost_vs_pressure_p1536.svg
+all_charts.html
 ```
 
 Chart meaning:
