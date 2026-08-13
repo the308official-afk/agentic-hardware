@@ -13,6 +13,7 @@ FILLER_SESSIONS="${FILLER_SESSIONS:-24}"
 PROMPT_TOKENS="${PROMPT_TOKENS:-1024}"
 PRESSURE_CONCURRENCY="${PRESSURE_CONCURRENCY:-1}"
 HINT_TIMING="${HINT_TIMING:-near_resume}"
+PREFETCH_ACTION="${PREFETCH_ACTION:-direct_probe}"
 
 mkdir -p "${RESULT_ROOT}"
 rm -f "${TRACE}" "${METRICS}" "${LOG}"
@@ -63,13 +64,13 @@ if [[ "${ready}" != "1" ]]; then
   exit 1
 fi
 
-echo "Running direct-probe workload..."
+echo "Running ${PREFETCH_ACTION} workload..."
 python scripts/run_pressure_resume_workload.py \
   --base-url "${HOST_URL}/v1" \
   --model "${MODEL}" \
   --mode hint_aware \
   --hint-prefetch-timing "${HINT_TIMING}" \
-  --prefetch-action direct_probe \
+  --prefetch-action "${PREFETCH_ACTION}" \
   --target-sessions "${TARGET_SESSIONS}" \
   --filler-sessions "${FILLER_SESSIONS}" \
   --prompt-tokens "${PROMPT_TOKENS}" \
@@ -86,8 +87,16 @@ python scripts/build_session_cache_map.py \
   --out-md "${RESULT_ROOT}/session_cache_map.md"
 
 echo
+python scripts/extract_hicache_call_report.py \
+  --trace "${TRACE}" \
+  --out-json "${RESULT_ROOT}/hicache_call_report.json" \
+  --out-md "${RESULT_ROOT}/hicache_call_report.md"
+
+echo
 echo "Milestone 7 artifacts:"
 echo "  ${TRACE}"
 echo "  ${METRICS}"
 echo "  ${RESULT_ROOT}/session_cache_map.json"
 echo "  ${RESULT_ROOT}/session_cache_map.md"
+echo "  ${RESULT_ROOT}/hicache_call_report.json"
+echo "  ${RESULT_ROOT}/hicache_call_report.md"

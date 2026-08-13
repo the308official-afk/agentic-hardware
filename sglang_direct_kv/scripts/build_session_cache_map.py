@@ -90,12 +90,16 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
     counts = Counter(str(event.get("event")) for event in events)
     prefix_maps = [event for event in events if event.get("event") == "agent.session_prefix_map"]
     direct_probes = [event for event in events if event.get("event") == "agent.direct_kv_prefetch_probe"]
+    direct_load_attempts = [event for event in events if event.get("event") == "agent.direct_kv_load_attempt"]
+    direct_load_misses = [event for event in events if event.get("event") == "agent.direct_kv_load_miss"]
     cache_counts = Counter(str(event.get("event")) for event in events if is_cache_event(event))
     return {
         "summary": {
             "total_events": len(events),
             "agent_sessions": len({event.get("session_id") for event in prefix_maps}),
             "direct_probe_events": len(direct_probes),
+            "direct_load_attempts": len(direct_load_attempts),
+            "direct_load_misses": len(direct_load_misses),
             "cache_event_types": len(cache_counts),
         },
         "event_counts": dict(counts.most_common()),
@@ -118,6 +122,26 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "probe_only": event.get("probe_only"),
             }
             for event in direct_probes
+        ],
+        "direct_load_attempts": [
+            {
+                "session_id": event.get("session_id"),
+                "prompt_hash": event.get("prompt_hash"),
+                "timing": event.get("timing"),
+                "intended_action": event.get("intended_action"),
+                "probe_only": event.get("probe_only"),
+            }
+            for event in direct_load_attempts
+        ],
+        "direct_load_misses": [
+            {
+                "session_id": event.get("session_id"),
+                "prompt_hash": event.get("prompt_hash"),
+                "timing": event.get("timing"),
+                "reason": event.get("reason"),
+                "guarded": event.get("guarded"),
+            }
+            for event in direct_load_misses
         ],
         "session_timeline": session_timeline(events),
         "cache_objects": cache_object_summary(events),
@@ -152,6 +176,26 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         lines.append(
             f"| `{item.get('session_id')}` | `{item.get('prompt_hash')}` | "
             f"`{item.get('timing')}` | `{item.get('intended_action')}` | {item.get('probe_only')} |"
+        )
+    lines.append("")
+    lines.append("## Guarded Direct Load Attempts")
+    lines.append("")
+    lines.append("| session | prompt hash | timing | intended action | probe only |")
+    lines.append("| --- | --- | --- | --- | --- |")
+    for item in report["direct_load_attempts"]:
+        lines.append(
+            f"| `{item.get('session_id')}` | `{item.get('prompt_hash')}` | "
+            f"`{item.get('timing')}` | `{item.get('intended_action')}` | {item.get('probe_only')} |"
+        )
+    lines.append("")
+    lines.append("## Guarded Direct Load Misses")
+    lines.append("")
+    lines.append("| session | prompt hash | timing | reason | guarded |")
+    lines.append("| --- | --- | --- | --- | --- |")
+    for item in report["direct_load_misses"]:
+        lines.append(
+            f"| `{item.get('session_id')}` | `{item.get('prompt_hash')}` | "
+            f"`{item.get('timing')}` | `{item.get('reason')}` | {item.get('guarded')} |"
         )
     lines.append("")
     lines.append("## Cache Event Counts")

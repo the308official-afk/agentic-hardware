@@ -907,6 +907,8 @@ The SGLang trace hook now records compact object metadata for HiCache/Radix call
 The workload now emits session_id, prompt_hash, request_role, and prompt_tokens metadata.
 The workload supports --prefetch-action direct_probe.
 direct_probe records where a direct host-to-GPU KV load should happen, but does not call the unsafe internal load yet.
+The workload also supports --prefetch-action direct_load as a guarded placeholder.
+direct_load records an attempted direct load and a miss reason until target host_indices are mapped.
 ```
 
 Run it:
@@ -937,6 +939,57 @@ cache event types observed: 10
 session_cache_map.json and session_cache_map.md were generated
 ```
 
+Pressure version for call-shape discovery:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone7_pressure \
+FILLER_SESSIONS=96 \
+PROMPT_TOKENS=1024 \
+bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Pressure result:
+
+```text
+Trace events: 2266
+agent.direct_kv_prefetch_probe events: 2
+hicache.load.start / hicache.load.end: 4 / 4
+hicache.write.start / hicache.write.end: 202 / 202
+hicache.evict_device.start / hicache.evict_device.end: 207 / 207
+hiradix.evict.start / hiradix.evict.end: 98 / 98
+hicache_call_report.md was generated
+```
+
+Observed natural HiCache load shape:
+
+```text
+HiCacheController.load(host_indices=<cpu int64 tensor>, node_id=<int>)
+Example host_indices sizes observed: 1335 and 1332 entries
+Successful calls returned cuda int64 device_indices tensors with the same length
+Some calls returned None when the device allocation was not available
+```
+
+Guarded direct-load placeholder:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone7_direct_load_probe \
+PREFETCH_ACTION=direct_load \
+FILLER_SESSIONS=24 \
+PROMPT_TOKENS=1024 \
+bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+This records `agent.direct_kv_load_attempt` and `agent.direct_kv_load_miss`.
+It intentionally does not call `HiCacheController.load()` until we can map the target session to exact `host_indices`.
+
+Direct-load smoke result:
+
+```text
+agent.direct_kv_load_attempt events: 2
+agent.direct_kv_load_miss events: 2
+miss reason: host_indices_not_mapped_yet
+```
+
 Output files:
 
 ```text
@@ -945,6 +998,8 @@ artifacts/results/milestone7/direct_hooks_metrics.jsonl
 artifacts/results/milestone7/direct_hooks_server.log
 artifacts/results/milestone7/session_cache_map.json
 artifacts/results/milestone7/session_cache_map.md
+artifacts/results/milestone7/hicache_call_report.json
+artifacts/results/milestone7/hicache_call_report.md
 ```
 
 Smoke output files use:
@@ -959,6 +1014,8 @@ Important events to observe:
 agent.session_prefix_map
 agent.hint_submitted
 agent.direct_kv_prefetch_probe
+agent.direct_kv_load_attempt
+agent.direct_kv_load_miss
 agent.resume_start
 hicache.load.start / hicache.load.end
 hicache.write.start / hicache.write.end
@@ -973,6 +1030,7 @@ Trace includes target session_id and prompt_hash.
 Trace includes direct KV prefetch probe events.
 Trace includes richer SGLang cache object metadata.
 session_cache_map.md summarizes target sessions, prompt hashes, direct probe points, cache event counts, and cache objects.
+hicache_call_report.md summarizes natural HiCache load/prefetch/match argument and result shapes.
 ```
 
 What this does not prove yet:
@@ -988,6 +1046,19 @@ Next substep:
 ```text
 Use session_cache_map.md plus the raw trace to identify the exact SGLang object and arguments needed for a controlled HiCache load.
 Then add a guarded direct_load mode and compare it against request_warm near_resume.
+```
+
+Known direct-load function shape from the installed SGLang package:
+
+```text
+HiCacheController.load(host_indices, priority=None, node_id=-1) -> device_indices or None
+```
+
+Current blocker:
+
+```text
+We still need to map target session/prefix -> host_indices.
+Milestone 7B pressure traces and hicache_call_report.md are meant to expose that mapping.
 ```
 
 ### Milestone 8: Manager Demo Results
@@ -1065,6 +1136,7 @@ sglang_direct_kv/
     summarize_design_space.py
     plot_design_space.py
     build_session_cache_map.py
+    extract_hicache_call_report.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py

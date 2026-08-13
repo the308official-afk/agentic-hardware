@@ -146,9 +146,12 @@ async def main_async() -> None:
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
     parser.add_argument(
         "--prefetch-action",
-        choices=("request_warm", "direct_probe"),
+        choices=("request_warm", "direct_probe", "direct_load"),
         default="request_warm",
-        help="request_warm sends a normal SGLang warm request; direct_probe only records the intended direct KV load.",
+        help=(
+            "request_warm sends a normal SGLang warm request; direct_probe records the intended direct KV load; "
+            "direct_load is guarded and currently logs a miss until host_indices are mapped."
+        ),
     )
     parser.add_argument("--out", default="artifacts/results/pressure_resume_metrics.jsonl")
     args = parser.parse_args()
@@ -227,10 +230,15 @@ async def main_async() -> None:
                         "prompt_chars": len(prompt),
                     }
                 )
-                if args.prefetch_action == "direct_probe" and event_prefix == "agent.hint_prefetch":
+                if args.prefetch_action in {"direct_probe", "direct_load"} and event_prefix == "agent.hint_prefetch":
+                    probe_event = (
+                        "agent.direct_kv_prefetch_probe"
+                        if args.prefetch_action == "direct_probe"
+                        else "agent.direct_kv_load_attempt"
+                    )
                     write_trace_event(
                         {
-                            "event": "agent.direct_kv_prefetch_probe",
+                            "event": probe_event,
                             "session_id": session_id,
                             "priority": "high",
                             "timing": timing,
@@ -240,6 +248,18 @@ async def main_async() -> None:
                             "intended_action": "direct_host_to_gpu_kv_load",
                         }
                     )
+                    if args.prefetch_action == "direct_load":
+                        write_trace_event(
+                            {
+                                "event": "agent.direct_kv_load_miss",
+                                "session_id": session_id,
+                                "priority": "high",
+                                "timing": timing,
+                                "prompt_hash": prefix_hash,
+                                "reason": "host_indices_not_mapped_yet",
+                                "guarded": True,
+                            }
+                        )
                     write_trace_event(
                         {
                             "event": f"{event_prefix}_end",
