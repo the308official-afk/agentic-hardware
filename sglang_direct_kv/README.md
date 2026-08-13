@@ -559,6 +559,21 @@ Writes one trace and one metrics file per mode.
 Prints a final comparison table.
 ```
 
+TTFT values reported:
+
+```text
+warm_ttft = TTFT for the first time target_0 and target_1 are sent.
+resume_ttft = TTFT when target_0 and target_1 resume after tool wait and KV pressure.
+```
+
+Why both matter:
+
+```text
+warm_ttft shows the first-touch cost for the target agent sessions.
+resume_ttft shows the cost after the agent pauses, other requests create KV pressure, and the target agents come back.
+The main prefetch question is whether resume_ttft improves without making the rest of the run worse.
+```
+
 Important note:
 
 ```text
@@ -603,17 +618,18 @@ mode=hint_aware run starts and completes
 agent.hint_submitted appears in hint-aware mode
 prefetch_attempted is recorded
 prefetch_success or prefetch_miss is recorded
-TTFT is recorded for each target resume
+warm TTFT is recorded for each first target request
+resume TTFT is recorded for each target resume
 hicache.load / hicache.write / hicache.evict_device counts are summarized per mode
 ```
 
 Result from the first comparison run:
 
 ```text
-mode             resume_count  avg_resume_TTFT_ms  p95_resume_TTFT_ms  hicache_load  hicache_evict_device
-no_prefetch      2             48.327              48.608              4             37
-generic_prefetch 2             48.117              48.261              4             39
-hint_aware       2             41.400              42.896              4             37
+mode             warm_count  avg_warm_TTFT_ms  p95_warm_TTFT_ms  resume_count  avg_resume_TTFT_ms  p95_resume_TTFT_ms  hicache_load  hicache_evict_device
+no_prefetch      2           219.286           348.191           2             48.327              48.608              4             37
+generic_prefetch 2           217.344           344.165           2             48.117              48.261              4             39
+hint_aware       2           217.292           343.949           2             41.400              42.896              4             37
 ```
 
 Important interpretation:

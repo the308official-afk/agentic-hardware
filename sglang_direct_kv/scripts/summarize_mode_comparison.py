@@ -36,12 +36,17 @@ def percentile(values: list[float], pct: float) -> float:
 def summarize_mode(root: Path, mode: str) -> dict[str, Any]:
     metrics = read_jsonl(root / f"{mode}_metrics.jsonl")
     trace = read_jsonl(root / f"{mode}_trace.jsonl")
+    warm_rows = [row for row in metrics if row.get("phase") == "target_warm"]
     resume_rows = [row for row in metrics if row.get("phase") == "target_resume"]
+    warm_ttfts = [float(row["ttft_ms"]) for row in warm_rows if "ttft_ms" in row]
     ttfts = [float(row["ttft_ms"]) for row in resume_rows if "ttft_ms" in row]
     event_counts = Counter(str(event.get("event")) for event in trace)
 
     return {
         "mode": mode,
+        "warm_count": len(warm_rows),
+        "warm_ttft_avg_ms": round(mean(warm_ttfts), 3) if warm_ttfts else 0.0,
+        "warm_ttft_p95_ms": round(percentile(warm_ttfts, 95), 3) if warm_ttfts else 0.0,
         "resume_count": len(resume_rows),
         "resume_ttft_avg_ms": round(mean(ttfts), 3) if ttfts else 0.0,
         "resume_ttft_p95_ms": round(percentile(ttfts, 95), 3) if ttfts else 0.0,
