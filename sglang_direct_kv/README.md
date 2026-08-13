@@ -62,6 +62,15 @@ The EC2 upload/download/SSH scripts work.
 The Python package installs in editable mode.
 ```
 
+Important events to observe:
+
+```text
+setup_ec2 completes without Python/package errors
+upload.sh syncs local files to EC2
+download.sh pulls artifacts back from EC2
+ssh_to_ec2.sh can run remote commands
+```
+
 Key files:
 
 ```text
@@ -138,6 +147,16 @@ MHATokenToKVPoolHost
 scheduler._prefetch_kvcache()
 ```
 
+Important events to observe:
+
+```text
+probe_sglang_kv_paths.py writes artifacts/sglang_probe.json
+extract_sglang_kv_targets.py writes artifacts/sglang_kv_targets.json
+extract_sglang_kv_targets.py writes artifacts/sglang_kv_targets.md
+HiCacheController.* functions are found
+HiRadixCache / RadixCache functions are found
+```
+
 ### Milestone 2: Real SGLang + HiCache Smoke Test - Completed
 
 Status: completed on EC2.
@@ -193,6 +212,16 @@ hicache_size: 14 GB
 attention backend: triton
 prefill attention backend: triton
 decode attention backend: triton
+```
+
+Important events to observe:
+
+```text
+SGLang server reaches /model_info
+KV Cache is allocated
+host HiCache memory is allocated
+chat request returns HTTP 200
+model response contains expected text, for example "OK"
 ```
 
 Important fixes made during this milestone:
@@ -284,6 +313,17 @@ HiRadixCache.evict()
 HiRadixCache.ready_to_load_host_cache()
 ```
 
+Important events to observe:
+
+```text
+trace.install.start / trace.install.end
+hiradix.match_prefix.start / hiradix.match_prefix.end
+hiradix.cache_unfinished_req.start / hiradix.cache_unfinished_req.end
+hiradix.cache_finished_req.start / hiradix.cache_finished_req.end
+hiradix.ready_to_load_host_cache.start / hiradix.ready_to_load_host_cache.end
+hicache.write.start / hicache.write.end
+```
+
 Result from the first traced EC2 run:
 
 ```text
@@ -358,6 +398,20 @@ Trace output:
 ```text
 artifacts/milestone4_kv_movement_trace.jsonl
 artifacts/results/milestone4_pressure_resume_metrics.jsonl
+```
+
+Important events to observe:
+
+```text
+agent.session_warm
+agent.hint_submitted
+agent.pressure_start
+agent.resume_start
+agent.request.start / agent.request.end
+hicache.write.start / hicache.write.end
+hicache.load.start / hicache.load.end
+hicache.evict_device.start / hicache.evict_device.end
+hiradix.evict.start / hiradix.evict.end
 ```
 
 Example hint:
@@ -452,6 +506,19 @@ Mode 3 improves tool-return-to-first-token latency or tail latency.
 Mode 3 avoids obvious regressions such as too much wasted prefetch or decode slowdown.
 ```
 
+Important events to observe:
+
+```text
+mode=no_prefetch run starts and completes
+mode=generic_prefetch run starts and completes
+mode=hint_aware run starts and completes
+agent.hint_submitted appears in hint-aware mode
+prefetch_attempted is recorded
+prefetch_success or prefetch_miss is recorded
+TTFT is recorded for each target resume
+hicache.load / hicache.write / hicache.evict_device counts are summarized per mode
+```
+
 ### Milestone 6: Manager Demo Results
 
 Status: planned.
@@ -479,6 +546,19 @@ KV load/write/eviction counts
 prefetch hit/late/wasted rate
 bandwidth or decode interference signal if available
 short timeline examples for Agent 42-style workflows
+```
+
+Important events to observe:
+
+```text
+tool_wait starts
+agent.hint_submitted
+hicache.write
+hicache.evict_device
+hicache.load
+agent.resume_start
+first token emitted
+TTFT and total latency recorded
 ```
 
 Success criteria:
