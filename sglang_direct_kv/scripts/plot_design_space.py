@@ -193,15 +193,16 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(early["warm_ttft_avg_ms"] if early else None),
-                    fmt_ms(late["warm_ttft_avg_ms"] if late else None),
+                    fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(early["resume_ttft_avg_ms"] if early else None),
+                    fmt_ms(late["resume_ttft_avg_ms"] if late else None),
                     fmt_ms(early["benefit_vs_no_prefetch_ms"] if early else None),
                     fmt_ms(late["benefit_vs_no_prefetch_ms"] if late else None),
                     fmt_pct(late["benefit_vs_no_prefetch_pct"] if late else None),
                 ]
             )
         return render_table(
-            ["fillers", "first base", "first early", "first late", "early benefit", "late benefit", "late %"],
+            ["fillers", "first TTFT", "resume base", "resume early", "resume late", "early benefit", "late benefit", "late %"],
             table_rows,
         )
 
@@ -214,15 +215,13 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(early["warm_ttft_avg_ms"] if early else None),
-                    fmt_ms(late["warm_ttft_avg_ms"] if late else None),
                     fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
                     fmt_ms(early["resume_ttft_avg_ms"] if early else None),
                     fmt_ms(late["resume_ttft_avg_ms"] if late else None),
                 ]
             )
         return render_table(
-            ["fillers", "first base", "first early", "first late", "resume base", "resume early", "resume late"],
+            ["fillers", "first TTFT", "resume base", "resume early", "resume late"],
             table_rows,
         )
 
@@ -235,14 +234,12 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(early["warm_ttft_avg_ms"] if early else None),
-                    fmt_ms(late["warm_ttft_avg_ms"] if late else None),
                     fmt_ms(early["prefetch_ttft_avg_ms"] if early else None),
                     fmt_ms(late["prefetch_ttft_avg_ms"] if late else None),
                 ]
             )
         return render_table(
-            ["fillers", "first base", "first early", "first late", "early prefetch", "late prefetch"],
+            ["fillers", "first TTFT", "early prefetch", "late prefetch"],
             table_rows,
         )
 
