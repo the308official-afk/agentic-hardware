@@ -707,9 +707,9 @@ Three planes:
 
 | Plane | Knob | Default Values | Simple Meaning |
 | --- | --- | --- | --- |
-| Prefetch timing | `TIMINGS` | `very_early_before_pressure early_before_pressure middle_during_pressure late_after_pressure` | When target KV/prefix warming happens during the tool gap. |
+| Prefetch timing | `TIMINGS` | `early_before_pressure late_after_pressure` | When target KV/prefix warming happens during the tool gap. |
 | Cache pressure | `FILLER_LIST` | `12 24 96 192` | How many unrelated sessions compete for KV space. |
-| Request size | `PROMPT_TOKEN_LIST` | `1024 2048` | How large each target/filler prompt is. |
+| Request size | `PROMPT_TOKEN_LIST` | `1024 1536` | How large each target/filler prompt is. |
 
 Prefetch timing values:
 
@@ -719,6 +719,9 @@ early_before_pressure = prefetch after the tool-wait delay, but before filler pr
 middle_during_pressure = prefetch halfway through filler pressure
 late_after_pressure = prefetch after filler pressure, right before resume
 ```
+
+The default sweep uses only early and late timing.
+The very-early and middle timing values remain available for optional follow-up sweeps.
 
 Run it:
 
@@ -751,14 +754,14 @@ With only 2 fillers, cache pressure was low, so the benefit was intentionally sm
 What the default sweep runs:
 
 ```text
-2 request sizes x 4 pressure levels x 5 cases
+2 request sizes x 4 pressure levels x 3 cases
 
 For each request size and pressure level:
 1 no_prefetch baseline
-4 hint_aware timing choices
+2 hint_aware timing choices
 ```
 
-That is 40 total SGLang server runs by default.
+That is 24 total SGLang server runs by default.
 Each design point starts a fresh SGLang server, runs one case, writes metrics/traces, then stops the server.
 This avoids cache state leaking from one design point into the next.
 
@@ -777,11 +780,11 @@ Charts produced:
 
 ```text
 benefit_vs_pressure_p1024.svg
-benefit_vs_pressure_p2048.svg
+benefit_vs_pressure_p1536.svg
 resume_ttft_vs_pressure_p1024.svg
-resume_ttft_vs_pressure_p2048.svg
+resume_ttft_vs_pressure_p1536.svg
 prefetch_cost_vs_pressure_p1024.svg
-prefetch_cost_vs_pressure_p2048.svg
+prefetch_cost_vs_pressure_p1536.svg
 ```
 
 Chart meaning:
@@ -811,6 +814,13 @@ How to run a smaller sweep:
 FILLER_LIST="12 24" \
 PROMPT_TOKEN_LIST="1024" \
 TIMINGS="early_before_pressure late_after_pressure" \
+bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+How to run the wider timing sweep:
+
+```bash
+TIMINGS="very_early_before_pressure early_before_pressure middle_during_pressure late_after_pressure" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
