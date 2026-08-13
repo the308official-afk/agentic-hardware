@@ -676,8 +676,8 @@ The comparison harness works.
 All three modes ran on the same model, same EC2 instance, same constrained KV pool, and same pressure/resume workload.
 The harsher run creates more KV pressure than the first run.
 No-prefetch resume TTFT increased from about 48 ms to about 79 ms.
-Generic early prefetch did not help because later filler requests can evict or disturb the warmed target KV/prefix.
-Hint-aware late prefetch lowered average resume TTFT from 79.499 ms to 72.189 ms in this small run.
+Generic pre-pressure prefetch did not help because later filler requests can evict or disturb the warmed target KV/prefix.
+Hint-aware near-resume prefetch lowered average resume TTFT from 79.499 ms to 72.189 ms in this small run.
 This is a promising signal, not yet a final conclusion, because there were only two target resume requests.
 The next step is to run larger repetitions and package the results for the manager demo.
 ```
@@ -707,7 +707,7 @@ Three planes:
 
 | Plane | Knob | Default Values | Simple Meaning |
 | --- | --- | --- | --- |
-| Prefetch timing | `TIMINGS` | `early_before_pressure late_after_pressure` | When target KV/prefix warming happens during the tool gap. |
+| Prefetch timing | `TIMINGS` | `pre_pressure near_resume` | When target KV/prefix warming happens during the tool gap. |
 | Cache pressure | `FILLER_LIST` | `12 24 96 192` | How many unrelated sessions compete for KV space. |
 | Request size | `PROMPT_TOKEN_LIST` | `1024 1536` | How large each target/filler prompt is. |
 
@@ -715,13 +715,14 @@ Prefetch timing values:
 
 ```text
 very_early_before_pressure = prefetch immediately after tool wait starts
-early_before_pressure = prefetch after the tool-wait delay, but before filler pressure
+pre_pressure = prefetch after the tool-wait delay, but before filler pressure
 middle_during_pressure = prefetch halfway through filler pressure
-late_after_pressure = prefetch after filler pressure, right before resume
+near_resume = prefetch after filler pressure, right before resume
 ```
 
-The default sweep uses only early and late timing.
+The default sweep uses only pre_pressure and near_resume timing.
 The very-early and middle timing values remain available for optional follow-up sweeps.
+The old names early_before_pressure and late_after_pressure are still accepted as aliases.
 
 Run it:
 
@@ -738,7 +739,7 @@ Default sweep command:
 RESULT_ROOT=artifacts/results/milestone6_design_space \
 FILLER_LIST="12 24 96 192" \
 PROMPT_TOKEN_LIST="1024 1536" \
-TIMINGS="early_before_pressure late_after_pressure" \
+TIMINGS="pre_pressure near_resume" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
@@ -768,9 +769,9 @@ Progress shown in the terminal:
 
 ```text
 Total cases: 24
-==== Milestone 6 case [1/24]: no_prefetch_late_after_pressure_f12_p1024 ====
+==== Milestone 6 case [1/24]: no_prefetch_near_resume_f12_p1024 ====
 ...
-==== Completed Milestone 6 case [1/24]: no_prefetch_late_after_pressure_f12_p1024 ====
+==== Completed Milestone 6 case [1/24]: no_prefetch_near_resume_f12_p1024 ====
 ```
 
 Output files:
@@ -825,14 +826,14 @@ How to run a smaller sweep:
 ```bash
 FILLER_LIST="12 24" \
 PROMPT_TOKEN_LIST="1024" \
-TIMINGS="early_before_pressure late_after_pressure" \
+TIMINGS="pre_pressure near_resume" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
 How to run the wider timing sweep:
 
 ```bash
-TIMINGS="very_early_before_pressure early_before_pressure middle_during_pressure late_after_pressure" \
+TIMINGS="very_early_before_pressure pre_pressure middle_during_pressure near_resume" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 

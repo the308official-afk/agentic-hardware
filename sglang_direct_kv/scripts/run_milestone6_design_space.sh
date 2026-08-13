@@ -7,7 +7,7 @@ MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
 TARGET_SESSIONS="${TARGET_SESSIONS:-2}"
 FILLER_LIST="${FILLER_LIST:-12 24 96 192}"
 PROMPT_TOKEN_LIST="${PROMPT_TOKEN_LIST:-1024 1536}"
-TIMINGS="${TIMINGS:-early_before_pressure late_after_pressure}"
+TIMINGS="${TIMINGS:-pre_pressure near_resume}"
 PRESSURE_CONCURRENCY="${PRESSURE_CONCURRENCY:-1}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone6_design_space}"
 
@@ -121,7 +121,7 @@ echo "Hint timings: ${TIMINGS}"
 
 for prompt_tokens in ${PROMPT_TOKEN_LIST}; do
   for fillers in ${FILLER_LIST}; do
-    run_case "no_prefetch" "late_after_pressure" "${fillers}" "${prompt_tokens}"
+    run_case "no_prefetch" "near_resume" "${fillers}" "${prompt_tokens}"
     for timing in ${TIMINGS}; do
       run_case "hint_aware" "${timing}" "${fillers}" "${prompt_tokens}"
     done

@@ -11,18 +11,31 @@ from typing import Any
 
 TIMING_LABELS = {
     "very_early_before_pressure": "very early",
-    "early_before_pressure": "early",
+    "early_before_pressure": "pre-pressure",
+    "pre_pressure": "pre-pressure",
     "middle_during_pressure": "middle",
-    "late_after_pressure": "late",
+    "late_after_pressure": "near-resume",
+    "near_resume": "near-resume",
 }
 
 COLORS = {
     "very_early_before_pressure": "#2563eb",
     "early_before_pressure": "#16a34a",
+    "pre_pressure": "#16a34a",
     "middle_during_pressure": "#d97706",
     "late_after_pressure": "#dc2626",
+    "near_resume": "#dc2626",
     "no_prefetch": "#111827",
 }
+
+TIMING_ALIASES = {
+    "early_before_pressure": "pre_pressure",
+    "late_after_pressure": "near_resume",
+}
+
+
+def canonical_timing(timing: str) -> str:
+    return TIMING_ALIASES.get(timing, timing)
 
 
 def read_rows(path: Path) -> list[dict[str, Any]]:
@@ -41,6 +54,7 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
             "hicache_evict_device",
         ):
             row[key] = float(row[key])
+        row["hint_timing"] = canonical_timing(str(row["hint_timing"]))
     return rows
 
 
@@ -187,59 +201,59 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
     if section == "Benefit vs Cache Pressure":
         for filler in fillers:
             baseline = row_for(rows, mode="no_prefetch", filler=filler)
-            early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
-            late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
+            pre_pressure = row_for(rows, mode="hint_aware", filler=filler, timing="pre_pressure")
+            near_resume = row_for(rows, mode="hint_aware", filler=filler, timing="near_resume")
             table_rows.append(
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
                     fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(early["resume_ttft_avg_ms"] if early else None),
-                    fmt_ms(late["resume_ttft_avg_ms"] if late else None),
-                    fmt_ms(early["benefit_vs_no_prefetch_ms"] if early else None),
-                    fmt_ms(late["benefit_vs_no_prefetch_ms"] if late else None),
-                    fmt_pct(late["benefit_vs_no_prefetch_pct"] if late else None),
+                    fmt_ms(pre_pressure["resume_ttft_avg_ms"] if pre_pressure else None),
+                    fmt_ms(near_resume["resume_ttft_avg_ms"] if near_resume else None),
+                    fmt_ms(pre_pressure["benefit_vs_no_prefetch_ms"] if pre_pressure else None),
+                    fmt_ms(near_resume["benefit_vs_no_prefetch_ms"] if near_resume else None),
+                    fmt_pct(near_resume["benefit_vs_no_prefetch_pct"] if near_resume else None),
                 ]
             )
         return render_table(
-            ["fillers", "first TTFT", "resume base", "resume early", "resume late", "early benefit", "late benefit", "late %"],
+            ["fillers", "first TTFT", "resume base", "resume pre-pressure", "resume near-resume", "pre-pressure benefit", "near-resume benefit", "near-resume %"],
             table_rows,
         )
 
     if section == "Resume TTFT vs Cache Pressure":
         for filler in fillers:
             baseline = row_for(rows, mode="no_prefetch", filler=filler)
-            early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
-            late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
+            pre_pressure = row_for(rows, mode="hint_aware", filler=filler, timing="pre_pressure")
+            near_resume = row_for(rows, mode="hint_aware", filler=filler, timing="near_resume")
             table_rows.append(
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
                     fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(early["resume_ttft_avg_ms"] if early else None),
-                    fmt_ms(late["resume_ttft_avg_ms"] if late else None),
+                    fmt_ms(pre_pressure["resume_ttft_avg_ms"] if pre_pressure else None),
+                    fmt_ms(near_resume["resume_ttft_avg_ms"] if near_resume else None),
                 ]
             )
         return render_table(
-            ["fillers", "first TTFT", "resume base", "resume early", "resume late"],
+            ["fillers", "first TTFT", "resume base", "resume pre-pressure", "resume near-resume"],
             table_rows,
         )
 
     if section == "Prefetch Cost vs Cache Pressure":
         for filler in fillers:
             baseline = row_for(rows, mode="no_prefetch", filler=filler)
-            early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
-            late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
+            pre_pressure = row_for(rows, mode="hint_aware", filler=filler, timing="pre_pressure")
+            near_resume = row_for(rows, mode="hint_aware", filler=filler, timing="near_resume")
             table_rows.append(
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(early["prefetch_ttft_avg_ms"] if early else None),
-                    fmt_ms(late["prefetch_ttft_avg_ms"] if late else None),
+                    fmt_ms(pre_pressure["prefetch_ttft_avg_ms"] if pre_pressure else None),
+                    fmt_ms(near_resume["prefetch_ttft_avg_ms"] if near_resume else None),
                 ]
             )
         return render_table(
-            ["fillers", "first TTFT", "early prefetch", "late prefetch"],
+            ["fillers", "first TTFT", "pre-pressure prefetch", "near-resume prefetch"],
             table_rows,
         )
 

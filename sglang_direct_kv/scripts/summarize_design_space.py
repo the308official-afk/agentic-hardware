@@ -10,6 +10,16 @@ from statistics import mean
 from typing import Any
 
 
+TIMING_ALIASES = {
+    "early_before_pressure": "pre_pressure",
+    "late_after_pressure": "near_resume",
+}
+
+
+def canonical_timing(timing: str) -> str:
+    return TIMING_ALIASES.get(timing, timing)
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not path.exists():
@@ -48,7 +58,7 @@ def summarize_case(metrics_path: Path) -> dict[str, Any] | None:
     return {
         "case": metrics_path.name.removesuffix("_metrics.jsonl"),
         "mode": first.get("mode", "unknown"),
-        "hint_timing": first.get("hint_prefetch_timing", "unknown"),
+        "hint_timing": canonical_timing(str(first.get("hint_prefetch_timing", "unknown"))),
         "filler_sessions": int(first.get("filler_sessions", 0)),
         "prompt_tokens": int(first.get("prompt_tokens", 0)),
         "warm_count": count_phase(metrics, "target_warm"),

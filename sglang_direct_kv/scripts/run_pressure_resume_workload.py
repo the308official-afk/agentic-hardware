@@ -12,6 +12,16 @@ from typing import Any
 import httpx
 
 
+TIMING_ALIASES = {
+    "early_before_pressure": "pre_pressure",
+    "late_after_pressure": "near_resume",
+}
+
+
+def canonical_timing(timing: str) -> str:
+    return TIMING_ALIASES.get(timing, timing)
+
+
 def trace_path() -> Path | None:
     raw_path = os.environ.get("AGENTIC_KV_TRACE_PATH")
     if not raw_path:
@@ -104,16 +114,19 @@ async def main_async() -> None:
         "--hint-prefetch-timing",
         choices=(
             "very_early_before_pressure",
+            "pre_pressure",
             "early_before_pressure",
             "middle_during_pressure",
+            "near_resume",
             "late_after_pressure",
         ),
-        default="late_after_pressure",
+        default="near_resume",
         help="When hint_aware mode sends target warm/prefetch requests.",
     )
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
     parser.add_argument("--out", default="artifacts/results/pressure_resume_metrics.jsonl")
     args = parser.parse_args()
+    args.hint_prefetch_timing = canonical_timing(args.hint_prefetch_timing)
 
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -249,19 +262,19 @@ async def main_async() -> None:
         await asyncio.sleep(args.tool_wait_ms / 1000)
 
         if args.mode == "generic_prefetch":
-            print("Generic prefetch: warm targets early before pressure", flush=True)
+            print("Generic prefetch: warm targets before pressure", flush=True)
             await prefetch_targets(
                 "agent.generic_prefetch",
-                "early_before_pressure",
+                "pre_pressure",
                 "generic_prefetch",
                 "generic_prefetch",
             )
 
-        if args.mode == "hint_aware" and args.hint_prefetch_timing == "early_before_pressure":
+        if args.mode == "hint_aware" and args.hint_prefetch_timing == "pre_pressure":
             print("Hint-aware prefetch: warm high-priority targets before pressure", flush=True)
             await prefetch_targets(
                 "agent.hint_prefetch",
-                "early_before_pressure",
+                "pre_pressure",
                 "hint_prefetch",
                 "hint_prefetch",
             )
@@ -288,11 +301,11 @@ async def main_async() -> None:
         else:
             await run_fillers(filler_prompts, 0)
 
-        if args.mode == "hint_aware" and args.hint_prefetch_timing == "late_after_pressure":
-            print("Hint-aware prefetch: warm high-priority targets close to resume", flush=True)
+        if args.mode == "hint_aware" and args.hint_prefetch_timing == "near_resume":
+            print("Hint-aware prefetch: warm high-priority targets near resume", flush=True)
             await prefetch_targets(
                 "agent.hint_prefetch",
-                "late_after_pressure",
+                "near_resume",
                 "hint_prefetch",
                 "hint_prefetch",
             )
