@@ -549,6 +549,43 @@ source .venv/bin/activate
 bash scripts/run_milestone5_compare_modes.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
+Default pressure settings:
+
+```text
+MAX_TOTAL_TOKENS=4096
+TARGET_SESSIONS=2
+FILLER_SESSIONS=36
+PROMPT_TOKENS=1536
+PRESSURE_CONCURRENCY=1
+```
+
+Why this is harsher than the first run:
+
+```text
+MAX_TOTAL_TOKENS is smaller, so the GPU-side KV pool is tighter.
+FILLER_SESSIONS is larger, so more unrelated sessions compete for KV space.
+PROMPT_TOKENS is larger, so each filler request consumes more KV.
+Together, this makes it more likely that target_0 and target_1 lose GPU-resident KV before resume.
+```
+
+If resume TTFT is still too low, make the run even harsher:
+
+```bash
+MAX_TOTAL_TOKENS=3072 \
+FILLER_SESSIONS=48 \
+PROMPT_TOKENS=2048 \
+bash scripts/run_milestone5_compare_modes.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+If SGLang runs out of memory or becomes unstable, back off:
+
+```bash
+MAX_TOTAL_TOKENS=6144 \
+FILLER_SESSIONS=24 \
+PROMPT_TOKENS=1024 \
+bash scripts/run_milestone5_compare_modes.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
 What this script does:
 
 ```text
@@ -623,13 +660,13 @@ resume TTFT is recorded for each target resume
 hicache.load / hicache.write / hicache.evict_device counts are summarized per mode
 ```
 
-Result from the first comparison run:
+Result from the harsher comparison run:
 
 ```text
 mode             warm_count  avg_warm_TTFT_ms  p95_warm_TTFT_ms  resume_count  avg_resume_TTFT_ms  p95_resume_TTFT_ms  hicache_load  hicache_evict_device
-no_prefetch      2           219.286           348.191           2             48.327              48.608              4             37
-generic_prefetch 2           217.344           344.165           2             48.117              48.261              4             39
-hint_aware       2           217.292           343.949           2             41.400              42.896              4             37
+no_prefetch      2           250.727           373.147           2             79.499              80.405              4             87
+generic_prefetch 2           255.053           381.734           2             80.661              82.055              4             89
+hint_aware       2           252.274           373.880           2             72.189              81.950              6             92
 ```
 
 Important interpretation:
@@ -637,7 +674,10 @@ Important interpretation:
 ```text
 The comparison harness works.
 All three modes ran on the same model, same EC2 instance, same constrained KV pool, and same pressure/resume workload.
-The hint-aware mode showed lower resume TTFT in this small run.
+The harsher run creates more KV pressure than the first run.
+No-prefetch resume TTFT increased from about 48 ms to about 79 ms.
+Generic early prefetch did not help because later filler requests can evict or disturb the warmed target KV/prefix.
+Hint-aware late prefetch lowered average resume TTFT from 79.499 ms to 72.189 ms in this small run.
 This is a promising signal, not yet a final conclusion, because there were only two target resume requests.
 The next step is to run larger repetitions and package the results for the manager demo.
 ```

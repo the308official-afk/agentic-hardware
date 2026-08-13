@@ -3,10 +3,10 @@ set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen2.5-1.5B-Instruct}"
 HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
-MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-8192}"
+MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
 TARGET_SESSIONS="${TARGET_SESSIONS:-2}"
-FILLER_SESSIONS="${FILLER_SESSIONS:-18}"
-PROMPT_TOKENS="${PROMPT_TOKENS:-1024}"
+FILLER_SESSIONS="${FILLER_SESSIONS:-36}"
+PROMPT_TOKENS="${PROMPT_TOKENS:-1536}"
 PRESSURE_CONCURRENCY="${PRESSURE_CONCURRENCY:-1}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone5}"
 MODES="${MODES:-no_prefetch generic_prefetch hint_aware}"
@@ -56,6 +56,11 @@ fi
 for mode in ${MODES}; do
   echo
   echo "==== Milestone 5 mode: ${mode} ===="
+  echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS}"
+  echo "TARGET_SESSIONS=${TARGET_SESSIONS}"
+  echo "FILLER_SESSIONS=${FILLER_SESSIONS}"
+  echo "PROMPT_TOKENS=${PROMPT_TOKENS}"
+  echo "PRESSURE_CONCURRENCY=${PRESSURE_CONCURRENCY}"
   trace="${RESULT_ROOT}/${mode}_trace.jsonl"
   metrics="${RESULT_ROOT}/${mode}_metrics.jsonl"
   log="${RESULT_ROOT}/${mode}_server.log"
