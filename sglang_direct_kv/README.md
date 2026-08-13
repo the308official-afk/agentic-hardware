@@ -79,6 +79,9 @@ Which functions look useful for direct KV instrumentation?
 Commands used:
 
 ```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
 python scripts/probe_sglang_kv_paths.py --out artifacts/sglang_probe.json
 python scripts/extract_sglang_kv_targets.py \
   --out-json artifacts/sglang_kv_targets.json \
@@ -114,6 +117,17 @@ scheduler._prefetch_kvcache()
 Status: completed on EC2.
 
 This milestone proved that the testbed can run a real model, on a real GPU, with SGLang hierarchical KV cache enabled.
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/smoke_hicache_request.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+The script starts SGLang with HiCache if it is not already running, waits for `/model_info`, sends one real chat request, prints the JSON response, and stops the server it started.
 
 What we proved:
 
@@ -268,6 +282,7 @@ sglang_direct_kv/
     setup_ec2.sh
     run_sglang_server.sh
     run_sglang_hicache_server.sh
+    smoke_hicache_request.sh
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py
     run_workload.py
@@ -317,7 +332,7 @@ AWS Deep Learning AMI GPU PyTorch
 Then:
 
 ```bash
-cd agentic_hardware/sglang_direct_kv
+cd ~/agentic_hardware/sglang_direct_kv
 bash scripts/setup_ec2.sh
 source .venv/bin/activate
 ```
@@ -332,6 +347,9 @@ python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_
 Probe SGLang:
 
 ```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
 python scripts/probe_sglang_kv_paths.py --out artifacts/sglang_probe.json
 python scripts/extract_sglang_kv_targets.py \
   --out-json artifacts/sglang_kv_targets.json \
@@ -341,12 +359,18 @@ python scripts/extract_sglang_kv_targets.py \
 Start SGLang:
 
 ```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
 bash scripts/run_sglang_server.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
 Start SGLang with hierarchical KV cache enabled:
 
 ```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
 bash scripts/run_sglang_hicache_server.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
@@ -379,6 +403,9 @@ HiCache currently expects the host KV cache pool to be larger than the device KV
 Run workload driver:
 
 ```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
 python scripts/run_workload.py --config configs/g5_2xlarge_smoke.yaml --mode no_prefetch
 python scripts/run_workload.py --config configs/g5_2xlarge_smoke.yaml --mode generic_prefetch
 python scripts/run_workload.py --config configs/g5_2xlarge_smoke.yaml --mode hint_aware
