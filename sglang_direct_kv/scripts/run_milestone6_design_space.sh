@@ -5,9 +5,9 @@ MODEL="${1:-Qwen/Qwen2.5-1.5B-Instruct}"
 HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
 TARGET_SESSIONS="${TARGET_SESSIONS:-2}"
-FILLER_LIST="${FILLER_LIST:-18 36 48}"
-PROMPT_TOKEN_LIST="${PROMPT_TOKEN_LIST:-1024 1536}"
-TIMINGS="${TIMINGS:-early_before_pressure middle_during_pressure late_after_pressure}"
+FILLER_LIST="${FILLER_LIST:-12 24 96 192}"
+PROMPT_TOKEN_LIST="${PROMPT_TOKEN_LIST:-1024 2048}"
+TIMINGS="${TIMINGS:-very_early_before_pressure early_before_pressure middle_during_pressure late_after_pressure}"
 PRESSURE_CONCURRENCY="${PRESSURE_CONCURRENCY:-1}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone6_design_space}"
 
@@ -107,3 +107,4 @@ done
 
 echo
 python scripts/summarize_design_space.py --root "${RESULT_ROOT}"
+python scripts/plot_design_space.py --root "${RESULT_ROOT}"

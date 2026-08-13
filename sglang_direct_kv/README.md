@@ -707,9 +707,18 @@ Three planes:
 
 | Plane | Knob | Default Values | Simple Meaning |
 | --- | --- | --- | --- |
-| Prefetch timing | `TIMINGS` | `early_before_pressure middle_during_pressure late_after_pressure` | When target KV/prefix warming happens during the tool gap. |
-| Cache pressure | `FILLER_LIST` | `18 36 48` | How many unrelated sessions compete for KV space. |
-| Request size | `PROMPT_TOKEN_LIST` | `1024 1536` | How large each target/filler prompt is. |
+| Prefetch timing | `TIMINGS` | `very_early_before_pressure early_before_pressure middle_during_pressure late_after_pressure` | When target KV/prefix warming happens during the tool gap. |
+| Cache pressure | `FILLER_LIST` | `12 24 96 192` | How many unrelated sessions compete for KV space. |
+| Request size | `PROMPT_TOKEN_LIST` | `1024 2048` | How large each target/filler prompt is. |
+
+Prefetch timing values:
+
+```text
+very_early_before_pressure = prefetch immediately after tool wait starts
+early_before_pressure = prefetch after the tool-wait delay, but before filler pressure
+middle_during_pressure = prefetch halfway through filler pressure
+late_after_pressure = prefetch after filler pressure, right before resume
+```
 
 Run it:
 
@@ -735,20 +744,23 @@ Smoke result:
 ```text
 The sweep runner completed.
 The summarizer wrote summary.json and summary.csv.
+The chart generator wrote SVG charts under charts/.
 With only 2 fillers, cache pressure was low, so the benefit was intentionally small.
 ```
 
 What the default sweep runs:
 
 ```text
-2 request sizes x 3 pressure levels x 4 cases
+2 request sizes x 4 pressure levels x 5 cases
 
 For each request size and pressure level:
 1 no_prefetch baseline
-3 hint_aware timing choices
+4 hint_aware timing choices
 ```
 
-That is 24 total SGLang server runs by default.
+That is 40 total SGLang server runs by default.
+Each design point starts a fresh SGLang server, runs one case, writes metrics/traces, then stops the server.
+This avoids cache state leaking from one design point into the next.
 
 Output files:
 
@@ -758,6 +770,27 @@ artifacts/results/milestone6_design_space/*_trace.jsonl
 artifacts/results/milestone6_design_space/*_server.log
 artifacts/results/milestone6_design_space/summary.json
 artifacts/results/milestone6_design_space/summary.csv
+artifacts/results/milestone6_design_space/charts/*.svg
+```
+
+Charts produced:
+
+```text
+benefit_vs_pressure_p1024.svg
+benefit_vs_pressure_p2048.svg
+resume_ttft_vs_pressure_p1024.svg
+resume_ttft_vs_pressure_p2048.svg
+prefetch_cost_vs_pressure_p1024.svg
+prefetch_cost_vs_pressure_p2048.svg
+```
+
+Chart meaning:
+
+```text
+x-axis = cache pressure, measured by filler sessions
+y-axis = latency metric
+lines = prefetch timing choices
+separate charts = prompt size
 ```
 
 Summary columns:
@@ -775,7 +808,7 @@ hicache_evict_device = GPU-side KV eviction events observed
 How to run a smaller sweep:
 
 ```bash
-FILLER_LIST="18 36" \
+FILLER_LIST="12 24" \
 PROMPT_TOKEN_LIST="1024" \
 TIMINGS="early_before_pressure late_after_pressure" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
@@ -785,8 +818,8 @@ How to run a harsher sweep:
 
 ```bash
 MAX_TOTAL_TOKENS=3072 \
-FILLER_LIST="36 48 60" \
-PROMPT_TOKEN_LIST="1536 2048" \
+FILLER_LIST="96 192 250" \
+PROMPT_TOKEN_LIST="2048" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
@@ -895,6 +928,7 @@ sglang_direct_kv/
     run_pressure_resume_workload.py
     summarize_mode_comparison.py
     summarize_design_space.py
+    plot_design_space.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py

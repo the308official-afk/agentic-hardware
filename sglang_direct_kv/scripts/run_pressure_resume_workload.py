@@ -102,7 +102,12 @@ async def main_async() -> None:
     )
     parser.add_argument(
         "--hint-prefetch-timing",
-        choices=("early_before_pressure", "middle_during_pressure", "late_after_pressure"),
+        choices=(
+            "very_early_before_pressure",
+            "early_before_pressure",
+            "middle_during_pressure",
+            "late_after_pressure",
+        ),
         default="late_after_pressure",
         help="When hint_aware mode sends target warm/prefetch requests.",
     )
@@ -232,6 +237,14 @@ async def main_async() -> None:
                         "reuse_confidence": 0.9,
                         "prefetch_timing": args.hint_prefetch_timing,
                     }
+                )
+            if args.hint_prefetch_timing == "very_early_before_pressure":
+                print("Hint-aware prefetch: warm high-priority targets immediately after tool wait starts", flush=True)
+                await prefetch_targets(
+                    "agent.hint_prefetch",
+                    "very_early_before_pressure",
+                    "hint_prefetch",
+                    "hint_prefetch",
                 )
         await asyncio.sleep(args.tool_wait_ms / 1000)
 
