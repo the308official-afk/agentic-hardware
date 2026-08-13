@@ -305,9 +305,9 @@ It did not yet trigger host-to-GPU loads or evictions because there was little m
 The next step is to create a pressure/resume workload that forces load and eviction events.
 ```
 
-### Milestone 4: Force Load/Evict And Add Direct Hint Hooks
+### Milestone 4: Force Load/Evict And Add Direct Hint Hooks - Completed
 
-Status: planned.
+Status: completed on EC2 for the pressure/load/evict path and initial agent hint timeline.
 
 What it is:
 
@@ -321,6 +321,43 @@ Why we need it:
 The current smoke test proves we can observe HiCache writes, but it is too small to force host-to-GPU reloads or eviction pressure.
 Agentic KV prefetch matters most when a session's KV has moved away from fast GPU memory and must be brought back before the agent resumes.
 This milestone creates that realistic failure mode, then adds hints such as session_id, priority, deadline, and reuse confidence.
+```
+
+Run the pressure trace:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/run_milestone4_pressure_trace.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+What this script does:
+
+```text
+Starts SGLang with HiCache enabled.
+Shrinks the device KV pool with --max-total-tokens.
+Warms a few target agent sessions.
+Sends many unique filler sessions to create KV pressure.
+Resumes the target sessions after the pressure phase.
+Writes a KV movement trace and pressure workload metrics.
+```
+
+Useful knobs:
+
+```bash
+MAX_TOTAL_TOKENS=8192
+TARGET_SESSIONS=2
+FILLER_SESSIONS=18
+PROMPT_TOKENS=1024
+PRESSURE_CONCURRENCY=1
+```
+
+Trace output:
+
+```text
+artifacts/milestone4_kv_movement_trace.jsonl
+artifacts/results/milestone4_pressure_resume_metrics.jsonl
 ```
 
 Example hint:
@@ -347,6 +384,32 @@ Success criteria:
 The workload produces real load and/or eviction trace events.
 The trace can associate those events with a request/session or prefix-cache path.
 The hint layer can mark a session as likely to resume soon.
+```
+
+Result from the first pressure EC2 run:
+
+```text
+MAX_TOTAL_TOKENS=8192
+TARGET_SESSIONS=2
+FILLER_SESSIONS=18
+PROMPT_TOKENS=1024
+Total trace events: 503
+HiCache write calls: 46
+HiCache load calls: 4
+HiCache device eviction calls: 37
+HiRadixCache eviction calls: 17
+Agent request events: 44
+Agent hint_submitted events: 2
+Agent resume_start events: 2
+```
+
+Important interpretation:
+
+```text
+We have now forced the harder case that Milestone 3 did not trigger.
+SGLang wrote KV to host HiCache, evicted device-side KV, and later loaded KV from host-side HiCache.
+The same trace also contains agent-level hint events, so we can align "Agent 42 is likely to resume" with real SGLang KV movement.
+This is still not a performance comparison. It is proof that the pressure/resume scenario and observability hooks work.
 ```
 
 ### Milestone 5: Compare Three Modes
@@ -442,6 +505,8 @@ sglang_direct_kv/
     run_sglang_server.sh
     run_sglang_hicache_server.sh
     smoke_hicache_request.sh
+    run_milestone4_pressure_trace.sh
+    run_pressure_resume_workload.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py
