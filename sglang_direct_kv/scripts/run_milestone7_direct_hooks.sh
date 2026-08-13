@@ -93,6 +93,12 @@ python scripts/extract_hicache_call_report.py \
   --out-md "${RESULT_ROOT}/hicache_call_report.md"
 
 echo
+python scripts/map_session_host_indices.py \
+  --trace "${TRACE}" \
+  --out-json "${RESULT_ROOT}/session_host_indices_map.json" \
+  --out-md "${RESULT_ROOT}/session_host_indices_map.md"
+
+echo
 echo "Milestone 7 artifacts:"
 echo "  ${TRACE}"
 echo "  ${METRICS}"
@@ -100,3 +106,5 @@ echo "  ${RESULT_ROOT}/session_cache_map.json"
 echo "  ${RESULT_ROOT}/session_cache_map.md"
 echo "  ${RESULT_ROOT}/hicache_call_report.json"
 echo "  ${RESULT_ROOT}/hicache_call_report.md"
+echo "  ${RESULT_ROOT}/session_host_indices_map.json"
+echo "  ${RESULT_ROOT}/session_host_indices_map.md"

@@ -1000,6 +1000,8 @@ artifacts/results/milestone7/session_cache_map.json
 artifacts/results/milestone7/session_cache_map.md
 artifacts/results/milestone7/hicache_call_report.json
 artifacts/results/milestone7/hicache_call_report.md
+artifacts/results/milestone7/session_host_indices_map.json
+artifacts/results/milestone7/session_host_indices_map.md
 ```
 
 Smoke output files use:
@@ -1031,6 +1033,7 @@ Trace includes direct KV prefetch probe events.
 Trace includes richer SGLang cache object metadata.
 session_cache_map.md summarizes target sessions, prompt hashes, direct probe points, cache event counts, and cache objects.
 hicache_call_report.md summarizes natural HiCache load/prefetch/match argument and result shapes.
+session_host_indices_map.md maps request windows to match_prefix and hicache.load evidence.
 ```
 
 What this does not prove yet:
@@ -1054,11 +1057,108 @@ Known direct-load function shape from the installed SGLang package:
 HiCacheController.load(host_indices, priority=None, node_id=-1) -> device_indices or None
 ```
 
-Current blocker:
+Milestone 7B blocker:
 
 ```text
 We still need to map target session/prefix -> host_indices.
-Milestone 7B pressure traces and hicache_call_report.md are meant to expose that mapping.
+Milestone 7C addresses this with a trace-based mapping report.
+```
+
+### Milestone 7C: Session To Host Indices Mapping
+
+Status: implemented as a trace-based mapper.
+
+What it is:
+
+```text
+Connect an agent request window to the SGLang host KV indices that are loaded during that request.
+```
+
+Why we need it:
+
+```text
+To prefetch Agent 42 directly, we need Agent 42's host_indices.
+SGLang stores those host indices on radix TreeNode.host_value.
+The mapper shows which target resume request caused which match_prefix result and which HiCache load.
+```
+
+Run it:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone7_mapping \
+FILLER_SESSIONS=96 \
+PROMPT_TOKENS=1024 \
+bash scripts/run_milestone7_direct_hooks.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Important events to observe:
+
+```text
+agent.request.start / agent.request.end
+hiradix.match_prefix.end
+hicache.load.start / hicache.load.end
+```
+
+Important output:
+
+```text
+artifacts/results/milestone7_mapping/session_host_indices_map.md
+```
+
+What this should show:
+
+```text
+target_0_resume -> match_prefix host_hit_length -> hicache.load host_indices length
+target_1_resume -> match_prefix host_hit_length -> hicache.load host_indices length
+```
+
+Observed mapping result:
+
+```text
+request windows: 100
+windows with HiCache load: 2
+mapping evidence links: 4
+
+target_0_resume:
+  host_node_id: 212
+  match_prefix host_hit_length: 1335
+  hicache.load node_id: 212
+  hicache.load host_indices length: 1335
+  host_indices sample: head [43..50], tail [1370..1377]
+
+target_1_resume:
+  host_node_id: 215
+  match_prefix host_hit_length: 1332
+  hicache.load node_id: 215
+  hicache.load host_indices length: 1332
+  host_indices sample: head [1391..1398], tail [2715..2722]
+```
+
+Important nuance:
+
+```text
+The final host node's host_value may be only part of the full load.
+For example, target_0 host node 212 had host_value length 1332,
+but the actual hicache.load call used 1335 host indices.
+That means SGLang may concatenate ancestor evicted nodes before calling load().
+So the direct prefetch path should reproduce SGLang's load_back path, not blindly load only last_host_node.host_value.
+```
+
+In simple words:
+
+```text
+This proves which host KV pages SGLang naturally loads when a target agent resumes.
+Once this mapping is stable, the next step is to issue that load before the resume request.
+```
+
+Next blocker:
+
+```text
+The mapping exists in the SGLang scheduler process, not in the external workload driver.
+To truly prefetch before resume, we need an in-server control hook that can:
+1. match the target prefix,
+2. identify evicted host-backed nodes,
+3. call the same load_back / HiCacheController.load path before the real request arrives.
 ```
 
 ### Milestone 8: Manager Demo Results
@@ -1137,6 +1237,7 @@ sglang_direct_kv/
     plot_design_space.py
     build_session_cache_map.py
     extract_hicache_call_report.py
+    map_session_host_indices.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py

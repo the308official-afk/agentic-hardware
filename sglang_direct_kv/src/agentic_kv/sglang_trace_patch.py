@@ -36,6 +36,12 @@ def _tensor_summary(value: Any) -> dict[str, Any]:
     try:
         if "numel" in summary and summary["numel"] <= 16:
             summary["values"] = value.detach().cpu().tolist()
+        elif "numel" in summary and summary["numel"] > 16:
+            sample_count = int(os.environ.get("AGENTIC_KV_TRACE_TENSOR_SAMPLE", "8"))
+            if sample_count > 0:
+                flat = value.detach().flatten()
+                summary["head"] = flat[:sample_count].cpu().tolist()
+                summary["tail"] = flat[-sample_count:].cpu().tolist()
     except Exception:
         pass
     return summary
@@ -61,7 +67,56 @@ def _safe_summary(value: Any) -> Any:
         return {str(k): _safe_summary(v) for k, v in list(value.items())[:16]}
     if hasattr(value, "shape") and hasattr(value, "numel"):
         return _tensor_summary(value)
+    if _looks_like_tree_node(value):
+        return _tree_node_summary(value)
     return {"type": type(value).__name__, "repr": repr(value)[:200]}
+
+
+def _looks_like_tree_node(value: Any) -> bool:
+    return all(hasattr(value, attr) for attr in ("id", "value", "host_value", "children", "parent"))
+
+
+def _tree_node_summary(node: Any) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "type": type(node).__name__,
+        "object_id": hex(id(node)),
+    }
+    for attr in ("id", "lock_ref", "host_ref_counter", "priority", "hit_count"):
+        if hasattr(node, attr):
+            try:
+                summary[attr] = getattr(node, attr)
+            except Exception:
+                pass
+    for prop in ("evicted", "backuped"):
+        try:
+            summary[prop] = bool(getattr(node, prop))
+        except Exception:
+            pass
+    try:
+        summary["parent_id"] = None if node.parent is None else node.parent.id
+    except Exception:
+        pass
+    try:
+        summary["children_count"] = len(node.children)
+    except Exception:
+        pass
+    try:
+        summary["key_len"] = len(node.key) if node.key is not None else 0
+    except Exception:
+        pass
+    try:
+        summary["value"] = _safe_summary(node.value)
+    except Exception:
+        pass
+    try:
+        summary["host_value"] = _safe_summary(node.host_value)
+    except Exception:
+        pass
+    try:
+        summary["hash_value_len"] = len(node.hash_value) if node.hash_value is not None else 0
+    except Exception:
+        pass
+    return summary
 
 
 def _interesting_attr_summary(obj: Any) -> dict[str, Any]:
