@@ -466,9 +466,9 @@ The same trace also contains agent-level hint events, so we can align "Agent 42 
 This is still not a performance comparison. It is proof that the pressure/resume scenario and observability hooks work.
 ```
 
-### Milestone 5: Compare Three Modes
+### Milestone 5: Compare Three Modes - Completed
 
-Status: planned.
+Status: completed on EC2 for the first small three-mode comparison.
 
 What it is:
 
@@ -490,6 +490,46 @@ Modes:
 Mode 1: no prefetch
 Mode 2: generic software prefetch
 Mode 3: hint-aware direct KV prefetch/protection
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/run_milestone5_compare_modes.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+What this script does:
+
+```text
+Runs the same pressure/resume workload three times.
+Starts a fresh SGLang server for each mode.
+Uses the same constrained device KV pool for each mode.
+Writes one trace and one metrics file per mode.
+Prints a final comparison table.
+```
+
+Important note:
+
+```text
+This is the first policy comparison harness.
+The generic and hint-aware prefetch actions are still software-level emulations.
+They use real SGLang requests to make the target prefix/KV path hot at different times.
+Milestone 5 tells us whether the policy timing is promising before deeper direct control.
+```
+
+Output files:
+
+```text
+artifacts/results/milestone5/no_prefetch_trace.jsonl
+artifacts/results/milestone5/generic_prefetch_trace.jsonl
+artifacts/results/milestone5/hint_aware_trace.jsonl
+artifacts/results/milestone5/no_prefetch_metrics.jsonl
+artifacts/results/milestone5/generic_prefetch_metrics.jsonl
+artifacts/results/milestone5/hint_aware_metrics.jsonl
+artifacts/results/milestone5/summary.json
 ```
 
 Main question:
@@ -517,6 +557,25 @@ prefetch_attempted is recorded
 prefetch_success or prefetch_miss is recorded
 TTFT is recorded for each target resume
 hicache.load / hicache.write / hicache.evict_device counts are summarized per mode
+```
+
+Result from the first comparison run:
+
+```text
+mode             resume_count  avg_resume_TTFT_ms  p95_resume_TTFT_ms  hicache_load  hicache_evict_device
+no_prefetch      2             48.327              48.608              4             37
+generic_prefetch 2             48.117              48.261              4             39
+hint_aware       2             41.400              42.896              4             37
+```
+
+Important interpretation:
+
+```text
+The comparison harness works.
+All three modes ran on the same model, same EC2 instance, same constrained KV pool, and same pressure/resume workload.
+The hint-aware mode showed lower resume TTFT in this small run.
+This is a promising signal, not yet a final conclusion, because there were only two target resume requests.
+The next step is to run larger repetitions and package the results for the manager demo.
 ```
 
 ### Milestone 6: Manager Demo Results
@@ -586,7 +645,9 @@ sglang_direct_kv/
     run_sglang_hicache_server.sh
     smoke_hicache_request.sh
     run_milestone4_pressure_trace.sh
+    run_milestone5_compare_modes.sh
     run_pressure_resume_workload.py
+    summarize_mode_comparison.py
     summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py
