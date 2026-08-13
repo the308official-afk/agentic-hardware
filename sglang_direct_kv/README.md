@@ -129,6 +129,12 @@ bash scripts/smoke_hicache_request.sh Qwen/Qwen2.5-1.5B-Instruct
 
 The script starts SGLang with HiCache if it is not already running, waits for `/model_info`, sends one real chat request, prints the JSON response, and stops the server it started.
 
+To send multiple requests through the same traced server:
+
+```bash
+REQUEST_COUNT=3 bash scripts/smoke_hicache_request.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
 What we proved:
 
 ```text
@@ -165,14 +171,44 @@ Lower HiCache host pool from 16 GB to 14 GB on g5.2xlarge.
 Prune old Docker state to free disk space.
 ```
 
-### Milestone 3: Log Real KV Movement - Next
+### Milestone 3: Log Real KV Movement - Completed
 
-Status: next milestone.
+Status: completed on EC2 for the initial HiCache write path.
 
 Goal:
 
 ```text
 Instrument SGLang's real HiCache path and log KV movement events.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/smoke_hicache_request.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+For a slightly richer trace:
+
+```bash
+REQUEST_COUNT=3 bash scripts/smoke_hicache_request.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Trace output:
+
+```text
+artifacts/kv_movement_trace.jsonl
+```
+
+Summarize an existing trace:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/summarize_kv_trace.py --trace artifacts/kv_movement_trace.jsonl
 ```
 
 Events we want to capture:
@@ -188,20 +224,56 @@ tokens/pages affected
 time spent in each movement
 ```
 
+Initial instrumentation points:
+
+```text
+HiCacheController.load()
+HiCacheController.write()
+HiCacheController.evict_device()
+HiCacheController.evict_host()
+HiCacheController.prefetch()
+HiRadixCache.match_prefix()
+HiRadixCache.cache_finished_req()
+HiRadixCache.cache_unfinished_req()
+HiRadixCache.evict()
+HiRadixCache.ready_to_load_host_cache()
+```
+
 Why this matters:
 
 ```text
 Before we claim prefetch benefits, we need proof that we can observe the real KV movement path.
 ```
 
-### Milestone 4: Add Direct Hint Hooks
+Result from the first traced EC2 run:
+
+```text
+REQUEST_COUNT=3
+Total trace events: 66
+HiCache write calls: 4
+HiRadixCache match_prefix calls: 8
+HiRadixCache ready_to_load_host_cache calls: 4
+HiRadixCache cache_unfinished_req calls: 4
+HiRadixCache cache_finished_req calls: 4
+```
+
+Important interpretation:
+
+```text
+We have proven that our testbed can observe real SGLang HiCache activity.
+The tiny smoke workload triggered GPU-to-host HiCache writes.
+It did not yet trigger host-to-GPU loads or evictions because there was little memory pressure.
+The next step is to create a pressure/resume workload that forces load and eviction events.
+```
+
+### Milestone 4: Force Load/Evict And Add Direct Hint Hooks
 
 Status: planned.
 
 Goal:
 
 ```text
-Connect agent/session hints to SGLang KV movement decisions.
+Create a pressure/resume workload that triggers host-to-GPU loads and evictions, then connect agent/session hints to SGLang KV movement decisions.
 ```
 
 Example hint:
@@ -283,6 +355,7 @@ sglang_direct_kv/
     run_sglang_server.sh
     run_sglang_hicache_server.sh
     smoke_hicache_request.sh
+    summarize_kv_trace.py
     probe_sglang_kv_paths.py
     extract_sglang_kv_targets.py
     run_workload.py

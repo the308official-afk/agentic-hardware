@@ -13,6 +13,13 @@ OVERLAP_FLAG="${OVERLAP_FLAG:---disable-overlap-schedule}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-triton}"
 PREFILL_ATTENTION_BACKEND="${PREFILL_ATTENTION_BACKEND:-triton}"
 DECODE_ATTENTION_BACKEND="${DECODE_ATTENTION_BACKEND:-triton}"
+AGENTIC_KV_TRACE_ENABLE="${AGENTIC_KV_TRACE_ENABLE:-1}"
+AGENTIC_KV_TRACE_PATH="${AGENTIC_KV_TRACE_PATH:-artifacts/kv_movement_trace.jsonl}"
+
+mkdir -p "$(dirname "${AGENTIC_KV_TRACE_PATH}")"
+export AGENTIC_KV_TRACE_ENABLE
+export AGENTIC_KV_TRACE_PATH
+export PYTHONPATH="$(pwd)/src:${PYTHONPATH:-}"
 
 if command -v nvcc >/dev/null 2>&1; then
   CUDA_BIN_DIR="$(dirname "$(command -v nvcc)")"
