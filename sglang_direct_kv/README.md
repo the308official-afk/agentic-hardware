@@ -732,23 +732,22 @@ source .venv/bin/activate
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
-Tiny smoke test used during implementation:
+Default sweep command:
 
 ```bash
-RESULT_ROOT=artifacts/results/milestone6_smoke \
-FILLER_LIST="2" \
-PROMPT_TOKEN_LIST="256" \
-TIMINGS="late_after_pressure" \
+RESULT_ROOT=artifacts/results/milestone6_design_space \
+FILLER_LIST="12 24 96 192" \
+PROMPT_TOKEN_LIST="1024 1536" \
+TIMINGS="early_before_pressure late_after_pressure" \
 bash scripts/run_milestone6_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
-Smoke result:
+Default sweep result:
 
 ```text
-The sweep runner completed.
-The summarizer wrote summary.json and summary.csv.
-The chart generator wrote SVG charts under charts/.
-With only 2 fillers, cache pressure was low, so the benefit was intentionally small.
+The sweep runner writes metrics and traces for all 24 clean SGLang runs.
+The summarizer writes summary.json and summary.csv.
+The chart generator writes SVG charts under charts/.
 ```
 
 What the default sweep runs:
