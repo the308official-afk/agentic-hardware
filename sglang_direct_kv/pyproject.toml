@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-kv"
+version = "0.1.0"
+description = "Direct SGLang KV instrumentation testbed for hint-guided KV prefetching."
+requires-python = ">=3.10"
+dependencies = [
+  "aiohttp>=3.9",
+  "httpx>=0.27",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "pyyaml>=6.0",
+  "rich>=13.7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,31 @@
+server:
+  base_url: "http://127.0.0.1:30000/v1"
+  model: "Qwen/Qwen2.5-1.5B-Instruct"
+
+workload:
+  num_agents: 10
+  turns_per_agent: 3
+  max_concurrency: 4
+  seed: 7
+
+agent:
+  tool_wait_ms_min: 100
+  tool_wait_ms_max: 1500
+  prompt_tokens_target: 1024
+  priorities:
+    high: 0.2
+    medium: 0.6
+    low: 0.2
+
+generation:
+  max_tokens: 32
+  temperature: 0.0
+  stream: true
+
+policy:
+  generic_prefetch_delay_ms: 200
+  hint_prefetch_lead_time_ms: 300
+  protection_window_ms: 700
+
+output:
+  results_dir: "artifacts/results"

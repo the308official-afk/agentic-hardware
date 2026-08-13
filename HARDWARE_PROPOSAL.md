@@ -302,6 +302,58 @@ hint-aware KV metadata and prefetch interface
 
 Tiering, peer-GPU routing, and compression are scaling extensions.
 
+## Expected Performance Benefits
+
+These figures should be treated as target hypotheses for realistic, tool-heavy agentic workloads, not guaranteed results.
+
+The main benefit is not faster raw token generation. The main benefit is faster and more predictable agent resumption after tool calls.
+
+Expected ballpark gains:
+
+```text
+tool-return-to-first-token latency: 30-70% reduction
+KV reload stall time: 40-80% reduction
+P95/P99 resume latency: 2x-4x improvement under memory pressure
+end-to-end agent task latency: 5-25% reduction
+serving throughput under many paused agents: 10-30% improvement
+wasted prefetch bandwidth: 20-50% reduction vs generic prefetch
+evicted-before-use prefetches: 50-90% reduction
+```
+
+Concrete resume example:
+
+```text
+Baseline:
+  tool returns
+  KV reload stall = 120 ms
+  first token starts at 130 ms
+
+Generic software prefetch:
+  some KV is ready
+  KV reload stall = 40-70 ms
+
+Hint-aware hardware-assisted prefetch:
+  KV is prefetched, prioritized, and protected
+  KV reload stall = 5-20 ms
+```
+
+Concrete task-level example:
+
+```text
+20 model resumes per agent task
+baseline average KV stall = 100 ms
+baseline total KV stall = 2.0 seconds
+
+hint-aware average KV stall = 20 ms
+hint-aware total KV stall = 0.4 seconds
+
+estimated KV stall saved = 1.6 seconds
+```
+
+Manager-facing claim:
+
+> For tool-heavy coding agents with long contexts and many concurrent sessions, hint-guided KV prefetch should reduce post-tool resume stalls by 40-80%, improve P95/P99 resume latency by 2-4x under memory pressure, and reduce end-to-end task latency by roughly 5-25%, depending on tool gap length and HBM pressure.
+
 ## Research Framing
 
 This proposal does not require an entirely new GPU architecture.

@@ -12,6 +12,8 @@ This prototype does not require new GPU hardware. Instead, it emulates hardware-
 
 See also: [Hardware Emulation Environment](HARDWARE_EMULATION_ENVIRONMENT.md)
 
+Direct SGLang testbed: [sglang_direct_kv](sglang_direct_kv/README.md)
+
 ## Workload Scenario
 
 Use coding-agent-style workflows inspired by SWE-bench:

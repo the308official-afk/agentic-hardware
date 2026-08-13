@@ -416,7 +416,17 @@ active decode slowdown kept below N%
 
 ## Recommendation
 
-Start with the PyTorch-based real-memory emulator.
+For the direct SGLang path, start with:
+
+```text
+sglang_direct_kv/
+```
+
+See: [SGLang Direct KV Instrumentation Testbed](sglang_direct_kv/README.md)
+
+Earlier recommendation:
+
+Start with the PyTorch-based real-memory emulator if we want the fastest memory-only prototype.
 
 Reason:
 
