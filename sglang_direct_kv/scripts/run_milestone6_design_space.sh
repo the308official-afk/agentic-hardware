@@ -14,6 +14,21 @@ RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone6_design_space}"
 mkdir -p artifacts "${RESULT_ROOT}"
 
 server_pid=""
+case_idx=0
+
+count_words() {
+  local count=0
+  local item
+  for item in $1; do
+    count=$((count + 1))
+  done
+  echo "${count}"
+}
+
+prompt_token_count="$(count_words "${PROMPT_TOKEN_LIST}")"
+filler_count="$(count_words "${FILLER_LIST}")"
+timing_count="$(count_words "${TIMINGS}")"
+total_cases=$((prompt_token_count * filler_count * (1 + timing_count)))
 
 cleanup_server() {
   if [[ -n "${server_pid}" ]]; then
@@ -53,13 +68,14 @@ run_case() {
   local timing="$2"
   local fillers="$3"
   local prompt_tokens="$4"
+  case_idx=$((case_idx + 1))
   local case_id="${mode}_${timing}_f${fillers}_p${prompt_tokens}"
   local trace="${RESULT_ROOT}/${case_id}_trace.jsonl"
   local metrics="${RESULT_ROOT}/${case_id}_metrics.jsonl"
   local log="${RESULT_ROOT}/${case_id}_server.log"
 
   echo
-  echo "==== Milestone 6 case: ${case_id} ===="
+  echo "==== Milestone 6 case [${case_idx}/${total_cases}]: ${case_id} ===="
   echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS}"
   echo "TARGET_SESSIONS=${TARGET_SESSIONS}"
   echo "FILLER_SESSIONS=${fillers}"
@@ -89,12 +105,19 @@ run_case() {
 
   python scripts/summarize_kv_trace.py --trace "${trace}" | head -35
   cleanup_server
+  echo "==== Completed Milestone 6 case [${case_idx}/${total_cases}]: ${case_id} ===="
 }
 
 if curl -fsS "${HOST_URL}/model_info" >/dev/null 2>&1; then
   echo "A server is already listening at ${HOST_URL}. Stop it before running Milestone 6." >&2
   exit 1
 fi
+
+echo "Milestone 6 design-space sweep"
+echo "Total cases: ${total_cases}"
+echo "Prompt token values: ${PROMPT_TOKEN_LIST}"
+echo "Filler values: ${FILLER_LIST}"
+echo "Hint timings: ${TIMINGS}"
 
 for prompt_tokens in ${PROMPT_TOKEN_LIST}; do
   for fillers in ${FILLER_LIST}; do

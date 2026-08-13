@@ -764,6 +764,15 @@ That is 24 total SGLang server runs by default.
 Each design point starts a fresh SGLang server, runs one case, writes metrics/traces, then stops the server.
 This avoids cache state leaking from one design point into the next.
 
+Progress shown in the terminal:
+
+```text
+Total cases: 24
+==== Milestone 6 case [1/24]: no_prefetch_late_after_pressure_f12_p1024 ====
+...
+==== Completed Milestone 6 case [1/24]: no_prefetch_late_after_pressure_f12_p1024 ====
+```
+
 Output files:
 
 ```text
