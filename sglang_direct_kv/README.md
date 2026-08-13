@@ -804,6 +804,7 @@ x-axis = cache pressure, measured by filler sessions
 y-axis = latency metric
 lines = prefetch timing choices
 separate charts = prompt size
+all_charts.html shows each chart beside an exact-number table
 ```
 
 Summary columns:

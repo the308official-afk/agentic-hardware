@@ -143,10 +143,95 @@ def render_chart(
     return out_path
 
 
-def render_dashboard(charts: list[tuple[str, Path]], out_path: Path) -> None:
-    grouped: dict[str, list[Path]] = defaultdict(list)
-    for section, path in charts:
-        grouped[section].append(path)
+def row_for(rows: list[dict[str, Any]], *, mode: str, filler: float, timing: str | None = None) -> dict[str, Any] | None:
+    for row in rows:
+        if row["mode"] != mode or row["filler_sessions"] != filler:
+            continue
+        if timing is not None and row["hint_timing"] != timing:
+            continue
+        return row
+    return None
+
+
+def fmt_ms(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.3f}"
+
+
+def fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.2f}%"
+
+
+def render_table(headers: list[str], rows: list[list[str]]) -> str:
+    lines = ["<table>", "<thead>", "<tr>"]
+    for header in headers:
+        lines.append(f"<th>{html.escape(header)}</th>")
+    lines.extend(["</tr>", "</thead>", "<tbody>"])
+    for row in rows:
+        lines.append("<tr>")
+        for value in row:
+            lines.append(f"<td>{html.escape(value)}</td>")
+        lines.append("</tr>")
+    lines.extend(["</tbody>", "</table>"])
+    return "\n".join(lines)
+
+
+def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
+    fillers = sorted({row["filler_sessions"] for row in rows})
+    table_rows: list[list[str]] = []
+
+    if section == "Benefit vs Cache Pressure":
+        for filler in fillers:
+            early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
+            late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
+            table_rows.append(
+                [
+                    str(int(filler)),
+                    fmt_ms(early["benefit_vs_no_prefetch_ms"] if early else None),
+                    fmt_ms(late["benefit_vs_no_prefetch_ms"] if late else None),
+                    fmt_pct(late["benefit_vs_no_prefetch_pct"] if late else None),
+                ]
+            )
+        return render_table(["fillers", "early benefit ms", "late benefit ms", "late benefit pct"], table_rows)
+
+    if section == "Resume TTFT vs Cache Pressure":
+        for filler in fillers:
+            baseline = row_for(rows, mode="no_prefetch", filler=filler)
+            early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
+            late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
+            table_rows.append(
+                [
+                    str(int(filler)),
+                    fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
+                    fmt_ms(early["resume_ttft_avg_ms"] if early else None),
+                    fmt_ms(late["resume_ttft_avg_ms"] if late else None),
+                ]
+            )
+        return render_table(["fillers", "no_prefetch ms", "early ms", "late ms"], table_rows)
+
+    if section == "Prefetch Cost vs Cache Pressure":
+        for filler in fillers:
+            early = row_for(rows, mode="hint_aware", filler=filler, timing="early_before_pressure")
+            late = row_for(rows, mode="hint_aware", filler=filler, timing="late_after_pressure")
+            table_rows.append(
+                [
+                    str(int(filler)),
+                    fmt_ms(early["prefetch_ttft_avg_ms"] if early else None),
+                    fmt_ms(late["prefetch_ttft_avg_ms"] if late else None),
+                ]
+            )
+        return render_table(["fillers", "early prefetch ms", "late prefetch ms"], table_rows)
+
+    return ""
+
+
+def render_dashboard(charts: list[tuple[str, Path, list[dict[str, Any]]]], out_path: Path) -> None:
+    grouped: dict[str, list[tuple[Path, list[dict[str, Any]]]]] = defaultdict(list)
+    for section, path, rows in charts:
+        grouped[section].append((path, rows))
 
     lines = [
         "<!doctype html>",
@@ -161,29 +246,42 @@ def render_dashboard(charts: list[tuple[str, Path]], out_path: Path) -> None:
         "    p { margin: 0 0 24px; color: #4b5563; line-height: 1.45; }",
         "    section { margin: 28px 0 42px; }",
         "    h2 { font-size: 20px; margin: 0 0 14px; }",
-        "    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 18px; }",
-        "    .chart { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }",
+        "    .grid { display: grid; gap: 18px; }",
+        "    .panel { display: grid; grid-template-columns: minmax(520px, 1.8fr) minmax(320px, 1fr); gap: 16px; align-items: start; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }",
+        "    .chart { min-width: 0; }",
+        "    .numbers { overflow-x: auto; }",
         "    img { display: block; width: 100%; height: auto; }",
+        "    table { width: 100%; border-collapse: collapse; font-size: 13px; }",
+        "    th { text-align: left; background: #f3f4f6; }",
+        "    th, td { border-bottom: 1px solid #e5e7eb; padding: 7px 8px; white-space: nowrap; }",
+        "    td { text-align: right; }",
+        "    td:first-child, th:first-child { text-align: left; }",
         "    code { background: #eef2ff; padding: 2px 5px; border-radius: 4px; }",
+        "    @media (max-width: 900px) { .panel { grid-template-columns: 1fr; } }",
         "  </style>",
         "</head>",
         "<body>",
         "  <h1>Milestone 6 Design-Space Charts</h1>",
-        "  <p>Each chart uses cache pressure on the x-axis. Lines represent prefetch timing choices. Separate panels represent prompt sizes.</p>",
+        "  <p>Each chart uses cache pressure on the x-axis. Lines represent prefetch timing choices. Separate panels represent prompt sizes. Positive benefit means hint-aware prefetch reduced resume TTFT compared with no_prefetch.</p>",
     ]
 
     for section in ("Benefit vs Cache Pressure", "Resume TTFT vs Cache Pressure", "Prefetch Cost vs Cache Pressure"):
-        paths = grouped.get(section, [])
-        if not paths:
+        panels = grouped.get(section, [])
+        if not panels:
             continue
         lines.append("  <section>")
         lines.append(f"    <h2>{html.escape(section)}</h2>")
         lines.append('    <div class="grid">')
-        for path in sorted(paths):
+        for path, rows in sorted(panels, key=lambda item: item[0].name):
             rel = path.relative_to(out_path.parent)
             alt = path.stem.replace("_", " ")
-            lines.append('      <div class="chart">')
-            lines.append(f'        <img src="{html.escape(str(rel))}" alt="{html.escape(alt)}">')
+            lines.append('      <div class="panel">')
+            lines.append('        <div class="chart">')
+            lines.append(f'          <img src="{html.escape(str(rel))}" alt="{html.escape(alt)}">')
+            lines.append("        </div>")
+            lines.append('        <div class="numbers">')
+            lines.append(chart_table(section, rows))
+            lines.append("        </div>")
             lines.append("      </div>")
         lines.append("    </div>")
         lines.append("  </section>")
@@ -207,7 +305,7 @@ def main() -> None:
     rows = read_rows(root / "summary.csv")
     charts_dir = root / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
-    charts: list[tuple[str, Path]] = []
+    charts: list[tuple[str, Path, list[dict[str, Any]]]] = []
 
     for prompt_tokens in sorted({row["prompt_tokens"] for row in rows}):
         prompt_rows = [row for row in rows if row["prompt_tokens"] == prompt_tokens]
@@ -222,6 +320,7 @@ def main() -> None:
                     y_label="Benefit vs no_prefetch (ms)",
                     out_path=charts_dir / f"benefit_vs_pressure_{suffix}.svg",
                 ),
+                prompt_rows,
             )
         )
         charts.append(
@@ -235,6 +334,7 @@ def main() -> None:
                     out_path=charts_dir / f"resume_ttft_vs_pressure_{suffix}.svg",
                     include_baseline=True,
                 ),
+                prompt_rows,
             )
         )
         charts.append(
@@ -247,6 +347,7 @@ def main() -> None:
                     y_label="Prefetch request TTFT (ms)",
                     out_path=charts_dir / f"prefetch_cost_vs_pressure_{suffix}.svg",
                 ),
+                prompt_rows,
             )
         )
 
