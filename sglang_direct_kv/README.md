@@ -1388,7 +1388,201 @@ Smoke dashboard:
 artifacts/results/milestone8_smoke/charts/all_charts.html
 ```
 
-### Milestone 9: Manager Demo Results
+### Milestone 9: Multi-Session Agent Traffic With Hint Outcome Analysis
+
+Status: implemented as a realistic traffic milestone.
+
+What it is:
+
+```text
+Run many overlapping agent sessions instead of one target plus fillers.
+Each session has:
+1. an initial model request
+2. a tool wait
+3. an optional frontend hint/prefetch
+4. a replay request when the tool returns
+```
+
+Why we need it:
+
+```text
+The earlier milestones isolated the mechanism.
+This milestone creates a more realistic serving scenario:
+many agent sessions arrive over time, each has its own replay deadline, and their KV cache states interfere with each other.
+This is where too-early, too-late, and unprotected prefetch behavior becomes visible.
+```
+
+Mental model:
+
+```text
+0 ms:     Agent 000 initial request arrives
+120 ms:   Agent 001 initial request arrives
+240 ms:   Agent 002 initial request arrives
+...
+
+Agent 000 enters tool_wait and gets a prefetch hint.
+Agent 001 enters tool_wait and gets a different replay deadline.
+Agent 002 has a shorter tool call and may replay before Agent 000.
+
+The frontend can send hints, but the GPU memory movement path still sees generic memory movement.
+It does not know which KV belongs to which agent, which replay deadline matters, or which prefetched KV should be protected.
+```
+
+Modes:
+
+| Mode | Meaning |
+| --- | --- |
+| `no_prefetch` | Initial requests and replays only. |
+| `request_warm` | Dynamo-like frontend sends a normal SGLang warm request during tool wait. |
+| `direct_load` | Frontend sends the direct SGLang load-back trigger during tool wait. |
+| `oracle_direct_load` | Frontend sends direct load close to replay time. This is the timing upper bound. |
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone9_agentic_traffic \
+MODES="no_prefetch request_warm direct_load oracle_direct_load" \
+SESSION_COUNT=12 \
+ARRIVAL_GAP_MS=120 \
+TOOL_WAIT_LIST_MS="250 500 900 1600" \
+PROMPT_TOKEN_LIST="768 1024 1536" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=120 \
+bash scripts/run_milestone9_agentic_traffic.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+What the default run does:
+
+```text
+Runs 4 clean SGLang server runs:
+1. no_prefetch
+2. request_warm
+3. direct_load
+4. oracle_direct_load
+
+Within each run, 12 agent sessions arrive 120 ms apart.
+Each session has a tool wait selected from 250, 500, 900, and 1600 ms.
+Each session has a prompt size selected from 768, 1024, and 1536 target tokens.
+```
+
+Progress shown in the terminal:
+
+```text
+Total cases: 4
+==== Milestone 9 traffic case [1/4]: no_prefetch ====
+...
+==== Completed Milestone 9 traffic case [1/4]: no_prefetch ====
+```
+
+Output files:
+
+```text
+artifacts/results/milestone9_agentic_traffic/no_prefetch_traffic_trace.jsonl
+artifacts/results/milestone9_agentic_traffic/no_prefetch_traffic_metrics.jsonl
+artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.csv
+artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.md
+artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.html
+
+The same files are produced for request_warm, direct_load, and oracle_direct_load.
+```
+
+Outcome labels:
+
+| Outcome | Meaning |
+| --- | --- |
+| `useful_prefetch` | Hint completed before replay, and replay did not need KV load-back. |
+| `late_prefetch` | Replay started before the hint/prefetch completed. |
+| `too_early_no_load_then_evicted` | Hint fired while KV was still resident, did not force useful movement/protection, eviction pressure happened, and replay later loaded KV. |
+| `too_early_or_unprotected` | Prefetch loaded KV, eviction pressure happened later, and replay still loaded KV. |
+| `resume_still_loaded_kv` | Hint happened, but replay still paid KV load-back. |
+| `no_prefetch_needed` | KV was already resident; no load was needed. |
+| `no_hint` | Baseline mode with no frontend hint. |
+
+Important events to observe:
+
+```text
+agent.session_arrival
+agent.tool_wait_start
+agent.hint_submitted
+agent.hint_prefetch_start
+agent.direct_kv_load_attempt
+agent.direct_kv_load_request.end
+agent.hint_prefetch_end
+agent.replay_due
+agent.resume_start
+hicache.load
+hicache.evict_device
+hiradix.init_load_back
+hiradix.load_back
+hiradix.evict
+```
+
+Why this supports the hardware argument:
+
+```text
+If request_warm or direct_load fires too early, KV can be evicted before replay.
+If it fires too late, replay still stalls.
+If many sessions overlap, one session's prefetch can compete with another session's active decode or useful KV.
+
+Software can issue the hint.
+The missing piece is enforcement:
+deadline-aware scheduling, priority-aware migration, and temporary residency protection in the memory movement path.
+```
+
+How to run a small smoke test:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone9_smoke \
+MODES="no_prefetch direct_load" \
+SESSION_COUNT=4 \
+ARRIVAL_GAP_MS=100 \
+TOOL_WAIT_LIST_MS="250 600" \
+PROMPT_TOKEN_LIST="512 768" \
+HINT_DELAY_MS=100 \
+ORACLE_LEAD_MS=100 \
+bash scripts/run_milestone9_agentic_traffic.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Smoke result observed on EC2:
+
+```text
+no_prefetch:
+  sessions: 4
+  outcomes:
+    no_hint: 4
+
+direct_load:
+  sessions: 4
+  direct_load attempts: 4
+  outcomes:
+    no_prefetch_needed: 2
+    too_early_no_load_then_evicted: 2
+```
+
+What the direct_load smoke means:
+
+```text
+For the short 250 ms tool waits, the hint was enough because replay did not need KV load-back.
+For the longer 600 ms tool waits, the hint fired about 500 ms before replay.
+At hint time, KV was still resident, so no useful load-back happened.
+Then eviction pressure happened before replay.
+At replay time, SGLang still had to load KV.
+
+This is the first realistic signal for the hardware argument:
+software issued a hint, but without deadline-aware protection/residency enforcement, an early hint did not guarantee useful KV residency at replay time.
+```
+
+Smoke reports:
+
+```text
+artifacts/results/milestone9_smoke/no_prefetch_outcomes/hint_outcomes.html
+artifacts/results/milestone9_smoke/direct_load_outcomes/hint_outcomes.html
+```
+
+### Milestone 10: Manager Demo Results
 
 Status: planned.
 
@@ -1459,7 +1653,10 @@ sglang_direct_kv/
     run_milestone6_design_space.sh
     run_milestone7_direct_hooks.sh
     run_milestone8_direct_load_design_space.sh
+    run_milestone9_agentic_traffic.sh
+    run_agentic_traffic_workload.py
     run_pressure_resume_workload.py
+    analyze_hint_outcomes.py
     summarize_mode_comparison.py
     summarize_design_space.py
     plot_design_space.py
