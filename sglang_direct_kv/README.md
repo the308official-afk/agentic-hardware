@@ -2297,6 +2297,44 @@ agentic_prefetch_timeline.html:
   copy/KV-level late_prefetch sessions: 1
 ```
 
+The timeline HTML now contains:
+
+```text
+Summary:
+  run-level counts, visible HtoD copy sessions, late prefetch sessions, average prefetch margin
+
+Timeline:
+  one row per agent session with initial request, tool wait, hint, SGLang KV load, CUDA HtoD copy, replay due, and replay
+
+Key Observations Per Session:
+  a simple explanation of what happened for each agent and what deduction to make
+
+Session Details:
+  the exact timing numbers used to build the chart and observations
+```
+
+Smoke per-session timeline summary:
+
+| Session | Tool Wait | SGLang KV Load Window | CUDA HtoD Copy Window | Replay Due | Margin | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `agent_000` | `913 ms` | `31644.234 -> 31767.257 ms` | `31661.501 -> 31766.530 ms` | `32093.616 ms` | `+327.086 ms` | Clean useful prefetch |
+| `agent_001` | `1583 ms` | `31813.107 -> 31816.774 ms` | not confidently attributed | `32764.811 ms` | `+948.037 ms` | SGLang-level useful prefetch |
+| `agent_002` | `1347 ms` | `31651.793 -> 31656.297 ms` | not confidently attributed | `32528.412 ms` | `+872.115 ms` | SGLang-level useful prefetch |
+| `agent_003` | `1443 ms` | `44275.895 -> 44348.003 ms` | not confidently attributed | `33089.015 ms` | `-11258.988 ms` | Late prefetch |
+| `agent_004` | `689 ms` | `31805.676 -> 31994.630 ms` | `31832.359 -> 31993.362 ms` | `32334.998 ms` | `+341.636 ms` | Clean useful prefetch |
+| `agent_005` | `1138 ms` | `31820.643 -> 31825.232 ms` | not confidently attributed | `32784.271 ms` | `+959.039 ms` | SGLang-level useful prefetch |
+
+Smoke per-session interpretation:
+
+| Session | Key Observation | Deduction |
+| --- | --- | --- |
+| `agent_000` | SGLang KV load and profiler-visible CUDA HtoD copies both happened during the hint path, finishing about `327 ms` before replay was due. | This is a clean success case: the hint moved KV early enough. |
+| `agent_001` | SGLang KV load finished about `948 ms` before replay, but profiler HtoD rows were not confidently attached to this session. | Useful SGLang-level evidence, but weaker CUDA-level evidence. |
+| `agent_002` | SGLang KV load finished about `872 ms` before replay, again without confident profiler HtoD attribution. | Another useful SGLang-level success case. |
+| `agent_003` | The hint was submitted before replay, but SGLang KV load did not occur until about `11259 ms` after replay was due. | This is the strongest failure case: software knew to prefetch, but the normal path acted too late. |
+| `agent_004` | SGLang KV load and profiler-visible CUDA HtoD copies both happened during the hint path, finishing about `342 ms` before replay was due. | This is another clean success case. |
+| `agent_005` | SGLang KV load finished about `959 ms` before replay, but profiler HtoD rows were not confidently attached to this session. | Useful SGLang-level success, but not a strong CUDA-attribution row. |
+
 Important interpretation of the two late-prefetch counts:
 
 ```text

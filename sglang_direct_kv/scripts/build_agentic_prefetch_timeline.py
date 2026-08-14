@@ -254,6 +254,49 @@ def fmt(value: Any) -> str:
     return html.escape(str(value))
 
 
+def fmt_ms(value: Any) -> str:
+    number = to_float(value)
+    if number is None:
+        return "not observed"
+    return f"{number:.3f} ms"
+
+
+def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
+    margin = to_float(row.get("prefetch_margin_ms"))
+    torch_copy_events = int(row.get("torch_h2d_copy_events") or 0)
+    sglang_events = int(row.get("sglang_copy_events") or 0)
+
+    if row.get("no_visible_prefetch"):
+        status = "No visible prefetch"
+        observation = "The trace did not show a SGLang KV load or CUDA HtoD copy for this hint."
+        deduction = "This session is weak evidence for movement timing; use it mainly to show missing visibility."
+    elif row.get("late_prefetch") is True and margin is not None:
+        status = "Late prefetch"
+        observation = f"The hinted KV movement completed {abs(margin):.3f} ms after replay was already due."
+        deduction = "The software hint existed, but the normal serving/KV path did not act early enough."
+    elif torch_copy_events > 0 and margin is not None:
+        status = "Clean useful prefetch"
+        observation = f"SGLang KV load and CUDA HtoD copies were visible, and movement completed {margin:.3f} ms before replay."
+        deduction = "This is the clean success case: the hint moved KV early enough for the agent replay."
+    elif sglang_events > 0 and margin is not None:
+        status = "SGLang-level useful prefetch"
+        observation = f"SGLang KV load was visible and completed {margin:.3f} ms before replay, but CUDA HtoD rows were not confidently attributed."
+        deduction = "This is useful SGLang-level evidence, but weaker CUDA-level evidence."
+    else:
+        status = "Incomplete timing"
+        observation = "Some required timing fields were missing."
+        deduction = "Do not use this row as a strong success or failure example."
+
+    evidence = (
+        f"tool wait {fmt_ms(row.get('tool_wait_ms'))}; "
+        f"SGLang load {fmt_ms(row.get('sglang_copy_start_ms'))} -> {fmt_ms(row.get('sglang_copy_end_ms'))}; "
+        f"CUDA HtoD {fmt_ms(row.get('torch_copy_start_ms'))} -> {fmt_ms(row.get('torch_copy_end_ms'))}; "
+        f"replay due {fmt_ms(row.get('replay_due_ms'))}; "
+        f"margin {fmt_ms(row.get('prefetch_margin_ms'))}"
+    )
+    return status, observation, deduction + " " + evidence
+
+
 def choose_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
     late = [row for row in rows if row.get("late_prefetch") is True]
     visible = [row for row in rows if row.get("torch_h2d_copy_events", 0)]
@@ -371,7 +414,11 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "table{border-collapse:collapse;width:100%;font-size:13px;background:white}",
         "th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;white-space:nowrap}",
         "th{background:#f3f4f6;font-weight:700}",
+        ".wrap{white-space:normal;line-height:1.35;min-width:260px}",
+        ".status{font-weight:700}",
         ".bad{color:#b91c1c;font-weight:700}",
+        ".good{color:#166534;font-weight:700}",
+        ".warn{color:#92400e;font-weight:700}",
         "</style>",
         "</head>",
         "<body>",
@@ -381,6 +428,25 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     for key, value in summary.items():
         lines.append(f"<tr><th>{html.escape(key)}</th><td>{fmt(value)}</td></tr>")
     lines.extend(["</tbody></table></div>", '<div class="panel"><h2>Timeline</h2>', *svg, "</div>"])
+    lines.append('<div class="panel"><h2>Key Observations Per Session</h2><table><thead><tr>')
+    for col in ("session_id", "status", "what happened", "deduction and evidence"):
+        lines.append(f"<th>{html.escape(col)}</th>")
+    lines.append("</tr></thead><tbody>")
+    for row in selected_rows:
+        status, observation, deduction = session_observation(row)
+        if row.get("late_prefetch"):
+            status_class = "bad"
+        elif int(row.get("torch_h2d_copy_events") or 0) > 0 and not row.get("late_prefetch"):
+            status_class = "good"
+        else:
+            status_class = "warn"
+        lines.append("<tr>")
+        lines.append(f"<td>{fmt(row.get('session_id', ''))}</td>")
+        lines.append(f'<td class="status {status_class}">{fmt(status)}</td>')
+        lines.append(f'<td class="wrap">{fmt(observation)}</td>')
+        lines.append(f'<td class="wrap">{fmt(deduction)}</td>')
+        lines.append("</tr>")
+    lines.append("</tbody></table></div>")
     lines.append('<div class="panel"><h2>Session Details</h2><table><thead><tr>')
     for col in columns:
         lines.append(f"<th>{html.escape(col)}</th>")
