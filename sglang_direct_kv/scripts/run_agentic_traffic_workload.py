@@ -91,6 +91,7 @@ async def chat_once(
     prompt: str,
     max_tokens: int,
     label: str,
+    custom_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "model": model,
@@ -99,6 +100,8 @@ async def chat_once(
         "temperature": 0,
         "stream": True,
     }
+    if custom_params:
+        payload["custom_params"] = custom_params
     start = time.perf_counter()
     first_token_time: float | None = None
     chunks = 0
@@ -224,7 +227,24 @@ async def main_async() -> None:
                     }
                 )
                 with range_scope(f"agentic_kv:client_request:session={session.session_id}:phase={phase}:mode={args.mode}"):
-                    row = await chat_once(client, args.base_url, args.model, prompt, max_tokens, label)
+                    row = await chat_once(
+                        client,
+                        args.base_url,
+                        args.model,
+                        prompt,
+                        max_tokens,
+                        label,
+                        custom_params={
+                            "agentic_kv": {
+                                "session_id": session.session_id,
+                                "phase": phase,
+                                "label": label,
+                                "mode": args.mode,
+                                "prompt_hash": p_hash,
+                                "priority": session.priority,
+                            }
+                        },
+                    )
                 row.update(
                     {
                         "phase": phase,

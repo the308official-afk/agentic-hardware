@@ -1754,6 +1754,24 @@ There are now two profiling paths:
 The worker-local profiler is the recommended first path because external Nsight has not yet exposed SGLang's worker GPU activity on the current EC2 setup.
 ```
 
+Milestone 10B adds KV/block attribution:
+
+```text
+The trace hooks record extra KV context on SGLang movement calls:
+  - call_id
+  - node_id
+  - request/session tags passed through SGLang custom_params
+  - direction: host_to_device / device_to_host / evict
+  - host_indices
+  - device_indices
+  - layer_id for per-layer host-pool movement
+
+This lets the CUDA copy timeline say:
+  this CUDA copy overlapped this SGLang KV movement window,
+  and that window was moving these host/device KV indices.
+  when SGLang request tags are available, the window can also show agent_000 / hint_prefetch / replay.
+```
+
 Why we need it:
 
 ```text
@@ -1795,6 +1813,7 @@ HICACHE_SIZE_GB=8 \
 ENABLE_NSYS=0 \
 AGENTIC_KV_TORCH_PROFILER_ENABLE=1 \
 AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=40 \
+AGENTIC_KV_TRACE_MAX_EXACT_INDICES=512 \
 SESSION_COUNT=12 \
 ARRIVAL_GAP_MS=120 \
 TOOL_WAIT_LIST_MS="250 500 900 1600" \
@@ -1813,6 +1832,7 @@ HICACHE_SIZE_GB=8 \
 ENABLE_NSYS=0 \
 AGENTIC_KV_TORCH_PROFILER_ENABLE=1 \
 AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=40 \
+AGENTIC_KV_TRACE_MAX_EXACT_INDICES=512 \
 SESSION_COUNT=4 \
 ARRIVAL_GAP_MS=120 \
 TOOL_WAIT_LIST_MS="500 900" \
@@ -1868,6 +1888,12 @@ kernel-like events in torch CUDA profile summary
 memcpy-like events in torch CUDA profile summary
 per-copy start/end rows in torch CUDA copy timeline CSV
 overlap between copies and hicache/agent windows in torch CUDA trace correlation report
+KV context fields on trace events:
+  kv_context.direction
+  kv_context.node_id
+  kv_context.host_indices
+  kv_context.device_indices
+  kv_context.layer_id
 optional Nsight NVTX/runtime tables
 ```
 
@@ -1945,6 +1971,8 @@ Observed in the exported worker trace:
 
 This fixes the immediate visibility problem:
 we can now see CUDA activity from inside the SGLang worker.
+The next fix adds KV/block context:
+we can now line up CUDA transfer events with SGLang host/device KV index movement windows.
 ```
 
 Correlation outputs:
@@ -1964,6 +1992,63 @@ oracle_direct_load_torch_cuda_copy_timeline.csv:
     direction: h2d / d2h / d2d / memset / unknown
     bytes
     overlapping agent or KV window when available
+    enclosing agent session and phase when available
+    overlapping KV direction, node id, layer id, host indices, and device indices when available
+```
+
+Simple example of the new evidence:
+
+```text
+hostpool.load_to_device_per_layer.start:
+  layer_id = 12
+  host_indices = [1040, 1041, 1042, ...]
+  device_indices = [88, 89, 90, ...]
+
+CUDA copy timeline row:
+  Memcpy HtoD started at 25140.015 ms
+  Memcpy HtoD ended at 25140.016 ms
+  enclosing_agent_session_id = agent_000
+  enclosing_agent_phase = hint_prefetch
+  overlap_event = hostpool.load_to_device_per_layer
+  overlap_kv_agent_session_id = agent_000
+  overlap_kv_agent_phase = hint_prefetch
+  overlap_layer_id = 12
+  overlap_host_indices = [1040, 1041, 1042, ...]
+  overlap_device_indices = [88, 89, 90, ...]
+
+Simple meaning:
+  this host-to-device copy happened during Agent 000's hint path,
+  while SGLang was loading those KV indices for that layer.
+```
+
+Current Milestone 10B validation:
+
+```text
+Completed on EC2 with:
+  RESULT_ROOT=artifacts/results/milestone10b_custom_tag_block_smoke
+  MODE=oracle_direct_load
+  SESSION_COUNT=4
+  AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=180
+
+The run produced:
+  CUDA events: 35787
+  reported windows with CUDA activity: 150
+
+Example observed row:
+  name = Memcpy HtoD (Pinned -> Device)
+  direction = h2d
+  bytes = 443392
+  overlap_event = hostpool.load_to_device_per_layer
+  overlap_kv_agent_session_id = agent_000
+  overlap_kv_agent_phase = hint_prefetch
+  overlap_kv_agent_label = agent_000_direct_load_hint
+  overlap_kv_layer_id = 0
+  overlap_host_index_count = 1055
+  overlap_device_index_count = 1055
+
+Simple meaning:
+  we can now show a profiler-visible host-to-device CUDA copy
+  and tie it to the SGLang KV indices being loaded for a specific agent hint request.
 ```
 
 Important caution:

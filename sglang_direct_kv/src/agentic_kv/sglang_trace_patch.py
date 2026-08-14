@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -13,6 +15,8 @@ from agentic_kv.torch_cuda_profiler import record_event as record_torch_profiler
 
 
 _INSTALLED = False
+_CALL_SEQ = 0
+_SESSION_RE = re.compile(r"coding agent session ([A-Za-z0-9_.:-]+)")
 
 
 def _trace_path() -> Path:
@@ -38,6 +42,28 @@ def _tensor_summary(value: Any) -> dict[str, Any]:
     except Exception:
         pass
     try:
+        is_integer_tensor = "int" in str(getattr(value, "dtype", "")).lower()
+        if is_integer_tensor and "numel" in summary:
+            max_exact = int(os.environ.get("AGENTIC_KV_TRACE_MAX_EXACT_INDICES", "256"))
+            flat = value.detach().flatten().cpu()
+            summary["index_count"] = int(flat.numel())
+            if int(flat.numel()) > 0:
+                summary["min"] = int(flat.min().item())
+                summary["max"] = int(flat.max().item())
+                values = [int(item) for item in flat.tolist()]
+                digest = hashlib.sha1(",".join(str(item) for item in values).encode("utf-8")).hexdigest()[:16]
+                summary["sha1_16"] = digest
+                if int(flat.numel()) <= max_exact:
+                    summary["values"] = values
+                else:
+                    sample_count = int(os.environ.get("AGENTIC_KV_TRACE_TENSOR_SAMPLE", "8"))
+                    if sample_count > 0:
+                        summary["head"] = values[:sample_count]
+                        summary["tail"] = values[-sample_count:]
+            return summary
+    except Exception:
+        pass
+    try:
         if "numel" in summary and summary["numel"] <= 16:
             summary["values"] = value.detach().cpu().tolist()
         elif "numel" in summary and summary["numel"] > 16:
@@ -49,6 +75,195 @@ def _tensor_summary(value: Any) -> dict[str, Any]:
     except Exception:
         pass
     return summary
+
+
+def _arg_value(args: tuple[Any, ...], kwargs: dict[str, Any], position: int, name: str) -> Any:
+    if name in kwargs:
+        return kwargs[name]
+    if len(args) > position:
+        return args[position]
+    return None
+
+
+def _index_context(value: Any) -> dict[str, Any] | None:
+    if value is None or not hasattr(value, "shape") or not hasattr(value, "numel"):
+        return None
+    summary = _tensor_summary(value)
+    return {
+        key: value
+        for key, value in summary.items()
+        if key
+        in {
+            "type",
+            "shape",
+            "dtype",
+            "device",
+            "numel",
+            "index_count",
+            "min",
+            "max",
+            "sha1_16",
+            "values",
+            "head",
+            "tail",
+        }
+    }
+
+
+def _cache_operation_summary(operation: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {"type": type(operation).__name__, "object_id": hex(id(operation))}
+    for attr in ("node_id", "node_ids", "priority", "request_id", "last_hash"):
+        if hasattr(operation, attr):
+            try:
+                out[attr] = _safe_summary(getattr(operation, attr))
+            except Exception:
+                pass
+    for attr in ("host_indices", "device_indices"):
+        if hasattr(operation, attr):
+            try:
+                out[attr] = _index_context(getattr(operation, attr))
+            except Exception:
+                pass
+    return out
+
+
+def _int_list_signature(values: Any) -> dict[str, Any]:
+    if not isinstance(values, list):
+        return {}
+    out: dict[str, Any] = {"count": len(values)}
+    if values:
+        digest = hashlib.sha1(",".join(str(int(item)) for item in values).encode("utf-8")).hexdigest()[:16]
+        out["sha1_16"] = digest
+        out["head"] = [int(item) for item in values[:8]]
+        out["tail"] = [int(item) for item in values[-8:]]
+    return out
+
+
+def _node_id(value: Any) -> Any:
+    if value is None:
+        return None
+    try:
+        return getattr(value, "id")
+    except Exception:
+        return None
+
+
+def _req_context(req: Any) -> dict[str, Any]:
+    if req is None:
+        return {}
+    context: dict[str, Any] = {"type": type(req).__name__}
+    for attr in ("rid", "req_pool_idx", "priority", "host_hit_length", "cache_protected_len", "kv_committed_len"):
+        if hasattr(req, attr):
+            try:
+                context[attr] = _safe_summary(getattr(req, attr))
+            except Exception:
+                pass
+    try:
+        sampling_params = getattr(req, "sampling_params", None)
+        custom_params = getattr(sampling_params, "custom_params", None)
+        if isinstance(custom_params, dict):
+            agentic = custom_params.get("agentic_kv")
+            if isinstance(agentic, dict):
+                context["agent_session_id"] = _safe_summary(agentic.get("session_id"))
+                context["agent_phase"] = _safe_summary(agentic.get("phase"))
+                context["agent_label"] = _safe_summary(agentic.get("label"))
+                context["agent_mode"] = _safe_summary(agentic.get("mode"))
+                context["agent_prompt_hash"] = _safe_summary(agentic.get("prompt_hash"))
+                context["agent_priority"] = _safe_summary(agentic.get("priority"))
+    except Exception:
+        pass
+    try:
+        text = getattr(req, "origin_input_text", "") or ""
+        match = _SESSION_RE.search(text)
+        if match and "agent_session_id" not in context:
+            context["agent_session_id"] = match.group(1)
+        context["origin_input_text_head"] = text[:160]
+    except Exception:
+        pass
+    for attr in ("origin_input_ids", "fill_ids", "output_ids"):
+        if hasattr(req, attr):
+            try:
+                context[attr] = _int_list_signature(getattr(req, attr))
+            except Exception:
+                pass
+    for attr in ("prefix_indices",):
+        if hasattr(req, attr):
+            try:
+                context[attr] = _index_context(getattr(req, attr))
+            except Exception:
+                pass
+    for attr in ("last_node", "last_host_node"):
+        if hasattr(req, attr):
+            try:
+                context[f"{attr}_id"] = _node_id(getattr(req, attr))
+            except Exception:
+                pass
+    return {key: value for key, value in context.items() if value not in (None, "", [], {})}
+
+
+def _queue_context(obj: Any, queue_name: str) -> list[dict[str, Any]]:
+    try:
+        queue = getattr(obj, queue_name)
+    except Exception:
+        return []
+    try:
+        return [_cache_operation_summary(operation) for operation in list(queue)]
+    except Exception:
+        return []
+
+
+def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[Any, ...], kwargs: dict[str, Any], result: Any = None) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+
+    if method_name == "load":
+        context["direction"] = "host_to_device"
+        context["host_indices"] = _index_context(_arg_value(args, kwargs, 0, "host_indices"))
+        context["device_indices"] = _index_context(result)
+        context["priority"] = _safe_summary(_arg_value(args, kwargs, 1, "priority"))
+        context["node_id"] = _safe_summary(_arg_value(args, kwargs, 2, "node_id"))
+    elif method_name == "write":
+        context["direction"] = "device_to_host"
+        context["device_indices"] = _index_context(_arg_value(args, kwargs, 0, "device_indices"))
+        context["host_indices"] = _index_context(result)
+        context["priority"] = _safe_summary(_arg_value(args, kwargs, 1, "priority"))
+        context["node_id"] = _safe_summary(_arg_value(args, kwargs, 2, "node_id"))
+    elif method_name == "evict_device":
+        context["direction"] = "device_evict"
+        context["device_indices"] = _index_context(_arg_value(args, kwargs, 0, "device_indices"))
+    elif method_name == "evict_host":
+        context["direction"] = "host_evict"
+        context["host_indices"] = _index_context(_arg_value(args, kwargs, 0, "host_indices"))
+    elif method_name == "prefetch":
+        context["direction"] = "storage_to_host"
+        context["request_id"] = _safe_summary(_arg_value(args, kwargs, 0, "request_id"))
+        context["host_indices"] = _index_context(_arg_value(args, kwargs, 1, "host_indices"))
+        new_input_tokens = _arg_value(args, kwargs, 2, "new_input_tokens")
+        context["new_input_token_count"] = len(new_input_tokens) if isinstance(new_input_tokens, list) else None
+        context["last_hash"] = _safe_summary(_arg_value(args, kwargs, 3, "last_hash"))
+    elif method_name == "start_loading":
+        context["direction"] = "host_to_device"
+        context["queued_ops"] = _queue_context(self_obj, "load_queue")
+        context["queued_op_count"] = len(context["queued_ops"])
+    elif method_name == "start_writing":
+        context["direction"] = "device_to_host"
+        context["queued_ops"] = _queue_context(self_obj, "write_queue")
+        context["queued_op_count"] = len(context["queued_ops"])
+    elif method_name == "load_to_device_per_layer":
+        context["direction"] = "host_to_device"
+        context["host_indices"] = _index_context(_arg_value(args, kwargs, 1, "host_indices"))
+        context["device_indices"] = _index_context(_arg_value(args, kwargs, 2, "device_indices"))
+        context["layer_id"] = _safe_summary(_arg_value(args, kwargs, 3, "layer_id"))
+        context["io_backend"] = _safe_summary(_arg_value(args, kwargs, 4, "io_backend"))
+    elif method_name == "backup_from_device_all_layer":
+        context["direction"] = "device_to_host"
+        context["host_indices"] = _index_context(_arg_value(args, kwargs, 1, "host_indices"))
+        context["device_indices"] = _index_context(_arg_value(args, kwargs, 2, "device_indices"))
+        context["io_backend"] = _safe_summary(_arg_value(args, kwargs, 3, "io_backend"))
+    elif method_name in {"cache_finished_req", "cache_unfinished_req"}:
+        context["direction"] = "cache_request"
+        context["request"] = _req_context(_arg_value(args, kwargs, 0, "req"))
+
+    return {key: value for key, value in context.items() if value is not None}
 
 
 def _safe_len(value: Any) -> int | None:
@@ -208,15 +423,20 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
 
     @functools.wraps(original)
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        global _CALL_SEQ
+        _CALL_SEQ += 1
+        call_id = f"{os.getpid()}-{_CALL_SEQ}"
         start_ns = time.perf_counter_ns()
         nvtx_name = f"agentic_kv:{event_name}:{cls.__name__}.{method_name}"
         start_event = {
             "event": f"{event_name}.start",
+            "call_id": call_id,
             "class": cls.__name__,
             "method": method_name,
             "self": _interesting_attr_summary(self),
             "args": [_safe_summary(arg) for arg in args],
             "kwargs": {key: _safe_summary(value) for key, value in kwargs.items()},
+            "kv_context": _kv_context(event_name, method_name, self, args, kwargs),
         }
         _write_event(start_event)
         maybe_start_torch_profiler(nvtx_name)
@@ -227,6 +447,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             _write_event(
                 {
                     "event": f"{event_name}.error",
+                    "call_id": call_id,
                     "class": cls.__name__,
                     "method": method_name,
                     "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
@@ -239,12 +460,14 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         _write_event(
             {
                 "event": f"{event_name}.end",
+                "call_id": call_id,
                 "class": cls.__name__,
                 "method": method_name,
                 "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
                 "self": _interesting_attr_summary(self),
                 "result_metadata": _result_metadata(result),
                 "result": _safe_summary(result),
+                "kv_context": _kv_context(event_name, method_name, self, args, kwargs, result),
             }
         )
         record_torch_profiler_event(nvtx_name)
@@ -293,6 +516,8 @@ def install_sglang_kv_trace() -> None:
             "evict_device": "hicache.evict_device",
             "evict_host": "hicache.evict_host",
             "prefetch": "hicache.prefetch",
+            "start_loading": "hicache.start_loading",
+            "start_writing": "hicache.start_writing",
         },
     )
     _try_patch(
@@ -318,5 +543,21 @@ def install_sglang_kv_trace() -> None:
             "evict": "radix.evict",
         },
     )
+    memory_pool_host = lambda: __import__("sglang.srt.mem_cache.memory_pool_host", fromlist=["HostPoolGroup"])
+    for class_name in (
+        "HostPoolGroup",
+        "MHATokenToKVPoolHost",
+        "MLATokenToKVPoolHost",
+        "NSATokenToKVPoolHost",
+        "MambaPoolHost",
+    ):
+        _try_patch(
+            memory_pool_host,
+            class_name,
+            {
+                "load_to_device_per_layer": "hostpool.load_to_device_per_layer",
+                "backup_from_device_all_layer": "hostpool.backup_from_device_all_layer",
+            },
+        )
 
     _write_event({"event": "trace.install.end"})
