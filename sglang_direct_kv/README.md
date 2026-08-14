@@ -87,6 +87,26 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F9 | Agentic timelines can show where lateness happens. | Milestone 11 smoke produced SGLang KV windows, profiler CUDA copy rows, hint outcome labels, and a per-session HTML timeline. | We can now show whether the hint was late at the request level, the KV-load level, or the CUDA-copy level. | This is the clearest evidence path for motivating deadline-aware prefetch hardware. | New |
 | F10 | CUDA copy attribution needs explicit agent context. | Milestone 11B changed `agent_001`, `agent_002`, and `agent_005` from SGLang-only rows into rows with profiler-visible HtoD copy windows. | Missing HtoD columns were mostly attribution weakness, not proof that no copy happened. | Carry agent/session context deeper into SGLang KV movement events and preserve batched session ownership. | New |
 | F11 | Missing green bars can be profiler-coverage artifacts. | In Milestone 11B, `agent_003` had SGLang host-to-device load from `44435.564 -> 44496.473 ms`, but the torch profiler stopped at `44407.848 ms`. In Milestone 11C, a later profiler stop showed `agent_003` with `528` HtoD events. | "No green bar" does not always mean "no CUDA copy." It can mean the profiler was not recording when the copy happened. | Reports now include profiler window status and missing-HtoD reason columns. | New |
+| F12 | Early CUDA copy is not enough for prefetch success. | In Milestone 11C300, CUDA copy was ready before replay for `6 / 6` sessions, but full hint completion succeeded for only `5 / 6`, replay reloaded KV for `6 / 6`, and clean success was `0 / 6`. | Even when CUDA copy happens before replay, the software-managed path can still fail because the full hint path is late, replay reloads KV again, or prefetched KV is not protected/reused predictably. | The need is not just "copy memory earlier"; the system must copy the right KV, finish predictably, protect residency, and make reuse visible/enforceable. | Strong |
+
+Main deduction from the latest timeline:
+
+```text
+Even when CUDA copy happens before replay,
+the software-managed path can still fail because:
+- the full hint path is late,
+- replay reloads KV again,
+- prefetched KV is not protected/reused predictably.
+
+So the need is not just:
+  copy memory earlier.
+
+The need is:
+  copy the right KV,
+  finish the hint path predictably,
+  protect the prefetched KV,
+  and make reuse visible/enforceable.
+```
 
 ## Milestones
 
