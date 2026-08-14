@@ -336,9 +336,9 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     width = 1500
     left = 225
     right = 55
-    row_h = 64
+    row_h = 84
     top = 78
-    height = top + row_h * max(1, len(selected)) + 92
+    height = top + row_h * max(1, len(selected)) + 104
     plot_w = width - left - right
     colors = {
         "initial": "#2563eb",
@@ -371,30 +371,32 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
         svg.append(f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>')
         svg.append(f'<line x1="{left}" y1="{y + 12}" x2="{left + plot_w}" y2="{y + 12}" stroke="#f3f4f6"/>')
+        svg.append(f'<line x1="{left}" y1="{y + 48}" x2="{left + plot_w}" y2="{y + 48}" stroke="#f9fafb"/>')
         prefetch_done = to_float(row.get("torch_copy_end_ms")) or to_float(row.get("sglang_copy_end_ms"))
         replay_due = to_float(row.get("replay_due_ms"))
         margin = to_float(row.get("prefetch_margin_ms"))
         if prefetch_done is not None and replay_due is not None and margin is not None:
             x_done = x_pos(prefetch_done)
             x_due = x_pos(replay_due)
-            y_margin = y + 42
+            y_margin = y + 48
+            y_label = y + 70
             if margin >= 0:
                 svg.append(
                     f'<line x1="{x_done:.1f}" y1="{y_margin}" x2="{x_due:.1f}" y2="{y_margin}" '
                     'stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>'
                 )
                 svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin}" r="5" fill="#16a34a"><title>prefetch done</title></circle>')
-                svg.append(f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_margin + 18}" text-anchor="middle" font-size="12" fill="#166534" font-weight="700">ready +{margin:.0f} ms</text>')
+                svg.append(f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_label}" text-anchor="middle" font-size="12" fill="#166534" font-weight="700">ready +{margin:.0f} ms</text>')
             else:
                 x1 = min(x_due, x_done)
                 x2 = max(x_due, x_done)
-                svg.append(f'<rect x="{x1:.1f}" y="{y - 4}" width="{max(2, x2 - x1):.1f}" height="34" fill="#fee2e2" opacity="0.7"/>')
+                svg.append(f'<rect x="{x1:.1f}" y="{y + 3}" width="{max(2, x2 - x1):.1f}" height="40" fill="#fee2e2" opacity="0.7"/>')
                 svg.append(
                     f'<line x1="{x_due:.1f}" y1="{y_margin}" x2="{x_done:.1f}" y2="{y_margin}" '
                     'stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>'
                 )
                 svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin}" r="5" fill="#dc2626"><title>prefetch done after replay due</title></circle>')
-                svg.append(f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_margin + 18}" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">{abs(margin):.0f} ms late</text>')
+                svg.append(f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_label}" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">{abs(margin):.0f} ms late</text>')
     for item in selected_timeline:
         sid = item["session_id"]
         y = top + row_index[sid] * row_h
@@ -404,16 +406,14 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         x2 = x_pos(float(item["end_ms"]))
         if x1 == x2:
             stroke_width = 6 if kind == "replay_due" else 3
-            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2}" x2="{x1:.1f}" y2="{y + 31}" stroke="{color}" stroke-width="{stroke_width}"><title>{html.escape(item["label"])}</title></line>')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{html.escape(item["label"])}</title></line>')
             if kind == "replay_due":
-                svg.append(f'<text x="{x1 + 7:.1f}" y="{y - 7}" font-size="12" fill="#111827" font-weight="700">due</text>')
-            elif kind == "hint_submitted":
-                svg.append(f'<text x="{x1 + 5:.1f}" y="{y + 58}" font-size="11" fill="#7c3aed">hint</text>')
+                svg.append(f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>')
         else:
-            svg.append(f'<rect x="{x1:.1f}" y="{y}" width="{max(2, x2 - x1):.1f}" height="26" rx="3" fill="{color}" opacity="0.88"><title>{html.escape(item["label"])}</title></rect>')
+            svg.append(f'<rect x="{x1:.1f}" y="{y + 4}" width="{max(2, x2 - x1):.1f}" height="24" rx="3" fill="{color}" opacity="0.88"><title>{html.escape(item["label"])}</title></rect>')
             if kind in {"sglang_copy", "torch_copy"} and x2 - x1 > 45:
                 label = "KV load" if kind == "sglang_copy" else "HtoD"
-                svg.append(f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 18}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{label}</text>')
+                svg.append(f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{label}</text>')
     legend_x = left
     legend_y = height - 32
     for idx, (kind, color) in enumerate(colors.items()):
