@@ -348,7 +348,10 @@ def build_rows(
         resume_load_count = int(float(outcome.get("resume_load_count") or 0))
         resume_hicache_load_count = int(float(outcome.get("resume_hicache_load_count") or 0))
         replay_reloaded_kv = resume_load_count > 0 or resume_hicache_load_count > 0
-        if cuda_copy_ready_before_replay and full_hint_done_before_replay and not replay_reloaded_kv:
+        hint_outcome = str(outcome.get("outcome", ""))
+        if hint_outcome == "no_prefetch_needed":
+            checkpoint_result = "no_prefetch_needed"
+        elif cuda_copy_ready_before_replay and full_hint_done_before_replay and not replay_reloaded_kv:
             checkpoint_result = "clean_success"
         elif cuda_copy_ready_before_replay and full_hint_done_before_replay and replay_reloaded_kv:
             checkpoint_result = "copy_ready_but_replay_reloaded"
@@ -394,7 +397,7 @@ def build_rows(
                 "resume_hicache_load_count": resume_hicache_load_count,
                 "eviction_pressure_after_prefetch": outcome.get("eviction_pressure_after_prefetch", ""),
                 "hint_total_duration_ms": outcome.get("hint_total_duration_ms", ""),
-                "hint_outcome": outcome.get("outcome", ""),
+                "hint_outcome": hint_outcome,
                 "checkpoint_result": checkpoint_result,
                 "replay_ttft_ms": phase_metric(events, session_id, "replay", "ttft_ms"),
             }
@@ -521,6 +524,8 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
 
 def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
     margin = to_float(row.get("prefetch_margin_ms"))
+    if row.get("checkpoint_result") == "no_prefetch_needed":
+        return "NO LOAD", "#6b7280"
     if row.get("checkpoint_result") == "clean_success":
         return f"CLEAN +{margin:.0f} ms" if margin is not None else "CLEAN", "#166534"
     if row.get("checkpoint_result") == "copy_ready_but_replay_reloaded":

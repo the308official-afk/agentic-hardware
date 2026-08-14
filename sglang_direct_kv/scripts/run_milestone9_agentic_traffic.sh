@@ -13,6 +13,10 @@ PROMPT_TOKEN_LIST="${PROMPT_TOKEN_LIST:-768 1024 1536}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-120}"
 ORACLE_LEAD_MS="${ORACLE_LEAD_MS:-120}"
 TRAFFIC_CONCURRENCY="${TRAFFIC_CONCURRENCY:-8}"
+RANDOMIZE_TRAFFIC="${RANDOMIZE_TRAFFIC:-0}"
+RANDOM_SEED="${RANDOM_SEED:-7}"
+ARRIVAL_GAP_RANGE_MS="${ARRIVAL_GAP_RANGE_MS:-60 220}"
+TOOL_WAIT_RANGE_MS="${TOOL_WAIT_RANGE_MS:-250 2200}"
 
 mkdir -p artifacts "${RESULT_ROOT}"
 
@@ -75,7 +79,11 @@ run_mode() {
   echo "==== Milestone 9 traffic case [${case_idx}/${mode_count}]: ${mode} ===="
   echo "SESSION_COUNT=${SESSION_COUNT}"
   echo "ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS}"
+  echo "RANDOMIZE_TRAFFIC=${RANDOMIZE_TRAFFIC}"
+  echo "RANDOM_SEED=${RANDOM_SEED}"
+  echo "ARRIVAL_GAP_RANGE_MS=${ARRIVAL_GAP_RANGE_MS}"
   echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
+  echo "TOOL_WAIT_RANGE_MS=${TOOL_WAIT_RANGE_MS}"
   echo "PROMPT_TOKEN_LIST=${PROMPT_TOKEN_LIST}"
   echo "HINT_DELAY_MS=${HINT_DELAY_MS}"
   echo "ORACLE_LEAD_MS=${ORACLE_LEAD_MS}"
@@ -91,7 +99,7 @@ run_mode() {
   server_pid="$!"
   wait_for_server "${log}"
 
-  python scripts/run_agentic_traffic_workload.py \
+  traffic_args=(
     --base-url "${HOST_URL}/v1" \
     --model "${MODEL}" \
     --mode "${mode}" \
@@ -103,6 +111,18 @@ run_mode() {
     --oracle-lead-ms "${ORACLE_LEAD_MS}" \
     --concurrency "${TRAFFIC_CONCURRENCY}" \
     --out "${metrics}"
+  )
+
+  if [[ "${RANDOMIZE_TRAFFIC}" == "1" ]]; then
+    traffic_args+=(
+      --randomize-traffic
+      --seed "${RANDOM_SEED}"
+      --arrival-gap-range-ms "${ARRIVAL_GAP_RANGE_MS}"
+      --tool-wait-range-ms "${TOOL_WAIT_RANGE_MS}"
+    )
+  fi
+
+  python scripts/run_agentic_traffic_workload.py "${traffic_args[@]}"
 
   python scripts/summarize_kv_trace.py --trace "${trace}" | head -45
   python scripts/analyze_hint_outcomes.py \
@@ -123,6 +143,8 @@ echo "Milestone 9 multi-session agentic traffic"
 echo "Total cases: ${mode_count}"
 echo "Modes: ${MODES}"
 echo "Each mode starts a fresh SGLang server."
+echo "RANDOMIZE_TRAFFIC=${RANDOMIZE_TRAFFIC}"
+echo "RANDOM_SEED=${RANDOM_SEED}"
 
 for mode in ${MODES}; do
   run_mode "${mode}"

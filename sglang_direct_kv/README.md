@@ -28,6 +28,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 11: Agentic Prefetch Timeline Experiment | Completed | [Milestone 11](#milestone-11-agentic-prefetch-timeline-experiment) |
 | Milestone 11B: Improved CUDA Copy Attribution | Completed | [Milestone 11B](#milestone-11b-improved-cuda-copy-attribution) |
 | Milestone 11C: Profiler Coverage Diagnosis | Completed | [Milestone 11C](#milestone-11c-profiler-coverage-diagnosis) |
+| Milestone 12: Paired Clean + Attribution Evidence | Ready | [Milestone 12](#milestone-12-paired-clean--attribution-evidence) |
 
 ## What We Are Testing
 
@@ -2599,6 +2600,107 @@ So Agent 003 is not a clean success.
 It is a useful case showing why raw copy visibility is only one part of the prefetch story.
 ```
 
+### Milestone 12: Paired Clean + Attribution Evidence
+
+Status: implemented and ready to run on EC2.
+
+What it is:
+
+```text
+Run two matching experiments with the same traffic shape.
+
+Run A: clean performance run
+  torch profiler off
+  use this for TTFT and latency claims
+
+Run B: profiled attribution run
+  torch profiler on
+  use this for CUDA HtoD/KV mechanism evidence
+```
+
+Why we need it:
+
+```text
+torch.profiler can distort TTFT heavily.
+So we should not use profiled runs for performance claims.
+
+Instead:
+  clean run answers "how fast was it?"
+  profiled run answers "what happened internally?"
+```
+
+What it produces:
+
+```text
+artifacts/results/milestone12_paired_evidence/clean_performance/
+artifacts/results/milestone12_paired_evidence/profiled_attribution/
+artifacts/results/milestone12_paired_evidence/paired_report/paired_report.html
+artifacts/results/milestone12_paired_evidence/paired_report/paired_report.md
+artifacts/results/milestone12_paired_evidence/paired_report/paired_session_evidence.csv
+```
+
+Recommended run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone12_paired_evidence \
+CLEAN_MODES="no_prefetch direct_load oracle_direct_load" \
+ATTRIBUTION_MODE=oracle_direct_load \
+SESSION_COUNT=12 \
+RANDOMIZE_TRAFFIC=1 \
+RANDOM_SEED=7 \
+ARRIVAL_GAP_RANGE_MS="60 220" \
+TOOL_WAIT_RANGE_MS="250 2200" \
+PROMPT_TOKEN_LIST="768 1024 1536" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=1000 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=300 \
+bash scripts/run_milestone12_paired_evidence.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Tiny smoke run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone12_paired_smoke \
+CLEAN_MODES="no_prefetch oracle_direct_load" \
+ATTRIBUTION_MODE=oracle_direct_load \
+SESSION_COUNT=3 \
+RANDOMIZE_TRAFFIC=1 \
+RANDOM_SEED=7 \
+ARRIVAL_GAP_RANGE_MS="80 160" \
+TOOL_WAIT_RANGE_MS="500 1000" \
+PROMPT_TOKEN_LIST="512" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=700 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=80 \
+bash scripts/run_milestone12_paired_evidence.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+How to read the report:
+
+```text
+Clean Performance Summary:
+  use for replay TTFT and improvement numbers
+
+Profiled Attribution Summary:
+  use for CUDA HtoD copy readiness, hint completion, replay reloads, and clean-success counts
+
+Paired Session Evidence:
+  joins clean TTFT with profiled mechanism evidence by session_id
+```
+
+Main rule:
+
+```text
+If a value comes from the clean run, it can support performance claims.
+If a value comes from the profiled run, it supports mechanism/attribution claims.
+```
+
 ## Directory Layout
 
 ```text
@@ -2624,6 +2726,7 @@ sglang_direct_kv/
     run_milestone9_oracle_lead_sweep.sh
     run_milestone10_dma_timeline.sh
     run_milestone11_agentic_timeline.sh
+    run_milestone12_paired_evidence.sh
     run_agentic_traffic_workload.py
     build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py
@@ -2633,6 +2736,7 @@ sglang_direct_kv/
     summarize_mode_comparison.py
     summarize_design_space.py
     summarize_agentic_traffic_results.py
+    summarize_milestone12_paired_evidence.py
     plot_design_space.py
     build_session_cache_map.py
     extract_hicache_call_report.py
