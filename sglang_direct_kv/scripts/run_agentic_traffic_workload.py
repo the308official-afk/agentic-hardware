@@ -348,10 +348,11 @@ async def main_async() -> None:
                     "prompt_hash": prompt_hash(base_prompt),
                 }
             )
+            hint_task: asyncio.Task[None] | None = None
             if args.mode != "no_prefetch":
                 write_trace_event(
                     {
-                    "event": "agent.hint_submitted",
+                        "event": "agent.hint_submitted",
                         "session_id": session.session_id,
                         "mode": args.mode,
                         "priority": session.priority,
@@ -365,8 +366,22 @@ async def main_async() -> None:
                 hint_offset = tool_start_offset_ms + args.hint_delay_ms
                 if args.mode == "oracle_direct_load":
                     hint_offset = max(tool_start_offset_ms, replay_due_offset_ms - args.oracle_lead_ms)
-                await sleep_until(hint_offset)
-                await issue_hint(session, base_prompt, replay_due_offset_ms)
+                write_trace_event(
+                    {
+                        "event": "agent.hint_task_scheduled",
+                        "session_id": session.session_id,
+                        "mode": args.mode,
+                        "priority": session.priority,
+                        "hint_offset_ms": hint_offset,
+                        "replay_due_offset_ms": replay_due_offset_ms,
+                    }
+                )
+
+                async def run_hint_task() -> None:
+                    await sleep_until(hint_offset)
+                    await issue_hint(session, base_prompt, replay_due_offset_ms)
+
+                hint_task = asyncio.create_task(run_hint_task())
             await sleep_until(replay_due_offset_ms)
             write_trace_event(
                 {
@@ -389,6 +404,8 @@ async def main_async() -> None:
                 }
             )
             await run_request(session, replay_prompt, "replay", f"{session.session_id}_replay", args.max_tokens)
+            if hint_task is not None:
+                await hint_task
 
         await asyncio.gather(*(run_session(session) for session in sessions))
 

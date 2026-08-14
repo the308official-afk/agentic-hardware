@@ -1392,6 +1392,30 @@ artifacts/results/milestone8_smoke/charts/all_charts.html
 
 Status: implemented as a realistic traffic milestone.
 
+Milestone 9B fix:
+
+```text
+Hint execution is decoupled from replay arrival.
+The frontend schedules the hint as a background task.
+The replay request arrives at its tool-return deadline even if the hint is still running.
+This means late_prefetch can now be observed instead of hidden by the workload driver.
+```
+
+Milestone 9B validation:
+
+```text
+EC2 late-prefetch smoke:
+SESSION_COUNT=2
+TOOL_WAIT_LIST_MS="250"
+HINT_DELAY_MS=500
+MODES="direct_load"
+
+Observed outcome:
+late_prefetch: 2
+
+This confirms replay can now arrive before the delayed hint finishes.
+```
+
 What it is:
 
 ```text
@@ -1487,6 +1511,11 @@ artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.
 artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.html
 
 The same files are produced for request_warm, direct_load, and oracle_direct_load.
+
+Combined summary:
+artifacts/results/milestone9_agentic_traffic/traffic_summary.csv
+artifacts/results/milestone9_agentic_traffic/traffic_summary.md
+artifacts/results/milestone9_agentic_traffic/traffic_summary.html
 ```
 
 Outcome labels:
@@ -1507,6 +1536,7 @@ Important events to observe:
 agent.session_arrival
 agent.tool_wait_start
 agent.hint_submitted
+agent.hint_task_scheduled
 agent.hint_prefetch_start
 agent.direct_kv_load_attempt
 agent.direct_kv_load_request.end
@@ -1580,6 +1610,20 @@ Smoke reports:
 ```text
 artifacts/results/milestone9_smoke/no_prefetch_outcomes/hint_outcomes.html
 artifacts/results/milestone9_smoke/direct_load_outcomes/hint_outcomes.html
+```
+
+How to generate a combined report from existing results:
+
+```bash
+python scripts/summarize_agentic_traffic_results.py \
+  --root artifacts/results/milestone9_agentic_traffic \
+  --modes "no_prefetch request_warm direct_load oracle_direct_load"
+```
+
+The fastest file to inspect is:
+
+```text
+artifacts/results/milestone9_agentic_traffic/traffic_summary.html
 ```
 
 ### Milestone 10: Manager Demo Results
@@ -1659,6 +1703,7 @@ sglang_direct_kv/
     analyze_hint_outcomes.py
     summarize_mode_comparison.py
     summarize_design_space.py
+    summarize_agentic_traffic_results.py
     plot_design_space.py
     build_session_cache_map.py
     extract_hicache_call_report.py

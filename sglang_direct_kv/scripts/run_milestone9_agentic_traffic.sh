@@ -129,4 +129,9 @@ for mode in ${MODES}; do
 done
 
 echo
+python scripts/summarize_agentic_traffic_results.py \
+  --root "${RESULT_ROOT}" \
+  --modes "${MODES}"
+
+echo
 echo "Milestone 9 outputs written under ${RESULT_ROOT}"
