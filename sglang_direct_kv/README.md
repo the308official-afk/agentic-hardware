@@ -25,7 +25,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 9: Multi-Session Agent Traffic | Completed | [Milestone 9](#milestone-9-multi-session-agent-traffic-with-hint-outcome-analysis) |
 | Milestone 10: DMA Timeline Profiling | Completed | [Milestone 10](#milestone-10-dma-timeline-profiling) |
 | Milestone 10B: CUDA Transfer To KV Block Attribution | Completed | [Milestone 10B](#milestone-10b-cuda-transfer-to-kv-block-attribution---completed) |
-| Milestone 11: Manager Demo Results | Planned | [Milestone 11](#milestone-11-manager-demo-results) |
+| Milestone 11: Agentic Prefetch Timeline Experiment | Completed | [Milestone 11](#milestone-11-agentic-prefetch-timeline-experiment) |
 
 ## What We Are Testing
 
@@ -82,6 +82,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F6 | `request_warm` remains an important software baseline. | Milestone 9B showed similar outcome patterns for `request_warm` and `direct_load`. | A manager can ask whether ordinary software warming is enough. | Compare hardware-assisted designs against software-only warming, not only against `no_prefetch`. | Baseline |
 | F7 | Oracle timing currently improves TTFT but still misses deadlines under pressure. | `ORACLE_LEAD_MS=1500` improved replay TTFT by about `219 ms`, but still produced `late_prefetch: 10`. | Better timing helps, but the prefetch path is not predictable enough. | Hardware/runtime support should expose deadline and progress telemetry. | Strong |
 | F8 | Worker-local profiling can expose SGLang CUDA activity. | Milestone 10 torch-profiler smoke exported one worker trace with `14329` kernel-like events, `5569` memcpy-like events, `70` HtoD events, and `2229` DtoH events. | We now have a path to inspect GPU activity from inside the SGLang worker. | Use worker-local profiling for DMA/copy evidence when external Nsight misses worker GPU activity. | New |
+| F9 | Agentic timelines can show where lateness happens. | Milestone 11 smoke produced SGLang KV windows, profiler CUDA copy rows, hint outcome labels, and a per-session HTML timeline. | We can now show whether the hint was late at the request level, the KV-load level, or the CUDA-copy level. | This is the clearest evidence path for motivating deadline-aware prefetch hardware. | New |
 
 ## Milestones
 
@@ -2093,54 +2094,247 @@ For final performance numbers, use the normal Milestone 9/Milestone 9B runs with
 For DMA/copy evidence, use Milestone 10 torch-profiler traces.
 ```
 
-### Milestone 11: Manager Demo Results
+### Milestone 11: Agentic Prefetch Timeline Experiment
 
-Status: planned.
+Status: completed on EC2 for a 6-session smoke run.
 
 What it is:
 
 ```text
-Produce a small, credible result table and timeline traces.
+Run a realistic multi-agent traffic trace and build a per-session timeline that shows:
+1. when each agent starts,
+2. when it enters tool wait,
+3. when the prefetch hint is submitted,
+4. when SGLang actually reaches the KV load path,
+5. when profiler-visible host-to-device CUDA copies happen,
+6. when the replay request becomes due,
+7. whether prefetch finished before replay.
 ```
 
 Why we need it:
 
 ```text
-The goal is not only to build a clever prototype.
-We need evidence that a manager can read quickly and trust: real LLM, real KV behavior, clear baseline, clear benefit, clear limitations.
-This milestone packages the experiment into a concise story for why hardware/runtime co-design may be worth exploring.
+Milestone 10B showed that we can connect CUDA HtoD copies to SGLang KV movement windows.
+Milestone 11 turns that into a clearer agentic timeline.
+
+Instead of saying only "prefetch was late",
+we can show exactly where it was late:
+the hint was submitted,
+the request waited in the normal serving path,
+SGLang eventually reached the KV load path,
+CUDA HtoD copies happened,
+and the replay deadline may have arrived before the prefetch completed.
+```
+
+Simple mental model:
+
+```text
+Agent 000:
+0 ms:    first request starts
+420 ms:  first request ends and tool_wait starts
+540 ms:  frontend submits a prefetch hint
+1100 ms: SGLang starts loading host KV back to GPU
+1115 ms: CUDA HtoD copies finish
+1200 ms: tool returns and replay is due
+1205 ms: replay starts
+
+This is useful: prefetch finished before replay.
+```
+
+```text
+Agent 001:
+200 ms:  first request starts
+610 ms:  first request ends and tool_wait starts
+730 ms:  frontend submits a prefetch hint
+1500 ms: replay is due
+1570 ms: SGLang finally starts loading host KV back to GPU
+1585 ms: CUDA HtoD copies finish
+1590 ms: replay starts
+
+This is late: the hint existed, but the movement path did not act soon enough.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone11_agentic_timeline \
+MODE=oracle_direct_load \
+SESSION_COUNT=16 \
+RANDOMIZE_TRAFFIC=1 \
+RANDOM_SEED=7 \
+ARRIVAL_GAP_RANGE_MS="60 220" \
+TOOL_WAIT_RANGE_MS="250 2200" \
+PROMPT_TOKEN_LIST="768 1024 1536" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=1000 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=220 \
+bash scripts/run_milestone11_agentic_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Small smoke run:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone11_timeline_smoke \
+MODE=oracle_direct_load \
+SESSION_COUNT=6 \
+RANDOMIZE_TRAFFIC=1 \
+RANDOM_SEED=7 \
+ARRIVAL_GAP_RANGE_MS="60 220" \
+TOOL_WAIT_RANGE_MS="250 1800" \
+PROMPT_TOKEN_LIST="768 1024" \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=220 \
+bash scripts/run_milestone11_agentic_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+What the script does:
+
+```text
+Step 1/6: start SGLang with HiCache, trace hooks, and worker-local torch.profiler
+Step 2/6: run randomized multi-session agent traffic
+Step 3/6: summarize the SGLang KV trace
+Step 4/6: classify hint outcomes
+Step 5/6: summarize and correlate torch CUDA copy activity
+Step 6/6: build the per-session agentic prefetch timeline
 ```
 
 Outputs:
 
 ```text
-TTFT after tool return
-P50/P95/P99 resume latency
-KV load/write/eviction counts
-prefetch hit/late/wasted rate
-bandwidth or decode interference signal if available
-short timeline examples for Agent 42-style workflows
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_traffic_trace.jsonl
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_traffic_metrics.jsonl
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_outcomes/hint_outcomes.html
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_torch_cuda_profile_summary.md
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_torch_cuda_trace_correlation.md
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_torch_cuda_copy_timeline.csv
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_agentic_prefetch_timeline.csv
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_agentic_prefetch_timeline.json
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_agentic_prefetch_timeline.html
+```
+
+The fastest file to inspect is:
+
+```text
+artifacts/results/milestone11_agentic_timeline/oracle_direct_load_agentic_prefetch_timeline.html
+```
+
+Timeline columns:
+
+```text
+hint_submitted_ms:
+  when the frontend/runtime issued the prefetch hint
+
+sglang_copy_start_ms / sglang_copy_end_ms:
+  when SGLang reached the KV load-back path for this hint
+
+torch_copy_start_ms / torch_copy_end_ms:
+  when profiler-visible host-to-device CUDA copies happened during that SGLang load window
+
+replay_due_ms:
+  when the tool result was ready and replay should start
+
+prefetch_margin_ms:
+  replay_due_ms - prefetch_done_ms
+  positive means prefetch finished before replay
+  negative means prefetch finished after replay was already due
+
+late_prefetch:
+  true when prefetch_margin_ms is negative
 ```
 
 Important events to observe:
 
 ```text
-tool_wait starts
+traffic.workload_start with sampled random sessions
+agent.session_arrival
+agent.tool_wait_start
 agent.hint_submitted
-hicache.write
-hicache.evict_device
-hicache.load
+agent.hint_task_scheduled
+agent.hint_prefetch_start
+agent.request.start phase=hint_prefetch
+agent.direct_kv_load_attempt
+hostpool.load_to_device_per_layer.start
+hostpool.load_to_device_per_layer.end
+CUDA Memcpy HtoD rows overlapping hostpool.load_to_device_per_layer
+agent.replay_due
 agent.resume_start
-first token emitted
-TTFT and total latency recorded
+agent.request.start phase=replay
+agent.request.end phase=replay
 ```
 
-Success criteria:
+Smoke result observed on EC2:
 
 ```text
-A short table comparing Mode 1, Mode 2, and Mode 3.
-A timeline showing a coding-agent tool gap and KV movement around that gap.
-A clear statement of what is proven, what is only emulated, and what hardware support would make cheaper or more predictable.
+RESULT_ROOT=artifacts/results/milestone11_timeline_smoke
+MODE=oracle_direct_load
+SESSION_COUNT=6
+RANDOMIZE_TRAFFIC=1
+RANDOM_SEED=7
+
+SGLang trace events: 1050
+hostpool.load_to_device_per_layer events: 168 start / 168 end
+hicache.load events: 18 start / 18 end
+hicache.evict_device events: 40 start / 40 end
+agent.hint_submitted events: 6
+agent.replay_due events: 6
+agent.resume_start events: 6
+
+torch profiles exported: 1
+kernel-like events: 22467
+memcpy-like events: 20653
+CUDA events in correlation report: 53240
+copy timeline rows: 9969
+HtoD copy rows: 4593
+
+hint_outcomes.html:
+  late_prefetch: 4
+  too_early_or_unprotected: 2
+
+agentic_prefetch_timeline.html:
+  sessions: 6
+  copy/KV-level late_prefetch sessions: 1
+```
+
+Important interpretation of the two late-prefetch counts:
+
+```text
+hint_outcomes late_prefetch:
+  the whole hint request completed after replay was already due.
+
+agentic timeline late_prefetch:
+  the observed SGLang KV load / CUDA copy path completed after replay was already due.
+
+These are related, but not identical.
+The first is frontend-visible request timing.
+The second is lower-level movement timing.
+Both are useful because they show where the delay is happening.
+```
+
+Expected interpretation:
+
+```text
+If hint_submitted_ms is early but sglang_copy_start_ms is much later,
+the prefetch waited inside the normal SGLang/request scheduling path.
+
+If sglang_copy_start_ms is close to torch_copy_start_ms,
+then once SGLang reaches the load path, CUDA movement begins quickly.
+
+If torch_copy_end_ms is after replay_due_ms,
+the prefetch was too late for that agent replay.
+
+This supports the hardware/runtime argument:
+software can create hints,
+but the current memory movement path does not have deadline-aware, priority-aware, agent-aware enforcement.
+```
+
+Important caution:
+
+```text
+torch.profiler adds overhead.
+Use Milestone 11 for timeline evidence and causality, not final latency numbers.
+Use Milestone 9 style runs without torch.profiler for cleaner TTFT performance numbers.
 ```
 
 ## Directory Layout
@@ -2167,7 +2361,9 @@ sglang_direct_kv/
     run_milestone9_agentic_traffic.sh
     run_milestone9_oracle_lead_sweep.sh
     run_milestone10_dma_timeline.sh
+    run_milestone11_agentic_timeline.sh
     run_agentic_traffic_workload.py
+    build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py
     analyze_hint_outcomes.py
     summarize_nsys_dma_timeline.py

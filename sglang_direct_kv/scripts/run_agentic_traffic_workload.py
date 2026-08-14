@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,16 @@ def parse_int_list(raw: str) -> list[int]:
     if not values:
         raise ValueError("expected at least one integer value")
     return values
+
+
+def parse_range(raw: str) -> tuple[int, int]:
+    parts = [int(item) for item in raw.replace(",", " ").split() if item.strip()]
+    if len(parts) != 2:
+        raise ValueError(f"expected two integers for range, got: {raw}")
+    lo, hi = parts
+    if lo > hi:
+        raise ValueError(f"range lower bound is larger than upper bound: {raw}")
+    return lo, hi
 
 
 def make_prompt(session_id: str, target_tokens: int, *, replay: bool = False) -> str:
@@ -134,16 +145,34 @@ def build_sessions(
     arrival_gap_ms: int,
     tool_wait_values: list[int],
     prompt_token_values: list[int],
+    randomize: bool = False,
+    seed: int = 0,
+    arrival_gap_range_ms: tuple[int, int] = (80, 240),
+    tool_wait_range_ms: tuple[int, int] = (250, 2200),
 ) -> list[AgentSession]:
     sessions: list[AgentSession] = []
+    rng = random.Random(seed)
+    next_arrival_ms = 0
     for idx in range(session_count):
         priority = "high" if idx % 4 == 0 else "normal"
+        if randomize:
+            if idx == 0:
+                next_arrival_ms = 0
+            else:
+                next_arrival_ms += rng.randint(*arrival_gap_range_ms)
+            arrival_ms = next_arrival_ms
+            tool_wait_ms = rng.randint(*tool_wait_range_ms)
+            prompt_tokens = rng.choice(prompt_token_values)
+        else:
+            arrival_ms = idx * arrival_gap_ms
+            tool_wait_ms = tool_wait_values[idx % len(tool_wait_values)]
+            prompt_tokens = prompt_token_values[idx % len(prompt_token_values)]
         sessions.append(
             AgentSession(
                 session_id=f"agent_{idx:03d}",
-                arrival_ms=idx * arrival_gap_ms,
-                tool_wait_ms=tool_wait_values[idx % len(tool_wait_values)],
-                prompt_tokens=prompt_token_values[idx % len(prompt_token_values)],
+                arrival_ms=arrival_ms,
+                tool_wait_ms=tool_wait_ms,
+                prompt_tokens=prompt_tokens,
                 priority=priority,
             )
         )
@@ -163,6 +192,10 @@ async def main_async() -> None:
     parser.add_argument("--arrival-gap-ms", type=int, default=120)
     parser.add_argument("--tool-wait-list-ms", default="250 500 900 1600")
     parser.add_argument("--prompt-token-list", default="768 1024 1536")
+    parser.add_argument("--randomize-traffic", action="store_true")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--arrival-gap-range-ms", default="80 240")
+    parser.add_argument("--tool-wait-range-ms", default="250 2200")
     parser.add_argument("--hint-delay-ms", type=int, default=120)
     parser.add_argument("--oracle-lead-ms", type=int, default=120)
     parser.add_argument("--max-tokens", type=int, default=8)
@@ -177,11 +210,17 @@ async def main_async() -> None:
 
     tool_wait_values = parse_int_list(args.tool_wait_list_ms)
     prompt_token_values = parse_int_list(args.prompt_token_list)
+    arrival_gap_range_ms = parse_range(args.arrival_gap_range_ms)
+    tool_wait_range_ms = parse_range(args.tool_wait_range_ms)
     sessions = build_sessions(
         session_count=args.session_count,
         arrival_gap_ms=args.arrival_gap_ms,
         tool_wait_values=tool_wait_values,
         prompt_token_values=prompt_token_values,
+        randomize=args.randomize_traffic,
+        seed=args.seed,
+        arrival_gap_range_ms=arrival_gap_range_ms,
+        tool_wait_range_ms=tool_wait_range_ms,
     )
 
     write_trace_event(
@@ -191,6 +230,11 @@ async def main_async() -> None:
             "session_count": args.session_count,
             "arrival_gap_ms": args.arrival_gap_ms,
             "tool_wait_list_ms": tool_wait_values,
+            "randomize_traffic": args.randomize_traffic,
+            "seed": args.seed,
+            "arrival_gap_range_ms": arrival_gap_range_ms,
+            "tool_wait_range_ms": tool_wait_range_ms,
+            "sampled_sessions": [session.__dict__ for session in sessions],
             "prompt_token_list": prompt_token_values,
             "hint_delay_ms": args.hint_delay_ms,
             "oracle_lead_ms": args.oracle_lead_ms,
