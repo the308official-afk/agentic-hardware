@@ -297,6 +297,17 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
     return status, observation, deduction + " " + evidence
 
 
+def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
+    margin = to_float(row.get("prefetch_margin_ms"))
+    if row.get("late_prefetch") is True and margin is not None:
+        return f"LATE {margin:.0f} ms", "#b91c1c"
+    if int(row.get("torch_h2d_copy_events") or 0) > 0 and margin is not None:
+        return f"SUCCESS +{margin:.0f} ms", "#166534"
+    if int(row.get("sglang_copy_events") or 0) > 0 and margin is not None:
+        return f"SGLang OK +{margin:.0f} ms", "#92400e"
+    return "INCOMPLETE", "#6b7280"
+
+
 def choose_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
     late = [row for row in rows if row.get("late_prefetch") is True]
     visible = [row for row in rows if row.get("torch_h2d_copy_events", 0)]
@@ -313,7 +324,8 @@ def choose_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
 
 def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, Any]], max_sessions: int) -> None:
     selected = choose_sessions(rows, max_sessions)
-    selected_rows = [row for row in rows if row["session_id"] in selected]
+    row_by_session = {str(row["session_id"]): row for row in rows}
+    selected_rows = [row_by_session[sid] for sid in selected if sid in row_by_session]
     selected_timeline = [item for item in timeline if item["session_id"] in selected]
     if selected_timeline:
         start = min(float(item["start_ms"]) for item in selected_timeline)
@@ -321,12 +333,12 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     else:
         start, end = 0.0, 1.0
     span = max(1.0, end - start)
-    width = 1200
-    left = 150
-    right = 40
-    row_h = 44
-    top = 60
-    height = top + row_h * max(1, len(selected)) + 70
+    width = 1500
+    left = 225
+    right = 55
+    row_h = 64
+    top = 78
+    height = top + row_h * max(1, len(selected)) + 92
     plot_w = width - left - right
     colors = {
         "initial": "#2563eb",
@@ -354,8 +366,35 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
     for sid in selected:
         y = top + row_index[sid] * row_h
-        svg.append(f'<text x="10" y="{y + 18}" font-weight="700">{html.escape(sid)}</text>')
+        row = row_by_session.get(sid, {})
+        status_label, status_color = timeline_status(row)
+        svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
+        svg.append(f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>')
         svg.append(f'<line x1="{left}" y1="{y + 12}" x2="{left + plot_w}" y2="{y + 12}" stroke="#f3f4f6"/>')
+        prefetch_done = to_float(row.get("torch_copy_end_ms")) or to_float(row.get("sglang_copy_end_ms"))
+        replay_due = to_float(row.get("replay_due_ms"))
+        margin = to_float(row.get("prefetch_margin_ms"))
+        if prefetch_done is not None and replay_due is not None and margin is not None:
+            x_done = x_pos(prefetch_done)
+            x_due = x_pos(replay_due)
+            y_margin = y + 42
+            if margin >= 0:
+                svg.append(
+                    f'<line x1="{x_done:.1f}" y1="{y_margin}" x2="{x_due:.1f}" y2="{y_margin}" '
+                    'stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>'
+                )
+                svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin}" r="5" fill="#16a34a"><title>prefetch done</title></circle>')
+                svg.append(f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_margin + 18}" text-anchor="middle" font-size="12" fill="#166534" font-weight="700">ready +{margin:.0f} ms</text>')
+            else:
+                x1 = min(x_due, x_done)
+                x2 = max(x_due, x_done)
+                svg.append(f'<rect x="{x1:.1f}" y="{y - 4}" width="{max(2, x2 - x1):.1f}" height="34" fill="#fee2e2" opacity="0.7"/>')
+                svg.append(
+                    f'<line x1="{x_due:.1f}" y1="{y_margin}" x2="{x_done:.1f}" y2="{y_margin}" '
+                    'stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>'
+                )
+                svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin}" r="5" fill="#dc2626"><title>prefetch done after replay due</title></circle>')
+                svg.append(f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_margin + 18}" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">{abs(margin):.0f} ms late</text>')
     for item in selected_timeline:
         sid = item["session_id"]
         y = top + row_index[sid] * row_h
@@ -364,15 +403,27 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         x1 = x_pos(float(item["start_ms"]))
         x2 = x_pos(float(item["end_ms"]))
         if x1 == x2:
-            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2}" x2="{x1:.1f}" y2="{y + 26}" stroke="{color}" stroke-width="3"/>')
+            stroke_width = 6 if kind == "replay_due" else 3
+            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2}" x2="{x1:.1f}" y2="{y + 31}" stroke="{color}" stroke-width="{stroke_width}"><title>{html.escape(item["label"])}</title></line>')
+            if kind == "replay_due":
+                svg.append(f'<text x="{x1 + 7:.1f}" y="{y - 7}" font-size="12" fill="#111827" font-weight="700">due</text>')
+            elif kind == "hint_submitted":
+                svg.append(f'<text x="{x1 + 5:.1f}" y="{y + 58}" font-size="11" fill="#7c3aed">hint</text>')
         else:
-            svg.append(f'<rect x="{x1:.1f}" y="{y}" width="{max(2, x2 - x1):.1f}" height="24" rx="3" fill="{color}" opacity="0.88"><title>{html.escape(item["label"])}</title></rect>')
+            svg.append(f'<rect x="{x1:.1f}" y="{y}" width="{max(2, x2 - x1):.1f}" height="26" rx="3" fill="{color}" opacity="0.88"><title>{html.escape(item["label"])}</title></rect>')
+            if kind in {"sglang_copy", "torch_copy"} and x2 - x1 > 45:
+                label = "KV load" if kind == "sglang_copy" else "HtoD"
+                svg.append(f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 18}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{label}</text>')
     legend_x = left
     legend_y = height - 32
     for idx, (kind, color) in enumerate(colors.items()):
         lx = legend_x + idx * 130
         svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
         svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(kind)}</text>')
+    svg.append(f'<line x1="{left}" y1="{height - 8}" x2="{left + 90}" y2="{height - 8}" stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>')
+    svg.append(f'<text x="{left + 100}" y="{height - 4}" fill="#166534">green gap = prefetch done before replay</text>')
+    svg.append(f'<line x1="{left + 420}" y1="{height - 8}" x2="{left + 510}" y2="{height - 8}" stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>')
+    svg.append(f'<text x="{left + 520}" y="{height - 4}" fill="#b91c1c">red gap = prefetch finished after replay was due</text>')
     svg.append("</svg>")
 
     late_count = sum(1 for row in rows if row.get("late_prefetch") is True)
@@ -411,6 +462,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "body{font-family:Arial,sans-serif;margin:24px;background:#f8fafc;color:#111827}",
         "h1,h2{margin:0 0 12px}",
         ".panel{background:white;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:16px 0}",
+        ".caption{margin:0 0 12px;color:#374151;line-height:1.45}",
         "table{border-collapse:collapse;width:100%;font-size:13px;background:white}",
         "th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;white-space:nowrap}",
         "th{background:#f3f4f6;font-weight:700}",
@@ -427,7 +479,15 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     ]
     for key, value in summary.items():
         lines.append(f"<tr><th>{html.escape(key)}</th><td>{fmt(value)}</td></tr>")
-    lines.extend(["</tbody></table></div>", '<div class="panel"><h2>Timeline</h2>', *svg, "</div>"])
+    lines.extend(
+        [
+            "</tbody></table></div>",
+            '<div class="panel"><h2>Timeline</h2>',
+            '<p class="caption">How to read this: the black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>',
+            *svg,
+            "</div>",
+        ]
+    )
     lines.append('<div class="panel"><h2>Key Observations Per Session</h2><table><thead><tr>')
     for col in ("session_id", "status", "what happened", "deduction and evidence"):
         lines.append(f"<th>{html.escape(col)}</th>")

@@ -2304,7 +2304,10 @@ Summary:
   run-level counts, visible HtoD copy sessions, late prefetch sessions, average prefetch margin
 
 Timeline:
-  one row per agent session with initial request, tool wait, hint, SGLang KV load, CUDA HtoD copy, replay due, and replay
+  one row per agent session with initial request, tool wait, hint, SGLang KV load, CUDA HtoD copy, replay due, and replay.
+  Each row also shows SUCCESS / SGLang OK / LATE status directly beside the agent id.
+  Green dashed gaps mean prefetch finished before replay.
+  Red dashed gaps mean replay was already due before prefetch finished.
 
 Key Observations Per Session:
   a simple explanation of what happened for each agent and what deduction to make
