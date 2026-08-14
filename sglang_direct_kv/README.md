@@ -1738,7 +1738,169 @@ The better claim is:
 software can issue hints, but the current runtime/memory path cannot make those hints deadline-aware, priority-aware, or residency-protected.
 ```
 
-### Milestone 10: Manager Demo Results
+### Milestone 10: DMA Timeline Profiling
+
+Status: implemented locally; EC2 validation pending.
+
+What it is:
+
+```text
+Run the multi-session agent traffic workload under NVIDIA Nsight Systems.
+Add NVTX labels around agent hint/replay phases and SGLang KV cache methods.
+Export the profiler timeline to SQLite and summarize observable CUDA copy activity.
+```
+
+Why we need it:
+
+```text
+Milestone 9 showed that hint duration can be around 1300 ms while measured hicache.load time is only around 10-13 ms.
+That suggests the long delay is not only the raw KV copy itself.
+This milestone looks one layer deeper: when did CUDA copy activity actually happen, and what GPU work was it competing with?
+```
+
+Important limitation:
+
+```text
+Nsight Systems does not expose the GPU DMA engine's private internal scheduling queue.
+But it does show observable CUDA memcpy activity, CUDA kernels, streams, and NVTX ranges.
+That is enough to infer whether prefetch work appears late, overlaps active inference, or is serialized behind other GPU work.
+```
+
+Important profiling detail:
+
+```text
+SGLang creates worker child processes.
+The profiler runner supports two shapes:
+1. monitor: start Nsight first as a short system-wide monitor, then start SGLang.
+2. launch: let Nsight launch SGLang directly.
+
+On the current EC2 setup, the most promising path is:
+NSYS_USE_SUDO=1 NSYS_PROFILE_SHAPE=launch
+
+That runs Nsight with profiling privilege while launching SGLang as ec2-user.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone10_dma_timeline \
+MODE=oracle_direct_load \
+HICACHE_SIZE_GB=8 \
+NSYS_USE_SUDO=1 \
+NSYS_PROFILE_SHAPE=launch \
+SESSION_COUNT=12 \
+ARRIVAL_GAP_MS=120 \
+TOOL_WAIT_LIST_MS="250 500 900 1600" \
+PROMPT_TOKEN_LIST="768 1024 1536" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=1500 \
+bash scripts/run_milestone10_dma_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Smaller smoke run:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone10_dma_timeline_smoke \
+MODE=oracle_direct_load \
+HICACHE_SIZE_GB=8 \
+NSYS_USE_SUDO=1 \
+NSYS_PROFILE_SHAPE=launch \
+SESSION_COUNT=4 \
+ARRIVAL_GAP_MS=120 \
+TOOL_WAIT_LIST_MS="500 900" \
+PROMPT_TOKEN_LIST="768" \
+ORACLE_LEAD_MS=1000 \
+bash scripts/run_milestone10_dma_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Outputs:
+
+```text
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_traffic_trace.jsonl
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_traffic_metrics.jsonl
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_outcomes/
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_server.nsys-rep
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_server.sqlite
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_dma_timeline_summary.md
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_dma_timeline_summary.json
+```
+
+Important events to observe:
+
+```text
+agent.hint_submitted
+agent.hint_prefetch_start
+agent.request.start phase=hint_prefetch
+hicache.load.start
+hicache.load.end
+agent.replay_due
+agent.resume_start
+agent.request.start phase=replay
+CUDA memcpy activity in the Nsight export
+CUDA kernel activity in the Nsight export
+NVTX tables/ranges in the Nsight export
+```
+
+What we want to learn:
+
+```text
+hint_issue_to_first_cuda_copy_ms:
+  Was the memory movement delayed after the hint?
+
+cuda_copy_duration_ms:
+  Was the actual copy small or large?
+
+kernel_activity_during_hint:
+  Was the GPU busy with active inference while the hint was waiting?
+
+replay_before_hint_done:
+  Did the tool return before the prefetch path completed?
+```
+
+Expected interpretation:
+
+```text
+If hicache.load is short but the Nsight timeline shows the hint path finishing late,
+then the problem is likely scheduling/queueing/contention, not simply KV bytes being impossible to move.
+
+That supports the hardware proposal:
+software can issue hints,
+but the memory movement path needs deadline, priority, and residency semantics to make the hints predictable.
+```
+
+Current EC2 validation:
+
+```text
+Completed a 4-session smoke run with Nsight Systems installed.
+The run produced:
+  - SGLang KV trace
+  - hint outcome report
+  - .nsys-rep report
+  - SQLite export
+  - DMA timeline summary
+
+The profiler captured NVTX ranges and CUDA runtime initialization calls.
+It did not yet expose CUPTI memcpy/kernel tables for the SGLang worker path.
+
+A separate PyTorch CUDA control test on the same machine did expose CUPTI_ACTIVITY_KIND_MEMCPY and CUPTI_ACTIVITY_KIND_KERNEL.
+So Nsight works on the machine, but our current SGLang launch/profile path still does not expose the worker GPU activity we want.
+```
+
+Current interpretation:
+
+```text
+Milestone 10 is partially complete.
+We now have the profiling harness and can generate profiler artifacts.
+But we do not yet have manager-grade DMA-lane evidence for SGLang.
+
+The next debugging step is to identify the exact SGLang worker process that owns CUDA execution
+and profile that process path directly, or run a lower-level CUPTI/PyTorch-profiler hook inside the worker.
+```
+
+### Milestone 11: Manager Demo Results
 
 Status: planned.
 
@@ -1811,9 +1973,11 @@ sglang_direct_kv/
     run_milestone8_direct_load_design_space.sh
     run_milestone9_agentic_traffic.sh
     run_milestone9_oracle_lead_sweep.sh
+    run_milestone10_dma_timeline.sh
     run_agentic_traffic_workload.py
     run_pressure_resume_workload.py
     analyze_hint_outcomes.py
+    summarize_nsys_dma_timeline.py
     summarize_mode_comparison.py
     summarize_design_space.py
     summarize_agentic_traffic_results.py
@@ -1833,8 +1997,10 @@ sglang_direct_kv/
       hints.py
       instrumentation.py
       metrics.py
+      nvtx.py
       policies.py
       sglang_client.py
+      sglang_trace_patch.py
 ```
 
 ## Recommended EC2 Machine

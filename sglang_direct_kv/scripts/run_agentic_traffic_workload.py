@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from agentic_kv.nvtx import mark, range_scope
+
 
 DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 
@@ -42,6 +44,15 @@ def write_trace_event(event: dict[str, Any]) -> None:
     event.setdefault("pid", os.getpid())
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def trace_and_mark(event: dict[str, Any]) -> None:
+    write_trace_event(event)
+    session_id = event.get("session_id")
+    mode = event.get("mode")
+    name = event.get("event", "event")
+    if session_id and mode:
+        mark(f"agentic_kv:{name}:session={session_id}:mode={mode}")
 
 
 def prompt_hash(prompt: str) -> str:
@@ -196,7 +207,7 @@ async def main_async() -> None:
         async def run_request(session: AgentSession, prompt: str, phase: str, label: str, max_tokens: int) -> dict[str, Any]:
             async with sem:
                 p_hash = prompt_hash(prompt)
-                write_trace_event(
+                trace_and_mark(
                     {
                         "event": "agent.request.start",
                         "label": label,
@@ -212,7 +223,8 @@ async def main_async() -> None:
                         "tool_wait_ms": session.tool_wait_ms,
                     }
                 )
-                row = await chat_once(client, args.base_url, args.model, prompt, max_tokens, label)
+                with range_scope(f"agentic_kv:client_request:session={session.session_id}:phase={phase}:mode={args.mode}"):
+                    row = await chat_once(client, args.base_url, args.model, prompt, max_tokens, label)
                 row.update(
                     {
                         "phase": phase,
@@ -226,7 +238,7 @@ async def main_async() -> None:
                     }
                 )
                 rows.append(row)
-                write_trace_event(
+                trace_and_mark(
                     {
                         "event": "agent.request.end",
                         "label": label,
@@ -248,7 +260,7 @@ async def main_async() -> None:
                 return
             p_hash = prompt_hash(base_prompt)
             action = "direct_load" if args.mode in {"direct_load", "oracle_direct_load"} else "request_warm"
-            write_trace_event(
+            trace_and_mark(
                 {
                     "event": "agent.hint_prefetch_start",
                     "session_id": session.session_id,
@@ -266,7 +278,7 @@ async def main_async() -> None:
                     + "\n\n"
                     + f"{DIRECT_LOAD_TRIGGER} session_id={session.session_id} prompt_hash={p_hash}"
                 )
-                write_trace_event(
+                trace_and_mark(
                     {
                         "event": "agent.direct_kv_load_attempt",
                         "session_id": session.session_id,
@@ -286,7 +298,7 @@ async def main_async() -> None:
                     f"{session.session_id}_direct_load_hint",
                     args.prefetch_max_tokens,
                 )
-                write_trace_event(
+                trace_and_mark(
                     {
                         "event": "agent.direct_kv_load_request.end",
                         "session_id": session.session_id,
@@ -306,7 +318,7 @@ async def main_async() -> None:
                     f"{session.session_id}_request_warm_hint",
                     args.prefetch_max_tokens,
                 )
-            write_trace_event(
+            trace_and_mark(
                 {
                     "event": "agent.hint_prefetch_end",
                     "session_id": session.session_id,
@@ -321,7 +333,7 @@ async def main_async() -> None:
             await sleep_until(session.arrival_ms)
             base_prompt = make_prompt(session.session_id, session.prompt_tokens)
             replay_prompt = make_prompt(session.session_id, session.prompt_tokens, replay=True)
-            write_trace_event(
+            trace_and_mark(
                 {
                     "event": "agent.session_arrival",
                     "session_id": session.session_id,
@@ -336,7 +348,7 @@ async def main_async() -> None:
             tool_start_ns = time.time_ns()
             tool_start_offset_ms = int((time.perf_counter() - workload_start) * 1000)
             replay_due_offset_ms = tool_start_offset_ms + session.tool_wait_ms
-            write_trace_event(
+            trace_and_mark(
                 {
                     "event": "agent.tool_wait_start",
                     "session_id": session.session_id,
@@ -350,7 +362,7 @@ async def main_async() -> None:
             )
             hint_task: asyncio.Task[None] | None = None
             if args.mode != "no_prefetch":
-                write_trace_event(
+                trace_and_mark(
                     {
                         "event": "agent.hint_submitted",
                         "session_id": session.session_id,
@@ -366,7 +378,7 @@ async def main_async() -> None:
                 hint_offset = tool_start_offset_ms + args.hint_delay_ms
                 if args.mode == "oracle_direct_load":
                     hint_offset = max(tool_start_offset_ms, replay_due_offset_ms - args.oracle_lead_ms)
-                write_trace_event(
+                trace_and_mark(
                     {
                         "event": "agent.hint_task_scheduled",
                         "session_id": session.session_id,
@@ -383,7 +395,7 @@ async def main_async() -> None:
 
                 hint_task = asyncio.create_task(run_hint_task())
             await sleep_until(replay_due_offset_ms)
-            write_trace_event(
+            trace_and_mark(
                 {
                     "event": "agent.replay_due",
                     "session_id": session.session_id,
@@ -393,7 +405,7 @@ async def main_async() -> None:
                     "replay_due_offset_ms": replay_due_offset_ms,
                 }
             )
-            write_trace_event(
+            trace_and_mark(
                 {
                     "event": "agent.resume_start",
                     "session_id": session.session_id,

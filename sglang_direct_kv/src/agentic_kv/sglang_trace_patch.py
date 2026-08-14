@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from agentic_kv.nvtx import range_scope
+
 
 _INSTALLED = False
 
@@ -205,6 +207,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
     @functools.wraps(original)
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
         start_ns = time.perf_counter_ns()
+        nvtx_name = f"agentic_kv:{event_name}:{cls.__name__}.{method_name}"
         start_event = {
             "event": f"{event_name}.start",
             "class": cls.__name__,
@@ -215,7 +218,8 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         }
         _write_event(start_event)
         try:
-            result = original(self, *args, **kwargs)
+            with range_scope(nvtx_name):
+                result = original(self, *args, **kwargs)
         except Exception as exc:
             _write_event(
                 {
