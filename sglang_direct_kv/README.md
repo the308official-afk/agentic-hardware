@@ -6,6 +6,27 @@ Build a direct SGLang-based testbed for hint-guided KV cache prefetching.
 
 This project intentionally starts with SGLang rather than fake KV tensors. The goal is to find and instrument the real SGLang KV/cache/offload path, then emulate future hardware support in software.
 
+## Table Of Contents
+
+| Section | Status | Link |
+| --- | --- | --- |
+| Key findings so far | Active | [Key Findings So Far](#key-findings-so-far) |
+| Milestone 0: Testbed Scaffold | Completed | [Milestone 0](#milestone-0-testbed-scaffold---completed) |
+| Milestone 1: SGLang Internals Map | Completed | [Milestone 1](#milestone-1-sglang-internals-map---completed) |
+| Milestone 2: Real SGLang + HiCache Smoke Test | Completed | [Milestone 2](#milestone-2-real-sglang--hicache-smoke-test---completed) |
+| Milestone 3: Log Real KV Movement | Completed | [Milestone 3](#milestone-3-log-real-kv-movement---completed) |
+| Milestone 4: Force Load/Evict And Add Direct Hint Hooks | Completed | [Milestone 4](#milestone-4-force-loadevict-and-add-direct-hint-hooks---completed) |
+| Milestone 5: Compare Three Modes | Completed | [Milestone 5](#milestone-5-compare-three-modes---completed) |
+| Milestone 6: Design-Space Sweep | Completed | [Milestone 6](#milestone-6-design-space-sweep) |
+| Milestone 7: Direct KV Movement Hooks | Completed | [Milestone 7](#milestone-7-direct-kv-movement-hooks) |
+| Milestone 7C: Session To Host Indices Mapping | Completed | [Milestone 7C](#milestone-7c-session-to-host-indices-mapping) |
+| Milestone 7D: Direct Load-Back Trigger | Completed | [Milestone 7D](#milestone-7d-direct-load-back-trigger) |
+| Milestone 8: Direct Load Design-Space Sweep | Completed | [Milestone 8](#milestone-8-direct-load-design-space-sweep) |
+| Milestone 9: Multi-Session Agent Traffic | Completed | [Milestone 9](#milestone-9-multi-session-agent-traffic-with-hint-outcome-analysis) |
+| Milestone 10: DMA Timeline Profiling | Completed | [Milestone 10](#milestone-10-dma-timeline-profiling) |
+| Milestone 10B: CUDA Transfer To KV Block Attribution | Completed | [Milestone 10B](#milestone-10b-cuda-transfer-to-kv-block-attribution---completed) |
+| Milestone 11: Manager Demo Results | Planned | [Milestone 11](#milestone-11-manager-demo-results) |
+
 ## What We Are Testing
 
 Agentic workloads naturally create wait windows:
@@ -1741,7 +1762,7 @@ software can issue hints, but the current runtime/memory path cannot make those 
 
 ### Milestone 10: DMA Timeline Profiling
 
-Status: in progress.
+Status: completed for the worker-local torch.profiler path. External Nsight remains optional and limited on the current EC2 setup.
 
 What it is:
 
@@ -1752,24 +1773,6 @@ There are now two profiling paths:
 2. external Nsight Systems profiling
 
 The worker-local profiler is the recommended first path because external Nsight has not yet exposed SGLang's worker GPU activity on the current EC2 setup.
-```
-
-Milestone 10B adds KV/block attribution:
-
-```text
-The trace hooks record extra KV context on SGLang movement calls:
-  - call_id
-  - node_id
-  - request/session tags passed through SGLang custom_params
-  - direction: host_to_device / device_to_host / evict
-  - host_indices
-  - device_indices
-  - layer_id for per-layer host-pool movement
-
-This lets the CUDA copy timeline say:
-  this CUDA copy overlapped this SGLang KV movement window,
-  and that window was moving these host/device KV indices.
-  when SGLang request tags are available, the window can also show agent_000 / hint_prefetch / replay.
 ```
 
 Why we need it:
@@ -1945,12 +1948,12 @@ So Nsight works on the machine, but our current SGLang launch/profile path still
 Current interpretation:
 
 ```text
-Milestone 10 is partially complete.
-We have the external Nsight harness and can generate profiler artifacts.
+Milestone 10 completed the worker-local profiler path.
+We also have the external Nsight harness and can generate profiler artifacts.
 But external Nsight did not expose SGLang memcpy/kernel tables on this EC2 setup.
 
-The current fix is to use a worker-local torch.profiler hook inside the SGLang worker process.
-That should tell us whether the actual worker CUDA activity is visible from inside the process.
+The fix was to use a worker-local torch.profiler hook inside the SGLang worker process.
+That showed actual worker CUDA activity from inside the process.
 ```
 
 Worker-local profiler validation:
@@ -1973,6 +1976,36 @@ This fixes the immediate visibility problem:
 we can now see CUDA activity from inside the SGLang worker.
 The next fix adds KV/block context:
 we can now line up CUDA transfer events with SGLang host/device KV index movement windows.
+```
+
+### Milestone 10B: CUDA Transfer To KV Block Attribution - Completed
+
+Status: completed on EC2.
+
+What it is:
+
+```text
+The trace hooks record extra KV context on SGLang movement calls:
+  - call_id
+  - node_id
+  - request/session tags passed through SGLang custom_params
+  - direction: host_to_device / device_to_host / evict
+  - host_indices
+  - device_indices
+  - layer_id for per-layer host-pool movement
+
+This lets the CUDA copy timeline say:
+  this CUDA copy overlapped this SGLang KV movement window,
+  and that window was moving these host/device KV indices.
+  when SGLang request tags are available, the window can also show agent_000 / hint_prefetch / replay.
+```
+
+Why we need it:
+
+```text
+Milestone 10 showed CUDA copies and SGLang KV windows, but not a clean link to the exact KV indices.
+Milestone 10B connects the profiler-visible copy to the SGLang-level KV movement context.
+This makes the evidence much more concrete: a copy can now be tied to host indices, device indices, layer id, and agent hint request.
 ```
 
 Correlation outputs:
