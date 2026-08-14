@@ -60,9 +60,12 @@ nsys_summary_md="${RESULT_ROOT}/${MODE}_dma_timeline_summary.md"
 torch_profile_dir="${RESULT_ROOT}/${MODE}_torch_cuda_profiles"
 torch_summary_json="${RESULT_ROOT}/${MODE}_torch_cuda_profile_summary.json"
 torch_summary_md="${RESULT_ROOT}/${MODE}_torch_cuda_profile_summary.md"
+torch_correlation_json="${RESULT_ROOT}/${MODE}_torch_cuda_trace_correlation.json"
+torch_correlation_md="${RESULT_ROOT}/${MODE}_torch_cuda_trace_correlation.md"
+torch_copy_timeline_csv="${RESULT_ROOT}/${MODE}_torch_cuda_copy_timeline.csv"
 
 rm -f "${trace}" "${metrics}" "${log}" "${nsys_log}" "${sqlite}" "${nsys_summary_json}" "${nsys_summary_md}"
-rm -f "${torch_summary_json}" "${torch_summary_md}"
+rm -f "${torch_summary_json}" "${torch_summary_md}" "${torch_correlation_json}" "${torch_correlation_md}" "${torch_copy_timeline_csv}"
 rm -f "${nsys_prefix}.nsys-rep" "${nsys_prefix}.qdrep"
 rm -rf "${out_dir}" "${torch_profile_dir}"
 
@@ -252,6 +255,12 @@ if [[ "${AGENTIC_KV_TORCH_PROFILER_ENABLE}" == "1" ]]; then
     --profile-dir "${torch_profile_dir}" \
     --out-json "${torch_summary_json}" \
     --out-md "${torch_summary_md}"
+  python scripts/correlate_torch_profile_with_agent_trace.py \
+    --trace "${trace}" \
+    --profile-dir "${torch_profile_dir}" \
+    --out-json "${torch_correlation_json}" \
+    --out-md "${torch_correlation_md}" \
+    --out-copy-csv "${torch_copy_timeline_csv}"
 fi
 
 if [[ "${ENABLE_NSYS}" == "1" ]]; then
@@ -290,4 +299,6 @@ fi
 if [[ "${AGENTIC_KV_TORCH_PROFILER_ENABLE}" == "1" ]]; then
   echo "Torch CUDA profiles: ${torch_profile_dir}"
   echo "Torch CUDA profile summary: ${torch_summary_md}"
+  echo "Torch CUDA trace correlation: ${torch_correlation_md}"
+  echo "Torch CUDA copy timeline CSV: ${torch_copy_timeline_csv}"
 fi

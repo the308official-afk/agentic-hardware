@@ -1766,7 +1766,6 @@ Important limitation:
 
 ```text
 Nsight Systems does not expose the GPU DMA engine's private internal scheduling queue.
-External Nsight does not expose the GPU DMA engine's private internal scheduling queue.
 When it works, it shows observable CUDA memcpy activity, CUDA kernels, streams, and NVTX ranges.
 The worker-local torch.profiler path gives us another way to capture CUDA activity from inside the process that is actually running SGLang.
 ```
@@ -1831,6 +1830,9 @@ artifacts/results/milestone10_dma_timeline/oracle_direct_load_outcomes/
 artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_profiles/
 artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_profile_summary.md
 artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_profile_summary.json
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_trace_correlation.md
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_trace_correlation.json
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_copy_timeline.csv
 ```
 
 Optional external Nsight run:
@@ -1864,6 +1866,8 @@ agent.request.start phase=replay
 torch CUDA profile exported by a SGLang worker
 kernel-like events in torch CUDA profile summary
 memcpy-like events in torch CUDA profile summary
+per-copy start/end rows in torch CUDA copy timeline CSV
+overlap between copies and hicache/agent windows in torch CUDA trace correlation report
 optional Nsight NVTX/runtime tables
 ```
 
@@ -1941,6 +1945,25 @@ Observed in the exported worker trace:
 
 This fixes the immediate visibility problem:
 we can now see CUDA activity from inside the SGLang worker.
+```
+
+Correlation outputs:
+
+```text
+oracle_direct_load_torch_cuda_trace_correlation.md:
+  shows which CUDA kernels and actual GPU transfer events overlapped each agent request and each SGLang KV method window.
+  "transfer events" means profiler rows such as Memcpy HtoD, Memcpy DtoH, Memcpy DtoD, and Memset.
+  "copy-like events" means broader PyTorch copy operations, so they are kept separate.
+
+oracle_direct_load_torch_cuda_copy_timeline.csv:
+  one row per observed GPU transfer event.
+  Each row includes:
+    start_ms_from_trace_start
+    end_ms_from_trace_start
+    duration_ms
+    direction: h2d / d2h / d2d / memset / unknown
+    bytes
+    overlapping agent or KV window when available
 ```
 
 Important caution:
