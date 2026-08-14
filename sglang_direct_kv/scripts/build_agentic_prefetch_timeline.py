@@ -120,6 +120,13 @@ def read_copy_rows(path: Path) -> list[dict[str, Any]]:
         return list(csv.DictReader(f))
 
 
+def read_outcome_rows(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None or not path.exists() or path.stat().st_size == 0:
+        return {}
+    with path.open("r", encoding="utf-8", newline="") as f:
+        return {str(row.get("session_id", "")): row for row in csv.DictReader(f) if row.get("session_id")}
+
+
 def read_profiler_coverage(profile_dir: Path | None) -> list[dict[str, Any]]:
     if profile_dir is None or not profile_dir.exists():
         return []
@@ -287,6 +294,7 @@ def build_rows(
     events: list[dict[str, Any]],
     copy_rows: list[dict[str, Any]],
     profiler_coverage: list[dict[str, Any]] | None = None,
+    outcome_rows: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     trace_start_ns = min(int(event["ts_ns"]) for event in events if event.get("ts_ns"))
     windows = build_windows(events)
@@ -294,8 +302,10 @@ def build_rows(
     profiler_start_ms, profiler_end_ms, profiler_stop_reason = coverage_ms_fields(coverage, trace_start_ns)
     rows: list[dict[str, Any]] = []
     timeline: list[dict[str, Any]] = []
+    outcomes = outcome_rows or {}
 
     for session_id in session_ids(events):
+        outcome = outcomes.get(session_id, {})
         arrival = first_event(events, "agent.session_arrival", session_id) or {}
         initial_start, initial_end = request_window(events, session_id, "initial_turn")
         hint_start, hint_end = request_window(events, session_id, "hint_prefetch")
@@ -331,6 +341,25 @@ def build_rows(
         )
         late_prefetch = prefetch_margin_ms is not None and prefetch_margin_ms < 0
         no_visible_prefetch = prefetch_done_ms is None
+        cuda_copy_ready_before_replay = bool(
+            torch_end_ms is not None and replay_due_ms is not None and torch_end_ms <= replay_due_ms
+        )
+        full_hint_done_before_replay = str(outcome.get("hint_completed_before_replay", "")).strip() == "1"
+        resume_load_count = int(float(outcome.get("resume_load_count") or 0))
+        resume_hicache_load_count = int(float(outcome.get("resume_hicache_load_count") or 0))
+        replay_reloaded_kv = resume_load_count > 0 or resume_hicache_load_count > 0
+        if cuda_copy_ready_before_replay and full_hint_done_before_replay and not replay_reloaded_kv:
+            checkpoint_result = "clean_success"
+        elif cuda_copy_ready_before_replay and full_hint_done_before_replay and replay_reloaded_kv:
+            checkpoint_result = "copy_ready_but_replay_reloaded"
+        elif cuda_copy_ready_before_replay and not full_hint_done_before_replay:
+            checkpoint_result = "copy_ready_but_hint_not_done"
+        elif not cuda_copy_ready_before_replay and full_hint_done_before_replay:
+            checkpoint_result = "hint_done_but_no_cuda_ready"
+        elif no_visible_prefetch:
+            checkpoint_result = "no_visible_prefetch"
+        else:
+            checkpoint_result = "not_ready"
 
         rows.append(
             {
@@ -358,6 +387,15 @@ def build_rows(
                 "prefetch_margin_ms": prefetch_margin_ms if prefetch_margin_ms is not None else "",
                 "late_prefetch": late_prefetch,
                 "no_visible_prefetch": no_visible_prefetch,
+                "cuda_copy_ready_before_replay": int(cuda_copy_ready_before_replay),
+                "full_hint_done_before_replay": int(full_hint_done_before_replay),
+                "replay_reloaded_kv": int(replay_reloaded_kv),
+                "resume_load_count": resume_load_count,
+                "resume_hicache_load_count": resume_hicache_load_count,
+                "eviction_pressure_after_prefetch": outcome.get("eviction_pressure_after_prefetch", ""),
+                "hint_total_duration_ms": outcome.get("hint_total_duration_ms", ""),
+                "hint_outcome": outcome.get("outcome", ""),
+                "checkpoint_result": checkpoint_result,
                 "replay_ttft_ms": phase_metric(events, session_id, "replay", "ttft_ms"),
             }
         )
@@ -413,11 +451,24 @@ def fmt_ms(value: Any) -> str:
     return f"{number:.3f} ms"
 
 
+def yes_no(value: Any) -> str:
+    return "yes" if str(value).strip() in {"1", "True", "true", "yes"} else "no"
+
+
+def checkpoint_class(value: Any, good_when_yes: bool = True) -> str:
+    is_yes = yes_no(value) == "yes"
+    good = is_yes if good_when_yes else not is_yes
+    return "good" if good else "bad"
+
+
 def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
     margin = to_float(row.get("prefetch_margin_ms"))
     torch_copy_events = int(row.get("torch_h2d_copy_events") or 0)
     sglang_events = int(row.get("sglang_copy_events") or 0)
     missing_reason = str(row.get("h2d_missing_reason") or "")
+    cuda_ready = yes_no(row.get("cuda_copy_ready_before_replay"))
+    hint_done = yes_no(row.get("full_hint_done_before_replay"))
+    replay_reloaded = yes_no(row.get("replay_reloaded_kv"))
 
     if row.get("no_visible_prefetch"):
         status = "No visible prefetch"
@@ -455,6 +506,9 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
 
     evidence = (
         f"tool wait {fmt_ms(row.get('tool_wait_ms'))}; "
+        f"CUDA copy ready before replay {cuda_ready}; "
+        f"full hint done before replay {hint_done}; "
+        f"replay reloaded KV {replay_reloaded}; "
         f"SGLang load {fmt_ms(row.get('sglang_copy_start_ms'))} -> {fmt_ms(row.get('sglang_copy_end_ms'))}; "
         f"CUDA HtoD {fmt_ms(row.get('torch_copy_start_ms'))} -> {fmt_ms(row.get('torch_copy_end_ms'))}; "
         f"profiler window {fmt_ms(row.get('profiler_start_ms'))} -> {fmt_ms(row.get('profiler_end_ms'))}; "
@@ -467,6 +521,12 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
 
 def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
     margin = to_float(row.get("prefetch_margin_ms"))
+    if row.get("checkpoint_result") == "clean_success":
+        return f"CLEAN +{margin:.0f} ms" if margin is not None else "CLEAN", "#166534"
+    if row.get("checkpoint_result") == "copy_ready_but_replay_reloaded":
+        return f"RELOAD +{margin:.0f} ms" if margin is not None else "RELOAD", "#92400e"
+    if row.get("checkpoint_result") == "copy_ready_but_hint_not_done":
+        return f"HINT LATE +{margin:.0f} ms" if margin is not None else "HINT LATE", "#b45309"
     if row.get("late_prefetch") is True and margin is not None:
         return f"LATE {margin:.0f} ms", "#b91c1c"
     if int(row.get("torch_h2d_copy_events") or 0) > 0 and margin is not None:
@@ -608,6 +668,10 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "sessions": len(rows),
         "sessions_with_visible_h2d_copy": visible_count,
         "late_prefetch_sessions": late_count,
+        "cuda_copy_ready_before_replay": sum(1 for row in rows if yes_no(row.get("cuda_copy_ready_before_replay")) == "yes"),
+        "full_hint_done_before_replay": sum(1 for row in rows if yes_no(row.get("full_hint_done_before_replay")) == "yes"),
+        "sessions_where_replay_reloaded_kv": sum(1 for row in rows if yes_no(row.get("replay_reloaded_kv")) == "yes"),
+        "clean_success_sessions": sum(1 for row in rows if row.get("checkpoint_result") == "clean_success"),
         "h2d_missing_reasons": ", ".join(missing_reasons),
         "avg_prefetch_margin_ms": round(mean(margins), 3) if margins else "",
     }
@@ -631,6 +695,15 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "replay_due_ms",
         "prefetch_margin_ms",
         "late_prefetch",
+        "cuda_copy_ready_before_replay",
+        "full_hint_done_before_replay",
+        "replay_reloaded_kv",
+        "resume_load_count",
+        "resume_hicache_load_count",
+        "eviction_pressure_after_prefetch",
+        "hint_total_duration_ms",
+        "hint_outcome",
+        "checkpoint_result",
         "replay_ttft_ms",
     ]
     lines = [
@@ -707,6 +780,60 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         lines.append(f'<td class="wrap">{fmt(why)}</td>')
         lines.append("</tr>")
     lines.append("</tbody></table></div>")
+    lines.append('<div class="panel"><h2>Prefetch Checkpoints</h2><table><thead><tr>')
+    for col in ("Checkpoint", "Simple meaning", "Why it matters"):
+        lines.append(f"<th>{html.escape(col)}</th>")
+    lines.append("</tr></thead><tbody>")
+    checkpoint_help = [
+        (
+            "CUDA copy ready before replay",
+            "The green HtoD copy ended before the black replay-due line.",
+            "This proves profiler-visible GPU copy work happened early enough, but only for the copied slice we attributed.",
+        ),
+        (
+            "Full hint done before replay",
+            "The whole purple hint request finished before replay resumed.",
+            "This catches cases where the copy started early but the normal SGLang request path was still busy.",
+        ),
+        (
+            "Replay reloaded KV",
+            "The real replay request still triggered SGLang KV load-back events.",
+            "This catches cases where prefetched KV was incomplete, evicted, or not enough for the replay.",
+        ),
+    ]
+    for checkpoint, meaning, why in checkpoint_help:
+        lines.append("<tr>")
+        lines.append(f'<td class="status">{fmt(checkpoint)}</td>')
+        lines.append(f'<td class="wrap">{fmt(meaning)}</td>')
+        lines.append(f'<td class="wrap">{fmt(why)}</td>')
+        lines.append("</tr>")
+    lines.append("</tbody></table></div>")
+
+    lines.append('<div class="panel"><h2>Checkpoint Results Per Session</h2><table><thead><tr>')
+    checkpoint_columns = [
+        "session_id",
+        "cuda_copy_ready_before_replay",
+        "full_hint_done_before_replay",
+        "replay_reloaded_kv",
+        "resume_load_count",
+        "hint_outcome",
+        "checkpoint_result",
+    ]
+    for col in checkpoint_columns:
+        lines.append(f"<th>{html.escape(col)}</th>")
+    lines.append("</tr></thead><tbody>")
+    for row in selected_rows:
+        lines.append("<tr>")
+        lines.append(f"<td>{fmt(row.get('session_id', ''))}</td>")
+        lines.append(f'<td class="{checkpoint_class(row.get("cuda_copy_ready_before_replay"))}">{yes_no(row.get("cuda_copy_ready_before_replay"))}</td>')
+        lines.append(f'<td class="{checkpoint_class(row.get("full_hint_done_before_replay"))}">{yes_no(row.get("full_hint_done_before_replay"))}</td>')
+        lines.append(f'<td class="{checkpoint_class(row.get("replay_reloaded_kv"), good_when_yes=False)}">{yes_no(row.get("replay_reloaded_kv"))}</td>')
+        lines.append(f"<td>{fmt(row.get('resume_load_count', ''))}</td>")
+        lines.append(f"<td>{fmt(row.get('hint_outcome', ''))}</td>")
+        lines.append(f"<td>{fmt(row.get('checkpoint_result', ''))}</td>")
+        lines.append("</tr>")
+    lines.append("</tbody></table></div>")
+
     lines.append('<div class="panel"><h2>Key Observations Per Session</h2><table><thead><tr>')
     for col in ("session_id", "status", "what happened", "deduction and evidence"):
         lines.append(f"<th>{html.escape(col)}</th>")
@@ -746,6 +873,7 @@ def main() -> None:
     parser.add_argument("--trace", required=True)
     parser.add_argument("--copy-csv", required=True)
     parser.add_argument("--profile-dir")
+    parser.add_argument("--outcome-csv")
     parser.add_argument("--out-csv", required=True)
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-html", required=True)
@@ -755,7 +883,8 @@ def main() -> None:
     events = read_jsonl(Path(args.trace))
     copy_rows = read_copy_rows(Path(args.copy_csv))
     profiler_coverage = read_profiler_coverage(Path(args.profile_dir)) if args.profile_dir else []
-    rows, timeline = build_rows(events, copy_rows, profiler_coverage)
+    outcome_rows = read_outcome_rows(Path(args.outcome_csv)) if args.outcome_csv else {}
+    rows, timeline = build_rows(events, copy_rows, profiler_coverage, outcome_rows)
     write_csv(Path(args.out_csv), rows)
     write_json(Path(args.out_json), rows, timeline)
     write_html(Path(args.out_html), rows, timeline, args.max_sessions)

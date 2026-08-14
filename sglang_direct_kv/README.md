@@ -2541,6 +2541,44 @@ So the attribution pipeline is now more precise:
   no green + inside_profiler_window = real attribution gap to investigate
 ```
 
+Three-checkpoint interpretation:
+
+```text
+The timeline now separates three questions:
+
+1. Did the profiler-visible CUDA HtoD copy finish before replay?
+2. Did the full software hint request finish before replay?
+3. Did the replay still reload KV?
+
+These are different.
+A green bar only answers question 1.
+It does not automatically mean the whole prefetch succeeded.
+```
+
+11C300 checkpoint result:
+
+| Checkpoint | Count | Meaning |
+| --- | ---: | --- |
+| CUDA copy ready before replay | `6 / 6` | Every selected session had profiler-visible HtoD copy before replay due. |
+| Full hint request done before replay | `5 / 6` | Agent 003 still had the full hint request path complete late. |
+| Replay still reloaded KV | `6 / 6` | Every replay still triggered KV load-back work. |
+| Clean success | `0 / 6` | No session satisfied all three success conditions at once. |
+
+Simple conclusion:
+
+```text
+11C300 proves the profiler can attribute Agent 003 CUDA HtoD copies when coverage is long enough.
+It does not prove the prefetch system had no failures.
+
+For Agent 003:
+  CUDA copy ready before replay: yes
+  Full hint request done before replay: no
+  Replay still reloaded KV: yes
+
+So Agent 003 is not a clean success.
+It is a useful case showing why raw copy visibility is only one part of the prefetch story.
+```
+
 ## Directory Layout
 
 ```text
