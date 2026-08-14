@@ -60,6 +60,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F5 | Correct prefetches can still be wasted. | `too_early_or_unprotected` sessions had both prefetch-side loads and replay-side loads, plus eviction pressure between hint and replay. | A correct hint can fail if the prefetched KV is not kept resident. | Need protected/pinned residency windows for prefetched KV. | Strong |
 | F6 | `request_warm` remains an important software baseline. | Milestone 9B showed similar outcome patterns for `request_warm` and `direct_load`. | A manager can ask whether ordinary software warming is enough. | Compare hardware-assisted designs against software-only warming, not only against `no_prefetch`. | Baseline |
 | F7 | Oracle timing currently improves TTFT but still misses deadlines under pressure. | `ORACLE_LEAD_MS=1500` improved replay TTFT by about `219 ms`, but still produced `late_prefetch: 10`. | Better timing helps, but the prefetch path is not predictable enough. | Hardware/runtime support should expose deadline and progress telemetry. | Strong |
+| F8 | Worker-local profiling can expose SGLang CUDA activity. | Milestone 10 torch-profiler smoke exported one worker trace with `14329` kernel-like events, `5569` memcpy-like events, `70` HtoD events, and `2229` DtoH events. | We now have a path to inspect GPU activity from inside the SGLang worker. | Use worker-local profiling for DMA/copy evidence when external Nsight misses worker GPU activity. | New |
 
 ## Milestones
 
@@ -1740,14 +1741,17 @@ software can issue hints, but the current runtime/memory path cannot make those 
 
 ### Milestone 10: DMA Timeline Profiling
 
-Status: implemented locally; EC2 validation pending.
+Status: in progress.
 
 What it is:
 
 ```text
-Run the multi-session agent traffic workload under NVIDIA Nsight Systems.
-Add NVTX labels around agent hint/replay phases and SGLang KV cache methods.
-Export the profiler timeline to SQLite and summarize observable CUDA copy activity.
+Run the multi-session agent traffic workload with deeper CUDA profiling.
+There are now two profiling paths:
+1. worker-local torch.profiler inside SGLang worker processes
+2. external Nsight Systems profiling
+
+The worker-local profiler is the recommended first path because external Nsight has not yet exposed SGLang's worker GPU activity on the current EC2 setup.
 ```
 
 Why we need it:
@@ -1762,8 +1766,9 @@ Important limitation:
 
 ```text
 Nsight Systems does not expose the GPU DMA engine's private internal scheduling queue.
-But it does show observable CUDA memcpy activity, CUDA kernels, streams, and NVTX ranges.
-That is enough to infer whether prefetch work appears late, overlaps active inference, or is serialized behind other GPU work.
+External Nsight does not expose the GPU DMA engine's private internal scheduling queue.
+When it works, it shows observable CUDA memcpy activity, CUDA kernels, streams, and NVTX ranges.
+The worker-local torch.profiler path gives us another way to capture CUDA activity from inside the process that is actually running SGLang.
 ```
 
 Important profiling detail:
@@ -1774,13 +1779,12 @@ The profiler runner supports two shapes:
 1. monitor: start Nsight first as a short system-wide monitor, then start SGLang.
 2. launch: let Nsight launch SGLang directly.
 
-On the current EC2 setup, the most promising path is:
-NSYS_USE_SUDO=1 NSYS_PROFILE_SHAPE=launch
-
-That runs Nsight with profiling privilege while launching SGLang as ec2-user.
+On the current EC2 setup, Nsight works on a simple PyTorch CUDA control test,
+but does not yet expose SGLang worker memcpy/kernel tables.
+So the current fix is to enable torch.profiler inside the SGLang worker and export Chrome traces from there.
 ```
 
-Run it:
+Recommended run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -1789,8 +1793,9 @@ source .venv/bin/activate
 RESULT_ROOT=artifacts/results/milestone10_dma_timeline \
 MODE=oracle_direct_load \
 HICACHE_SIZE_GB=8 \
-NSYS_USE_SUDO=1 \
-NSYS_PROFILE_SHAPE=launch \
+ENABLE_NSYS=0 \
+AGENTIC_KV_TORCH_PROFILER_ENABLE=1 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=40 \
 SESSION_COUNT=12 \
 ARRIVAL_GAP_MS=120 \
 TOOL_WAIT_LIST_MS="250 500 900 1600" \
@@ -1806,8 +1811,9 @@ Smaller smoke run:
 RESULT_ROOT=artifacts/results/milestone10_dma_timeline_smoke \
 MODE=oracle_direct_load \
 HICACHE_SIZE_GB=8 \
-NSYS_USE_SUDO=1 \
-NSYS_PROFILE_SHAPE=launch \
+ENABLE_NSYS=0 \
+AGENTIC_KV_TORCH_PROFILER_ENABLE=1 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=40 \
 SESSION_COUNT=4 \
 ARRIVAL_GAP_MS=120 \
 TOOL_WAIT_LIST_MS="500 900" \
@@ -1822,10 +1828,26 @@ Outputs:
 artifacts/results/milestone10_dma_timeline/oracle_direct_load_traffic_trace.jsonl
 artifacts/results/milestone10_dma_timeline/oracle_direct_load_traffic_metrics.jsonl
 artifacts/results/milestone10_dma_timeline/oracle_direct_load_outcomes/
-artifacts/results/milestone10_dma_timeline/oracle_direct_load_server.nsys-rep
-artifacts/results/milestone10_dma_timeline/oracle_direct_load_server.sqlite
-artifacts/results/milestone10_dma_timeline/oracle_direct_load_dma_timeline_summary.md
-artifacts/results/milestone10_dma_timeline/oracle_direct_load_dma_timeline_summary.json
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_profiles/
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_profile_summary.md
+artifacts/results/milestone10_dma_timeline/oracle_direct_load_torch_cuda_profile_summary.json
+```
+
+Optional external Nsight run:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone10_nsys_smoke \
+MODE=oracle_direct_load \
+HICACHE_SIZE_GB=8 \
+ENABLE_NSYS=1 \
+NSYS_USE_SUDO=1 \
+NSYS_PROFILE_SHAPE=launch \
+SESSION_COUNT=4 \
+ARRIVAL_GAP_MS=120 \
+TOOL_WAIT_LIST_MS="500 900" \
+PROMPT_TOKEN_LIST="768" \
+ORACLE_LEAD_MS=1000 \
+bash scripts/run_milestone10_dma_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
 Important events to observe:
@@ -1839,9 +1861,10 @@ hicache.load.end
 agent.replay_due
 agent.resume_start
 agent.request.start phase=replay
-CUDA memcpy activity in the Nsight export
-CUDA kernel activity in the Nsight export
-NVTX tables/ranges in the Nsight export
+torch CUDA profile exported by a SGLang worker
+kernel-like events in torch CUDA profile summary
+memcpy-like events in torch CUDA profile summary
+optional Nsight NVTX/runtime tables
 ```
 
 What we want to learn:
@@ -1863,7 +1886,7 @@ replay_before_hint_done:
 Expected interpretation:
 
 ```text
-If hicache.load is short but the Nsight timeline shows the hint path finishing late,
+If hicache.load is short but the CUDA profile shows GPU work happening elsewhere,
 then the problem is likely scheduling/queueing/contention, not simply KV bytes being impossible to move.
 
 That supports the hardware proposal:
@@ -1893,11 +1916,40 @@ Current interpretation:
 
 ```text
 Milestone 10 is partially complete.
-We now have the profiling harness and can generate profiler artifacts.
-But we do not yet have manager-grade DMA-lane evidence for SGLang.
+We have the external Nsight harness and can generate profiler artifacts.
+But external Nsight did not expose SGLang memcpy/kernel tables on this EC2 setup.
 
-The next debugging step is to identify the exact SGLang worker process that owns CUDA execution
-and profile that process path directly, or run a lower-level CUPTI/PyTorch-profiler hook inside the worker.
+The current fix is to use a worker-local torch.profiler hook inside the SGLang worker process.
+That should tell us whether the actual worker CUDA activity is visible from inside the process.
+```
+
+Worker-local profiler validation:
+
+```text
+Completed a 4-session torch-profiler smoke run.
+The worker profiler exported one Chrome trace from the SGLang worker process.
+
+Observed in the exported worker trace:
+  kernel-like events: 14329
+  memcpy-like events: 5569
+  HtoD memcpy-like events: 70
+  DtoH memcpy-like events: 2229
+  DtoD memcpy-like events: 37
+  CUDA-like total time: 756.028 ms
+  kernel-like total time: 587.921 ms
+  memcpy-like total time: 83.588 ms
+
+This fixes the immediate visibility problem:
+we can now see CUDA activity from inside the SGLang worker.
+```
+
+Important caution:
+
+```text
+torch.profiler adds high overhead.
+Use it for short diagnostic runs, not final latency numbers.
+For final performance numbers, use the normal Milestone 9/Milestone 9B runs without torch.profiler.
+For DMA/copy evidence, use Milestone 10 torch-profiler traces.
 ```
 
 ### Milestone 11: Manager Demo Results
@@ -1978,6 +2030,7 @@ sglang_direct_kv/
     run_pressure_resume_workload.py
     analyze_hint_outcomes.py
     summarize_nsys_dma_timeline.py
+    summarize_torch_cuda_profiles.py
     summarize_mode_comparison.py
     summarize_design_space.py
     summarize_agentic_traffic_results.py
@@ -2001,6 +2054,7 @@ sglang_direct_kv/
       policies.py
       sglang_client.py
       sglang_trace_patch.py
+      torch_cuda_profiler.py
 ```
 
 ## Recommended EC2 Machine

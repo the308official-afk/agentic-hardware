@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentic_kv.nvtx import range_scope
+from agentic_kv.torch_cuda_profiler import maybe_start as maybe_start_torch_profiler
+from agentic_kv.torch_cuda_profiler import record_event as record_torch_profiler_event
 
 
 _INSTALLED = False
@@ -217,6 +219,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             "kwargs": {key: _safe_summary(value) for key, value in kwargs.items()},
         }
         _write_event(start_event)
+        maybe_start_torch_profiler(nvtx_name)
         try:
             with range_scope(nvtx_name):
                 result = original(self, *args, **kwargs)
@@ -244,6 +247,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                 "result": _safe_summary(result),
             }
         )
+        record_torch_profiler_event(nvtx_name)
         return result
 
     wrapper._agentic_kv_wrapped = True  # type: ignore[attr-defined]

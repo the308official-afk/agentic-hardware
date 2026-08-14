@@ -7,6 +7,9 @@ MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone10_dma_timeline}"
 MODE="${MODE:-oracle_direct_load}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-8}"
+ENABLE_NSYS="${ENABLE_NSYS:-1}"
+AGENTIC_KV_TORCH_PROFILER_ENABLE="${AGENTIC_KV_TORCH_PROFILER_ENABLE:-0}"
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS="${AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS:-0}"
 SESSION_COUNT="${SESSION_COUNT:-12}"
 ARRIVAL_GAP_MS="${ARRIVAL_GAP_MS:-120}"
 TOOL_WAIT_LIST_MS="${TOOL_WAIT_LIST_MS:-250 500 900 1600}"
@@ -29,7 +32,7 @@ NSYS_EXTRA_ARGS="${NSYS_EXTRA_ARGS:-}"
 
 mkdir -p artifacts "${RESULT_ROOT}"
 
-if ! command -v "${NSYS_BIN}" >/dev/null 2>&1; then
+if [[ "${ENABLE_NSYS}" == "1" ]] && ! command -v "${NSYS_BIN}" >/dev/null 2>&1; then
   cat >&2 <<EOF
 Nsight Systems CLI was not found: ${NSYS_BIN}
 
@@ -54,10 +57,14 @@ nsys_prefix="${RESULT_ROOT}/${MODE}_server"
 sqlite="${RESULT_ROOT}/${MODE}_server.sqlite"
 nsys_summary_json="${RESULT_ROOT}/${MODE}_dma_timeline_summary.json"
 nsys_summary_md="${RESULT_ROOT}/${MODE}_dma_timeline_summary.md"
+torch_profile_dir="${RESULT_ROOT}/${MODE}_torch_cuda_profiles"
+torch_summary_json="${RESULT_ROOT}/${MODE}_torch_cuda_profile_summary.json"
+torch_summary_md="${RESULT_ROOT}/${MODE}_torch_cuda_profile_summary.md"
 
 rm -f "${trace}" "${metrics}" "${log}" "${nsys_log}" "${sqlite}" "${nsys_summary_json}" "${nsys_summary_md}"
+rm -f "${torch_summary_json}" "${torch_summary_md}"
 rm -f "${nsys_prefix}.nsys-rep" "${nsys_prefix}.qdrep"
-rm -rf "${out_dir}"
+rm -rf "${out_dir}" "${torch_profile_dir}"
 
 server_pid=""
 nsys_pid=""
@@ -126,6 +133,9 @@ wait_for_server() {
 echo "Milestone 10 DMA timeline profiling"
 echo "MODE=${MODE}"
 echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
+echo "ENABLE_NSYS=${ENABLE_NSYS}"
+echo "AGENTIC_KV_TORCH_PROFILER_ENABLE=${AGENTIC_KV_TORCH_PROFILER_ENABLE}"
+echo "AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=${AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS}"
 echo "SESSION_COUNT=${SESSION_COUNT}"
 echo "ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
@@ -143,60 +153,71 @@ echo "NSYS_USE_SUDO=${NSYS_USE_SUDO}"
 export AGENTIC_KV_TRACE_ENABLE=1
 export AGENTIC_KV_NVTX_ENABLE=1
 export AGENTIC_KV_TRACE_PATH="${trace}"
+export AGENTIC_KV_TORCH_PROFILER_ENABLE
+export AGENTIC_KV_TORCH_PROFILER_DIR="${torch_profile_dir}"
+export AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS
 export HICACHE_SIZE_GB
 export EXTRA_SERVER_ARGS="--max-total-tokens ${MAX_TOTAL_TOKENS}"
 
-nsys_args=(
-  profile
-  --force-overwrite=true
-  --output="${nsys_prefix}"
-  --trace="${NSYS_TRACE}"
-  --sample="${NSYS_SAMPLE}"
-  --wait="${NSYS_WAIT}"
-  --cuda-memory-usage="${NSYS_CUDA_MEMORY_USAGE}"
-  --cuda-trace-scope="${NSYS_CUDA_TRACE_SCOPE}"
-  --trace-fork-before-exec=true
-)
-if [[ "${NSYS_USE_SUDO}" == "1" ]]; then
-  nsys_args=(
-    env
-    "PATH=${PATH}"
-    "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
-    "HOME=${HOME}"
-    "PYTHONPATH=$(pwd)/src:${PYTHONPATH:-}"
-    "AGENTIC_KV_TRACE_ENABLE=${AGENTIC_KV_TRACE_ENABLE}"
-    "AGENTIC_KV_NVTX_ENABLE=${AGENTIC_KV_NVTX_ENABLE}"
-    "AGENTIC_KV_TRACE_PATH=${AGENTIC_KV_TRACE_PATH}"
-    "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
-    "EXTRA_SERVER_ARGS=${EXTRA_SERVER_ARGS}"
-    "${NSYS_BIN}"
-    "${nsys_args[@]}"
-    --run-as
-    "${NSYS_RUN_AS_USER}"
-  )
-  nsys_cmd=(sudo "${nsys_args[@]}")
-else
-  nsys_cmd=("${NSYS_BIN}" "${nsys_args[@]}")
-fi
-
-if [[ "${NSYS_PROFILE_SHAPE}" == "monitor" ]]; then
-  setsid "${nsys_cmd[@]}" \
-    ${NSYS_EXTRA_ARGS} \
-    sleep "${NSYS_MONITOR_DURATION_SEC}" >"${nsys_log}" 2>&1 &
-  nsys_pid="$!"
-
-  sleep "${NSYS_MONITOR_WARMUP_SEC}"
-
+if [[ "${ENABLE_NSYS}" != "1" ]]; then
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${log}" 2>&1 &
   server_pid="$!"
-elif [[ "${NSYS_PROFILE_SHAPE}" == "launch" ]]; then
-  setsid "${nsys_cmd[@]}" \
-    ${NSYS_EXTRA_ARGS} \
-    bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${log}" 2>&1 &
-  server_pid="$!"
 else
-  echo "Unknown NSYS_PROFILE_SHAPE=${NSYS_PROFILE_SHAPE}; use monitor or launch." >&2
-  exit 1
+  nsys_args=(
+    profile
+    --force-overwrite=true
+    --output="${nsys_prefix}"
+    --trace="${NSYS_TRACE}"
+    --sample="${NSYS_SAMPLE}"
+    --wait="${NSYS_WAIT}"
+    --cuda-memory-usage="${NSYS_CUDA_MEMORY_USAGE}"
+    --cuda-trace-scope="${NSYS_CUDA_TRACE_SCOPE}"
+    --trace-fork-before-exec=true
+  )
+  if [[ "${NSYS_USE_SUDO}" == "1" ]]; then
+    nsys_args=(
+      env
+      "PATH=${PATH}"
+      "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+      "HOME=${HOME}"
+      "PYTHONPATH=$(pwd)/src:${PYTHONPATH:-}"
+      "AGENTIC_KV_TRACE_ENABLE=${AGENTIC_KV_TRACE_ENABLE}"
+      "AGENTIC_KV_NVTX_ENABLE=${AGENTIC_KV_NVTX_ENABLE}"
+      "AGENTIC_KV_TRACE_PATH=${AGENTIC_KV_TRACE_PATH}"
+      "AGENTIC_KV_TORCH_PROFILER_ENABLE=${AGENTIC_KV_TORCH_PROFILER_ENABLE}"
+      "AGENTIC_KV_TORCH_PROFILER_DIR=${AGENTIC_KV_TORCH_PROFILER_DIR}"
+      "AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=${AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS}"
+      "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
+      "EXTRA_SERVER_ARGS=${EXTRA_SERVER_ARGS}"
+      "${NSYS_BIN}"
+      "${nsys_args[@]}"
+      --run-as
+      "${NSYS_RUN_AS_USER}"
+    )
+    nsys_cmd=(sudo "${nsys_args[@]}")
+  else
+    nsys_cmd=("${NSYS_BIN}" "${nsys_args[@]}")
+  fi
+
+  if [[ "${NSYS_PROFILE_SHAPE}" == "monitor" ]]; then
+    setsid "${nsys_cmd[@]}" \
+      ${NSYS_EXTRA_ARGS} \
+      sleep "${NSYS_MONITOR_DURATION_SEC}" >"${nsys_log}" 2>&1 &
+    nsys_pid="$!"
+
+    sleep "${NSYS_MONITOR_WARMUP_SEC}"
+
+    setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${log}" 2>&1 &
+    server_pid="$!"
+  elif [[ "${NSYS_PROFILE_SHAPE}" == "launch" ]]; then
+    setsid "${nsys_cmd[@]}" \
+      ${NSYS_EXTRA_ARGS} \
+      bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${log}" 2>&1 &
+    server_pid="$!"
+  else
+    echo "Unknown NSYS_PROFILE_SHAPE=${NSYS_PROFILE_SHAPE}; use monitor or launch." >&2
+    exit 1
+  fi
 fi
 
 wait_for_server
@@ -221,36 +242,52 @@ python scripts/analyze_hint_outcomes.py \
   --out-dir "${out_dir}"
 
 cleanup_server
-if [[ "${NSYS_PROFILE_SHAPE}" == "monitor" ]]; then
+if [[ "${ENABLE_NSYS}" == "1" && "${NSYS_PROFILE_SHAPE}" == "monitor" ]]; then
   cleanup_nsys
 fi
 
-report="${nsys_prefix}.nsys-rep"
-if [[ ! -f "${report}" && -f "${nsys_prefix}.qdrep" ]]; then
-  report="${nsys_prefix}.qdrep"
+if [[ "${AGENTIC_KV_TORCH_PROFILER_ENABLE}" == "1" ]]; then
+  sleep 2
+  python scripts/summarize_torch_cuda_profiles.py \
+    --profile-dir "${torch_profile_dir}" \
+    --out-json "${torch_summary_json}" \
+    --out-md "${torch_summary_md}"
 fi
 
-if [[ ! -f "${report}" ]]; then
-  echo "Nsight report was not generated. Log tail:"
-  tail -160 "${nsys_log}" || true
-  exit 1
+if [[ "${ENABLE_NSYS}" == "1" ]]; then
+  report="${nsys_prefix}.nsys-rep"
+  if [[ ! -f "${report}" && -f "${nsys_prefix}.qdrep" ]]; then
+    report="${nsys_prefix}.qdrep"
+  fi
+
+  if [[ ! -f "${report}" ]]; then
+    echo "Nsight report was not generated. Log tail:"
+    tail -160 "${nsys_log}" || true
+    exit 1
+  fi
+
+  "${NSYS_BIN}" export \
+    --type sqlite \
+    --force-overwrite=true \
+    --output "${sqlite}" \
+    "${report}"
+
+  python scripts/summarize_nsys_dma_timeline.py \
+    --sqlite "${sqlite}" \
+    --trace "${trace}" \
+    --out-json "${nsys_summary_json}" \
+    --out-md "${nsys_summary_md}"
 fi
-
-"${NSYS_BIN}" export \
-  --type sqlite \
-  --force-overwrite=true \
-  --output "${sqlite}" \
-  "${report}"
-
-python scripts/summarize_nsys_dma_timeline.py \
-  --sqlite "${sqlite}" \
-  --trace "${trace}" \
-  --out-json "${nsys_summary_json}" \
-  --out-md "${nsys_summary_md}"
 
 echo
 echo "Milestone 10 outputs written under ${RESULT_ROOT}"
-echo "Nsight report: ${report}"
-echo "SQLite export: ${sqlite}"
-echo "DMA summary: ${nsys_summary_md}"
-echo "Nsight monitor log: ${nsys_log}"
+if [[ "${ENABLE_NSYS}" == "1" ]]; then
+  echo "Nsight report: ${report}"
+  echo "SQLite export: ${sqlite}"
+  echo "DMA summary: ${nsys_summary_md}"
+  echo "Nsight monitor log: ${nsys_log}"
+fi
+if [[ "${AGENTIC_KV_TORCH_PROFILER_ENABLE}" == "1" ]]; then
+  echo "Torch CUDA profiles: ${torch_profile_dir}"
+  echo "Torch CUDA profile summary: ${torch_summary_md}"
+fi
