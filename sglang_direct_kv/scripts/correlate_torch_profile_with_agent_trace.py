@@ -314,6 +314,8 @@ def context_node_id(context: dict[str, Any]) -> Any:
 
 
 def request_context(context: dict[str, Any]) -> dict[str, Any]:
+    if context.get("agent_session_id"):
+        return context
     value = context.get("request")
     return value if isinstance(value, dict) else {}
 
@@ -337,6 +339,35 @@ def index_signature(index: dict[str, Any]) -> str:
     if isinstance(values, list):
         return f"{len(values)}:{','.join(str(item) for item in values)}"
     return ""
+
+
+def index_range(index: dict[str, Any]) -> tuple[int, int, int] | None:
+    try:
+        minimum = int(index["min"])
+        maximum = int(index["max"])
+        count = int(index.get("index_count") or index.get("numel"))
+    except Exception:
+        return None
+    return minimum, maximum, count
+
+
+def range_contains(outer: tuple[int, int, int], inner: tuple[int, int, int]) -> bool:
+    outer_min, outer_max, _ = outer
+    inner_min, inner_max, _ = inner
+    return outer_min <= inner_min and inner_max <= outer_max
+
+
+def agent_info_from_window(window: dict[str, Any]) -> dict[str, Any]:
+    if not window.get("kv_agent_session_id"):
+        return {}
+    return {
+        "agent_session_id": window.get("kv_agent_session_id", ""),
+        "rid": window.get("kv_request_rid", ""),
+        "agent_phase": window.get("kv_agent_phase", ""),
+        "agent_label": window.get("kv_agent_label", ""),
+        "agent_prompt_hash": window.get("kv_agent_prompt_hash", ""),
+        "source_event": window.get("event", ""),
+    }
 
 
 def build_request_maps(windows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -427,6 +458,53 @@ def annotate_kv_windows_with_request_maps(
             window["kv_request_source_event"] = info.get("source_event", "")
 
 
+def annotate_kv_windows_with_index_ranges(windows: list[dict[str, Any]]) -> None:
+    known: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
+    for window in windows:
+        if window.get("window_type") != "sglang_kv_method":
+            continue
+        info = agent_info_from_window(window)
+        if not info:
+            continue
+        context = merged_kv_context(window)
+        host_range = index_range(context_index(context, "host_indices"))
+        if host_range:
+            known.append((host_range, info))
+
+    for window in windows:
+        if window.get("window_type") != "sglang_kv_method" or window.get("kv_agent_session_id"):
+            continue
+        context = merged_kv_context(window)
+        host_range = index_range(context_index(context, "host_indices"))
+        if not host_range:
+            continue
+        matches: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for known_range, info in known:
+            if not range_contains(host_range, known_range):
+                continue
+            key = (
+                str(info.get("agent_session_id", "")),
+                str(info.get("agent_phase", "")),
+                str(info.get("agent_prompt_hash", "")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            matches.append(info)
+        if not matches:
+            continue
+        window["kv_agent_sessions"] = matches
+        if len(matches) == 1:
+            info = matches[0]
+            window["kv_agent_session_id"] = info.get("agent_session_id", "")
+            window["kv_request_rid"] = info.get("rid", "")
+            window["kv_agent_phase"] = info.get("agent_phase", "")
+            window["kv_agent_label"] = info.get("agent_label", "")
+            window["kv_agent_prompt_hash"] = info.get("agent_prompt_hash", "")
+            window["kv_request_source_event"] = info.get("source_event", "")
+
+
 def index_values_text(index: dict[str, Any]) -> str:
     if "values" in index:
         return compact_json(index["values"], 360)
@@ -444,10 +522,18 @@ def kv_columns(window: dict[str, Any]) -> dict[str, Any]:
     context = merged_kv_context(window)
     host = context_index(context, "host_indices")
     device = context_index(context, "device_indices")
+    session_infos = window.get("kv_agent_sessions") or context.get("agent_sessions")
+    session_ids = ""
+    session_phases = ""
+    if isinstance(session_infos, list):
+        session_ids = ",".join(str(item.get("agent_session_id", "")) for item in session_infos if item.get("agent_session_id"))
+        session_phases = ",".join(sorted({str(item.get("agent_phase", "")) for item in session_infos if item.get("agent_phase")}))
     return {
         "kv_direction": context.get("direction", ""),
         "kv_agent_session_id": window.get("kv_agent_session_id", ""),
+        "kv_agent_session_ids": session_ids,
         "kv_agent_phase": window.get("kv_agent_phase", ""),
+        "kv_agent_phases": session_phases,
         "kv_agent_label": window.get("kv_agent_label", ""),
         "kv_request_rid": window.get("kv_request_rid", ""),
         "kv_node_id": context_node_id(context),

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +18,9 @@ from agentic_kv.torch_cuda_profiler import record_event as record_torch_profiler
 _INSTALLED = False
 _CALL_SEQ = 0
 _SESSION_RE = re.compile(r"coding agent session ([A-Za-z0-9_.:-]+)")
+_ACTIVE_AGENT_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("agentic_kv_active_agent_context", default={})
+_AGENT_BY_NODE_ID: dict[str, dict[str, Any]] = {}
+_AGENT_BY_INDEX_SIG: dict[str, dict[str, Any]] = {}
 
 
 def _trace_path() -> Path:
@@ -110,6 +114,167 @@ def _index_context(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _index_signature(index: dict[str, Any] | None) -> str:
+    if not isinstance(index, dict):
+        return ""
+    count = index.get("index_count") or index.get("numel")
+    digest = index.get("sha1_16")
+    if count and digest:
+        return f"{count}:{digest}"
+    values = index.get("values")
+    if isinstance(values, list):
+        return f"{len(values)}:{','.join(str(item) for item in values)}"
+    return ""
+
+
+def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: context.get(key)
+        for key in (
+            "agent_session_id",
+            "agent_phase",
+            "agent_label",
+            "agent_mode",
+            "agent_prompt_hash",
+            "agent_priority",
+        )
+        if context.get(key) not in (None, "", [], {})
+    }
+
+
+def _agent_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
+    direct = _copy_agent_context(context)
+    if direct:
+        return direct
+    req = context.get("request")
+    if isinstance(req, dict):
+        return _copy_agent_context(req)
+    return {}
+
+
+def _propagated_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
+    agent = _agent_context_from_context(context)
+    if agent:
+        return agent
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list) and sessions:
+        return {"agent_sessions": sessions}
+    return {}
+
+
+def _agent_for_node_or_indices(context: dict[str, Any]) -> dict[str, Any]:
+    node_id = context.get("node_id")
+    if node_id not in (None, "", [], {}):
+        agent = _AGENT_BY_NODE_ID.get(str(node_id), {})
+        if agent:
+            return agent
+    node_ids = context.get("node_ids")
+    if isinstance(node_ids, list):
+        for item in node_ids:
+            agent = _AGENT_BY_NODE_ID.get(str(item), {})
+            if agent:
+                return agent
+    for key in ("host_indices", "device_indices"):
+        value = context.get(key)
+        if isinstance(value, dict):
+            sig = _index_signature(value)
+            if sig and sig in _AGENT_BY_INDEX_SIG:
+                return _AGENT_BY_INDEX_SIG[sig]
+    return {}
+
+
+def _with_queue_agent_context(context: dict[str, Any]) -> None:
+    ops = context.get("queued_ops")
+    if not isinstance(ops, list):
+        return
+    sessions: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        agent = _agent_for_node_or_indices(op)
+        if not agent:
+            continue
+        op.update({key: value for key, value in agent.items() if op.get(key) in (None, "", [], {})})
+        sig = tuple(agent.get(key) for key in ("agent_session_id", "agent_phase", "agent_prompt_hash"))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        sessions.append(agent)
+    if sessions:
+        context["agent_sessions"] = sessions
+        if len(sessions) == 1:
+            context.update({key: value for key, value in sessions[0].items() if context.get(key) in (None, "", [], {})})
+
+
+def _remember_agent_context(context: dict[str, Any]) -> None:
+    agent = _agent_context_from_context(context)
+    if not agent:
+        return
+
+    node_ids: list[Any] = []
+    node_id = context.get("node_id")
+    if node_id not in (None, "", [], {}):
+        node_ids.append(node_id)
+
+    req = context.get("request")
+    if isinstance(req, dict):
+        for key in ("last_node_id", "last_host_node_id"):
+            value = req.get(key)
+            if isinstance(value, list):
+                node_ids.extend(value)
+            elif value not in (None, "", [], {}):
+                node_ids.append(value)
+
+    for node_id in node_ids:
+        _AGENT_BY_NODE_ID[str(node_id)] = agent
+
+    for key in ("host_indices", "device_indices", "prefix_indices"):
+        value = context.get(key)
+        if isinstance(value, dict):
+            sig = _index_signature(value)
+            if sig:
+                _AGENT_BY_INDEX_SIG[sig] = agent
+
+    if isinstance(req, dict):
+        for key in ("prefix_indices",):
+            value = req.get(key)
+            if isinstance(value, dict):
+                sig = _index_signature(value)
+                if sig:
+                    _AGENT_BY_INDEX_SIG[sig] = agent
+
+
+def _apply_known_agent_context(context: dict[str, Any]) -> dict[str, Any]:
+    _with_queue_agent_context(context)
+    if _agent_context_from_context(context):
+        _remember_agent_context(context)
+        return context
+
+    agent: dict[str, Any] = {}
+    node_id = context.get("node_id")
+    if node_id not in (None, "", [], {}):
+        agent = _AGENT_BY_NODE_ID.get(str(node_id), {})
+
+    if not agent:
+        agent = _agent_for_node_or_indices(context)
+
+    if not agent:
+        active = _ACTIVE_AGENT_CONTEXT.get({})
+        if isinstance(active.get("agent_sessions"), list):
+            context["agent_sessions"] = active["agent_sessions"]
+            if len(active["agent_sessions"]) == 1:
+                agent = active["agent_sessions"][0]
+        else:
+            agent = active
+
+    if agent:
+        context.update({key: value for key, value in agent.items() if context.get(key) in (None, "", [], {})})
+        _remember_agent_context(context)
+
+    return context
+
+
 def _cache_operation_summary(operation: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"type": type(operation).__name__, "object_id": hex(id(operation))}
     for attr in ("node_id", "node_ids", "priority", "request_id", "last_hash"):
@@ -125,6 +290,18 @@ def _cache_operation_summary(operation: Any) -> dict[str, Any]:
             except Exception:
                 pass
     return out
+
+
+def _req_from_params(params: Any) -> Any:
+    if params is None:
+        return None
+    try:
+        req = getattr(params, "req", None)
+        if req is not None:
+            return req
+    except Exception:
+        pass
+    return None
 
 
 def _int_list_signature(values: Any) -> dict[str, Any]:
@@ -259,11 +436,35 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         context["host_indices"] = _index_context(_arg_value(args, kwargs, 1, "host_indices"))
         context["device_indices"] = _index_context(_arg_value(args, kwargs, 2, "device_indices"))
         context["io_backend"] = _safe_summary(_arg_value(args, kwargs, 3, "io_backend"))
+    elif method_name in {"match_prefix", "init_load_back"}:
+        params = _arg_value(args, kwargs, 0, "params")
+        context["request"] = _req_context(_req_from_params(params))
+        if method_name == "init_load_back":
+            context["direction"] = "host_to_device"
+            try:
+                last_host_node = getattr(params, "last_host_node", None)
+                context["node_id"] = _safe_summary(_node_id(last_host_node))
+                context["host_indices"] = _index_context(getattr(last_host_node, "host_value", None))
+            except Exception:
+                pass
+            try:
+                context["host_hit_length"] = _safe_summary(getattr(params, "host_hit_length", None))
+            except Exception:
+                pass
+    elif method_name == "load_back":
+        node = _arg_value(args, kwargs, 0, "node")
+        context["direction"] = "host_to_device"
+        context["node_id"] = _safe_summary(_node_id(node))
+        try:
+            context["host_indices"] = _index_context(getattr(node, "host_value", None))
+        except Exception:
+            pass
     elif method_name in {"cache_finished_req", "cache_unfinished_req"}:
         context["direction"] = "cache_request"
         context["request"] = _req_context(_arg_value(args, kwargs, 0, "req"))
 
-    return {key: value for key, value in context.items() if value is not None}
+    context = {key: value for key, value in context.items() if value is not None}
+    return _apply_known_agent_context(context)
 
 
 def _safe_len(value: Any) -> int | None:
@@ -428,6 +629,9 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         call_id = f"{os.getpid()}-{_CALL_SEQ}"
         start_ns = time.perf_counter_ns()
         nvtx_name = f"agentic_kv:{event_name}:{cls.__name__}.{method_name}"
+        start_kv_context = _kv_context(event_name, method_name, self, args, kwargs)
+        agent_context = _propagated_context_from_context(start_kv_context)
+        context_token = _ACTIVE_AGENT_CONTEXT.set(agent_context) if agent_context else None
         start_event = {
             "event": f"{event_name}.start",
             "call_id": call_id,
@@ -436,7 +640,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             "self": _interesting_attr_summary(self),
             "args": [_safe_summary(arg) for arg in args],
             "kwargs": {key: _safe_summary(value) for key, value in kwargs.items()},
-            "kv_context": _kv_context(event_name, method_name, self, args, kwargs),
+            "kv_context": start_kv_context,
         }
         _write_event(start_event)
         maybe_start_torch_profiler(nvtx_name)
@@ -455,23 +659,29 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                     "error": str(exc),
                 }
             )
+            if context_token is not None:
+                _ACTIVE_AGENT_CONTEXT.reset(context_token)
             raise
 
-        _write_event(
-            {
-                "event": f"{event_name}.end",
-                "call_id": call_id,
-                "class": cls.__name__,
-                "method": method_name,
-                "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
-                "self": _interesting_attr_summary(self),
-                "result_metadata": _result_metadata(result),
-                "result": _safe_summary(result),
-                "kv_context": _kv_context(event_name, method_name, self, args, kwargs, result),
-            }
-        )
-        record_torch_profiler_event(nvtx_name)
-        return result
+        try:
+            _write_event(
+                {
+                    "event": f"{event_name}.end",
+                    "call_id": call_id,
+                    "class": cls.__name__,
+                    "method": method_name,
+                    "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
+                    "self": _interesting_attr_summary(self),
+                    "result_metadata": _result_metadata(result),
+                    "result": _safe_summary(result),
+                    "kv_context": _kv_context(event_name, method_name, self, args, kwargs, result),
+                }
+            )
+            record_torch_profiler_event(nvtx_name)
+            return result
+        finally:
+            if context_token is not None:
+                _ACTIVE_AGENT_CONTEXT.reset(context_token)
 
     wrapper._agentic_kv_wrapped = True  # type: ignore[attr-defined]
     setattr(cls, method_name, wrapper)

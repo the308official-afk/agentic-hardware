@@ -26,6 +26,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 10: DMA Timeline Profiling | Completed | [Milestone 10](#milestone-10-dma-timeline-profiling) |
 | Milestone 10B: CUDA Transfer To KV Block Attribution | Completed | [Milestone 10B](#milestone-10b-cuda-transfer-to-kv-block-attribution---completed) |
 | Milestone 11: Agentic Prefetch Timeline Experiment | Completed | [Milestone 11](#milestone-11-agentic-prefetch-timeline-experiment) |
+| Milestone 11B: Improved CUDA Copy Attribution | Completed | [Milestone 11B](#milestone-11b-improved-cuda-copy-attribution) |
 
 ## What We Are Testing
 
@@ -83,6 +84,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F7 | Oracle timing currently improves TTFT but still misses deadlines under pressure. | `ORACLE_LEAD_MS=1500` improved replay TTFT by about `219 ms`, but still produced `late_prefetch: 10`. | Better timing helps, but the prefetch path is not predictable enough. | Hardware/runtime support should expose deadline and progress telemetry. | Strong |
 | F8 | Worker-local profiling can expose SGLang CUDA activity. | Milestone 10 torch-profiler smoke exported one worker trace with `14329` kernel-like events, `5569` memcpy-like events, `70` HtoD events, and `2229` DtoH events. | We now have a path to inspect GPU activity from inside the SGLang worker. | Use worker-local profiling for DMA/copy evidence when external Nsight misses worker GPU activity. | New |
 | F9 | Agentic timelines can show where lateness happens. | Milestone 11 smoke produced SGLang KV windows, profiler CUDA copy rows, hint outcome labels, and a per-session HTML timeline. | We can now show whether the hint was late at the request level, the KV-load level, or the CUDA-copy level. | This is the clearest evidence path for motivating deadline-aware prefetch hardware. | New |
+| F10 | CUDA copy attribution needs explicit agent context. | Milestone 11B changed `agent_001`, `agent_002`, and `agent_005` from SGLang-only rows into rows with profiler-visible HtoD copy windows. | Missing HtoD columns were mostly attribution weakness, not proof that no copy happened. | Carry agent/session context deeper into SGLang KV movement events and preserve batched session ownership. | New |
 
 ## Milestones
 
@@ -2376,6 +2378,88 @@ Important caution:
 torch.profiler adds overhead.
 Use Milestone 11 for timeline evidence and causality, not final latency numbers.
 Use Milestone 9 style runs without torch.profiler for cleaner TTFT performance numbers.
+```
+
+### Milestone 11B: Improved CUDA Copy Attribution
+
+Status: completed on EC2 for a 6-session attribution smoke run.
+
+What it is:
+
+```text
+Improve the trace/correlation path so CUDA HtoD copies can be tied back to agent sessions more reliably.
+```
+
+Why we need it:
+
+```text
+In the first Milestone 11 smoke, some sessions showed SGLang KV load-back but no CUDA HtoD rows.
+That was too easy to misread as "no GPU copy happened."
+The better interpretation was:
+the copy probably happened, but our profiler/correlator did not confidently attach it to that agent.
+```
+
+What changed:
+
+```text
+The SGLang trace hook now extracts agent context from match_prefix and init_load_back params.
+That context is propagated through nested load_back, hicache.load, and hostpool calls.
+Queued HiCache load operations can carry their mapped agent context.
+The correlation CSV now has fields for shared/batched agent ownership.
+The HTML wording now says "not attributed" instead of "not observed" for missing CUDA rows.
+```
+
+Run used:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone11b_attribution_smoke \
+MODE=oracle_direct_load \
+SESSION_COUNT=6 \
+RANDOMIZE_TRAFFIC=1 \
+RANDOM_SEED=7 \
+ARRIVAL_GAP_RANGE_MS="60 220" \
+TOOL_WAIT_RANGE_MS="250 1800" \
+PROMPT_TOKEN_LIST="768 1024" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=1000 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=220 \
+bash scripts/run_milestone11_agentic_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Attribution smoke result:
+
+| Session | SGLang KV Load Window | CUDA HtoD Copy Window | HtoD Events | HtoD Bytes | Replay Due | Margin | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `agent_000` | `31690.807 -> 31815.466 ms` | `31711.545 -> 31814.808 ms` | `1624` | `60497920` | `32124.946 ms` | `+310.138 ms` | Clean useful prefetch |
+| `agent_001` | `31864.335 -> 31868.100 ms` | `31887.975 -> 32045.098 ms` | `2856` | `99921920` | `32794.098 ms` | `+749.000 ms` | CUDA-attributed useful prefetch |
+| `agent_002` | `31701.051 -> 31705.669 ms` | `31711.545 -> 31814.808 ms` | `1624` | `60497920` | `32558.256 ms` | `+743.448 ms` | CUDA-attributed useful prefetch |
+| `agent_003` | `44423.217 -> 44427.141 ms` | not attributed | `0` | `0` | `33132.434 ms` | `-11294.707 ms` | Late prefetch |
+| `agent_004` | `31854.515 -> 32046.171 ms` | `31887.975 -> 32045.098 ms` | `2856` | `99921920` | `32378.433 ms` | `+333.335 ms` | Clean useful prefetch |
+| `agent_005` | `31875.146 -> 31879.722 ms` | `31887.975 -> 32045.098 ms` | `2856` | `99921920` | `32827.943 ms` | `+782.845 ms` | CUDA-attributed useful prefetch |
+
+Important interpretation:
+
+```text
+agent_002 used to look like:
+  SGLang load observed, CUDA HtoD not attributed.
+
+After Milestone 11B, agent_002 now shows:
+  SGLang load observed,
+  CUDA HtoD copy window observed,
+  HtoD copy finished about 743 ms before replay.
+
+This makes the evidence stronger:
+the hint path did real host-to-device movement early enough for agent_002.
+```
+
+Important nuance:
+
+```text
+Some HtoD copy windows are shared/batched across multiple agent sessions.
+For example, the same HtoD copy window may include agent_000 and agent_002.
+That is not a bug.
+It shows SGLang/runtime batching KV movement across sessions.
+The hardware argument still applies: the movement path needs agent/session/deadline context even when copies are batched.
 ```
 
 ## Directory Layout

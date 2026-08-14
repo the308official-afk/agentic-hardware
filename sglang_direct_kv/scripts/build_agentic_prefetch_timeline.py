@@ -69,6 +69,12 @@ def selected_kv_windows(windows: list[dict[str, Any]], session_id: str) -> list[
     out: list[dict[str, Any]] = []
     preferred_events = {"hostpool.load_to_device_per_layer"}
     fallback_events = {"hicache.start_loading", "hicache.load"}
+
+    def matches(cols: dict[str, Any]) -> bool:
+        if cols.get("kv_agent_session_id") == session_id and cols.get("kv_agent_phase") == "hint_prefetch":
+            return True
+        return False
+
     for event_names in (preferred_events, fallback_events):
         for window in windows:
             cols = kv_columns(window)
@@ -76,8 +82,7 @@ def selected_kv_windows(windows: list[dict[str, Any]], session_id: str) -> list[
                 window.get("window_type") == "sglang_kv_method"
                 and window.get("event") in event_names
                 and cols.get("kv_direction") == "host_to_device"
-                and cols.get("kv_agent_session_id") == session_id
-                and cols.get("kv_agent_phase") == "hint_prefetch"
+                and matches(cols)
             ):
                 out.append(window)
         if out:
@@ -112,6 +117,18 @@ def selected_copy_rows(
     ]
 
     def matches_session(row: dict[str, Any]) -> bool:
+        session_ids = {
+            item.strip()
+            for item in str(row.get("overlap_kv_agent_session_ids", "")).split(",")
+            if item.strip()
+        }
+        phases = {
+            item.strip()
+            for item in str(row.get("overlap_kv_agent_phases", "")).split(",")
+            if item.strip()
+        }
+        if session_id in session_ids and "hint_prefetch" in phases:
+            return True
         if row.get("overlap_kv_agent_session_id") == session_id and row.get("overlap_kv_agent_phase") == "hint_prefetch":
             return True
         if row.get("enclosing_agent_session_id") == session_id and row.get("enclosing_agent_phase") == "hint_prefetch":
@@ -257,7 +274,7 @@ def fmt(value: Any) -> str:
 def fmt_ms(value: Any) -> str:
     number = to_float(value)
     if number is None:
-        return "not observed"
+        return "not attributed"
     return f"{number:.3f} ms"
 
 
@@ -280,7 +297,7 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
         deduction = "This is the clean success case: the hint moved KV early enough for the agent replay."
     elif sglang_events > 0 and margin is not None:
         status = "SGLang-level useful prefetch"
-        observation = f"SGLang KV load was visible and completed {margin:.3f} ms before replay, but CUDA HtoD rows were not confidently attributed."
+        observation = f"SGLang KV load was visible and completed {margin:.3f} ms before replay, but CUDA HtoD rows were not confidently attributed to this session."
         deduction = "This is useful SGLang-level evidence, but weaker CUDA-level evidence."
     else:
         status = "Incomplete timing"
