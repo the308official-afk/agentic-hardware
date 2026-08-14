@@ -34,6 +34,33 @@ Mode 2: generic software prefetch
 Mode 3: hint-aware direct KV prefetch/protection
 ```
 
+## Key Findings So Far
+
+The experiments so far show that agentic hints are useful, but software-issued hints are not enough by themselves.
+Under overlapping agent traffic, hints can complete too late, or complete early and still fail because the KV is not protected from eviction.
+The measured KV load calls are short compared with end-to-end hint completion, which suggests the issue is not only raw memory copy speed.
+The stronger argument is that current runtime/GPU memory paths lack deadline-aware, priority-aware, and residency-aware enforcement for agentic KV prefetch.
+
+Most important timing insight so far:
+
+```text
+Avg hint total duration: ~1284-1345 ms
+Total measured hicache.load time across all sessions: ~10-13 ms
+```
+
+This means the long delay is mostly not inside the raw `hicache.load` call.
+It is likely dominated by scheduling, queueing, runtime bookkeeping, and contention with active inference work.
+
+| ID | Finding | Evidence | Why It Matters | Hardware/Runtime Implication | Status |
+| --- | --- | --- | --- | --- | --- |
+| F1 | Software hints can reduce replay TTFT. | Milestone 9B: `direct_load` improved average replay TTFT by about `147 ms` vs `no_prefetch`. | The opportunity is real; agent wait windows can be used. | Keep the frontend/runtime hint path and make it more enforceable. | Observed |
+| F2 | Hints can complete too late under load. | `oracle_direct_load` with `500 ms` and `1000 ms` lead still produced `late_prefetch: 12`. | Even good timing estimates do not guarantee KV readiness. | Need deadline-aware scheduling and priority-aware migration. | Strong |
+| F3 | Starting earlier is not sufficient. | `1500 ms` oracle lead produced `late_prefetch: 10` and `too_early_or_unprotected: 2`. | More lead time can trade late prefetch for eviction-before-reuse. | Need residency protection, not just earlier prefetch. | Strong |
+| F4 | Raw KV load time is not the main observed delay. | Oracle lead sweep: average hint duration was about `1284-1345 ms`, while total measured hint-side `hicache.load` time was only about `10-13 ms` across all sessions. | The long delay is mostly outside the raw KV load call. | Need a prioritized prefetch path that avoids normal request scheduling/queueing delays. | Strong |
+| F5 | Correct prefetches can still be wasted. | `too_early_or_unprotected` sessions had both prefetch-side loads and replay-side loads, plus eviction pressure between hint and replay. | A correct hint can fail if the prefetched KV is not kept resident. | Need protected/pinned residency windows for prefetched KV. | Strong |
+| F6 | `request_warm` remains an important software baseline. | Milestone 9B showed similar outcome patterns for `request_warm` and `direct_load`. | A manager can ask whether ordinary software warming is enough. | Compare hardware-assisted designs against software-only warming, not only against `no_prefetch`. | Baseline |
+| F7 | Oracle timing currently improves TTFT but still misses deadlines under pressure. | `ORACLE_LEAD_MS=1500` improved replay TTFT by about `219 ms`, but still produced `late_prefetch: 10`. | Better timing helps, but the prefetch path is not predictable enough. | Hardware/runtime support should expose deadline and progress telemetry. | Strong |
+
 ## Milestones
 
 ### Milestone 0: Testbed Scaffold - Completed
