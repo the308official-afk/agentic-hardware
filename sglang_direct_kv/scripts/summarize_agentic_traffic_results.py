@@ -44,6 +44,13 @@ def outcome_counts(rows: list[dict[str, Any]]) -> str:
     return ", ".join(f"{name}: {count}" for name, count in counts.most_common())
 
 
+def mean_field(rows: list[dict[str, Any]], key: str, *, skip_zero: bool = False) -> float:
+    values = [as_float(row, key) for row in rows if row.get(key, "") != ""]
+    if skip_zero:
+        values = [value for value in values if value > 0]
+    return round(mean(values), 3) if values else 0.0
+
+
 def load_mode_rows(root: Path, modes: list[str]) -> dict[str, list[dict[str, Any]]]:
     result: dict[str, list[dict[str, Any]]] = {}
     for mode in modes:
@@ -76,8 +83,20 @@ def build_mode_summary(mode_rows: dict[str, list[dict[str, Any]]]) -> list[dict[
                 "avg_improvement_vs_no_prefetch_pct": (
                     round(improvement * 100.0 / baseline_avg, 2) if baseline_avg else 0.0
                 ),
+                "avg_hint_ttft_ms": mean_field(rows, "hint_ttft_ms", skip_zero=True),
+                "avg_hint_total_duration_ms": mean_field(rows, "hint_total_duration_ms", skip_zero=True),
+                "avg_hint_start_to_first_hicache_load_ms": mean_field(
+                    rows, "hint_start_to_first_hicache_load_ms", skip_zero=True
+                ),
+                "total_hint_hicache_load_duration_ms": round(
+                    sum(as_float(row, "hint_hicache_load_duration_total_ms") for row in rows), 3
+                ),
+                "avg_hint_non_load_time_ms": mean_field(rows, "hint_non_load_time_ms", skip_zero=True),
                 "total_prefetch_load_count": sum(as_int(row, "prefetch_load_count") for row in rows),
                 "total_resume_load_count": sum(as_int(row, "resume_load_count") for row in rows),
+                "total_resume_hicache_load_duration_ms": round(
+                    sum(as_float(row, "resume_hicache_load_duration_total_ms") for row in rows), 3
+                ),
                 "total_eviction_pressure_after_prefetch": sum(
                     as_int(row, "eviction_pressure_after_prefetch") for row in rows
                 ),
@@ -109,6 +128,35 @@ def build_tool_wait_summary(mode_rows: dict[str, list[dict[str, Any]]]) -> list[
     return rows_out
 
 
+def build_prefetch_time_summary(mode_rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    rows_out: list[dict[str, Any]] = []
+    for mode, rows in mode_rows.items():
+        if mode == "no_prefetch":
+            continue
+        rows_out.append(
+            {
+                "mode": mode,
+                "sessions": len(rows),
+                "avg_hint_ttft_ms": mean_field(rows, "hint_ttft_ms", skip_zero=True),
+                "avg_hint_total_duration_ms": mean_field(rows, "hint_total_duration_ms", skip_zero=True),
+                "avg_hint_start_to_first_hicache_load_ms": mean_field(
+                    rows, "hint_start_to_first_hicache_load_ms", skip_zero=True
+                ),
+                "total_hint_hicache_load_duration_ms": round(
+                    sum(as_float(row, "hint_hicache_load_duration_total_ms") for row in rows), 3
+                ),
+                "avg_hint_hicache_load_duration_ms": mean_field(
+                    rows, "hint_hicache_load_duration_total_ms", skip_zero=True
+                ),
+                "avg_hint_non_load_time_ms": mean_field(rows, "hint_non_load_time_ms", skip_zero=True),
+                "total_prefetch_load_count": sum(as_int(row, "prefetch_load_count") for row in rows),
+                "total_resume_load_count": sum(as_int(row, "resume_load_count") for row in rows),
+                "outcomes": outcome_counts(rows),
+            }
+        )
+    return rows_out
+
+
 def build_failure_rows(mode_rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     good = {"no_hint", "no_prefetch_needed", "useful_prefetch"}
     rows_out: list[dict[str, Any]] = []
@@ -122,6 +170,12 @@ def build_failure_rows(mode_rows: dict[str, list[dict[str, Any]]]) -> list[dict[
                     "session_id": row.get("session_id", ""),
                     "tool_wait_ms": as_int(row, "tool_wait_ms"),
                     "prompt_tokens": as_int(row, "prompt_tokens"),
+                    "hint_ttft_ms": as_float(row, "hint_ttft_ms"),
+                    "hint_total_duration_ms": as_float(row, "hint_total_duration_ms"),
+                    "hint_start_to_first_hicache_load_ms": row.get("hint_start_to_first_hicache_load_ms", ""),
+                    "hint_hicache_load_duration_total_ms": as_float(
+                        row, "hint_hicache_load_duration_total_ms"
+                    ),
                     "replay_ttft_ms": as_float(row, "replay_ttft_ms"),
                     "prefetch_load_count": as_int(row, "prefetch_load_count"),
                     "resume_load_count": as_int(row, "resume_load_count"),
@@ -251,11 +305,13 @@ def main() -> None:
 
     mode_summary = build_mode_summary(mode_rows)
     tool_wait_summary = build_tool_wait_summary(mode_rows)
+    prefetch_time_summary = build_prefetch_time_summary(mode_rows)
     failure_rows = build_failure_rows(mode_rows)
     session_delta_rows = build_session_delta_rows(mode_rows)
     sections = {
         "Mode Summary": mode_summary,
         "Tool Wait Breakdown": tool_wait_summary,
+        "Prefetch Time Breakdown": prefetch_time_summary,
         "Failure Mode Rows": failure_rows,
         "Per-Session Delta vs Baseline": session_delta_rows,
     }

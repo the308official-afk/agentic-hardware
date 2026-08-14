@@ -1518,6 +1518,35 @@ artifacts/results/milestone9_agentic_traffic/traffic_summary.md
 artifacts/results/milestone9_agentic_traffic/traffic_summary.html
 ```
 
+The combined summary includes:
+
+```text
+Mode Summary
+Tool Wait Breakdown
+Prefetch Time Breakdown
+Failure Mode Rows
+Per-Session Delta vs Baseline
+```
+
+The Prefetch Time Breakdown is especially important.
+It separates:
+
+```text
+hint_ttft_ms = end-to-end hint request time seen by the frontend
+hint_start_to_first_hicache_load_ms = time before SGLang reaches KV load-back
+hint_hicache_load_duration_total_ms = measured time spent inside hicache.load
+hint_non_load_time_ms = hint time not explained by hicache.load duration
+```
+
+Why this matters:
+
+```text
+If hicache.load is tiny but hint_ttft_ms is large,
+the bottleneck is not just raw KV copy time.
+The hint is delayed by serving/runtime scheduling, queueing, cache bookkeeping, and contention with active work.
+This supports the case for deadline-aware, priority-aware hardware/runtime prefetch support.
+```
+
 Outcome labels:
 
 | Outcome | Meaning |
@@ -1626,6 +1655,62 @@ The fastest file to inspect is:
 artifacts/results/milestone9_agentic_traffic/traffic_summary.html
 ```
 
+How to run an oracle lead sweep:
+
+```bash
+RESULT_ROOT_BASE=artifacts/results/milestone9_oracle_lead_sweep \
+ORACLE_LEAD_LIST="500 1000 1500" \
+MODES="no_prefetch oracle_direct_load" \
+SESSION_COUNT=12 \
+ARRIVAL_GAP_MS=120 \
+TOOL_WAIT_LIST_MS="250 500 900 1600" \
+PROMPT_TOKEN_LIST="768 1024 1536" \
+HINT_DELAY_MS=120 \
+bash scripts/run_milestone9_oracle_lead_sweep.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Expected interpretation:
+
+```text
+small oracle lead:
+  more late_prefetch
+
+larger oracle lead:
+  fewer late_prefetch, but possibly more too_early_or_unprotected
+
+That transition is the core hardware argument:
+start too late and replay stalls;
+start too early and KV may be evicted without residency protection.
+```
+
+Observed oracle lead sweep:
+
+| Oracle Lead | Baseline Avg Replay TTFT | Oracle Avg Replay TTFT | Improvement | Outcomes |
+| --- | ---: | ---: | ---: | --- |
+| `500 ms` | `1010.465 ms` | `871.450 ms` | `139.016 ms` | `late_prefetch: 12` |
+| `1000 ms` | `1013.611 ms` | `807.090 ms` | `206.520 ms` | `late_prefetch: 12` |
+| `1500 ms` | `1026.244 ms` | `806.769 ms` | `219.475 ms` | `late_prefetch: 10`, `too_early_or_unprotected: 2` |
+
+Timing breakdown from the sweep:
+
+| Oracle Lead | Avg Hint TTFT | Avg Hint Total Duration | Avg Time To First `hicache.load` | Total Hint `hicache.load` Duration | Avg Non-Load Hint Time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `500 ms` | `899.227 ms` | `1344.818 ms` | `711.877 ms` | `12.711 ms` | `1343.759 ms` |
+| `1000 ms` | `874.432 ms` | `1284.391 ms` | `652.739 ms` | `10.056 ms` | `1283.553 ms` |
+| `1500 ms` | `875.295 ms` | `1309.660 ms` | `759.399 ms` | `10.321 ms` | `1308.800 ms` |
+
+Interpretation:
+
+```text
+The actual hicache.load time is tiny compared with the end-to-end hint duration.
+The delay is mostly outside the raw KV load call.
+That points to scheduling, queueing, runtime work, and contention with active inference.
+
+This is stronger than saying "DMA is slow."
+The better claim is:
+software can issue hints, but the current runtime/memory path cannot make those hints deadline-aware, priority-aware, or residency-protected.
+```
+
 ### Milestone 10: Manager Demo Results
 
 Status: planned.
@@ -1698,6 +1783,7 @@ sglang_direct_kv/
     run_milestone7_direct_hooks.sh
     run_milestone8_direct_load_design_space.sh
     run_milestone9_agentic_traffic.sh
+    run_milestone9_oracle_lead_sweep.sh
     run_agentic_traffic_workload.py
     run_pressure_resume_workload.py
     analyze_hint_outcomes.py

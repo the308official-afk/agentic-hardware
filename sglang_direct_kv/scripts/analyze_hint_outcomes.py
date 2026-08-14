@@ -96,6 +96,16 @@ def count_named(events: list[dict[str, Any]], names: set[str]) -> int:
     return sum(1 for event in events if event.get("event") in names)
 
 
+def event_duration_ms(event: dict[str, Any]) -> float:
+    value = event.get("duration_ms", 0.0)
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def first_event_named(events: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    matches = [event for event in events if event.get("event") == name]
+    return min(matches, key=event_ts) if matches else None
+
+
 def avg_metric(metrics: list[dict[str, Any]], session_id: str, phase: str, key: str) -> float:
     values = [
         float(row[key])
@@ -163,8 +173,26 @@ def build_rows(trace: list[dict[str, Any]], metrics: list[dict[str, Any]]) -> li
 
         prefetch_load_count = count_named(hint_events, LOAD_EVENTS)
         prefetch_hicache_load_count = count_named(hint_events, {"hicache.load.end"})
+        first_hint_hicache_load = first_event_named(hint_events, "hicache.load.start")
+        hint_hicache_load_ends = [
+            event for event in hint_events if event.get("event") == "hicache.load.end"
+        ]
+        hint_hicache_load_duration_total_ms = round(
+            sum(event_duration_ms(event) for event in hint_hicache_load_ends), 3
+        )
+        hint_hicache_load_duration_max_ms = round(
+            max((event_duration_ms(event) for event in hint_hicache_load_ends), default=0.0), 3
+        )
         resume_load_count = count_named(resume_events, LOAD_EVENTS)
         resume_hicache_load_count = count_named(resume_events, {"hicache.load.end"})
+        resume_hicache_load_duration_total_ms = round(
+            sum(
+                event_duration_ms(event)
+                for event in resume_events
+                if event.get("event") == "hicache.load.end"
+            ),
+            3,
+        )
         after_hint_before_resume = events_between(trace, hint_end_ts, resume_start_ts)
         eviction_pressure_after_prefetch = count_named(after_hint_before_resume, EVICT_EVENTS)
         hint_completed_before_replay = bool(
@@ -177,6 +205,21 @@ def build_rows(trace: list[dict[str, Any]], metrics: list[dict[str, Any]]) -> li
         replay_ttft_ms = avg_metric(metrics, session_id, "replay", "ttft_ms")
         hint_ttft_ms = avg_metric(metrics, session_id, "hint_prefetch", "ttft_ms")
         initial_ttft_ms = avg_metric(metrics, session_id, "initial_turn", "ttft_ms")
+        hint_total_duration_ms = (
+            round((hint_end_ts - hint_start_ts) / 1_000_000, 3)
+            if hint_start_ts is not None and hint_end_ts is not None
+            else 0.0
+        )
+        hint_start_to_first_hicache_load_ms = (
+            round((event_ts(first_hint_hicache_load) - hint_start_ts) / 1_000_000, 3)
+            if hint_start_ts is not None and first_hint_hicache_load is not None
+            else ""
+        )
+        hint_non_load_time_ms = (
+            round(max(0.0, hint_total_duration_ms - hint_hicache_load_duration_total_ms), 3)
+            if hint_total_duration_ms
+            else 0.0
+        )
         outcome = classify(
             has_hint=has_hint,
             hint_completed_before_replay=hint_completed_before_replay,
@@ -194,6 +237,11 @@ def build_rows(trace: list[dict[str, Any]], metrics: list[dict[str, Any]]) -> li
                 "prompt_tokens": int(first_metric.get("prompt_tokens", 0)),
                 "initial_ttft_ms": initial_ttft_ms,
                 "hint_ttft_ms": hint_ttft_ms,
+                "hint_total_duration_ms": hint_total_duration_ms,
+                "hint_start_to_first_hicache_load_ms": hint_start_to_first_hicache_load_ms,
+                "hint_hicache_load_duration_total_ms": hint_hicache_load_duration_total_ms,
+                "hint_hicache_load_duration_max_ms": hint_hicache_load_duration_max_ms,
+                "hint_non_load_time_ms": hint_non_load_time_ms,
                 "replay_ttft_ms": replay_ttft_ms,
                 "has_hint": int(has_hint),
                 "hint_completed_before_replay": int(hint_completed_before_replay),
@@ -201,6 +249,7 @@ def build_rows(trace: list[dict[str, Any]], metrics: list[dict[str, Any]]) -> li
                 "prefetch_hicache_load_count": prefetch_hicache_load_count,
                 "resume_load_count": resume_load_count,
                 "resume_hicache_load_count": resume_hicache_load_count,
+                "resume_hicache_load_duration_total_ms": resume_hicache_load_duration_total_ms,
                 "eviction_pressure_after_prefetch": eviction_pressure_after_prefetch,
                 "direct_load_attempts": count_named(
                     [event for event in trace if event.get("session_id") == session_id],
@@ -248,9 +297,14 @@ def write_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "mode",
         "tool_wait_ms",
         "prompt_tokens",
+        "hint_ttft_ms",
+        "hint_total_duration_ms",
+        "hint_start_to_first_hicache_load_ms",
+        "hint_hicache_load_duration_total_ms",
         "replay_ttft_ms",
         "prefetch_load_count",
         "resume_load_count",
+        "resume_hicache_load_duration_total_ms",
         "eviction_pressure_after_prefetch",
         "outcome",
     ]
@@ -301,9 +355,13 @@ def write_html(path: Path, rows: list[dict[str, Any]]) -> None:
         "prompt_tokens",
         "initial_ttft_ms",
         "hint_ttft_ms",
+        "hint_total_duration_ms",
+        "hint_start_to_first_hicache_load_ms",
+        "hint_hicache_load_duration_total_ms",
         "replay_ttft_ms",
         "prefetch_load_count",
         "resume_load_count",
+        "resume_hicache_load_duration_total_ms",
         "eviction_pressure_after_prefetch",
         "outcome",
     ]
