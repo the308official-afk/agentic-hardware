@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import signal
 import time
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ _PROFILER: Any | None = None
 _STARTED = False
 _STOPPED = False
 _EVENT_COUNT = 0
+_SIGNALS_INSTALLED = False
+_PREVIOUS_SIGNAL_HANDLERS: dict[int, Any] = {}
 
 
 def enabled() -> bool:
@@ -61,6 +64,7 @@ def maybe_start(label: str) -> None:
         )
         _PROFILER.start()
         _STARTED = True
+        _install_signal_handlers()
         _write_status({"event": "torch_profiler.start", "label": label})
     except Exception as exc:
         _STOPPED = True
@@ -135,6 +139,33 @@ def stop_and_export(reason: str = "manual", label: str = "") -> None:
                 "error": str(exc),
             }
         )
+
+
+def _handle_signal(signum: int, frame: Any) -> None:
+    stop_and_export(f"signal_{signum}", "shutdown")
+    previous = _PREVIOUS_SIGNAL_HANDLERS.get(signum)
+    if callable(previous):
+        previous(signum, frame)
+        return
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
+    raise SystemExit(128 + signum)
+
+
+def _install_signal_handlers() -> None:
+    global _SIGNALS_INSTALLED
+    if _SIGNALS_INSTALLED:
+        return
+    signums = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGQUIT"):
+        signums.append(signal.SIGQUIT)
+    for signum in signums:
+        try:
+            _PREVIOUS_SIGNAL_HANDLERS[signum] = signal.getsignal(signum)
+            signal.signal(signum, _handle_signal)
+        except Exception:
+            pass
+    _SIGNALS_INSTALLED = True
 
 
 atexit.register(lambda: stop_and_export("atexit"))

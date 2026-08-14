@@ -27,6 +27,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 10B: CUDA Transfer To KV Block Attribution | Completed | [Milestone 10B](#milestone-10b-cuda-transfer-to-kv-block-attribution---completed) |
 | Milestone 11: Agentic Prefetch Timeline Experiment | Completed | [Milestone 11](#milestone-11-agentic-prefetch-timeline-experiment) |
 | Milestone 11B: Improved CUDA Copy Attribution | Completed | [Milestone 11B](#milestone-11b-improved-cuda-copy-attribution) |
+| Milestone 11C: Profiler Coverage Diagnosis | Completed | [Milestone 11C](#milestone-11c-profiler-coverage-diagnosis) |
 
 ## What We Are Testing
 
@@ -85,6 +86,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F8 | Worker-local profiling can expose SGLang CUDA activity. | Milestone 10 torch-profiler smoke exported one worker trace with `14329` kernel-like events, `5569` memcpy-like events, `70` HtoD events, and `2229` DtoH events. | We now have a path to inspect GPU activity from inside the SGLang worker. | Use worker-local profiling for DMA/copy evidence when external Nsight misses worker GPU activity. | New |
 | F9 | Agentic timelines can show where lateness happens. | Milestone 11 smoke produced SGLang KV windows, profiler CUDA copy rows, hint outcome labels, and a per-session HTML timeline. | We can now show whether the hint was late at the request level, the KV-load level, or the CUDA-copy level. | This is the clearest evidence path for motivating deadline-aware prefetch hardware. | New |
 | F10 | CUDA copy attribution needs explicit agent context. | Milestone 11B changed `agent_001`, `agent_002`, and `agent_005` from SGLang-only rows into rows with profiler-visible HtoD copy windows. | Missing HtoD columns were mostly attribution weakness, not proof that no copy happened. | Carry agent/session context deeper into SGLang KV movement events and preserve batched session ownership. | New |
+| F11 | Missing green bars can be profiler-coverage artifacts. | In Milestone 11B, `agent_003` had SGLang host-to-device load from `44435.564 -> 44496.473 ms`, but the torch profiler stopped at `44407.848 ms`. In Milestone 11C, a later profiler stop showed `agent_003` with `528` HtoD events. | "No green bar" does not always mean "no CUDA copy." It can mean the profiler was not recording when the copy happened. | Reports now include profiler window status and missing-HtoD reason columns. | New |
 
 ## Milestones
 
@@ -2407,6 +2409,7 @@ That context is propagated through nested load_back, hicache.load, and hostpool 
 Queued HiCache load operations can carry their mapped agent context.
 The correlation CSV now has fields for shared/batched agent ownership.
 The HTML wording now says "not attributed" instead of "not observed" for missing CUDA rows.
+The timeline now records profiler coverage, so a missing green bar can be explained.
 ```
 
 Run used:
@@ -2428,14 +2431,14 @@ bash scripts/run_milestone11_agentic_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
 
 Attribution smoke result:
 
-| Session | SGLang KV Load Window | CUDA HtoD Copy Window | HtoD Events | HtoD Bytes | Replay Due | Margin | Result |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `agent_000` | `31690.807 -> 31815.466 ms` | `31711.545 -> 31814.808 ms` | `1624` | `60497920` | `32124.946 ms` | `+310.138 ms` | Clean useful prefetch |
-| `agent_001` | `31864.335 -> 31868.100 ms` | `31887.975 -> 32045.098 ms` | `2856` | `99921920` | `32794.098 ms` | `+749.000 ms` | CUDA-attributed useful prefetch |
-| `agent_002` | `31701.051 -> 31705.669 ms` | `31711.545 -> 31814.808 ms` | `1624` | `60497920` | `32558.256 ms` | `+743.448 ms` | CUDA-attributed useful prefetch |
-| `agent_003` | `44423.217 -> 44427.141 ms` | not attributed | `0` | `0` | `33132.434 ms` | `-11294.707 ms` | Late prefetch |
-| `agent_004` | `31854.515 -> 32046.171 ms` | `31887.975 -> 32045.098 ms` | `2856` | `99921920` | `32378.433 ms` | `+333.335 ms` | Clean useful prefetch |
-| `agent_005` | `31875.146 -> 31879.722 ms` | `31887.975 -> 32045.098 ms` | `2856` | `99921920` | `32827.943 ms` | `+782.845 ms` | CUDA-attributed useful prefetch |
+| Session | SGLang KV Load Window | CUDA HtoD Copy Window | HtoD Events | Profiler Window | Profiler Status | Missing Reason | Replay Due | Margin | Result |
+| --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |
+| `agent_000` | `31710.976 -> 31815.287 ms` | `31711.545 -> 31814.808 ms` | `1624` | `24409.362 -> 44407.848 ms` | `inside_profiler_window` | `none` | `32124.946 ms` | `+310.138 ms` | CUDA-attributed useful prefetch |
+| `agent_001` | `31887.405 -> 32045.998 ms` | `31887.975 -> 32045.098 ms` | `2856` | `24409.362 -> 44407.848 ms` | `inside_profiler_window` | `none` | `32794.098 ms` | `+749.000 ms` | CUDA-attributed useful prefetch |
+| `agent_002` | `31710.976 -> 31815.287 ms` | `31711.545 -> 31814.808 ms` | `1624` | `24409.362 -> 44407.848 ms` | `inside_profiler_window` | `none` | `32558.256 ms` | `+743.448 ms` | CUDA-attributed useful prefetch |
+| `agent_003` | `44435.564 -> 44496.473 ms` | not attributed | `0` | `24409.362 -> 44407.848 ms` | `after_profiler_stopped` | `profiler_stopped_before_kv_load` | `33132.434 ms` | `-11364.039 ms` | Late prefetch |
+| `agent_004` | `31887.405 -> 32045.998 ms` | `31887.975 -> 32045.098 ms` | `2856` | `24409.362 -> 44407.848 ms` | `inside_profiler_window` | `none` | `32378.433 ms` | `+333.335 ms` | CUDA-attributed useful prefetch |
+| `agent_005` | `31887.405 -> 32045.998 ms` | `31887.975 -> 32045.098 ms` | `2856` | `24409.362 -> 44407.848 ms` | `inside_profiler_window` | `none` | `32827.943 ms` | `+782.845 ms` | CUDA-attributed useful prefetch |
 
 Important interpretation:
 
@@ -2460,6 +2463,82 @@ For example, the same HtoD copy window may include agent_000 and agent_002.
 That is not a bug.
 It shows SGLang/runtime batching KV movement across sessions.
 The hardware argument still applies: the movement path needs agent/session/deadline context even when copies are batched.
+```
+
+Agent 003 no-green diagnosis:
+
+```text
+In this run, agent_003 did have SGLang host-to-device KV load work:
+  44435.564 ms -> 44496.473 ms
+
+But torch.profiler stopped earlier:
+  24409.362 ms -> 44407.848 ms
+
+So the missing green bar means:
+  the profiler was no longer recording when agent_003's KV load happened.
+
+It does not mean:
+  no CUDA host-to-device copy happened.
+```
+
+### Milestone 11C: Profiler Coverage Diagnosis
+
+Status: completed on EC2 for a focused 6-session attribution-debug run.
+
+What it is:
+
+```text
+Rerun the same 6-session traffic shape with a later torch-profiler event stop.
+The goal is to test whether agent_003 gets CUDA HtoD attribution when the profiler stays alive long enough.
+```
+
+Why we need it:
+
+```text
+Milestone 11B showed agent_003 with SGLang KV movement but no green CUDA-copy bar.
+Before claiming "the copy was missing," we need to prove whether the profiler actually covered that time window.
+```
+
+Run used:
+
+```bash
+RESULT_ROOT=artifacts/results/milestone11c_profiler_coverage_smoke_300 \
+MODE=oracle_direct_load \
+SESSION_COUNT=6 \
+RANDOMIZE_TRAFFIC=1 \
+RANDOM_SEED=7 \
+ARRIVAL_GAP_RANGE_MS="60 220" \
+TOOL_WAIT_RANGE_MS="250 1800" \
+PROMPT_TOKEN_LIST="768 1024" \
+HINT_DELAY_MS=120 \
+ORACLE_LEAD_MS=1000 \
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=300 \
+bash scripts/run_milestone11_agentic_timeline.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Important warning:
+
+```text
+This run is for attribution debugging only.
+Do not use its TTFT numbers as performance evidence.
+Stopping/exporting torch.profiler during live traffic can add large overhead to later requests.
+Use Milestone 9-style runs without torch.profiler for performance numbers.
+```
+
+Agent 003 result:
+
+| Session | SGLang KV Load Window | CUDA HtoD Copy Window | HtoD Events | HtoD Bytes | Profiler Window | Profiler Status | Missing Reason | Replay Due | Margin | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |
+| `agent_003` | `33191.650 -> 47824.138 ms` | `33192.241 -> 33236.513 ms` | `528` | `23767040` | `24573.943 -> 47812.734 ms` | `partly_outside_profiler_window` | `none` | `34052.773 ms` | `+816.260 ms` | CUDA-attributed useful prefetch |
+
+Conclusion:
+
+```text
+The old agent_003 no-green case was caused by profiler coverage.
+When the profiler stayed alive past agent_003's HtoD copy window, agent_003 got green CUDA HtoD attribution.
+So the attribution pipeline is now more precise:
+  no green + after_profiler_stopped = profiler coverage issue
+  no green + inside_profiler_window = real attribution gap to investigate
 ```
 
 ## Directory Layout

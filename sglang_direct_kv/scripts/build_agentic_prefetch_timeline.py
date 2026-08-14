@@ -65,13 +65,35 @@ def session_ids(events: list[dict[str, Any]]) -> list[str]:
     return sorted(ids)
 
 
-def selected_kv_windows(windows: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
+def selected_kv_windows(
+    windows: list[dict[str, Any]],
+    session_id: str,
+    hint_start_ns: int | None,
+    hint_end_ns: int | None,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     preferred_events = {"hostpool.load_to_device_per_layer"}
     fallback_events = {"hicache.start_loading", "hicache.load"}
 
+    def inside_hint_request(window: dict[str, Any]) -> bool:
+        if hint_start_ns is None or hint_end_ns is None:
+            return True
+        return int(window["start_ns"]) < hint_end_ns and int(window["end_ns"]) > hint_start_ns
+
     def matches(cols: dict[str, Any]) -> bool:
         if cols.get("kv_agent_session_id") == session_id and cols.get("kv_agent_phase") == "hint_prefetch":
+            return True
+        session_ids = {
+            item.strip()
+            for item in str(cols.get("kv_agent_session_ids", "")).split(",")
+            if item.strip()
+        }
+        phases = {
+            item.strip()
+            for item in str(cols.get("kv_agent_phases", "")).split(",")
+            if item.strip()
+        }
+        if session_id in session_ids and "hint_prefetch" in phases:
             return True
         return False
 
@@ -82,6 +104,7 @@ def selected_kv_windows(windows: list[dict[str, Any]], session_id: str) -> list[
                 window.get("window_type") == "sglang_kv_method"
                 and window.get("event") in event_names
                 and cols.get("kv_direction") == "host_to_device"
+                and inside_hint_request(window)
                 and matches(cols)
             ):
                 out.append(window)
@@ -95,6 +118,105 @@ def read_copy_rows(path: Path) -> list[dict[str, Any]]:
         return []
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
+
+
+def read_profiler_coverage(profile_dir: Path | None) -> list[dict[str, Any]]:
+    if profile_dir is None or not profile_dir.exists():
+        return []
+
+    windows: list[dict[str, Any]] = []
+    for path in sorted(profile_dir.glob("torch_profiler_status_pid*.jsonl")):
+        active: dict[str, Any] | None = None
+        for event in read_jsonl(path):
+            name = event.get("event")
+            if name == "torch_profiler.start":
+                active = {
+                    "pid": event.get("pid", ""),
+                    "start_ns": event.get("ts_ns"),
+                    "start_label": event.get("label", ""),
+                    "status_path": str(path),
+                }
+            elif name == "torch_profiler.export" and active is not None:
+                active.update(
+                    {
+                        "end_ns": event.get("ts_ns"),
+                        "reason": event.get("reason", ""),
+                        "event_count": event.get("event_count", ""),
+                        "trace_path": event.get("trace_path", ""),
+                    }
+                )
+                windows.append(active)
+                active = None
+        if active is not None:
+            active.update({"end_ns": None, "reason": "started_but_no_export", "event_count": "", "trace_path": ""})
+            windows.append(active)
+    return windows
+
+
+def coverage_ms_fields(coverage: list[dict[str, Any]], trace_start_ns: int) -> tuple[str, str, str]:
+    starts = [int(item["start_ns"]) for item in coverage if isinstance(item.get("start_ns"), int)]
+    ends = [int(item["end_ns"]) for item in coverage if isinstance(item.get("end_ns"), int)]
+    reasons = [str(item.get("reason", "")) for item in coverage if item.get("reason")]
+    start_ms = ns_to_ms(min(starts), trace_start_ns) if starts else ""
+    end_ms = ns_to_ms(max(ends), trace_start_ns) if ends else ""
+    return str(start_ms), str(end_ms), ",".join(sorted(set(reasons)))
+
+
+def profiler_window_status(
+    coverage: list[dict[str, Any]],
+    start_ms: float | None,
+    end_ms: float | None,
+    trace_start_ns: int,
+) -> str:
+    if start_ms is None or end_ms is None:
+        return "no_sglang_kv_window"
+    if not coverage:
+        return "no_profiler_status"
+
+    saw_before = False
+    saw_after = False
+    saw_overlap = False
+    for item in coverage:
+        start_ns = item.get("start_ns")
+        end_ns = item.get("end_ns")
+        if not isinstance(start_ns, int):
+            continue
+        cov_start_ms = ns_to_ms(start_ns, trace_start_ns)
+        cov_end_ms = ns_to_ms(end_ns, trace_start_ns) if isinstance(end_ns, int) else float("inf")
+        if cov_start_ms <= start_ms and end_ms <= cov_end_ms:
+            return "inside_profiler_window"
+        if end_ms < cov_start_ms:
+            saw_before = True
+        elif start_ms > cov_end_ms:
+            saw_after = True
+        elif start_ms < cov_end_ms and end_ms > cov_start_ms:
+            saw_overlap = True
+
+    if saw_overlap:
+        return "partly_outside_profiler_window"
+    if saw_after and not saw_before:
+        return "after_profiler_stopped"
+    if saw_before and not saw_after:
+        return "before_profiler_started"
+    return "outside_profiler_window"
+
+
+def missing_h2d_reason(torch_copy_count: int, sglang_event_count: int, profile_status: str) -> str:
+    if torch_copy_count > 0:
+        return ""
+    if sglang_event_count == 0:
+        return "no_sglang_kv_load"
+    if profile_status == "after_profiler_stopped":
+        return "profiler_stopped_before_kv_load"
+    if profile_status == "before_profiler_started":
+        return "kv_load_before_profiler_started"
+    if profile_status == "partly_outside_profiler_window":
+        return "kv_load_partly_outside_profiler_window"
+    if profile_status == "no_profiler_status":
+        return "no_profiler_status"
+    if profile_status == "inside_profiler_window":
+        return "inside_profiler_window_but_no_h2d_attribution"
+    return profile_status
 
 
 def overlaps_ms(row: dict[str, Any], start_ms: float, end_ms: float) -> bool:
@@ -161,9 +283,15 @@ def phase_metric(events: list[dict[str, Any]], session_id: str, phase: str, key:
     return ""
 
 
-def build_rows(events: list[dict[str, Any]], copy_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def build_rows(
+    events: list[dict[str, Any]],
+    copy_rows: list[dict[str, Any]],
+    profiler_coverage: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     trace_start_ns = min(int(event["ts_ns"]) for event in events if event.get("ts_ns"))
     windows = build_windows(events)
+    coverage = profiler_coverage or []
+    profiler_start_ms, profiler_end_ms, profiler_stop_reason = coverage_ms_fields(coverage, trace_start_ns)
     rows: list[dict[str, Any]] = []
     timeline: list[dict[str, Any]] = []
 
@@ -177,7 +305,7 @@ def build_rows(events: list[dict[str, Any]], copy_rows: list[dict[str, Any]]) ->
         replay_due_ms = event_ms(events, "agent.replay_due", session_id, trace_start_ns)
         resume_start_ms = event_ms(events, "agent.resume_start", session_id, trace_start_ns)
 
-        kv = selected_kv_windows(windows, session_id)
+        kv = selected_kv_windows(windows, session_id, hint_start, hint_end)
         sglang_start_ms = ns_to_ms(int(kv[0]["start_ns"]), trace_start_ns) if kv else None
         sglang_end_ms = ns_to_ms(max(int(item["end_ns"]) for item in kv), trace_start_ns) if kv else None
         sglang_event_count = len(kv)
@@ -192,6 +320,8 @@ def build_rows(events: list[dict[str, Any]], copy_rows: list[dict[str, Any]]) ->
         torch_end_ms = max((to_float(row.get("end_ms_from_trace_start")) or 0.0 for row in copies), default=None)
         torch_copy_count = len(copies)
         torch_bytes = sum(int(float(row.get("bytes") or 0)) for row in copies)
+        profile_status = profiler_window_status(coverage, sglang_start_ms, sglang_end_ms, trace_start_ns)
+        h2d_missing_reason = missing_h2d_reason(torch_copy_count, sglang_event_count, profile_status)
 
         prefetch_done_ms = torch_end_ms if torch_end_ms is not None else sglang_end_ms
         prefetch_margin_ms = (
@@ -218,6 +348,11 @@ def build_rows(events: list[dict[str, Any]], copy_rows: list[dict[str, Any]]) ->
                 "torch_copy_end_ms": torch_end_ms if torch_end_ms is not None else "",
                 "torch_h2d_copy_events": torch_copy_count,
                 "torch_h2d_bytes": torch_bytes,
+                "profiler_start_ms": profiler_start_ms,
+                "profiler_end_ms": profiler_end_ms,
+                "profiler_stop_reason": profiler_stop_reason,
+                "sglang_kv_profiler_status": profile_status,
+                "h2d_missing_reason": h2d_missing_reason,
                 "replay_due_ms": replay_due_ms if replay_due_ms is not None else "",
                 "resume_start_ms": resume_start_ms if resume_start_ms is not None else "",
                 "prefetch_margin_ms": prefetch_margin_ms if prefetch_margin_ms is not None else "",
@@ -282,6 +417,7 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
     margin = to_float(row.get("prefetch_margin_ms"))
     torch_copy_events = int(row.get("torch_h2d_copy_events") or 0)
     sglang_events = int(row.get("sglang_copy_events") or 0)
+    missing_reason = str(row.get("h2d_missing_reason") or "")
 
     if row.get("no_visible_prefetch"):
         status = "No visible prefetch"
@@ -289,15 +425,28 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
         deduction = "This session is weak evidence for movement timing; use it mainly to show missing visibility."
     elif row.get("late_prefetch") is True and margin is not None:
         status = "Late prefetch"
-        observation = f"The hinted KV movement completed {abs(margin):.3f} ms after replay was already due."
-        deduction = "The software hint existed, but the normal serving/KV path did not act early enough."
+        if missing_reason == "profiler_stopped_before_kv_load":
+            observation = (
+                f"SGLang KV movement completed {abs(margin):.3f} ms after replay was already due. "
+                "CUDA HtoD is not shown because torch.profiler had already stopped before this KV window."
+            )
+            deduction = "This is a real late SGLang prefetch, but the missing green bar is a profiler-coverage issue, not proof that no CUDA copy happened."
+        else:
+            observation = f"The hinted KV movement completed {abs(margin):.3f} ms after replay was already due."
+            deduction = "The software hint existed, but the normal serving/KV path did not act early enough."
     elif torch_copy_events > 0 and margin is not None:
         status = "Clean useful prefetch"
         observation = f"SGLang KV load and CUDA HtoD copies were visible, and movement completed {margin:.3f} ms before replay."
         deduction = "This is the clean success case: the hint moved KV early enough for the agent replay."
     elif sglang_events > 0 and margin is not None:
         status = "SGLang-level useful prefetch"
-        observation = f"SGLang KV load was visible and completed {margin:.3f} ms before replay, but CUDA HtoD rows were not confidently attributed to this session."
+        if missing_reason:
+            observation = (
+                f"SGLang KV load was visible and completed {margin:.3f} ms before replay, "
+                f"but CUDA HtoD attribution is missing because: {missing_reason}."
+            )
+        else:
+            observation = f"SGLang KV load was visible and completed {margin:.3f} ms before replay, but CUDA HtoD rows were not confidently attributed to this session."
         deduction = "This is useful SGLang-level evidence, but weaker CUDA-level evidence."
     else:
         status = "Incomplete timing"
@@ -308,6 +457,8 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
         f"tool wait {fmt_ms(row.get('tool_wait_ms'))}; "
         f"SGLang load {fmt_ms(row.get('sglang_copy_start_ms'))} -> {fmt_ms(row.get('sglang_copy_end_ms'))}; "
         f"CUDA HtoD {fmt_ms(row.get('torch_copy_start_ms'))} -> {fmt_ms(row.get('torch_copy_end_ms'))}; "
+        f"profiler window {fmt_ms(row.get('profiler_start_ms'))} -> {fmt_ms(row.get('profiler_end_ms'))}; "
+        f"HtoD missing reason {fmt(row.get('h2d_missing_reason')) or 'none'}; "
         f"replay due {fmt_ms(row.get('replay_due_ms'))}; "
         f"margin {fmt_ms(row.get('prefetch_margin_ms'))}"
     )
@@ -445,11 +596,19 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
 
     late_count = sum(1 for row in rows if row.get("late_prefetch") is True)
     visible_count = sum(1 for row in rows if row.get("torch_h2d_copy_events", 0))
+    missing_reasons = sorted(
+        {
+            str(row.get("h2d_missing_reason"))
+            for row in rows
+            if row.get("h2d_missing_reason")
+        }
+    )
     margins = [float(row["prefetch_margin_ms"]) for row in rows if row.get("prefetch_margin_ms") not in ("", None)]
     summary = {
         "sessions": len(rows),
         "sessions_with_visible_h2d_copy": visible_count,
         "late_prefetch_sessions": late_count,
+        "h2d_missing_reasons": ", ".join(missing_reasons),
         "avg_prefetch_margin_ms": round(mean(margins), 3) if margins else "",
     }
     columns = [
@@ -464,6 +623,11 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "torch_copy_end_ms",
         "torch_h2d_copy_events",
         "torch_h2d_bytes",
+        "sglang_kv_profiler_status",
+        "h2d_missing_reason",
+        "profiler_start_ms",
+        "profiler_end_ms",
+        "profiler_stop_reason",
         "replay_due_ms",
         "prefetch_margin_ms",
         "late_prefetch",
@@ -523,7 +687,12 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         (
             "green torch_copy",
             "Profiler-attributed CUDA host-to-device copy activity inside the hint request.",
-            "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request.",
+            "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request. If it is missing, check the profiler coverage columns before concluding no copy happened.",
+        ),
+        (
+            "profiler window",
+            "The time range where torch.profiler was actually recording CUDA work.",
+            "A session can have SGLang KV movement but no green bar if that movement happened after the profiler stopped.",
         ),
         (
             "green/red dashed gap",
@@ -576,6 +745,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build a per-session agentic KV prefetch timeline.")
     parser.add_argument("--trace", required=True)
     parser.add_argument("--copy-csv", required=True)
+    parser.add_argument("--profile-dir")
     parser.add_argument("--out-csv", required=True)
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-html", required=True)
@@ -584,7 +754,8 @@ def main() -> None:
 
     events = read_jsonl(Path(args.trace))
     copy_rows = read_copy_rows(Path(args.copy_csv))
-    rows, timeline = build_rows(events, copy_rows)
+    profiler_coverage = read_profiler_coverage(Path(args.profile_dir)) if args.profile_dir else []
+    rows, timeline = build_rows(events, copy_rows, profiler_coverage)
     write_csv(Path(args.out_csv), rows)
     write_json(Path(args.out_json), rows, timeline)
     write_html(Path(args.out_html), rows, timeline, args.max_sessions)

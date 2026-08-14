@@ -191,6 +191,7 @@ echo "Step 6/6: building agentic prefetch timeline"
 python scripts/build_agentic_prefetch_timeline.py \
   --trace "${trace}" \
   --copy-csv "${torch_copy_timeline_csv}" \
+  --profile-dir "${torch_profile_dir}" \
   --out-csv "${agentic_timeline_csv}" \
   --out-json "${agentic_timeline_json}" \
   --out-html "${agentic_timeline_html}" \
