@@ -500,11 +500,44 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         [
             "</tbody></table></div>",
             '<div class="panel"><h2>Timeline</h2>',
-            '<p class="caption">How to read this: the black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>',
+            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Green is the profiler-attributed CUDA HtoD copy observed inside that hint request. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>',
             *svg,
             "</div>",
         ]
     )
+    lines.append('<div class="panel"><h2>Timeline Layers</h2><table><thead><tr>')
+    for col in ("Layer", "Meaning", "Why it matters"):
+        lines.append(f"<th>{html.escape(col)}</th>")
+    lines.append("</tr></thead><tbody>")
+    layer_rows = [
+        (
+            "gray tool_wait",
+            "The agent is waiting for a tool result, such as tests, search, or build output.",
+            "This is the opportunity window where prefetch can happen before the next model turn.",
+        ),
+        (
+            "purple hint_request",
+            "The software request we currently send to SGLang to trigger KV load-back.",
+            "This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.",
+        ),
+        (
+            "green torch_copy",
+            "Profiler-attributed CUDA host-to-device copy activity inside the hint request.",
+            "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request.",
+        ),
+        (
+            "green/red dashed gap",
+            "The time between KV/copy completion and replay due.",
+            "Green means KV was ready before replay. Red means the replay deadline passed before KV movement finished.",
+        ),
+    ]
+    for layer, meaning, why in layer_rows:
+        lines.append("<tr>")
+        lines.append(f'<td class="status">{fmt(layer)}</td>')
+        lines.append(f'<td class="wrap">{fmt(meaning)}</td>')
+        lines.append(f'<td class="wrap">{fmt(why)}</td>')
+        lines.append("</tr>")
+    lines.append("</tbody></table></div>")
     lines.append('<div class="panel"><h2>Key Observations Per Session</h2><table><thead><tr>')
     for col in ("session_id", "status", "what happened", "deduction and evidence"):
         lines.append(f"<th>{html.escape(col)}</th>")
