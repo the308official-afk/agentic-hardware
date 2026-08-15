@@ -315,24 +315,29 @@ def high_level_summary(
 def timeline_layer_rows() -> list[dict[str, Any]]:
     return [
         {
-            "layer": "blue phase bars",
-            "meaning": "real DeepAgents model turns sent to SGLang",
-            "why_it_matters": "proves the live SWE-bench/AgentBench path is reaching SGLang",
+            "layer": "blue current_turn",
+            "meaning": "the real AgentBench/DeepAgents turn before the next resume",
+            "why_it_matters": "this is the context whose KV may be useful for the next turn",
         },
         {
-            "layer": "gray wait gaps",
-            "meaning": "observed gap between one model turn and the next extracted replay turn",
-            "why_it_matters": "this is the agent pause where a future hint-aware prefetch could run",
+            "layer": "gray tool_wait",
+            "meaning": "the observed gap between the current turn and the next AgentBench turn",
+            "why_it_matters": "this is the opportunity window where a future hint-aware prefetch could run",
         },
         {
-            "layer": "red replay bars",
-            "meaning": "the next real prompt that would resume the agent session",
-            "why_it_matters": "this becomes the controlled replay request in Milestone 18",
+            "layer": "black replay_due",
+            "meaning": "the boundary where the next AgentBench turn is due",
+            "why_it_matters": "prefetch must finish before this boundary to avoid resume stalls",
         },
         {
-            "layer": "KV/copy telemetry table",
-            "meaning": "SGLang HiCache and copy hooks observed during the live run",
-            "why_it_matters": "shows the report is connected to real SGLang memory-path events",
+            "layer": "red replay",
+            "meaning": "the next real prompt extracted from AgentBench",
+            "why_it_matters": "this is the request replayed in Milestone 18 prefetch-mode experiments",
+        },
+        {
+            "layer": "purple/green not shown here",
+            "meaning": "the live direct run does not inject hint requests, so there is no purple hint bar or green prefetch-copy bar in this timeline",
+            "why_it_matters": "those bars appear in the controlled replay reports where we compare prefetch modes",
         },
     ]
 
@@ -482,6 +487,7 @@ def build_replay_timeline_svg(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p>No replay-session timeline available.</p>"
     spans: list[dict[str, Any]] = []
+    markers: list[dict[str, Any]] = []
     for idx, row in enumerate(rows[:8]):
         session_id = str(row.get("session_id", f"session_{idx}"))
         arrival = float(row.get("arrival_ms") or idx * 80)
@@ -491,33 +497,40 @@ def build_replay_timeline_svg(rows: list[dict[str, Any]]) -> str:
         current_end = arrival + max(current_latency, 1.0)
         replay_due = current_end + wait_ms
         replay_end = replay_due + max(next_latency, 1.0)
+        rel_current_start = arrival - replay_due
+        rel_current_end = current_end - replay_due
+        rel_replay_end = replay_end - replay_due
         spans.extend(
             [
                 {
                     "session_id": session_id,
                     "kind": "current_turn",
-                    "start_ms": arrival,
-                    "end_ms": current_end,
+                    "start_ms": rel_current_start,
+                    "end_ms": rel_current_end,
                     "label": str(row.get("from_phase", "current")),
+                    "wait_ms": wait_ms,
                 },
                 {
                     "session_id": session_id,
                     "kind": "tool_wait",
-                    "start_ms": current_end,
-                    "end_ms": replay_due,
+                    "start_ms": rel_current_end,
+                    "end_ms": 0.0,
                     "label": f"wait {wait_ms:.0f} ms",
+                    "wait_ms": wait_ms,
                 },
                 {
                     "session_id": session_id,
                     "kind": "replay_turn",
-                    "start_ms": replay_due,
-                    "end_ms": replay_end,
+                    "start_ms": 0.0,
+                    "end_ms": rel_replay_end,
                     "label": str(row.get("to_phase", "replay")),
+                    "wait_ms": wait_ms,
                 },
             ]
         )
-    start = min(float(span["start_ms"]) for span in spans)
-    end = max(float(span["end_ms"]) for span in spans)
+        markers.append({"session_id": session_id, "kind": "replay_due", "time_ms": 0.0, "label": "replay due"})
+    start = -1200.0
+    end = 1800.0
     span_ms = max(1.0, end - start)
     sessions = []
     for span in spans:
@@ -530,46 +543,96 @@ def build_replay_timeline_svg(rows: list[dict[str, Any]]) -> str:
     row_h = 64
     height = top + len(sessions) * row_h + 76
     plot_w = width - left - right
-    colors = {"current_turn": "#2563eb", "tool_wait": "#d1d5db", "replay_turn": "#ef4444"}
+    colors = {
+        "current_turn": "#2563eb",
+        "tool_wait": "#d1d5db",
+        "replay_due": "#111827",
+        "replay_turn": "#ef4444",
+    }
 
     def x_pos(ms: float) -> float:
         return left + (ms - start) / span_ms * plot_w
 
+    def x_clamped(ms: float) -> float:
+        return max(left, min(left + plot_w, x_pos(ms)))
+
     session_index = {session_id: idx for idx, session_id in enumerate(sessions)}
     svg = [
-        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="AgentBench extracted replay-session timeline">',
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="AgentBench replay-boundary timeline">',
         f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
     ]
-    for tick in range(6):
-        ms = start + span_ms * tick / 5
+    ticks = [-1200, -600, 0, 600, 1200, 1800]
+    for ms in ticks:
         x = x_pos(ms)
         svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 36}" stroke="#e5e7eb"/>')
-        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+        label = "replay due" if ms == 0 else f"{ms:+.0f} ms"
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{html.escape(label)}</text>')
     for session_id in sessions:
         y = top + session_index[session_id] * row_h
         short_id = session_id.replace("agentbench_", "ab_")
-        svg.append(f'<text x="10" y="{y + 18}" font-weight="700">{html.escape(short_id)}</text>')
+        wait_span = next((span for span in spans if span["session_id"] == session_id), {})
+        wait_ms = float(wait_span.get("wait_ms") or 0)
+        status = "VERY SHORT WAIT" if wait_ms < 100 else "SHORT WAIT" if wait_ms < 500 else "LONG WAIT"
+        status_color = "#b45309" if wait_ms < 100 else "#166534"
+        svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(short_id)}</text>')
+        svg.append(
+            f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{status} {wait_ms:.0f} ms</text>'
+        )
         svg.append(f'<line x1="{left}" y1="{y + 8}" x2="{left + plot_w}" y2="{y + 8}" stroke="#f3f4f6"/>')
-    for span in spans:
+        svg.append(f'<line x1="{left}" y1="{y + 44}" x2="{left + plot_w}" y2="{y + 44}" stroke="#f9fafb"/>')
+    for span in sorted(spans, key=lambda item: {"tool_wait": 0, "current_turn": 1, "replay_turn": 3}.get(str(item["kind"]), 2)):
         y = top + session_index[span["session_id"]] * row_h
-        x1 = x_pos(float(span["start_ms"]))
-        x2 = x_pos(float(span["end_ms"]))
+        raw_start = float(span["start_ms"])
+        raw_end = float(span["end_ms"])
+        x1 = x_clamped(raw_start)
+        x2 = x_clamped(raw_end)
         kind = str(span["kind"])
         color = colors.get(kind, "#64748b")
-        opacity = "0.88" if kind != "tool_wait" else "0.75"
+        opacity = "0.82" if kind == "replay_turn" else "0.88" if kind != "tool_wait" else "0.72"
+        bar_y = y + 4
+        bar_h = 24
+        if raw_end < start or raw_start > end:
+            continue
+        display_x1 = x1
+        display_x2 = x2
+        if kind == "tool_wait" and display_x2 - display_x1 < 10:
+            display_x1 = max(left, display_x2 - 10)
+        continues = x_pos(raw_end) > left + plot_w or x_pos(raw_start) < left
         svg.append(
-            f'<rect x="{x1:.1f}" y="{y}" width="{max(3, x2 - x1):.1f}" height="24" rx="3" '
+            f'<rect x="{display_x1:.1f}" y="{bar_y}" width="{max(3, display_x2 - display_x1):.1f}" height="{bar_h}" rx="3" '
             f'fill="{color}" opacity="{opacity}"><title>{html.escape(str(span["label"]))}</title></rect>'
         )
-        if x2 - x1 > 80:
+        if kind == "replay_turn":
+            svg.append(
+                f'<line x1="{x1:.1f}" y1="{bar_y - 3}" x2="{x1:.1f}" y2="{bar_y + bar_h + 3}" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>'
+            )
+        if continues and kind in {"current_turn", "replay_turn"}:
+            if kind == "replay_turn":
+                arrow_x = left + plot_w - 7
+                arrow_y = bar_y + bar_h / 2
+                svg.append(
+                    f'<path d="M {arrow_x - 7:.1f} {arrow_y - 7:.1f} L {arrow_x:.1f} {arrow_y:.1f} L {arrow_x - 7:.1f} {arrow_y + 7:.1f}" '
+                    'fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>'
+                )
+                svg.append(f'<text x="{left + plot_w - 82:.1f}" y="{bar_y - 4}" font-size="10" fill="#991b1b" font-weight="700">continues</text>')
+            elif kind == "current_turn":
+                svg.append(f'<text x="{left + 8}" y="{bar_y - 4}" font-size="10" fill="#1d4ed8" font-weight="700">continues from earlier</text>')
+        if display_x2 - display_x1 > 80:
             fill = "#111827" if kind == "tool_wait" else "white"
             svg.append(
-                f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 16}" text-anchor="middle" '
+                f'<text x="{(display_x1 + display_x2) / 2:.1f}" y="{bar_y + 16}" text-anchor="middle" '
                 f'font-size="11" fill="{fill}" font-weight="700">{html.escape(str(span["label"]))}</text>'
             )
+    for marker in markers:
+        y = top + session_index[marker["session_id"]] * row_h
+        x = x_pos(float(marker["time_ms"]))
+        svg.append(
+            f'<line x1="{x:.1f}" y1="{y + 1}" x2="{x:.1f}" y2="{y + 36}" stroke="#111827" stroke-width="6"><title>replay due</title></line>'
+        )
+        svg.append(f'<text x="{x:.1f}" y="{y - 4}" text-anchor="middle" font-size="10" fill="#111827" font-weight="700">due</text>')
     legend_y = height - 30
     for idx, (name, color) in enumerate(colors.items()):
-        lx = left + idx * 190
+        lx = left + idx * 170
         svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
         svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(name)}</text>')
     svg.append("</svg>")
@@ -698,16 +761,16 @@ def write_outputs(
         '<div class="panel"><h2>Run Details</h2>',
         html_table(runs),
         "</div>",
-        '<div class="panel"><h2>Model-Turn Timeline</h2>',
-        '<p class="caption">How to read this: each colored bar is one real DeepAgents model turn served by SGLang. Long bars are expensive model turns. The phase labels show where the agent was in the SWE-bench workflow.</p>',
-        timeline_svg,
-        "</div>",
-        '<div class="panel"><h2>Extracted Replay-Session Timeline</h2>',
-        '<p class="caption">How to read this: blue is the source model turn, gray is the observed wait gap between turns, and red is the next real prompt that can be replayed as a resumed agent turn. The gray window is the opportunity where a future hint-aware prefetch could run.</p>',
+        '<div class="panel"><h2>AgentBench Resume-Boundary Timeline</h2>',
+        '<p class="caption">How to read this: this uses the same visual grammar as the paired report, but with real AgentBench/SWE-bench prompts. Each row is aligned at the black replay-due boundary. Blue is the previous real AgentBench turn, gray is the observed wait gap, and red is the next real AgentBench turn. Purple hint bars and green prefetch-copy bars are absent here because this live direct report does not inject prefetch hints; those appear in the controlled replay-mode reports.</p>',
         replay_svg,
         "</div>",
         '<div class="panel"><h2>Timeline Layers</h2>',
         html_table(layers),
+        "</div>",
+        '<div class="panel"><h2>Live Phase Overview</h2>',
+        '<p class="caption">Supporting context: each colored bar is one real DeepAgents model turn served by SGLang. This overview explains where the replay sessions came from, but it is not the main prefetch-boundary view.</p>',
+        timeline_svg,
         "</div>",
         '<div class="panel"><h2>Key Observations</h2>',
         html_table(observations),
