@@ -228,6 +228,161 @@ def kv_summary(trace_path: Path, copy_path: Path | None) -> list[dict[str, Any]]
     ]
 
 
+def copy_summary(copy_path: Path | None) -> list[dict[str, Any]]:
+    copies = read_jsonl(copy_path) if copy_path else []
+    direction_counts = Counter(str(row.get("direction", "unknown")) for row in copies)
+    agent_rows = [row for row in copies if row.get("agent_session_id")]
+    durations = [
+        float(row.get("duration_ms"))
+        for row in copies
+        if row.get("event") == "kv_telemetry.copy.end" and row.get("duration_ms") not in ("", None)
+    ]
+    return [
+        {
+            "copy_events": len(copies),
+            "agent_context_copy_events": len(agent_rows),
+            "unique_agent_sessions": len({str(row.get("agent_session_id")) for row in agent_rows}),
+            "device_to_host_events": direction_counts.get("device_to_host", 0),
+            "host_to_device_events": direction_counts.get("host_to_device", 0),
+            "device_evict_events": direction_counts.get("device_evict", 0),
+            "avg_copy_end_duration_ms": round(sum(durations) / len(durations), 3) if durations else 0.0,
+            "max_copy_end_duration_ms": round(max(durations), 3) if durations else 0.0,
+        }
+    ]
+
+
+def load_replay_workload(out_root: Path) -> list[dict[str, Any]]:
+    candidates = [
+        out_root.parent / "agentbench_replay_workload.jsonl",
+        out_root.parent.parent / "latest_agentbench_replay_workload.jsonl",
+    ]
+    for path in candidates:
+        rows = read_jsonl(path)
+        if rows:
+            return rows
+    return []
+
+
+def replay_session_rows(workload_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in workload_rows:
+        wait_ms = float(row.get("tool_wait_ms") or 0)
+        prompt_tokens = int(float(row.get("prompt_tokens") or 0))
+        replay_tokens = int(float(row.get("replay_prompt_tokens") or 0))
+        rows.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "from_phase": row.get("from_phase", ""),
+                "to_phase": row.get("to_phase", ""),
+                "tool_wait_ms": round(wait_ms, 3),
+                "wait_class": "very_short" if wait_ms < 100 else "short" if wait_ms < 500 else "long",
+                "current_latency_ms": row.get("current_latency_ms", ""),
+                "next_latency_ms": row.get("next_latency_ms", ""),
+                "prompt_tokens": prompt_tokens,
+                "replay_prompt_tokens": replay_tokens,
+                "token_delta": replay_tokens - prompt_tokens,
+                "next_tool_calls": row.get("next_tool_call_count", ""),
+            }
+        )
+    return rows
+
+
+def high_level_summary(
+    runs: list[dict[str, Any]],
+    phases: list[dict[str, Any]],
+    kv: list[dict[str, Any]],
+    copy: list[dict[str, Any]],
+    replay: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    total_tool_calls = sum(int(float(row.get("tool_calls_seen") or 0)) for row in runs)
+    total_latency = sum(float(row.get("total_model_latency_ms") or 0) for row in runs)
+    kv_row = kv[0] if kv else {}
+    copy_row = copy[0] if copy else {}
+    return [
+        {
+            "real_agentbench_runs": len(runs),
+            "phase_model_turns": len(phases),
+            "tool_calls_observed": total_tool_calls,
+            "total_model_latency_ms": round(total_latency, 3),
+            "sglang_trace_events": kv_row.get("trace_events", 0),
+            "kv_copy_telemetry_events": copy_row.get("copy_events", 0),
+            "copy_events_with_agent_context": copy_row.get("agent_context_copy_events", 0),
+            "replay_sessions_extracted": len(replay),
+        }
+    ]
+
+
+def timeline_layer_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "layer": "blue phase bars",
+            "meaning": "real DeepAgents model turns sent to SGLang",
+            "why_it_matters": "proves the live SWE-bench/AgentBench path is reaching SGLang",
+        },
+        {
+            "layer": "gray wait gaps",
+            "meaning": "observed gap between one model turn and the next extracted replay turn",
+            "why_it_matters": "this is the agent pause where a future hint-aware prefetch could run",
+        },
+        {
+            "layer": "red replay bars",
+            "meaning": "the next real prompt that would resume the agent session",
+            "why_it_matters": "this becomes the controlled replay request in Milestone 18",
+        },
+        {
+            "layer": "KV/copy telemetry table",
+            "meaning": "SGLang HiCache and copy hooks observed during the live run",
+            "why_it_matters": "shows the report is connected to real SGLang memory-path events",
+        },
+    ]
+
+
+def key_observation_rows(
+    runs: list[dict[str, Any]],
+    phases: list[dict[str, Any]],
+    copy: list[dict[str, Any]],
+    replay: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if runs:
+        run = runs[0]
+        rows.append(
+            {
+                "observation": "Real harness is connected",
+                "evidence": f"{run.get('repo')} run {run.get('run_id')} produced {run.get('phase_model_turns')} model turns through {run.get('frontend_url')}",
+                "deduction": "This is no longer a synthetic-only experiment; real AgentBench traffic reached SGLang directly.",
+            }
+        )
+    if phases:
+        longest = max(phases, key=lambda row: float(row.get("reported_latency_ms") or 0))
+        rows.append(
+            {
+                "observation": "Agent phases have very different serving costs",
+                "evidence": f"{longest.get('phase')} took {longest.get('reported_latency_ms')} ms with {longest.get('input_tokens')} input tokens and {longest.get('output_tokens')} output tokens",
+                "deduction": "A hint policy should not treat all turns equally; phase and prompt size matter.",
+            }
+        )
+    copy_row = copy[0] if copy else {}
+    if copy_row:
+        rows.append(
+            {
+                "observation": "KV/copy telemetry is visible",
+                "evidence": f"{copy_row.get('copy_events')} copy telemetry events, {copy_row.get('agent_context_copy_events')} carrying agent/session context",
+                "deduction": "The SGLang hooks can connect memory movement to agent sessions in the live path.",
+            }
+        )
+    if replay:
+        short_waits = sum(1 for row in replay if str(row.get("wait_class")) in {"very_short", "short"})
+        rows.append(
+            {
+                "observation": "Many extracted waits are short",
+                "evidence": f"{short_waits}/{len(replay)} replay sessions have wait_class short or very_short",
+                "deduction": "This is exactly where normal software scheduling can miss the prefetch window.",
+            }
+        )
+    return rows
+
+
 def build_phase_timeline_svg(rows: list[dict[str, Any]], index_rows: list[dict[str, Any]]) -> str:
     spans: list[dict[str, Any]] = []
     for item in index_rows:
@@ -323,6 +478,104 @@ def build_phase_timeline_svg(rows: list[dict[str, Any]], index_rows: list[dict[s
     return "\n".join(svg)
 
 
+def build_replay_timeline_svg(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No replay-session timeline available.</p>"
+    spans: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows[:8]):
+        session_id = str(row.get("session_id", f"session_{idx}"))
+        arrival = float(row.get("arrival_ms") or idx * 80)
+        current_latency = float(row.get("current_latency_ms") or 0)
+        wait_ms = float(row.get("tool_wait_ms") or 0)
+        next_latency = float(row.get("next_latency_ms") or 0)
+        current_end = arrival + max(current_latency, 1.0)
+        replay_due = current_end + wait_ms
+        replay_end = replay_due + max(next_latency, 1.0)
+        spans.extend(
+            [
+                {
+                    "session_id": session_id,
+                    "kind": "current_turn",
+                    "start_ms": arrival,
+                    "end_ms": current_end,
+                    "label": str(row.get("from_phase", "current")),
+                },
+                {
+                    "session_id": session_id,
+                    "kind": "tool_wait",
+                    "start_ms": current_end,
+                    "end_ms": replay_due,
+                    "label": f"wait {wait_ms:.0f} ms",
+                },
+                {
+                    "session_id": session_id,
+                    "kind": "replay_turn",
+                    "start_ms": replay_due,
+                    "end_ms": replay_end,
+                    "label": str(row.get("to_phase", "replay")),
+                },
+            ]
+        )
+    start = min(float(span["start_ms"]) for span in spans)
+    end = max(float(span["end_ms"]) for span in spans)
+    span_ms = max(1.0, end - start)
+    sessions = []
+    for span in spans:
+        if span["session_id"] not in sessions:
+            sessions.append(span["session_id"])
+    width = 1500
+    left = 330
+    right = 50
+    top = 78
+    row_h = 64
+    height = top + len(sessions) * row_h + 76
+    plot_w = width - left - right
+    colors = {"current_turn": "#2563eb", "tool_wait": "#d1d5db", "replay_turn": "#ef4444"}
+
+    def x_pos(ms: float) -> float:
+        return left + (ms - start) / span_ms * plot_w
+
+    session_index = {session_id: idx for idx, session_id in enumerate(sessions)}
+    svg = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="AgentBench extracted replay-session timeline">',
+        f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
+    ]
+    for tick in range(6):
+        ms = start + span_ms * tick / 5
+        x = x_pos(ms)
+        svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 36}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+    for session_id in sessions:
+        y = top + session_index[session_id] * row_h
+        short_id = session_id.replace("agentbench_", "ab_")
+        svg.append(f'<text x="10" y="{y + 18}" font-weight="700">{html.escape(short_id)}</text>')
+        svg.append(f'<line x1="{left}" y1="{y + 8}" x2="{left + plot_w}" y2="{y + 8}" stroke="#f3f4f6"/>')
+    for span in spans:
+        y = top + session_index[span["session_id"]] * row_h
+        x1 = x_pos(float(span["start_ms"]))
+        x2 = x_pos(float(span["end_ms"]))
+        kind = str(span["kind"])
+        color = colors.get(kind, "#64748b")
+        opacity = "0.88" if kind != "tool_wait" else "0.75"
+        svg.append(
+            f'<rect x="{x1:.1f}" y="{y}" width="{max(3, x2 - x1):.1f}" height="24" rx="3" '
+            f'fill="{color}" opacity="{opacity}"><title>{html.escape(str(span["label"]))}</title></rect>'
+        )
+        if x2 - x1 > 80:
+            fill = "#111827" if kind == "tool_wait" else "white"
+            svg.append(
+                f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 16}" text-anchor="middle" '
+                f'font-size="11" fill="{fill}" font-weight="700">{html.escape(str(span["label"]))}</text>'
+            )
+    legend_y = height - 30
+    for idx, (name, color) in enumerate(colors.items()):
+        lx = left + idx * 190
+        svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(name)}</text>')
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
 def html_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p>No rows.</p>"
@@ -334,7 +587,23 @@ def html_table(rows: list[dict[str, Any]]) -> str:
     for row in rows:
         out.append("<tr>")
         for header in headers:
-            cls = ' class="wrap"' if header in {"result_dir", "prompt_evolution_report", "tool_call_details", "top_events"} else ""
+            cls = (
+                ' class="wrap"'
+                if header
+                in {
+                    "result_dir",
+                    "prompt_evolution_report",
+                    "tool_call_details",
+                    "top_events",
+                    "evidence",
+                    "deduction",
+                    "why_it_matters",
+                    "session_id",
+                    "trace_file",
+                    "copy_telemetry_file",
+                }
+                else ""
+            )
             out.append(f"<td{cls}>{fmt(row.get(header, ''))}</td>")
         out.append("</tr>")
     out.append("</tbody></table>")
@@ -375,11 +644,23 @@ def write_outputs(
     runs = run_rows(index_rows)
     phases = phase_rows(index_rows)
     kv = kv_summary(trace_path, copy_path)
+    copy = copy_summary(copy_path)
+    replay_workload = load_replay_workload(out_root)
+    replay = replay_session_rows(replay_workload)
+    summary = high_level_summary(runs, phases, kv, copy, replay)
+    layers = timeline_layer_rows()
+    observations = key_observation_rows(runs, phases, copy, replay)
     write_csv(out_root / "agentbench_sglang_runs.csv", runs)
     write_csv(out_root / "agentbench_sglang_phase_turns.csv", phases)
     write_csv(out_root / "agentbench_sglang_kv_summary.csv", kv)
+    write_csv(out_root / "agentbench_sglang_copy_summary.csv", copy)
+    write_csv(out_root / "agentbench_sglang_high_level_summary.csv", summary)
+    write_csv(out_root / "agentbench_sglang_timeline_layers.csv", layers)
+    write_csv(out_root / "agentbench_sglang_key_observations.csv", observations)
+    write_csv(out_root / "agentbench_sglang_replay_sessions.csv", replay)
 
     timeline_svg = build_phase_timeline_svg(phases, index_rows)
+    replay_svg = build_replay_timeline_svg(replay_workload)
     html_lines = [
         "<!doctype html>",
         '<html lang="en">',
@@ -387,36 +668,69 @@ def write_outputs(
         '<meta charset="utf-8">',
         "<title>AgentBench Direct SGLang Report</title>",
         "<style>",
-        "body{font-family:Arial,sans-serif;margin:24px;background:#f8fafc;color:#111827}",
-        "h1,h2{margin:0 0 12px}",
-        ".panel{background:white;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:16px 0}",
-        ".caption{margin:0 0 12px;color:#374151;line-height:1.45}",
+        ":root{--ink:#111827;--muted:#4b5563;--line:#e5e7eb;--soft:#f8fafc;--panel:#ffffff;--good:#166534;--bad:#b91c1c;--warn:#b45309}",
+        "body{font-family:Arial,sans-serif;margin:28px;background:var(--soft);color:var(--ink)}",
+        "h1{font-size:32px;margin:0 0 8px} h2{font-size:22px;margin:0 0 12px} h3{font-size:16px;margin:14px 0 8px}",
+        ".subtle{color:var(--muted);line-height:1.5;margin:0}",
+        ".panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px 20px;margin:18px 0;box-shadow:0 1px 2px rgba(15,23,42,.04)}",
+        ".caption{margin:0 0 12px;color:#374151;line-height:1.5;font-size:15px}",
+        ".grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}",
+        ".callout{border-left:4px solid #2563eb;background:#eff6ff;padding:12px 14px;margin:12px 0;color:#1f2937}",
+        ".warn{border-left-color:#b45309;background:#fffbeb}",
         "table{border-collapse:collapse;width:100%;font-size:13px;background:white}",
-        "th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;white-space:nowrap;vertical-align:top}",
+        "th,td{border-bottom:1px solid var(--line);padding:8px;text-align:left;white-space:nowrap;vertical-align:top}",
         "th{background:#f3f4f6;font-weight:700}",
-        ".wrap{white-space:normal;line-height:1.35;min-width:260px}",
+        ".wrap{white-space:normal;line-height:1.35;min-width:260px;max-width:520px}",
+        ".good{color:var(--good);font-weight:700}.bad{color:var(--bad);font-weight:700}.warnText{color:var(--warn);font-weight:700}",
+        "@media(max-width:900px){.grid{grid-template-columns:1fr} body{margin:14px}}",
         "</style>",
         "</head>",
         "<body>",
         "<h1>AgentBench Direct SGLang Report</h1>",
-        '<div class="panel"><h2>What This Proves</h2>',
+        '<p class="subtle">A manager-readable report for the real SWE-bench Pro -> AgentBench -> Deep Agents -> SGLang direct path.</p>',
+        '<div class="panel"><h2>What This Report Shows</h2>',
         '<p class="caption">This run uses real SWE-bench tasks, the existing AgentBench/DeepAgents harness, and a direct SGLang OpenAI-compatible endpoint. Dynamo is removed. The runtime path is SWE-bench Pro -> AgentBench -> Deep Agents -> SGLang -> direct KV trace/reporting.</p>',
+        '<div class="callout"><strong>Main point:</strong> this is the realism proof. It shows real agent traffic reaching SGLang and producing KV/cache/copy telemetry. The controlled prefetch comparison is done later using the replay sessions extracted from this live run.</div>',
         "</div>",
-        '<div class="panel"><h2>Run Summary</h2>',
+        '<div class="panel"><h2>High-Level Summary</h2>',
+        html_table(summary),
+        "</div>",
+        '<div class="panel"><h2>Run Details</h2>',
         html_table(runs),
         "</div>",
         '<div class="panel"><h2>Model-Turn Timeline</h2>',
-        '<p class="caption">This phase-level timeline shows real DeepAgents model turns. Tool calls happen inside these turns; the next milestone extracts these prompts into replayable sessions so we can compare no-prefetch, request-warm, direct-load, and oracle-direct-load under controlled timing.</p>',
+        '<p class="caption">How to read this: each colored bar is one real DeepAgents model turn served by SGLang. Long bars are expensive model turns. The phase labels show where the agent was in the SWE-bench workflow.</p>',
         timeline_svg,
         "</div>",
+        '<div class="panel"><h2>Extracted Replay-Session Timeline</h2>',
+        '<p class="caption">How to read this: blue is the source model turn, gray is the observed wait gap between turns, and red is the next real prompt that can be replayed as a resumed agent turn. The gray window is the opportunity where a future hint-aware prefetch could run.</p>',
+        replay_svg,
+        "</div>",
+        '<div class="panel"><h2>Timeline Layers</h2>',
+        html_table(layers),
+        "</div>",
+        '<div class="panel"><h2>Key Observations</h2>',
+        html_table(observations),
+        "</div>",
+        '<div class="grid">',
         '<div class="panel"><h2>SGLang KV Trace Summary</h2>',
         html_table(kv),
+        "</div>",
+        '<div class="panel"><h2>KV Copy Telemetry Summary</h2>',
+        html_table(copy),
+        "</div>",
+        "</div>",
+        '<div class="panel"><h2>Extracted Replay Sessions</h2>',
+        '<p class="caption">These are the real prompts extracted from the live AgentBench phase trace. Milestone 18 reuses these sessions to compare prefetch modes under controlled timing.</p>',
+        html_table(replay),
         "</div>",
         '<div class="panel"><h2>Phase-Level Model Turns</h2>',
         html_table(phases),
         "</div>",
         '<div class="panel"><h2>Important Interpretation</h2>',
-        '<p class="caption">This live path is the realism proof: real agent, real tools, real prompts, real SGLang. It is not yet the controlled prefetch comparison. For the controlled comparison, use the trace-replay workload generated from these real AgentBench prompts.</p>',
+        '<div class="callout"><strong>What we can claim:</strong> real AgentBench/DeepAgents traffic reached SGLang directly, SGLang served the model turns, and KV/copy telemetry was captured with agent/session context.</div>',
+        '<div class="callout warn"><strong>What we should not claim from this report alone:</strong> this live report does not isolate the performance value of prefetching. DeepAgents controls the live tool-loop timing, so controlled mode comparison belongs in the AgentBench replay-mode report.</div>',
+        '<p class="caption">Use this report as the realism bridge. Use <code>latest_agentbench_replay_mode_summary.html</code> for the controlled no-prefetch/request-warm/direct-load/oracle-direct-load comparison using these real prompts.</p>',
         "</div>",
         "</body></html>",
     ]
@@ -435,12 +749,24 @@ def write_outputs(
         "",
         "Dynamo is intentionally removed in this experiment.",
         "",
+        "## High-Level Summary",
+        "",
+        *md_table(summary),
         "## Run Summary",
         "",
         *md_table(runs),
+        "## Key Observations",
+        "",
+        *md_table(observations),
         "## SGLang KV Trace Summary",
         "",
         *md_table(kv),
+        "## KV Copy Telemetry Summary",
+        "",
+        *md_table(copy),
+        "## Extracted Replay Sessions",
+        "",
+        *md_table(replay),
         "## Phase-Level Model Turns",
         "",
         *md_table(phases),
@@ -460,8 +786,22 @@ def write_outputs(
         "run_csv": str(out_root / "agentbench_sglang_runs.csv"),
         "phase_csv": str(out_root / "agentbench_sglang_phase_turns.csv"),
         "kv_summary_csv": str(out_root / "agentbench_sglang_kv_summary.csv"),
+        "copy_summary_csv": str(out_root / "agentbench_sglang_copy_summary.csv"),
+        "high_level_summary_csv": str(out_root / "agentbench_sglang_high_level_summary.csv"),
+        "key_observations_csv": str(out_root / "agentbench_sglang_key_observations.csv"),
+        "replay_sessions_csv": str(out_root / "agentbench_sglang_replay_sessions.csv"),
         "trace_path": str(trace_path),
         "copy_telemetry_path": str(copy_path or ""),
+        "sections": {
+            "high_level_summary": summary,
+            "runs": runs,
+            "phases": phases,
+            "kv_summary": kv,
+            "copy_summary": copy,
+            "timeline_layers": layers,
+            "key_observations": observations,
+            "replay_sessions": replay,
+        },
     }
     (out_root / "agentbench_sglang_direct_report.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -475,6 +815,12 @@ def write_outputs(
             (out_root / "agentbench_sglang_direct_report.json", "latest_agentbench_sglang_direct_report.json"),
             (out_root / "agentbench_sglang_runs.csv", "latest_agentbench_sglang_runs.csv"),
             (out_root / "agentbench_sglang_phase_turns.csv", "latest_agentbench_sglang_phase_turns.csv"),
+            (out_root / "agentbench_sglang_kv_summary.csv", "latest_agentbench_sglang_kv_summary.csv"),
+            (out_root / "agentbench_sglang_copy_summary.csv", "latest_agentbench_sglang_copy_summary.csv"),
+            (out_root / "agentbench_sglang_high_level_summary.csv", "latest_agentbench_sglang_high_level_summary.csv"),
+            (out_root / "agentbench_sglang_timeline_layers.csv", "latest_agentbench_sglang_timeline_layers.csv"),
+            (out_root / "agentbench_sglang_key_observations.csv", "latest_agentbench_sglang_key_observations.csv"),
+            (out_root / "agentbench_sglang_replay_sessions.csv", "latest_agentbench_sglang_replay_sessions.csv"),
         ]:
             if src.exists():
                 shutil.copyfile(src, latest_root / name)
