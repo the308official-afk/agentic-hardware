@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,27 @@ def install_sglang_chat_model_patch(agentbench_root: Path) -> None:
         build_annotations,
         supported_agent_hints,
     )
+
+    def apply_tool_choice_override(llm: ChatOpenAI) -> ChatOpenAI:
+        existing_override = getattr(agent_module, "apply_tool_choice_override", None)
+        if callable(existing_override):
+            return existing_override(llm)
+
+        forced_choice = os.environ.get("AGENTBENCH_FORCE_TOOL_CHOICE", "").strip()
+        if not forced_choice or forced_choice.lower() in {"0", "false", "none", "off", "auto"}:
+            return llm
+
+        original_bind_tools = llm.bind_tools
+
+        @wraps(original_bind_tools)
+        def bind_tools_with_forced_choice(tools, *args, **kwargs):
+            existing_choice = kwargs.get("tool_choice")
+            if existing_choice is None or str(existing_choice).strip().lower() == "auto":
+                kwargs["tool_choice"] = forced_choice
+            return original_bind_tools(tools, *args, **kwargs)
+
+        object.__setattr__(llm, "bind_tools", bind_tools_with_forced_choice)
+        return llm
 
     def build_sglang_chat_model(
         *,
@@ -108,7 +130,7 @@ def install_sglang_chat_model_patch(agentbench_root: Path) -> None:
             timeout=300,
             extra_body=extra_body,
         )
-        return agent_module.apply_tool_choice_override(llm)
+        return apply_tool_choice_override(llm)
 
     agent_module.build_dynamo_chat_model = build_sglang_chat_model
 

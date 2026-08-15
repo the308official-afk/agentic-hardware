@@ -3361,7 +3361,7 @@ The report also keeps Timeline Sanity Checks:
 
 ### Milestone 16: AgentBench -> SGLang Direct
 
-Status: ready to run on EC2/GPU.
+Status: validated on EC2/GPU with a single SWE-bench Pro task.
 
 What it is:
 
@@ -3413,6 +3413,7 @@ source .venv/bin/activate
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 START_INDEX=0 \
 END_INDEX=0 \
+EXTRA_SERVER_ARGS="--tool-call-parser qwen" \
 bash scripts/run_milestone16_agentbench_sglang_direct.sh \
   Qwen/Qwen2.5-1.5B-Instruct
 ```
@@ -3426,6 +3427,18 @@ RUN_PREFLIGHT=1
 AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=3
 ```
 
+Latest validation:
+
+```text
+Run: agentbench-20260815_152259
+Repo: NodeBB/NodeBB
+Model turns captured: 6
+Tool calls observed: 1
+SGLang trace events: 396
+KV copy telemetry events: 88
+Replay sessions extracted: 5
+```
+
 Useful knobs:
 
 ```bash
@@ -3435,7 +3448,7 @@ END_INDEX=2
 RUN_PREFLIGHT=1
 AGENTBENCH_INSTALL_DEPS=1
 PROMPT_EVOLUTION_VALUE_CHAR_LIMIT=50000
-MAX_TOTAL_TOKENS=4096
+MAX_TOTAL_TOKENS=16384
 ```
 
 Important events to observe:
@@ -3512,7 +3525,7 @@ The workload has enough rows for a replay experiment.
 
 ### Milestone 18: Real Prompt Prefetch Modes
 
-Status: ready to run on EC2/GPU.
+Status: validated on EC2/GPU with the latest AgentBench replay workload.
 
 What it is:
 
@@ -3568,6 +3581,24 @@ Outputs:
 artifacts/results/milestone18_agentbench_trace_replay_modes/traffic_summary.html
 artifacts/results/latest_agentbench_replay_mode_summary.html
 artifacts/results/latest_agentbench_replay_mode_summary.csv
+```
+
+Latest validation:
+
+```text
+Replay sessions: 5
+Modes compared: no_prefetch, request_warm, direct_load, oracle_direct_load
+
+Average replay TTFT:
+  no_prefetch:        107.070 ms
+  request_warm:       115.743 ms
+  direct_load:        120.002 ms
+  oracle_direct_load:  91.353 ms
+
+Interpretation:
+  On this small real-prompt replay, oracle_direct_load was best on average.
+  The non-oracle hint modes were worse because the extracted waits were very short,
+  so hints often arrived too late or competed with live replay work.
 ```
 
 ### Milestone 19: Realistic Manager Report

@@ -26,7 +26,7 @@ AGENTBENCH_AGENT_RECURSION_LIMIT="${AGENTBENCH_AGENT_RECURSION_LIMIT:-300}"
 PROMPT_EVOLUTION_VALUE_CHAR_LIMIT="${PROMPT_EVOLUTION_VALUE_CHAR_LIMIT:-50000}"
 RUN_PREFLIGHT="${RUN_PREFLIGHT:-1}"
 AGENTBENCH_INSTALL_DEPS="${AGENTBENCH_INSTALL_DEPS:-1}"
-MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
+MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-16384}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-14}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.55}"
 
@@ -136,7 +136,7 @@ echo "Dynamo is not used in this milestone." | tee -a "${DRIVER_LOG}"
 
 if [[ "${AGENTBENCH_INSTALL_DEPS}" == "1" ]]; then
   echo "Installing/refreshing AgentBench Python dependencies..." | tee -a "${DRIVER_LOG}"
-  "${PYTHON_BIN}" -m pip install -r "${AGENTBENCH_ROOT}/agentbench/requirements.txt" 2>&1 | tee -a "${DRIVER_LOG}"
+  (cd "${AGENTBENCH_ROOT}" && "${PYTHON_BIN}" -m pip install -r agentbench/requirements.txt) 2>&1 | tee -a "${DRIVER_LOG}"
 fi
 
 if [[ -x "${AGENTBENCH_ROOT}/agentbench/ensure_deepagents_ready.sh" ]]; then
@@ -155,7 +155,7 @@ export AGENTIC_KV_TRACE_ENABLE=1
 export AGENTIC_KV_TRACE_PATH="${TRACE}"
 export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
 export AGENTIC_KV_COPY_TELEMETRY_PATH="${COPY_TELEMETRY}"
-export EXTRA_SERVER_ARGS="--max-total-tokens ${MAX_TOTAL_TOKENS}"
+export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:-} --max-total-tokens ${MAX_TOTAL_TOKENS}"
 export HICACHE_SIZE_GB
 export MEM_FRACTION_STATIC
 

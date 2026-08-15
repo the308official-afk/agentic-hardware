@@ -7,12 +7,13 @@ RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone18_agentbench_trace_repla
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 WORKLOAD_JSONL="${WORKLOAD_JSONL:-${LATEST_REPORT_ROOT}/latest_agentbench_replay_workload.jsonl}"
 MODES="${MODES:-no_prefetch request_warm direct_load oracle_direct_load}"
-MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
+MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-16384}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-120}"
 ORACLE_LEAD_MS="${ORACLE_LEAD_MS:-500}"
 TRAFFIC_CONCURRENCY="${TRAFFIC_CONCURRENCY:-4}"
 MAX_TOKENS="${MAX_TOKENS:-8}"
 PREFETCH_MAX_TOKENS="${PREFETCH_MAX_TOKENS:-1}"
+BASE_EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:-}"
 
 mkdir -p "${RESULT_ROOT}" "${LATEST_REPORT_ROOT}"
 
@@ -92,7 +93,7 @@ run_mode() {
   export AGENTIC_KV_TRACE_PATH="${trace}"
   export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
   export AGENTIC_KV_COPY_TELEMETRY_PATH="${copy_telemetry}"
-  export EXTRA_SERVER_ARGS="--max-total-tokens ${MAX_TOTAL_TOKENS}"
+  export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${log}" 2>&1 &
   server_pid="$!"
