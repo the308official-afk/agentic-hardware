@@ -2637,6 +2637,36 @@ artifacts/results/milestone12_paired_evidence/profiled_attribution/
 artifacts/results/milestone12_paired_evidence/paired_report/paired_report.html
 artifacts/results/milestone12_paired_evidence/paired_report/paired_report.md
 artifacts/results/milestone12_paired_evidence/paired_report/paired_session_evidence.csv
+
+Stable latest report copies:
+artifacts/results/latest_paired_report.html
+artifacts/results/latest_paired_report.md
+artifacts/results/latest_paired_report.json
+```
+
+The run-specific report stays in the milestone folder.
+The latest report files are replaced every time this milestone runs.
+
+What the HTML report shows:
+
+```text
+Manager Summary:
+  short explanation of the clean performance result and profiled mechanism result
+
+How To Read This Report:
+  explains which numbers are performance numbers and which numbers are attribution evidence
+
+Key Deductions:
+  highlights important lessons, especially cases where CUDA copy finished but replay still reloaded KV
+
+Clean Performance Summary:
+  profiler-off TTFT numbers
+
+Profiled Attribution Summary:
+  profiler-on CUDA HtoD, hint completion, and replay reload evidence
+
+Paired Session Evidence:
+  one row per session joining the clean performance result with profiled mechanism evidence
 ```
 
 Recommended run:
@@ -2646,6 +2676,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 RESULT_ROOT=artifacts/results/milestone12_paired_evidence \
+LATEST_REPORT_ROOT=artifacts/results \
 CLEAN_MODES="no_prefetch direct_load oracle_direct_load" \
 ATTRIBUTION_MODE=oracle_direct_load \
 SESSION_COUNT=12 \
@@ -2667,6 +2698,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 RESULT_ROOT=artifacts/results/milestone12_paired_smoke \
+LATEST_REPORT_ROOT=artifacts/results \
 CLEAN_MODES="no_prefetch oracle_direct_load" \
 ATTRIBUTION_MODE=oracle_direct_load \
 SESSION_COUNT=3 \
@@ -2692,6 +2724,12 @@ Profiled Attribution Summary:
 
 Paired Session Evidence:
   joins clean TTFT with profiled mechanism evidence by session_id
+```
+
+Open the most recent report here after any run:
+
+```text
+artifacts/results/latest_paired_report.html
 ```
 
 Main rule:

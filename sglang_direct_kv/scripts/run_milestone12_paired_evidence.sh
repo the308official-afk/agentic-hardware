@@ -3,6 +3,7 @@ set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen2.5-1.5B-Instruct}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone12_paired_evidence}"
+LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 CLEAN_MODES="${CLEAN_MODES:-no_prefetch direct_load oracle_direct_load}"
 ATTRIBUTION_MODE="${ATTRIBUTION_MODE:-oracle_direct_load}"
 RUN_CLEAN="${RUN_CLEAN:-1}"
@@ -31,6 +32,7 @@ mkdir -p "${RESULT_ROOT}" "${REPORT_ROOT}"
 echo "Milestone 12 paired clean + attribution evidence"
 echo "MODEL=${MODEL}"
 echo "RESULT_ROOT=${RESULT_ROOT}"
+echo "LATEST_REPORT_ROOT=${LATEST_REPORT_ROOT}"
 echo "CLEAN_MODES=${CLEAN_MODES}"
 echo "ATTRIBUTION_MODE=${ATTRIBUTION_MODE}"
 echo "SESSION_COUNT=${SESSION_COUNT}"
@@ -104,7 +106,8 @@ python scripts/summarize_milestone12_paired_evidence.py \
   --attribution-root "${ATTRIBUTION_ROOT}" \
   --out-root "${REPORT_ROOT}" \
   --modes "${CLEAN_MODES}" \
-  --attribution-mode "${ATTRIBUTION_MODE}"
+  --attribution-mode "${ATTRIBUTION_MODE}" \
+  --latest-root "${LATEST_REPORT_ROOT}"
 
 echo
 echo "Milestone 12 outputs written under ${RESULT_ROOT}"
@@ -112,3 +115,6 @@ echo "Clean performance root: ${CLEAN_ROOT}"
 echo "Profiled attribution root: ${ATTRIBUTION_ROOT}"
 echo "Paired report HTML: ${REPORT_ROOT}/paired_report.html"
 echo "Paired report Markdown: ${REPORT_ROOT}/paired_report.md"
+echo "Latest paired report HTML: ${LATEST_REPORT_ROOT}/latest_paired_report.html"
+echo "Latest paired report Markdown: ${LATEST_REPORT_ROOT}/latest_paired_report.md"
+echo "Latest paired report JSON: ${LATEST_REPORT_ROOT}/latest_paired_report.json"
