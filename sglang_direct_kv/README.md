@@ -30,6 +30,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 11C: Profiler Coverage Diagnosis | Completed | [Milestone 11C](#milestone-11c-profiler-coverage-diagnosis) |
 | Milestone 12: Paired Clean + Attribution Evidence | Ready | [Milestone 12](#milestone-12-paired-clean--attribution-evidence) |
 | Milestone 13: Failure Stress Experiment | Completed | [Milestone 13](#milestone-13-failure-stress-experiment) |
+| Milestone 13B: Green-Bar Failure Stress | Completed | [Milestone 13B](#milestone-13b-green-bar-failure-stress) |
 
 ## What We Are Testing
 
@@ -91,6 +92,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F11 | Missing green bars can be profiler-coverage artifacts. | In Milestone 11B, `agent_003` had SGLang host-to-device load from `44435.564 -> 44496.473 ms`, but the torch profiler stopped at `44407.848 ms`. In Milestone 11C, a later profiler stop showed `agent_003` with `528` HtoD events. | "No green bar" does not always mean "no CUDA copy." It can mean the profiler was not recording when the copy happened. | Reports now include profiler window status and missing-HtoD reason columns. | New |
 | F12 | Early CUDA copy is not enough for prefetch success. | In Milestone 11C300, CUDA copy was ready before replay for `6 / 6` sessions, but full hint completion succeeded for only `5 / 6`, replay reloaded KV for `6 / 6`, and clean success was `0 / 6`. | Even when CUDA copy happens before replay, the software-managed path can still fail because the full hint path is late, replay reloads KV again, or prefetched KV is not protected/reused predictably. | The need is not just "copy memory earlier"; the system must copy the right KV, finish predictably, protect residency, and make reuse visible/enforceable. | Strong |
 | F13 | Failure-heavy stress shows software hints are not deadline-predictable. | Milestone 13 manager stress: clean `oracle_direct_load` improved avg replay TTFT by `629.573 ms` vs `no_prefetch`, but clean outcomes were `late_prefetch: 32 / 32`. Profiled attribution showed `cuda_ready=0 / 32`, `hint_done=0 / 32`, `replay_reloaded=32 / 32`, `clean_success=0 / 32`. | Hints can still help average latency while failing the actual deadline/residency requirement for every session under pressure. | This is the strongest case so far for deadline-aware migration, prefetch protection, and hardware-visible progress/telemetry. | Strong |
+| F14 | Green-bar stress gives both CUDA-copy visibility and failure evidence. | Milestone 13B captured visible CUDA HtoD bars in `4 / 12` sessions while still showing `late_prefetch: 12 / 12`, `replay_reloaded=12 / 12`, and `clean_success=0 / 12`. | The report now shows the concrete host-to-device copy windows for some agents, while still proving that the software hint path missed every replay deadline under stress. | Use this report as the manager-facing visual bridge between SGLang-level KV movement and CUDA-level data movement. | Strong |
 
 Main deduction from the latest timeline:
 
@@ -2777,7 +2779,7 @@ If a value comes from the profiled run, it supports mechanism/attribution claims
 
 ### Milestone 13: Failure Stress Experiment
 
-Status: implemented and ready to run on EC2.
+Status: completed on EC2.
 
 What it is:
 
@@ -2919,6 +2921,118 @@ Key Observations Per Session:
   use this as the manager-facing explanation of each failure case
 ```
 
+### Milestone 13B: Green-Bar Failure Stress
+
+Status: completed on EC2.
+
+What it is:
+
+```text
+Milestone 13B is a smaller stress run tuned for visualization.
+
+Milestone 13:
+  maximum failure pressure
+  showed 32 / 32 late prefetch
+  many green CUDA bars were missing because torch.profiler stopped before very late KV loads
+
+Milestone 13B:
+  medium pressure
+  profiler export tuned for green-bar capture
+  designed to show CUDA HtoD green bars while still showing failures
+```
+
+Why we need it:
+
+```text
+For manager-facing reports, the green CUDA HtoD bars make the timeline feel complete.
+They show the actual host-to-device copy window, not only the SGLang-level KV-load window.
+```
+
+Recommended run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+GREEN_BAR_PRESET=medium \
+bash scripts/run_milestone13b_green_bar_failure_stress.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Presets:
+
+| Preset | Sessions | Profiler events | Use case |
+| --- | ---: | ---: | --- |
+| `medium` | `12` | `350` | Best balance: stress + green-bar visibility. |
+| `replay` | `8` | `350` | Replays the known failure-heavy smoke shape with green-bar export enabled. |
+| `small_full` | `6` | `350` | Highest chance of green bars, but weakest stress. |
+
+Note: the profiler event number is an export threshold. If it is too high, the run can finish before a trace file is exported, which means the report may miss green CUDA bars even when SGLang-level KV movement happened.
+
+Main output:
+
+```text
+artifacts/results/latest_paired_report.html
+artifacts/results/milestone13b_green_bar_failure_stress/paired_report/paired_report.html
+```
+
+What we want to see:
+
+```text
+At least some sessions should show green CUDA HtoD bars.
+Some sessions should still be late, reload KV, or fail clean success.
+
+That gives us the complete visual story:
+  software hint issued,
+  SGLang KV movement happened,
+  CUDA HtoD copy happened,
+  replay timing still failed or replay still reloaded KV.
+```
+
+Observed 13B result:
+
+```text
+Clean performance run:
+  no_prefetch avg replay TTFT: 1228.151 ms
+  oracle_direct_load avg replay TTFT: 875.411 ms
+  average improvement: 352.740 ms, or 28.72%
+  oracle_direct_load outcome: late_prefetch 12 / 12
+
+Profiled attribution run:
+  sessions with visible CUDA HtoD green bars: 4 / 12
+  CUDA copy ready before replay: 0 / 12
+  full hint done before replay: 0 / 12
+  replay reloaded KV: 12 / 12
+  clean success: 0 / 12
+```
+
+Simple interpretation:
+
+```text
+This is the visual stress case we wanted.
+
+For some agents, the report now shows green CUDA HtoD bars.
+That proves the profiler can see real host-to-device data movement during the hint path.
+
+But every agent still missed the useful prefetch checkpoint:
+  the hint path was not complete before replay,
+  replay still loaded KV again,
+  and no session achieved clean success.
+
+So the story is stronger:
+  software can issue hints,
+  CUDA copies can happen,
+  but the current software-managed path is still not deadline-predictable
+  and does not protect/reuse prefetched KV reliably under stress.
+```
+
+Important:
+
+```text
+Use the clean run for TTFT numbers.
+Use the profiled run for green bars and CUDA/KV attribution.
+Do not use profiled TTFT as performance evidence because torch.profiler can add large overhead.
+```
+
 ## Directory Layout
 
 ```text
@@ -2946,6 +3060,7 @@ sglang_direct_kv/
     run_milestone11_agentic_timeline.sh
     run_milestone12_paired_evidence.sh
     run_milestone13_failure_stress.sh
+    run_milestone13b_green_bar_failure_stress.sh
     run_agentic_traffic_workload.py
     build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py
