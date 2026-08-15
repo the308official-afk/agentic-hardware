@@ -40,6 +40,7 @@ torch_summary_md="${RESULT_ROOT}/${MODE}_torch_cuda_profile_summary.md"
 torch_correlation_json="${RESULT_ROOT}/${MODE}_torch_cuda_trace_correlation.json"
 torch_correlation_md="${RESULT_ROOT}/${MODE}_torch_cuda_trace_correlation.md"
 torch_copy_timeline_csv="${RESULT_ROOT}/${MODE}_torch_cuda_copy_timeline.csv"
+copy_telemetry="${RESULT_ROOT}/${MODE}_kv_copy_telemetry.jsonl"
 agentic_timeline_csv="${RESULT_ROOT}/${MODE}_agentic_prefetch_timeline.csv"
 agentic_timeline_json="${RESULT_ROOT}/${MODE}_agentic_prefetch_timeline.json"
 agentic_timeline_html="${RESULT_ROOT}/${MODE}_agentic_prefetch_timeline.html"
@@ -53,6 +54,7 @@ rm -f \
   "${torch_correlation_json}" \
   "${torch_correlation_md}" \
   "${torch_copy_timeline_csv}" \
+  "${copy_telemetry}" \
   "${agentic_timeline_csv}" \
   "${agentic_timeline_json}" \
   "${agentic_timeline_html}"
@@ -143,11 +145,14 @@ echo "PROMPT_TOKEN_LIST=${PROMPT_TOKEN_LIST}"
 echo "HINT_DELAY_MS=${HINT_DELAY_MS}"
 echo "ORACLE_LEAD_MS=${ORACLE_LEAD_MS}"
 echo "TRAFFIC_CONCURRENCY=${TRAFFIC_CONCURRENCY}"
+echo "AGENTIC_KV_TORCH_PROFILER_ENABLE=${AGENTIC_KV_TORCH_PROFILER_ENABLE}"
 echo "AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=${AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS}"
 
 export AGENTIC_KV_TRACE_ENABLE=1
 export AGENTIC_KV_NVTX_ENABLE=1
 export AGENTIC_KV_TRACE_PATH="${trace}"
+export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
+export AGENTIC_KV_COPY_TELEMETRY_PATH="${copy_telemetry}"
 export AGENTIC_KV_TRACE_MAX_EXACT_INDICES
 export AGENTIC_KV_TORCH_PROFILER_ENABLE
 export AGENTIC_KV_TORCH_PROFILER_DIR="${torch_profile_dir}"
@@ -191,6 +196,7 @@ echo "Step 6/6: building agentic prefetch timeline"
 python scripts/build_agentic_prefetch_timeline.py \
   --trace "${trace}" \
   --copy-csv "${torch_copy_timeline_csv}" \
+  --telemetry-jsonl "${copy_telemetry}" \
   --profile-dir "${torch_profile_dir}" \
   --outcome-csv "${out_dir}/hint_outcomes.csv" \
   --out-csv "${agentic_timeline_csv}" \
@@ -206,5 +212,6 @@ echo "Hint outcomes: ${out_dir}/hint_outcomes.html"
 echo "Torch profile summary: ${torch_summary_md}"
 echo "Torch trace correlation: ${torch_correlation_md}"
 echo "CUDA copy timeline CSV: ${torch_copy_timeline_csv}"
+echo "Lightweight KV copy telemetry: ${copy_telemetry}"
 echo "Agentic timeline CSV: ${agentic_timeline_csv}"
 echo "Agentic timeline HTML: ${agentic_timeline_html}"

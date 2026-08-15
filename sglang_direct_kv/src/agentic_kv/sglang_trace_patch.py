@@ -27,6 +27,15 @@ def _trace_path() -> Path:
     return Path(os.environ.get("AGENTIC_KV_TRACE_PATH", "artifacts/kv_movement_trace.jsonl"))
 
 
+def _copy_telemetry_path() -> Path | None:
+    configured = os.environ.get("AGENTIC_KV_COPY_TELEMETRY_PATH")
+    if configured:
+        return Path(configured)
+    if os.environ.get("AGENTIC_KV_COPY_TELEMETRY_ENABLE", "0") != "1":
+        return None
+    return _trace_path().with_name("kv_copy_telemetry.jsonl")
+
+
 def _tensor_summary(value: Any) -> dict[str, Any]:
     summary: dict[str, Any] = {"type": type(value).__name__}
     shape = getattr(value, "shape", None)
@@ -617,6 +626,80 @@ def _write_event(event: dict[str, Any]) -> None:
         f.write(json.dumps(event, sort_keys=True) + "\n")
 
 
+def _compact_index_for_telemetry(index: Any) -> dict[str, Any]:
+    if not isinstance(index, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("index_count", "numel", "min", "max", "sha1_16"):
+        if index.get(key) not in (None, "", [], {}):
+            out[key] = index[key]
+    return out
+
+
+def _copy_telemetry_event(
+    *,
+    phase: str,
+    call_id: str,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+    duration_ms: float | None = None,
+    error: str | None = None,
+) -> dict[str, Any] | None:
+    if method_name not in {
+        "load_to_device_per_layer",
+        "backup_from_device_all_layer",
+        "evict_device",
+        "evict_host",
+    }:
+        return None
+
+    direction = context.get("direction", "")
+    host = _compact_index_for_telemetry(context.get("host_indices"))
+    device = _compact_index_for_telemetry(context.get("device_indices"))
+    event: dict[str, Any] = {
+        "event": f"kv_telemetry.copy.{phase}",
+        "call_id": call_id,
+        "source_event": event_name,
+        "class": class_name,
+        "method": method_name,
+        "direction": direction,
+        "layer_id": context.get("layer_id", ""),
+        "io_backend": context.get("io_backend", ""),
+        "host_index_count": host.get("index_count") or host.get("numel") or "",
+        "host_index_min": host.get("min", ""),
+        "host_index_max": host.get("max", ""),
+        "host_index_sha1_16": host.get("sha1_16", ""),
+        "device_index_count": device.get("index_count") or device.get("numel") or "",
+        "device_index_min": device.get("min", ""),
+        "device_index_max": device.get("max", ""),
+        "device_index_sha1_16": device.get("sha1_16", ""),
+    }
+    event.update(_copy_agent_context(context))
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list) and sessions:
+        event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    if error:
+        event["error"] = error
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
+def _write_copy_telemetry(event: dict[str, Any] | None) -> None:
+    if not event:
+        return
+    path = _copy_telemetry_path()
+    if path is None:
+        return
+    event.setdefault("ts_ns", time.time_ns())
+    event.setdefault("pid", os.getpid())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, sort_keys=True) + "\n")
+
+
 def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
     original = getattr(cls, method_name, None)
     if original is None or getattr(original, "_agentic_kv_wrapped", False):
@@ -643,11 +726,22 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             "kv_context": start_kv_context,
         }
         _write_event(start_event)
+        _write_copy_telemetry(
+            _copy_telemetry_event(
+                phase="start",
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=start_kv_context,
+            )
+        )
         maybe_start_torch_profiler(nvtx_name)
         try:
             with range_scope(nvtx_name):
                 result = original(self, *args, **kwargs)
         except Exception as exc:
+            error_context = _kv_context(event_name, method_name, self, args, kwargs)
             _write_event(
                 {
                     "event": f"{event_name}.error",
@@ -659,23 +753,48 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                     "error": str(exc),
                 }
             )
+            _write_copy_telemetry(
+                _copy_telemetry_event(
+                    phase="error",
+                    call_id=call_id,
+                    event_name=event_name,
+                    method_name=method_name,
+                    class_name=cls.__name__,
+                    context=error_context,
+                    duration_ms=(time.perf_counter_ns() - start_ns) / 1_000_000,
+                    error=str(exc),
+                )
+            )
             if context_token is not None:
                 _ACTIVE_AGENT_CONTEXT.reset(context_token)
             raise
 
         try:
+            end_context = _kv_context(event_name, method_name, self, args, kwargs, result)
+            duration_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
             _write_event(
                 {
                     "event": f"{event_name}.end",
                     "call_id": call_id,
                     "class": cls.__name__,
                     "method": method_name,
-                    "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
+                    "duration_ms": duration_ms,
                     "self": _interesting_attr_summary(self),
                     "result_metadata": _result_metadata(result),
                     "result": _safe_summary(result),
-                    "kv_context": _kv_context(event_name, method_name, self, args, kwargs, result),
+                    "kv_context": end_context,
                 }
+            )
+            _write_copy_telemetry(
+                _copy_telemetry_event(
+                    phase="end",
+                    call_id=call_id,
+                    event_name=event_name,
+                    method_name=method_name,
+                    class_name=cls.__name__,
+                    context=end_context,
+                    duration_ms=duration_ms,
+                )
             )
             record_torch_profiler_event(nvtx_name)
             return result

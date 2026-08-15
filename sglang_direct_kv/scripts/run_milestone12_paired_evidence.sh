@@ -8,6 +8,7 @@ CLEAN_MODES="${CLEAN_MODES:-no_prefetch direct_load oracle_direct_load}"
 ATTRIBUTION_MODE="${ATTRIBUTION_MODE:-oracle_direct_load}"
 RUN_CLEAN="${RUN_CLEAN:-1}"
 RUN_ATTRIBUTION="${RUN_ATTRIBUTION:-1}"
+ATTRIBUTION_TORCH_PROFILER_ENABLE="${ATTRIBUTION_TORCH_PROFILER_ENABLE:-1}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-4096}"
 SESSION_COUNT="${SESSION_COUNT:-12}"
 RANDOMIZE_TRAFFIC="${RANDOMIZE_TRAFFIC:-1}"
@@ -35,6 +36,7 @@ echo "RESULT_ROOT=${RESULT_ROOT}"
 echo "LATEST_REPORT_ROOT=${LATEST_REPORT_ROOT}"
 echo "CLEAN_MODES=${CLEAN_MODES}"
 echo "ATTRIBUTION_MODE=${ATTRIBUTION_MODE}"
+echo "ATTRIBUTION_TORCH_PROFILER_ENABLE=${ATTRIBUTION_TORCH_PROFILER_ENABLE}"
 echo "SESSION_COUNT=${SESSION_COUNT}"
 echo "RANDOMIZE_TRAFFIC=${RANDOMIZE_TRAFFIC}"
 echo "RANDOM_SEED=${RANDOM_SEED}"
@@ -46,8 +48,8 @@ echo "ORACLE_LEAD_MS=${ORACLE_LEAD_MS}"
 echo
 echo "Important:"
 echo "  Clean run is for TTFT/performance claims."
-echo "  Profiled run is for CUDA/KV attribution only."
-echo "  Do not use profiled TTFT values as performance numbers."
+echo "  Mechanism run is for KV movement attribution."
+echo "  If torch profiler is enabled, do not use profiled TTFT values as performance numbers."
 
 if [[ "${RUN_CLEAN}" == "1" ]]; then
   echo
@@ -75,7 +77,7 @@ fi
 
 if [[ "${RUN_ATTRIBUTION}" == "1" ]]; then
   echo
-  echo "Step 2/3: profiled attribution run with torch profiler ON"
+  echo "Step 2/3: mechanism attribution run"
   RESULT_ROOT="${ATTRIBUTION_ROOT}" \
   MODE="${ATTRIBUTION_MODE}" \
   MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS}" \
@@ -91,7 +93,7 @@ if [[ "${RUN_ATTRIBUTION}" == "1" ]]; then
   ORACLE_LEAD_MS="${ORACLE_LEAD_MS}" \
   TRAFFIC_CONCURRENCY="${TRAFFIC_CONCURRENCY}" \
   TIMELINE_MAX_SESSIONS="${TIMELINE_MAX_SESSIONS}" \
-  AGENTIC_KV_TORCH_PROFILER_ENABLE=1 \
+  AGENTIC_KV_TORCH_PROFILER_ENABLE="${ATTRIBUTION_TORCH_PROFILER_ENABLE}" \
   AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS="${AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS}" \
   bash scripts/run_milestone11_agentic_timeline.sh "${MODEL}"
 else

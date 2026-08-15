@@ -120,6 +120,35 @@ def read_copy_rows(path: Path) -> list[dict[str, Any]]:
         return list(csv.DictReader(f))
 
 
+def read_copy_telemetry(path: Path | None) -> list[dict[str, Any]]:
+    if path is None or not path.exists() or path.stat().st_size == 0:
+        return []
+    starts: dict[str, dict[str, Any]] = {}
+    windows: list[dict[str, Any]] = []
+    for event in read_jsonl(path):
+        call_id = str(event.get("call_id", ""))
+        if not call_id:
+            continue
+        name = event.get("event")
+        if name == "kv_telemetry.copy.start":
+            starts[call_id] = event
+        elif name in {"kv_telemetry.copy.end", "kv_telemetry.copy.error"}:
+            start = starts.get(call_id, {})
+            if not start:
+                continue
+            start_ns = start.get("ts_ns")
+            end_ns = event.get("ts_ns")
+            if not isinstance(start_ns, int) or not isinstance(end_ns, int):
+                continue
+            merged = dict(start)
+            merged.update({key: value for key, value in event.items() if value not in (None, "", [], {})})
+            merged["start_ns"] = start_ns
+            merged["end_ns"] = end_ns
+            merged["status"] = "error" if name == "kv_telemetry.copy.error" else "ok"
+            windows.append(merged)
+    return sorted(windows, key=lambda item: int(item["start_ns"]))
+
+
 def read_outcome_rows(path: Path | None) -> dict[str, dict[str, Any]]:
     if path is None or not path.exists() or path.stat().st_size == 0:
         return {}
@@ -276,6 +305,29 @@ def selected_copy_rows(
     return sorted(out, key=lambda row: float(row.get("start_ms_from_trace_start") or 0.0))
 
 
+def selected_telemetry_windows(windows: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for window in windows:
+        if window.get("source_event") != "hostpool.load_to_device_per_layer":
+            continue
+        if window.get("direction") != "host_to_device":
+            continue
+        if window.get("agent_session_id") == session_id and window.get("agent_phase") == "hint_prefetch":
+            out.append(window)
+            continue
+        sessions = window.get("agent_sessions")
+        if isinstance(sessions, list):
+            for item in sessions:
+                if (
+                    isinstance(item, dict)
+                    and item.get("agent_session_id") == session_id
+                    and item.get("agent_phase") == "hint_prefetch"
+                ):
+                    out.append(window)
+                    break
+    return sorted(out, key=lambda item: int(item["start_ns"]))
+
+
 def event_ms(events: list[dict[str, Any]], name: str, session_id: str, trace_start_ns: int) -> float | None:
     event = first_event(events, name, session_id)
     if not event or not event.get("ts_ns"):
@@ -295,10 +347,12 @@ def build_rows(
     copy_rows: list[dict[str, Any]],
     profiler_coverage: list[dict[str, Any]] | None = None,
     outcome_rows: dict[str, dict[str, Any]] | None = None,
+    telemetry_windows: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     trace_start_ns = min(int(event["ts_ns"]) for event in events if event.get("ts_ns"))
     windows = build_windows(events)
     coverage = profiler_coverage or []
+    telemetry = telemetry_windows or []
     profiler_start_ms, profiler_end_ms, profiler_stop_reason = coverage_ms_fields(coverage, trace_start_ns)
     rows: list[dict[str, Any]] = []
     timeline: list[dict[str, Any]] = []
@@ -325,6 +379,21 @@ def build_rows(
             if counts:
                 sglang_bytes_like = str(counts[0])
 
+        telemetry_kv = selected_telemetry_windows(telemetry, session_id)
+        telemetry_start_ms = ns_to_ms(int(telemetry_kv[0]["start_ns"]), trace_start_ns) if telemetry_kv else None
+        telemetry_end_ms = ns_to_ms(max(int(item["end_ns"]) for item in telemetry_kv), trace_start_ns) if telemetry_kv else None
+        telemetry_event_count = len(telemetry_kv)
+        telemetry_host_index_count = ""
+        if telemetry_kv:
+            counts = [item.get("host_index_count") for item in telemetry_kv if item.get("host_index_count")]
+            if counts:
+                telemetry_host_index_count = str(counts[0])
+        if sglang_start_ms is None and telemetry_start_ms is not None:
+            sglang_start_ms = telemetry_start_ms
+            sglang_end_ms = telemetry_end_ms
+            sglang_event_count = telemetry_event_count
+            sglang_bytes_like = telemetry_host_index_count
+
         copies = selected_copy_rows(copy_rows, session_id, kv, trace_start_ns)
         torch_start_ms = to_float(copies[0].get("start_ms_from_trace_start")) if copies else None
         torch_end_ms = max((to_float(row.get("end_ms_from_trace_start")) or 0.0 for row in copies), default=None)
@@ -333,7 +402,16 @@ def build_rows(
         profile_status = profiler_window_status(coverage, sglang_start_ms, sglang_end_ms, trace_start_ns)
         h2d_missing_reason = missing_h2d_reason(torch_copy_count, sglang_event_count, profile_status)
 
-        prefetch_done_ms = torch_end_ms if torch_end_ms is not None else sglang_end_ms
+        visible_copy_start_ms = torch_start_ms if torch_start_ms is not None else telemetry_start_ms
+        visible_copy_end_ms = torch_end_ms if torch_end_ms is not None else telemetry_end_ms
+        visible_copy_source = (
+            "torch_profiler_h2d"
+            if torch_end_ms is not None
+            else "sglang_lightweight_h2d_telemetry"
+            if telemetry_end_ms is not None
+            else ""
+        )
+        prefetch_done_ms = visible_copy_end_ms if visible_copy_end_ms is not None else sglang_end_ms
         prefetch_margin_ms = (
             round(float(replay_due_ms) - float(prefetch_done_ms), 3)
             if replay_due_ms is not None and prefetch_done_ms is not None
@@ -343,6 +421,9 @@ def build_rows(
         no_visible_prefetch = prefetch_done_ms is None
         cuda_copy_ready_before_replay = bool(
             torch_end_ms is not None and replay_due_ms is not None and torch_end_ms <= replay_due_ms
+        )
+        kv_copy_ready_before_replay = bool(
+            visible_copy_end_ms is not None and replay_due_ms is not None and visible_copy_end_ms <= replay_due_ms
         )
         full_hint_done_before_replay = str(outcome.get("hint_completed_before_replay", "")).strip() == "1"
         resume_load_count = int(float(outcome.get("resume_load_count") or 0))
@@ -376,10 +457,17 @@ def build_rows(
                 "sglang_copy_end_ms": sglang_end_ms if sglang_end_ms is not None else "",
                 "sglang_copy_events": sglang_event_count,
                 "sglang_host_index_count": sglang_bytes_like,
+                "telemetry_copy_start_ms": telemetry_start_ms if telemetry_start_ms is not None else "",
+                "telemetry_copy_end_ms": telemetry_end_ms if telemetry_end_ms is not None else "",
+                "telemetry_h2d_copy_events": telemetry_event_count,
+                "telemetry_host_index_count": telemetry_host_index_count,
                 "torch_copy_start_ms": torch_start_ms if torch_start_ms is not None else "",
                 "torch_copy_end_ms": torch_end_ms if torch_end_ms is not None else "",
                 "torch_h2d_copy_events": torch_copy_count,
                 "torch_h2d_bytes": torch_bytes,
+                "visible_copy_start_ms": visible_copy_start_ms if visible_copy_start_ms is not None else "",
+                "visible_copy_end_ms": visible_copy_end_ms if visible_copy_end_ms is not None else "",
+                "visible_copy_source": visible_copy_source,
                 "profiler_start_ms": profiler_start_ms,
                 "profiler_end_ms": profiler_end_ms,
                 "profiler_stop_reason": profiler_stop_reason,
@@ -390,6 +478,7 @@ def build_rows(
                 "prefetch_margin_ms": prefetch_margin_ms if prefetch_margin_ms is not None else "",
                 "late_prefetch": late_prefetch,
                 "no_visible_prefetch": no_visible_prefetch,
+                "kv_copy_ready_before_replay": int(kv_copy_ready_before_replay),
                 "cuda_copy_ready_before_replay": int(cuda_copy_ready_before_replay),
                 "full_hint_done_before_replay": int(full_hint_done_before_replay),
                 "replay_reloaded_kv": int(replay_reloaded_kv),
@@ -418,6 +507,7 @@ def build_rows(
         add_marker("hint_submitted", hint_submitted_ms, "hint")
         add_bar("hint_request", ns_to_ms(hint_start, trace_start_ns) if hint_start else None, ns_to_ms(hint_end, trace_start_ns) if hint_end else None, "hint request")
         add_bar("sglang_copy", sglang_start_ms, sglang_end_ms, "SGLang KV load")
+        add_bar("telemetry_copy", telemetry_start_ms, telemetry_end_ms, "Lightweight KV HtoD telemetry")
         add_bar("torch_copy", torch_start_ms, torch_end_ms, "CUDA HtoD copies")
         add_marker("replay_due", replay_due_ms, "replay due")
         add_bar("replay", ns_to_ms(replay_start, trace_start_ns) if replay_start else None, ns_to_ms(replay_end, trace_start_ns) if replay_end else None, "replay")
@@ -579,6 +669,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "hint_submitted": "#7c3aed",
         "hint_request": "#a855f7",
         "sglang_copy": "#f59e0b",
+        "telemetry_copy": "#22c55e",
         "torch_copy": "#16a34a",
         "replay_due": "#111827",
         "replay": "#dc2626",
@@ -595,8 +686,9 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
             "hint_request": 3,
             "replay": 4,
             "sglang_copy": 5,
-            "torch_copy": 6,
-            "replay_due": 7,
+            "telemetry_copy": 6,
+            "torch_copy": 7,
+            "replay_due": 8,
         }
         return order.get(str(item.get("kind", "")), 10)
 
@@ -661,15 +753,16 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
             bar_h = 24
             opacity = "0.88"
             stroke = ""
-            if kind == "torch_copy":
+            if kind in {"telemetry_copy", "torch_copy"}:
                 display_x2 = max(x2, x1 + 24)
                 bar_y = y
                 bar_h = 32
                 opacity = "1"
                 stroke = ' stroke="#f8fafc" stroke-width="3"'
             svg.append(f'<rect x="{x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{html.escape(item["label"])}</title></rect>')
-            if kind == "torch_copy":
-                svg.append(f'<text x="{(x1 + display_x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">HtoD</text>')
+            if kind in {"telemetry_copy", "torch_copy"}:
+                label = "KV" if kind == "telemetry_copy" else "HtoD"
+                svg.append(f'<text x="{(x1 + display_x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{label}</text>')
             elif kind == "sglang_copy" and x2 - x1 > 45:
                 label = "KV load" if kind == "sglang_copy" else "HtoD"
                 svg.append(f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{label}</text>')
@@ -686,7 +779,9 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     svg.append("</svg>")
 
     late_count = sum(1 for row in rows if row.get("late_prefetch") is True)
-    visible_count = sum(1 for row in rows if row.get("torch_h2d_copy_events", 0))
+    visible_count = sum(1 for row in rows if row.get("visible_copy_end_ms") not in ("", None))
+    telemetry_count = sum(1 for row in rows if int(row.get("telemetry_h2d_copy_events") or 0) > 0)
+    torch_count = sum(1 for row in rows if int(row.get("torch_h2d_copy_events") or 0) > 0)
     missing_reasons = sorted(
         {
             str(row.get("h2d_missing_reason"))
@@ -697,8 +792,11 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     margins = [float(row["prefetch_margin_ms"]) for row in rows if row.get("prefetch_margin_ms") not in ("", None)]
     summary = {
         "sessions": len(rows),
-        "sessions_with_visible_h2d_copy": visible_count,
+        "sessions_with_visible_copy_telemetry": visible_count,
+        "sessions_with_lightweight_kv_copy_telemetry": telemetry_count,
+        "sessions_with_profiler_cuda_h2d_copy": torch_count,
         "late_prefetch_sessions": late_count,
+        "kv_copy_ready_before_replay": sum(1 for row in rows if yes_no(row.get("kv_copy_ready_before_replay")) == "yes"),
         "cuda_copy_ready_before_replay": sum(1 for row in rows if yes_no(row.get("cuda_copy_ready_before_replay")) == "yes"),
         "full_hint_done_before_replay": sum(1 for row in rows if yes_no(row.get("full_hint_done_before_replay")) == "yes"),
         "sessions_where_replay_reloaded_kv": sum(1 for row in rows if yes_no(row.get("replay_reloaded_kv")) == "yes"),
@@ -714,10 +812,17 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "hint_submitted_ms",
         "sglang_copy_start_ms",
         "sglang_copy_end_ms",
+        "telemetry_copy_start_ms",
+        "telemetry_copy_end_ms",
+        "telemetry_h2d_copy_events",
+        "telemetry_host_index_count",
         "torch_copy_start_ms",
         "torch_copy_end_ms",
         "torch_h2d_copy_events",
         "torch_h2d_bytes",
+        "visible_copy_start_ms",
+        "visible_copy_end_ms",
+        "visible_copy_source",
         "sglang_kv_profiler_status",
         "h2d_missing_reason",
         "profiler_start_ms",
@@ -726,6 +831,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         "replay_due_ms",
         "prefetch_margin_ms",
         "late_prefetch",
+        "kv_copy_ready_before_replay",
         "cuda_copy_ready_before_replay",
         "full_hint_done_before_replay",
         "replay_reloaded_kv",
@@ -740,15 +846,17 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     visible_h2d_rows = [
         {
             "session_id": row.get("session_id", ""),
-            "h2d_start_ms": row.get("torch_copy_start_ms", ""),
-            "h2d_end_ms": row.get("torch_copy_end_ms", ""),
-            "h2d_events": row.get("torch_h2d_copy_events", ""),
-            "h2d_bytes": row.get("torch_h2d_bytes", ""),
+            "copy_start_ms": row.get("visible_copy_start_ms", ""),
+            "copy_end_ms": row.get("visible_copy_end_ms", ""),
+            "copy_source": row.get("visible_copy_source", ""),
+            "telemetry_events": row.get("telemetry_h2d_copy_events", ""),
+            "torch_h2d_events": row.get("torch_h2d_copy_events", ""),
+            "torch_h2d_bytes": row.get("torch_h2d_bytes", ""),
             "replay_due_ms": row.get("replay_due_ms", ""),
             "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
         }
         for row in selected_rows
-        if int(row.get("torch_h2d_copy_events") or 0) > 0
+        if row.get("visible_copy_end_ms") not in ("", None)
     ]
     lines = [
         "<!doctype html>",
@@ -781,14 +889,14 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         [
             "</tbody></table></div>",
             '<div class="panel"><h2>Timeline</h2>',
-            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Green is the profiler-attributed CUDA HtoD copy observed inside that hint request. Green HtoD bars are drawn on top with a minimum visual width so short copy windows are not lost at full timeline scale. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>',
+            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Bright green is lightweight SGLang KV-copy telemetry. Dark green is profiler-attributed CUDA HtoD copy. Green bars are drawn on top with a minimum visual width so short copy windows are not lost at full timeline scale. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>',
             *svg,
             "</div>",
         ]
     )
     if visible_h2d_rows:
-        lines.append('<div class="panel"><h2>Visible CUDA HtoD Copies</h2>')
-        lines.append('<p class="caption">These rows are the exact sessions represented by green HtoD bars in the timeline.</p>')
+        lines.append('<div class="panel"><h2>Visible KV Copy Telemetry</h2>')
+        lines.append('<p class="caption">These rows are the exact sessions represented by green copy bars in the timeline. `sglang_lightweight_h2d_telemetry` is the scalable source; `torch_profiler_h2d` is the heavier CUDA validation source.</p>')
         lines.append("<table><thead><tr>")
         for col in visible_h2d_rows[0]:
             lines.append(f"<th>{html.escape(col)}</th>")
@@ -815,8 +923,13 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
             "This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.",
         ),
         (
+            "bright green telemetry_copy",
+            "Lightweight SGLang host-to-device KV copy telemetry from the exact KV load path. Short green bars are visually widened so they are easy to see.",
+            "This is the scalable evidence path for larger experiments. It avoids huge torch.profiler traces while preserving per-session KV movement timing.",
+        ),
+        (
             "green torch_copy",
-            "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short green bars are visually widened so they are easy to see.",
+            "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short dark-green bars are visually widened so they are easy to see.",
             "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request. If it is missing, check the profiler coverage columns before concluding no copy happened. Use the HtoD table for exact start/end times.",
         ),
         (
@@ -842,6 +955,11 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         lines.append(f"<th>{html.escape(col)}</th>")
     lines.append("</tr></thead><tbody>")
     checkpoint_help = [
+        (
+            "KV copy ready before replay",
+            "The lightweight green KV-copy telemetry ended before the black replay-due line.",
+            "This is the scalable checkpoint for larger runs where torch.profiler is off.",
+        ),
         (
             "CUDA copy ready before replay",
             "The green HtoD copy ended before the black replay-due line.",
@@ -869,6 +987,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     lines.append('<div class="panel"><h2>Checkpoint Results Per Session</h2><table><thead><tr>')
     checkpoint_columns = [
         "session_id",
+        "kv_copy_ready_before_replay",
         "cuda_copy_ready_before_replay",
         "full_hint_done_before_replay",
         "replay_reloaded_kv",
@@ -882,6 +1001,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     for row in selected_rows:
         lines.append("<tr>")
         lines.append(f"<td>{fmt(row.get('session_id', ''))}</td>")
+        lines.append(f'<td class="{checkpoint_class(row.get("kv_copy_ready_before_replay"))}">{yes_no(row.get("kv_copy_ready_before_replay"))}</td>')
         lines.append(f'<td class="{checkpoint_class(row.get("cuda_copy_ready_before_replay"))}">{yes_no(row.get("cuda_copy_ready_before_replay"))}</td>')
         lines.append(f'<td class="{checkpoint_class(row.get("full_hint_done_before_replay"))}">{yes_no(row.get("full_hint_done_before_replay"))}</td>')
         lines.append(f'<td class="{checkpoint_class(row.get("replay_reloaded_kv"), good_when_yes=False)}">{yes_no(row.get("replay_reloaded_kv"))}</td>')
@@ -929,6 +1049,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build a per-session agentic KV prefetch timeline.")
     parser.add_argument("--trace", required=True)
     parser.add_argument("--copy-csv", required=True)
+    parser.add_argument("--telemetry-jsonl")
     parser.add_argument("--profile-dir")
     parser.add_argument("--outcome-csv")
     parser.add_argument("--out-csv", required=True)
@@ -939,9 +1060,10 @@ def main() -> None:
 
     events = read_jsonl(Path(args.trace))
     copy_rows = read_copy_rows(Path(args.copy_csv))
+    telemetry_windows = read_copy_telemetry(Path(args.telemetry_jsonl)) if args.telemetry_jsonl else []
     profiler_coverage = read_profiler_coverage(Path(args.profile_dir)) if args.profile_dir else []
     outcome_rows = read_outcome_rows(Path(args.outcome_csv)) if args.outcome_csv else {}
-    rows, timeline = build_rows(events, copy_rows, profiler_coverage, outcome_rows)
+    rows, timeline = build_rows(events, copy_rows, profiler_coverage, outcome_rows, telemetry_windows)
     write_csv(Path(args.out_csv), rows)
     write_json(Path(args.out_json), rows, timeline)
     write_html(Path(args.out_html), rows, timeline, args.max_sessions)

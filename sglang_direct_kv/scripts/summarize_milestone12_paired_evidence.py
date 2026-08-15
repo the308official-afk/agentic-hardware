@@ -128,7 +128,10 @@ def build_clean_summary(clean_rows: dict[str, list[dict[str, Any]]]) -> list[dic
 def build_attribution_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
+    visible_copy = sum(1 for row in rows if row.get("visible_copy_end_ms") not in ("", None))
+    lightweight_copy = sum(1 for row in rows if as_int(row, "telemetry_h2d_copy_events") > 0)
     visible_h2d = sum(1 for row in rows if as_int(row, "torch_h2d_copy_events") > 0)
+    kv_ready = sum(1 for row in rows if yes(row, "kv_copy_ready_before_replay"))
     cuda_ready = sum(1 for row in rows if yes(row, "cuda_copy_ready_before_replay"))
     hint_done = sum(1 for row in rows if yes(row, "full_hint_done_before_replay"))
     reloaded = sum(1 for row in rows if yes(row, "replay_reloaded_kv"))
@@ -138,8 +141,11 @@ def build_attribution_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "profiled_sessions": len(rows),
             "evidence_status": "clean_success_seen"
             if clean_success
-            else ("copy_visible_but_not_sufficient" if cuda_ready and reloaded else "mechanism_visible"),
-            "sessions_with_visible_h2d_copy": visible_h2d,
+            else ("copy_visible_but_not_sufficient" if kv_ready and reloaded else "mechanism_visible"),
+            "sessions_with_visible_copy_telemetry": visible_copy,
+            "sessions_with_lightweight_kv_copy_telemetry": lightweight_copy,
+            "sessions_with_profiler_cuda_h2d_copy": visible_h2d,
+            "kv_copy_ready_before_replay": kv_ready,
             "cuda_copy_ready_before_replay": cuda_ready,
             "full_hint_done_before_replay": hint_done,
             "replay_reloaded_kv": reloaded,
@@ -188,6 +194,11 @@ def build_paired_rows(
                 else "no",
                 "profiled_replay_reloaded_kv": "yes" if yes(attr, "replay_reloaded_kv") else "no",
                 "profiled_checkpoint_result": attr.get("checkpoint_result", ""),
+                "profiled_kv_copy_ready_before_replay": "yes"
+                if yes(attr, "kv_copy_ready_before_replay")
+                else "no",
+                "profiled_visible_copy_source": attr.get("visible_copy_source", ""),
+                "profiled_telemetry_h2d_events": attr.get("telemetry_h2d_copy_events", ""),
                 "profiled_h2d_events": attr.get("torch_h2d_copy_events", ""),
                 "profiled_h2d_bytes": attr.get("torch_h2d_bytes", ""),
                 "profiled_prefetch_margin_ms": attr.get("prefetch_margin_ms", ""),
@@ -199,6 +210,7 @@ def build_paired_rows(
 def paired_takeaway(clean: dict[str, Any], baseline: dict[str, Any], attr: dict[str, Any]) -> str:
     if not attr:
         return "no profiled row"
+    kv_ready = yes(attr, "kv_copy_ready_before_replay")
     cuda_ready = yes(attr, "cuda_copy_ready_before_replay")
     hint_done = yes(attr, "full_hint_done_before_replay")
     reloaded = yes(attr, "replay_reloaded_kv")
@@ -207,6 +219,10 @@ def paired_takeaway(clean: dict[str, Any], baseline: dict[str, Any], attr: dict[
     faster = baseline and clean and clean_ttft < baseline_ttft
     if cuda_ready and hint_done and not reloaded and faster:
         return "clean success"
+    if kv_ready and not cuda_ready and reloaded:
+        return "KV copy telemetry visible, replay still reloaded"
+    if kv_ready and not cuda_ready:
+        return "KV copy telemetry visible, CUDA profiler not required"
     if cuda_ready and reloaded:
         return "copy was early, replay still reloaded"
     if cuda_ready and not hint_done:
@@ -228,7 +244,7 @@ def load_timeline_json(path: Path) -> list[dict[str, Any]]:
 
 def choose_timeline_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
     late = [row for row in rows if truthy(row.get("late_prefetch"))]
-    visible = [row for row in rows if as_int(row, "torch_h2d_copy_events") > 0]
+    visible = [row for row in rows if row.get("visible_copy_end_ms") not in ("", None)]
     ordered: list[str] = []
     for group in (late, visible, rows):
         for row in sorted(group, key=lambda item: to_float(item.get("prefetch_margin_ms")) or 1_000_000):
@@ -255,6 +271,8 @@ def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
         return f"LATE {margin:.0f} ms", "#b91c1c"
     if as_int(row, "torch_h2d_copy_events") > 0 and margin is not None:
         return f"SUCCESS +{margin:.0f} ms", "#166534"
+    if as_int(row, "telemetry_h2d_copy_events") > 0 and margin is not None:
+        return f"KV TRACE {margin:.0f} ms", "#15803d" if margin >= 0 else "#b91c1c"
     if as_int(row, "sglang_copy_events") > 0 and margin is not None:
         return f"SGLang OK +{margin:.0f} ms", "#92400e"
     return "INCOMPLETE", "#6b7280"
@@ -263,9 +281,11 @@ def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
 def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
     margin = to_float(row.get("prefetch_margin_ms"))
     torch_copy_events = as_int(row, "torch_h2d_copy_events")
+    telemetry_copy_events = as_int(row, "telemetry_h2d_copy_events")
     sglang_events = as_int(row, "sglang_copy_events")
     missing_reason = str(row.get("h2d_missing_reason") or "")
     cuda_ready = yes_no(row.get("cuda_copy_ready_before_replay"))
+    kv_ready = yes_no(row.get("kv_copy_ready_before_replay"))
     hint_done = yes_no(row.get("full_hint_done_before_replay"))
     replay_reloaded = yes_no(row.get("replay_reloaded_kv"))
 
@@ -288,6 +308,10 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
         status = "Clean useful prefetch"
         observation = f"SGLang KV load and CUDA HtoD copies were visible, and movement completed {margin:.3f} ms before replay."
         deduction = "This is the clean success case for movement timing: the hint moved KV early enough for the agent replay."
+    elif telemetry_copy_events > 0 and margin is not None:
+        status = "Lightweight KV telemetry visible"
+        observation = f"SGLang KV-copy telemetry was visible and movement completed with margin {margin:.3f} ms."
+        deduction = "This is scalable movement evidence from the exact SGLang KV load path; use torch-profiler runs separately to validate CUDA-level mapping."
     elif sglang_events > 0 and margin is not None:
         status = "SGLang-level useful prefetch"
         if missing_reason:
@@ -305,10 +329,12 @@ def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
 
     evidence = (
         f"tool wait {fmt_ms(row.get('tool_wait_ms'))}; "
+        f"KV copy ready before replay {kv_ready}; "
         f"CUDA copy ready before replay {cuda_ready}; "
         f"full hint done before replay {hint_done}; "
         f"replay reloaded KV {replay_reloaded}; "
         f"SGLang load {fmt_ms(row.get('sglang_copy_start_ms'))} -> {fmt_ms(row.get('sglang_copy_end_ms'))}; "
+        f"lightweight KV copy {fmt_ms(row.get('telemetry_copy_start_ms'))} -> {fmt_ms(row.get('telemetry_copy_end_ms'))}; "
         f"CUDA HtoD {fmt_ms(row.get('torch_copy_start_ms'))} -> {fmt_ms(row.get('torch_copy_end_ms'))}; "
         f"profiler window {fmt_ms(row.get('profiler_start_ms'))} -> {fmt_ms(row.get('profiler_end_ms'))}; "
         f"HtoD missing reason {fmt(row.get('h2d_missing_reason')) or 'none'}; "
@@ -437,7 +463,12 @@ def html_table(rows: list[dict[str, Any]]) -> str:
                 cls = ' class="bad"'
             elif value in {"faster", "clean success", "clean_success_seen"}:
                 cls = ' class="good"'
-            elif value in {"slower", "copy was early, replay still reloaded", "copy was early, full hint path was late"}:
+            elif value in {
+                "slower",
+                "copy was early, replay still reloaded",
+                "copy was early, full hint path was late",
+                "KV copy telemetry visible, replay still reloaded",
+            }:
                 cls = ' class="warn"'
             out.append(f"<td{cls}>{html.escape(value)}</td>")
         out.append("</tr>")
@@ -473,6 +504,7 @@ def build_timeline_svg(
         "hint_submitted": "#7c3aed",
         "hint_request": "#a855f7",
         "sglang_copy": "#f59e0b",
+        "telemetry_copy": "#22c55e",
         "torch_copy": "#16a34a",
         "replay_due": "#111827",
         "replay": "#dc2626",
@@ -489,8 +521,9 @@ def build_timeline_svg(
             "hint_request": 3,
             "replay": 4,
             "sglang_copy": 5,
-            "torch_copy": 6,
-            "replay_due": 7,
+            "telemetry_copy": 6,
+            "torch_copy": 7,
+            "replay_due": 8,
         }
         return order.get(str(item.get("kind", "")), 10)
 
@@ -572,7 +605,7 @@ def build_timeline_svg(
             bar_h = 24
             opacity = "0.88"
             stroke = ""
-            if kind == "torch_copy":
+            if kind in {"telemetry_copy", "torch_copy"}:
                 display_x2 = max(x2, x1 + 24)
                 bar_y = y
                 bar_h = 32
@@ -581,9 +614,10 @@ def build_timeline_svg(
             svg.append(
                 f'<rect x="{x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{label}</title></rect>'
             )
-            if kind == "torch_copy":
+            if kind in {"telemetry_copy", "torch_copy"}:
+                text_label = "KV" if kind == "telemetry_copy" else "HtoD"
                 svg.append(
-                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">HtoD</text>'
+                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{text_label}</text>'
                 )
             elif kind == "sglang_copy" and x2 - x1 > 45:
                 text_label = "KV load" if kind == "sglang_copy" else "HtoD"
@@ -608,19 +642,20 @@ def build_timeline_svg(
     return "\n".join(svg), selected_rows
 
 
-def visible_h2d_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def visible_copy_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
-        events = as_int(row, "torch_h2d_copy_events")
-        if events <= 0:
+        if row.get("visible_copy_end_ms") in ("", None):
             continue
         out.append(
             {
                 "session_id": row.get("session_id", ""),
-                "h2d_start_ms": row.get("torch_copy_start_ms", ""),
-                "h2d_end_ms": row.get("torch_copy_end_ms", ""),
-                "h2d_events": events,
-                "h2d_bytes": row.get("torch_h2d_bytes", ""),
+                "copy_start_ms": row.get("visible_copy_start_ms", ""),
+                "copy_end_ms": row.get("visible_copy_end_ms", ""),
+                "copy_source": row.get("visible_copy_source", ""),
+                "telemetry_events": row.get("telemetry_h2d_copy_events", ""),
+                "torch_h2d_events": row.get("torch_h2d_copy_events", ""),
+                "torch_h2d_bytes": row.get("torch_h2d_bytes", ""),
                 "replay_due_ms": row.get("replay_due_ms", ""),
                 "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
             }
@@ -636,8 +671,11 @@ def timeline_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "sessions": len(rows),
-            "sessions_with_visible_h2d_copy": sum(1 for row in rows if as_int(row, "torch_h2d_copy_events") > 0),
+            "sessions_with_visible_copy_telemetry": sum(1 for row in rows if row.get("visible_copy_end_ms") not in ("", None)),
+            "sessions_with_lightweight_kv_copy_telemetry": sum(1 for row in rows if as_int(row, "telemetry_h2d_copy_events") > 0),
+            "sessions_with_profiler_cuda_h2d_copy": sum(1 for row in rows if as_int(row, "torch_h2d_copy_events") > 0),
             "late_prefetch_sessions": sum(1 for row in rows if truthy(row.get("late_prefetch"))),
+            "kv_copy_ready_before_replay": sum(1 for row in rows if truthy(row.get("kv_copy_ready_before_replay"))),
             "cuda_copy_ready_before_replay": sum(1 for row in rows if truthy(row.get("cuda_copy_ready_before_replay"))),
             "full_hint_done_before_replay": sum(1 for row in rows if truthy(row.get("full_hint_done_before_replay"))),
             "sessions_where_replay_reloaded_kv": sum(1 for row in rows if truthy(row.get("replay_reloaded_kv"))),
@@ -661,9 +699,14 @@ def timeline_layers_rows() -> list[dict[str, Any]]:
             "Why it matters": "This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.",
         },
         {
-            "Layer": "green torch_copy",
-            "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short green bars are visually widened so they are easy to see.",
-            "Why it matters": "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request. Use the HtoD table for exact start/end times.",
+            "Layer": "bright green telemetry_copy",
+            "Meaning": "Lightweight SGLang host-to-device KV copy telemetry from the exact KV load path. On the chart, short bars are visually widened so they are easy to see.",
+            "Why it matters": "This is the scalable evidence path for larger experiments. It avoids huge torch.profiler traces while preserving per-session KV movement timing.",
+        },
+        {
+            "Layer": "dark green torch_copy",
+            "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short bars are visually widened so they are easy to see.",
+            "Why it matters": "This is the heavier CUDA-level validation source. Use it on small runs to validate that SGLang KV-copy telemetry maps to real CUDA HtoD activity.",
         },
         {
             "Layer": "black replay_due",
@@ -681,9 +724,14 @@ def timeline_layers_rows() -> list[dict[str, Any]]:
 def prefetch_checkpoint_rows() -> list[dict[str, Any]]:
     return [
         {
+            "Checkpoint": "KV copy ready before replay",
+            "Simple meaning": "The lightweight green KV-copy telemetry ended before the black replay-due line.",
+            "Why it matters": "This is the scalable checkpoint for larger runs where torch.profiler is off.",
+        },
+        {
             "Checkpoint": "CUDA copy ready before replay",
-            "Simple meaning": "The green HtoD copy ended before the black replay-due line.",
-            "Why it matters": "This proves profiler-visible GPU copy work happened early enough, but only for the copied slice we attributed.",
+            "Simple meaning": "The dark-green profiler HtoD copy ended before the black replay-due line.",
+            "Why it matters": "This proves profiler-visible GPU copy work happened early enough, but only for the copied slice we attributed in smaller validation runs.",
         },
         {
             "Checkpoint": "Full hint done before replay",
@@ -701,6 +749,7 @@ def prefetch_checkpoint_rows() -> list[dict[str, Any]]:
 def checkpoint_result_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     keys = [
         "session_id",
+        "kv_copy_ready_before_replay",
         "cuda_copy_ready_before_replay",
         "full_hint_done_before_replay",
         "replay_reloaded_kv",
@@ -735,10 +784,17 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "hint_submitted_ms",
         "sglang_copy_start_ms",
         "sglang_copy_end_ms",
+        "telemetry_copy_start_ms",
+        "telemetry_copy_end_ms",
+        "telemetry_h2d_copy_events",
+        "telemetry_host_index_count",
         "torch_copy_start_ms",
         "torch_copy_end_ms",
         "torch_h2d_copy_events",
         "torch_h2d_bytes",
+        "visible_copy_start_ms",
+        "visible_copy_end_ms",
+        "visible_copy_source",
         "sglang_kv_profiler_status",
         "h2d_missing_reason",
         "profiler_start_ms",
@@ -747,6 +803,7 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "replay_due_ms",
         "prefetch_margin_ms",
         "late_prefetch",
+        "kv_copy_ready_before_replay",
         "cuda_copy_ready_before_replay",
         "full_hint_done_before_replay",
         "replay_reloaded_kv",
@@ -819,7 +876,7 @@ def write_html(
         "</div></div>",
         '<div class="panel"><h2>How To Read This Report</h2>',
         '<p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>',
-        '<p class="caption"><span class="pill">Profiled attribution</span> comes from profiler-on runs. Use these rows to show CUDA HtoD copies, hint completion, and replay reload behavior.</p>',
+        '<p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>',
         '<p class="caption"><span class="pill">Paired evidence</span> joins the two views by session id, so we can say what improved and what mechanism was observed.</p>',
         "</div>",
         '<div class="panel"><h2>Key Deductions</h2><ul>',
@@ -844,18 +901,18 @@ def write_html(
         lines.append("</div></div>")
         lines.append('<div class="panel"><h2>Timeline</h2>')
         lines.append(
-            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Green is the profiler-attributed CUDA HtoD copy observed inside that hint request. Green HtoD bars are drawn on top with a minimum visual width so short copy windows are not lost at full timeline scale. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>'
+            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Bright green is lightweight SGLang KV-copy telemetry. Dark green is optional torch-profiler CUDA HtoD validation. Green bars are drawn on top with a minimum visual width so short copy windows are not lost at full timeline scale. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
-        h2d_rows = visible_h2d_rows(selected_timeline_rows)
-        if h2d_rows:
-            lines.append('<div class="panel"><h2>Visible CUDA HtoD Copies</h2>')
+        copy_rows = visible_copy_rows(selected_timeline_rows)
+        if copy_rows:
+            lines.append('<div class="panel"><h2>Visible KV Copy Telemetry</h2>')
             lines.append(
-                '<p class="caption">These are the selected sessions where the profiler attributed host-to-device CUDA copy activity. The green bars in the timeline correspond to these rows.</p>'
+                '<p class="caption">These are the selected sessions represented by green copy bars in the timeline. `sglang_lightweight_h2d_telemetry` is the scalable source for larger runs; `torch_profiler_h2d` is the heavier CUDA-validation source for smaller runs.</p>'
             )
             lines.append('<div class="table-wrap">')
-            lines.append(html_table(h2d_rows))
+            lines.append(html_table(copy_rows))
             lines.append("</div></div>")
         timeline_sections = [
             ("Timeline Layers", timeline_layers_rows(), "These rows explain what each visual layer in the timeline means."),
@@ -918,9 +975,9 @@ def summary_cards(sections: dict[str, list[dict[str, Any]]]) -> list[dict[str, s
             "detail": f'Best mode: {best.get("mode", "n/a")}.',
         },
         {
-            "label": "CUDA Ready",
-            "value": f'{attr_row.get("cuda_copy_ready_before_replay", 0)} / {profiled_sessions}',
-            "detail": "Profiled sessions where CUDA HtoD copy finished before replay.",
+            "label": "KV Copy Ready",
+            "value": f'{attr_row.get("kv_copy_ready_before_replay", 0)} / {profiled_sessions}',
+            "detail": "Sessions where scalable KV-copy telemetry finished before replay.",
         },
         {
             "label": "Replay Reloaded KV",
@@ -941,7 +998,7 @@ def manager_summary_lines(sections: dict[str, list[dict[str, Any]]]) -> list[str
     attr_row = attr[0] if attr else {}
     lines = [
         "The clean run is the performance source of truth because it runs without torch.profiler overhead.",
-        "The profiled run is the mechanism source of truth because it exposes CUDA HtoD and SGLang KV movement evidence.",
+        "The mechanism run is the movement source of truth because it exposes lightweight SGLang KV-copy telemetry, with torch-profiler CUDA HtoD as optional validation.",
     ]
     if best:
         lines.append(
@@ -949,7 +1006,7 @@ def manager_summary_lines(sections: dict[str, list[dict[str, Any]]]) -> list[str
         )
     if attr_row:
         lines.append(
-            f'Profiled attribution: CUDA copy ready before replay in {attr_row.get("cuda_copy_ready_before_replay")} / {attr_row.get("profiled_sessions")} sessions; replay reloaded KV in {attr_row.get("replay_reloaded_kv")} / {attr_row.get("profiled_sessions")} sessions.'
+            f'Mechanism attribution: KV copy ready before replay in {attr_row.get("kv_copy_ready_before_replay")} / {attr_row.get("profiled_sessions")} sessions; profiler CUDA HtoD visible in {attr_row.get("sessions_with_profiler_cuda_h2d_copy")} / {attr_row.get("profiled_sessions")} sessions; replay reloaded KV in {attr_row.get("replay_reloaded_kv")} / {attr_row.get("profiled_sessions")} sessions.'
         )
     return lines
 
@@ -959,13 +1016,18 @@ def key_deduction_lines(sections: dict[str, list[dict[str, Any]]]) -> list[str]:
     paired = sections.get("Paired Session Evidence", [])
     attr_row = attr[0] if attr else {}
     cuda_ready = as_int(attr_row, "cuda_copy_ready_before_replay") if attr_row else 0
+    kv_ready = as_int(attr_row, "kv_copy_ready_before_replay") if attr_row else 0
     reloaded = as_int(attr_row, "replay_reloaded_kv") if attr_row else 0
     hint_done = as_int(attr_row, "full_hint_done_before_replay") if attr_row else 0
     sessions = as_int(attr_row, "profiled_sessions") if attr_row else 0
     lines = [
         "We should judge TTFT using the clean run, then use the profiled run to explain why the result happened.",
     ]
-    if cuda_ready and reloaded:
+    if kv_ready and reloaded:
+        lines.append(
+            "Important hardware argument: even when KV copy telemetry finishes before replay, replay can still reload KV. Copying memory earlier is not enough by itself; residency, protection, and reuse need to be enforceable."
+        )
+    elif cuda_ready and reloaded:
         lines.append(
             "Important hardware argument: even when CUDA HtoD copy is ready before replay, replay can still reload KV. Copying memory earlier is not enough by itself; residency, protection, and reuse need to be enforceable."
         )
@@ -985,7 +1047,7 @@ def key_deduction_lines(sections: dict[str, list[dict[str, Any]]]) -> list[str]:
 def section_caption(title: str) -> str:
     captions = {
         "Clean Performance Summary": "Profiler is off here. Use this table for TTFT and performance claims.",
-        "Profiled Attribution Summary": "Profiler is on here. Use this table to understand CUDA HtoD copy visibility, hint completion, and replay reloads.",
+        "Profiled Attribution Summary": "Use this table to understand scalable KV-copy telemetry, optional CUDA HtoD validation, hint completion, and replay reloads.",
         "Paired Session Evidence": "This joins the clean and profiled views by session id so each session has both a performance view and a mechanism view.",
     }
     return captions.get(title, "")
@@ -1106,6 +1168,7 @@ def main() -> None:
     for row in sections["Profiled Attribution Summary"]:
         print(
             "profiled attribution: "
+            f"kv_ready={row.get('kv_copy_ready_before_replay', 0)}/{row['profiled_sessions']}, "
             f"cuda_ready={row['cuda_copy_ready_before_replay']}/{row['profiled_sessions']}, "
             f"hint_done={row['full_hint_done_before_replay']}/{row['profiled_sessions']}, "
             f"reloaded={row['replay_reloaded_kv']}/{row['profiled_sessions']}, "

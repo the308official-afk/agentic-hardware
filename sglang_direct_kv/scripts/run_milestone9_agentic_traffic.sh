@@ -71,6 +71,7 @@ run_mode() {
   local mode="$1"
   case_idx=$((case_idx + 1))
   local trace="${RESULT_ROOT}/${mode}_traffic_trace.jsonl"
+  local copy_telemetry="${RESULT_ROOT}/${mode}_kv_copy_telemetry.jsonl"
   local metrics="${RESULT_ROOT}/${mode}_traffic_metrics.jsonl"
   local log="${RESULT_ROOT}/${mode}_server.log"
   local out_dir="${RESULT_ROOT}/${mode}_outcomes"
@@ -88,11 +89,13 @@ run_mode() {
   echo "HINT_DELAY_MS=${HINT_DELAY_MS}"
   echo "ORACLE_LEAD_MS=${ORACLE_LEAD_MS}"
 
-  rm -f "${trace}" "${metrics}" "${log}"
+  rm -f "${trace}" "${copy_telemetry}" "${metrics}" "${log}"
   rm -rf "${out_dir}"
 
   export AGENTIC_KV_TRACE_ENABLE=1
   export AGENTIC_KV_TRACE_PATH="${trace}"
+  export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
+  export AGENTIC_KV_COPY_TELEMETRY_PATH="${copy_telemetry}"
   export EXTRA_SERVER_ARGS="--max-total-tokens ${MAX_TOTAL_TOKENS}"
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${log}" 2>&1 &

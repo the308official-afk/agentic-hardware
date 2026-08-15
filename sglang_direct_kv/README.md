@@ -31,6 +31,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 12: Paired Clean + Attribution Evidence | Ready | [Milestone 12](#milestone-12-paired-clean--attribution-evidence) |
 | Milestone 13: Failure Stress Experiment | Completed | [Milestone 13](#milestone-13-failure-stress-experiment) |
 | Milestone 13B: Green-Bar Failure Stress | Completed | [Milestone 13B](#milestone-13b-green-bar-failure-stress) |
+| Milestone 14: Lightweight KV Copy Telemetry | Completed | [Milestone 14](#milestone-14-lightweight-kv-copy-telemetry) |
 
 ## What We Are Testing
 
@@ -93,6 +94,8 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F12 | Early CUDA copy is not enough for prefetch success. | In Milestone 11C300, CUDA copy was ready before replay for `6 / 6` sessions, but full hint completion succeeded for only `5 / 6`, replay reloaded KV for `6 / 6`, and clean success was `0 / 6`. | Even when CUDA copy happens before replay, the software-managed path can still fail because the full hint path is late, replay reloads KV again, or prefetched KV is not protected/reused predictably. | The need is not just "copy memory earlier"; the system must copy the right KV, finish predictably, protect residency, and make reuse visible/enforceable. | Strong |
 | F13 | Failure-heavy stress shows software hints are not deadline-predictable. | Milestone 13 manager stress: clean `oracle_direct_load` improved avg replay TTFT by `629.573 ms` vs `no_prefetch`, but clean outcomes were `late_prefetch: 32 / 32`. Profiled attribution showed `cuda_ready=0 / 32`, `hint_done=0 / 32`, `replay_reloaded=32 / 32`, `clean_success=0 / 32`. | Hints can still help average latency while failing the actual deadline/residency requirement for every session under pressure. | This is the strongest case so far for deadline-aware migration, prefetch protection, and hardware-visible progress/telemetry. | Strong |
 | F14 | Green-bar stress gives both CUDA-copy visibility and failure evidence. | Milestone 13B captured visible CUDA HtoD bars in `4 / 12` sessions while still showing `late_prefetch: 12 / 12`, `replay_reloaded=12 / 12`, and `clean_success=0 / 12`. | The report now shows the concrete host-to-device copy windows for some agents, while still proving that the software hint path missed every replay deadline under stress. | Use this report as the manager-facing visual bridge between SGLang-level KV movement and CUDA-level data movement. | Strong |
+| F15 | Full torch-profiler traces do not scale to large timelines. | 32-session profiler traces can produce hundreds of thousands of unrelated CUDA/kernel events, while we only need per-agent KV movement windows. | Large profiler traces make reports slow and can still miss late sessions if the profiler window ends early. | Use lightweight SGLang KV-copy telemetry for large runs, and use short torch-profiler runs only to validate that this telemetry maps to real CUDA HtoD movement. | Strong |
+| F16 | Lightweight KV-copy telemetry scales to all sessions in a 32-session stress run. | Milestone 14 captured lightweight KV-copy telemetry for `32 / 32` sessions with `0` torch-profiler files. The telemetry stream had `2848` compact rows. | We can now show green KV movement bars for larger traffic without collecting massive unrelated CUDA traces. | Use movement-only telemetry as the default evidence path, then use small torch-profiler runs as CUDA validation. | New |
 
 Main deduction from the latest timeline:
 
@@ -3033,6 +3036,143 @@ Use the profiled run for green bars and CUDA/KV attribution.
 Do not use profiled TTFT as performance evidence because torch.profiler can add large overhead.
 ```
 
+### Milestone 14: Lightweight KV Copy Telemetry
+
+Status: completed on EC2.
+
+What it is:
+
+```text
+Milestone 14 is the scalable version of the timeline experiment.
+
+Instead of using torch.profiler for every session, it records only compact
+SGLang KV movement telemetry around the exact host-to-device KV load path.
+```
+
+Why we need it:
+
+```text
+Full torch-profiler traces are too heavy for large traffic runs.
+They capture many unrelated kernels, memcpy events, memsets, runtime calls,
+and scheduler activity.
+
+For the manager-facing timeline, we mostly need:
+  agent session id
+  hint start/end
+  KV host-to-device movement start/end
+  replay due
+  replay start
+  whether replay reloaded KV
+```
+
+What changed:
+
+```text
+The SGLang trace hook now writes a compact movement-only JSONL stream:
+
+AGENTIC_KV_COPY_TELEMETRY_PATH=<result_root>/<mode>_kv_copy_telemetry.jsonl
+
+It records only targeted movement events such as:
+  hostpool.load_to_device_per_layer
+  hostpool.backup_from_device_all_layer
+  evict_device / evict_host
+
+Each telemetry row includes:
+  session_id / phase / priority
+  direction
+  layer_id
+  host/device index counts
+  start/end timestamp
+  duration
+```
+
+How to interpret the new green bars:
+
+```text
+Bright green KV bars:
+  lightweight SGLang KV-copy telemetry
+  scalable to many sessions
+  best for large traffic timelines
+
+Dark green HtoD bars:
+  torch-profiler CUDA HtoD validation
+  heavier
+  best for small validation runs
+```
+
+Recommended run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/run_milestone14_lightweight_copy_telemetry.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Default shape:
+
+```text
+SESSION_COUNT=32
+ATTRIBUTION_TORCH_PROFILER_ENABLE=0
+TIMELINE_MAX_SESSIONS=32
+```
+
+Main output:
+
+```text
+artifacts/results/latest_paired_report.html
+artifacts/results/milestone14_lightweight_copy_telemetry/paired_report/paired_report.html
+```
+
+Completed EC2 result:
+
+```text
+Clean performance:
+  no_prefetch avg replay TTFT:        1477.667 ms
+  oracle_direct_load avg replay TTFT: 1245.694 ms
+  improvement:                         231.973 ms, or 15.7%
+
+Attribution / timeline:
+  sessions:                              32
+  lightweight KV telemetry visible:       32 / 32
+  torch-profiler CUDA HtoD rows:           0 / 32
+  KV copy ready before replay:             0 / 32
+  full hint done before replay:            0 / 32
+  replay reloaded KV:                     32 / 32
+  clean success:                           0 / 32
+  compact telemetry rows:               2848
+```
+
+What this means:
+
+```text
+Milestone 14 proves we can get the important green KV-copy bars without
+recording a huge torch-profiler trace.
+
+It also shows the stress failure clearly:
+  every session had visible KV movement,
+  but every session missed the replay deadline,
+  and every replay still reloaded KV.
+
+So the failure is not "we cannot see the copy."
+The failure is that the software-managed hint path did not make KV ready,
+resident, and reusable by the replay deadline.
+```
+
+Simple interpretation:
+
+```text
+Use Milestone 14 to show large-scale timing behavior:
+  which sessions had KV movement,
+  when that movement started,
+  when it finished,
+  whether it beat the replay deadline,
+  whether replay still reloaded KV.
+
+Use Milestone 13B or smaller torch-profiler runs to validate that the
+SGLang KV-copy telemetry corresponds to real CUDA HtoD movement.
+```
+
 ## Directory Layout
 
 ```text
@@ -3061,6 +3201,7 @@ sglang_direct_kv/
     run_milestone12_paired_evidence.sh
     run_milestone13_failure_stress.sh
     run_milestone13b_green_bar_failure_stress.sh
+    run_milestone14_lightweight_copy_telemetry.sh
     run_agentic_traffic_workload.py
     build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py
