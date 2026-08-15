@@ -38,6 +38,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 18: Real Prompt Prefetch Modes | Ready | [Milestone 18](#milestone-18-real-prompt-prefetch-modes) |
 | Milestone 19: Realistic Manager Report | Ready | [Milestone 19](#milestone-19-realistic-manager-report) |
 | Milestone 20: SWE-bench Trajectory Prompt Replay | Ready | [Milestone 20](#milestone-20-swe-bench-trajectory-prompt-replay) |
+| Milestone 21: Direct SGLang Experiment 6 Prompt Evolution | Ready | [Milestone 21](#milestone-21-direct-sglang-experiment-6-prompt-evolution) |
 
 ## What We Are Testing
 
@@ -3732,6 +3733,120 @@ Milestone 20 answers:
   but replace synthetic prompts with real SWE-bench trajectory prompts?
 ```
 
+### Milestone 21: Direct SGLang Experiment 6 Prompt Evolution
+
+Status: ready.
+
+What it is:
+
+```text
+Run the working Experiment 6 prompt-evolution batch shape from kv_cache_offloading,
+but remove Dynamo and send Deep Agents directly to SGLang.
+
+This milestone generates the real SWE-bench trajectory prompt catalog that
+Milestone 20 consumes.
+```
+
+Why we need it:
+
+```text
+Milestone 20 needs real trajectory prompts.
+Previously, those prompts came from kv_cache_offloading Experiment 6.
+This milestone regenerates that source inside the direct-SGLang workflow:
+
+SWE-bench task
+  -> Deep Agents tool loop
+  -> SGLang OpenAI-compatible endpoint
+  -> prompt evolution reports
+  -> trajectory prompt catalog
+```
+
+What changed from the original Experiment 6:
+
+| Original Exp6 Piece | Direct-SGLang Version |
+| --- | --- |
+| Dynamo frontend on port 8000 | SGLang endpoint on port 30000 |
+| Dynamo start/stop wrapper | direct SGLang server launcher |
+| large GH200-oriented model | smaller Qwen model for g5.2xlarge |
+| same Deep Agents tool loop | kept |
+| same SWE-bench task loop | kept |
+| same prompt-evolution reports | kept |
+| same trajectory catalog format | kept |
+
+Recommended first run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="exp6_direct_sglang_smoke_1"
+
+PROMPT_EVOLUTION_BATCH_ID="${RUN_ID}" \
+START_INDEX=0 \
+END_INDEX=1 \
+SERVER_MODE=simple \
+MAX_TOTAL_TOKENS=8192 \
+AGENTBENCH_EXECUTION_LOOP=1 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=3 \
+AGENTBENCH_FORCE_TOOL_CHOICE=auto \
+bash scripts/run_milestone21_exp6_direct_sglang.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+If the 7B model is too tight on `g5.2xlarge`, use:
+
+```bash
+bash scripts/run_milestone21_exp6_direct_sglang.sh \
+  Qwen/Qwen2.5-3B-Instruct
+```
+
+Important events to observe:
+
+```text
+SGLang starts directly; Dynamo is not used.
+The smoke chat request passes.
+The Deep Agents tool-loop preflight passes.
+Each SWE-bench task produces a new AgentBench result directory.
+The task trace index is updated.
+The trajectory prompt catalog is generated.
+```
+
+Key output files:
+
+```text
+artifacts/results/milestone21_exp6_direct_sglang/driver.log
+artifacts/results/milestone21_exp6_direct_sglang/exp6_direct_sglang_task_index.csv
+artifacts/results/milestone21_exp6_direct_sglang/exp6_direct_swebench_trajectory_prompt_catalog.csv
+artifacts/results/latest_exp6_direct_swebench_trajectory_prompt_catalog.csv
+~/kv_cache_offloading/experiments/reports/latest_swebench_trajectory_prompt_catalog.csv
+```
+
+Then run Milestone 20 using the generated catalog:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+CATALOG_CSV=~/kv_cache_offloading/experiments/reports/latest_swebench_trajectory_prompt_catalog.csv \
+MAX_SESSIONS=6 \
+CLEAN_MODES="no_prefetch oracle_direct_load" \
+ATTRIBUTION_TORCH_PROFILER_ENABLE=0 \
+TOOL_WAIT_LIST_MS="250 500 900 1600 3000" \
+bash scripts/run_milestone20_swebench_trajectory_replay.sh \
+  Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Simple interpretation:
+
+```text
+Milestone 21 answers:
+  Can we generate real SWE-bench/Deep Agents prompt trajectories without Dynamo?
+
+Milestone 20 answers:
+  What happens when those real trajectories replace the synthetic prompts
+  in our paired prefetch evidence report?
+```
+
 ## Directory Layout
 
 ```text
@@ -3757,6 +3872,7 @@ sglang_direct_kv/
     run_milestone9_oracle_lead_sweep.sh
     extract_swebench_trajectory_prompt_workload.py
     run_milestone20_swebench_trajectory_replay.sh
+    run_milestone21_exp6_direct_sglang.sh
     run_milestone10_dma_timeline.sh
     run_milestone11_agentic_timeline.sh
     run_milestone12_paired_evidence.sh
