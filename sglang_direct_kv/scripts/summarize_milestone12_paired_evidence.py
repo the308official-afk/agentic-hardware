@@ -639,13 +639,6 @@ def build_timeline_svg(
             svg.append(
                 f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
             )
-            if kind == "replay_due":
-                row = row_by_session.get(sid, {})
-                replay_start = to_float(row.get("replay_start_ms"))
-                due_label = "replay due/start" if replay_start is not None and abs(replay_start - raw_start_ms) < 5.0 else "replay due"
-                svg.append(
-                    f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">{due_label}</text>'
-                )
         else:
             display_x2 = x2
             display_x1 = x1
@@ -695,12 +688,6 @@ def build_timeline_svg(
                 svg.append(
                     f'<line x1="{x1:.1f}" y1="{bar_y - 3}" x2="{x1:.1f}" y2="{bar_y + bar_h + 3}" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>'
                 )
-                row = row_by_session.get(sid, {})
-                replay_due_ms = to_float(row.get("replay_due_ms"))
-                if replay_due_ms is None or abs(raw_start_ms - replay_due_ms) >= 5.0:
-                    svg.append(
-                        f'<text x="{x1:.1f}" y="{bar_y + bar_h + 13}" text-anchor="middle" font-size="9" fill="#991b1b" font-weight="700">replay start</text>'
-                    )
             if replay_continues:
                 arrow_x = left + plot_w - 7
                 arrow_y = bar_y + bar_h / 2
@@ -716,12 +703,6 @@ def build_timeline_svg(
                 )
                 svg.append(
                     f'<line x1="{x2:.1f}" y1="{bar_y - 3}" x2="{x2:.1f}" y2="{bar_y + bar_h + 3}" stroke="#064e3b" stroke-width="1.5"><title>exact copy end</title></line>'
-                )
-                svg.append(
-                    f'<text x="{x1:.1f}" y="{bar_y + bar_h + 22}" text-anchor="middle" font-size="9" fill="#064e3b" font-weight="700">copy start</text>'
-                )
-                svg.append(
-                    f'<text x="{x2:.1f}" y="{bar_y - 10}" text-anchor="middle" font-size="9" fill="#064e3b" font-weight="700">copy end</text>'
                 )
                 svg.append(
                     f'<text x="{(display_x1 + display_x2) / 2:.1f}" y="{bar_y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{text_label}</text>'
@@ -1037,7 +1018,7 @@ def write_html(
         lines.append("</div></div>")
         lines.append('<div class="panel"><h2>Timeline</h2>')
         lines.append(
-            '<p class="caption">How to read this: this focused view zooms into the prefetch/replay boundary. Bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request; long replay bars are clipped and marked as continuing. If purple overlaps red, the hint was still running when replay arrived. Small labels mark hint start/end, copy start/end, replay due, and replay start. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. Green bars may be widened for visibility; thin dark ticks mark the exact copy start and end.</p>'
+            '<p class="caption">How to read this: this focused view zooms into the prefetch/replay boundary. Bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request; long replay bars are clipped and marked as continuing. If purple overlaps red, the hint was still running when replay arrived. Only hint start/end are labeled directly to keep the chart readable. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. Green bars may be widened for visibility; thin dark ticks mark the exact copy start and end.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
