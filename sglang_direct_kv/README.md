@@ -3832,6 +3832,21 @@ for example a GH200/H100/H200-class setup. A smaller model can validate wiring,
 but should not be treated as final realistic evidence.
 ```
 
+Observed 7B fallback result on `g5.2xlarge`:
+
+```text
+Model: Qwen/Qwen2.5-Coder-7B-Instruct
+Server result: SGLang loaded successfully, allocated KV cache, and passed smoke chat.
+Natural tool preflight: failed with tool_calls=0 and final_text=TOOL_CALL_FAILED.
+Forced tool preflight: produced repeated SGLang requests and growing cached context,
+but did not complete the required edit/execute loop cleanly.
+
+Interpretation:
+The 7B model is useful for checking that direct SGLang serving works on A10G.
+It is not a good substitute for the realistic Exp6 tool-calling workload because
+it does not reliably emit structured Deep Agents tool calls in this setup.
+```
+
 Important events to observe:
 
 ```text
