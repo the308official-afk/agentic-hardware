@@ -29,6 +29,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 11B: Improved CUDA Copy Attribution | Completed | [Milestone 11B](#milestone-11b-improved-cuda-copy-attribution) |
 | Milestone 11C: Profiler Coverage Diagnosis | Completed | [Milestone 11C](#milestone-11c-profiler-coverage-diagnosis) |
 | Milestone 12: Paired Clean + Attribution Evidence | Ready | [Milestone 12](#milestone-12-paired-clean--attribution-evidence) |
+| Milestone 13: Failure Stress Experiment | Completed | [Milestone 13](#milestone-13-failure-stress-experiment) |
 
 ## What We Are Testing
 
@@ -89,6 +90,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F10 | CUDA copy attribution needs explicit agent context. | Milestone 11B changed `agent_001`, `agent_002`, and `agent_005` from SGLang-only rows into rows with profiler-visible HtoD copy windows. | Missing HtoD columns were mostly attribution weakness, not proof that no copy happened. | Carry agent/session context deeper into SGLang KV movement events and preserve batched session ownership. | New |
 | F11 | Missing green bars can be profiler-coverage artifacts. | In Milestone 11B, `agent_003` had SGLang host-to-device load from `44435.564 -> 44496.473 ms`, but the torch profiler stopped at `44407.848 ms`. In Milestone 11C, a later profiler stop showed `agent_003` with `528` HtoD events. | "No green bar" does not always mean "no CUDA copy." It can mean the profiler was not recording when the copy happened. | Reports now include profiler window status and missing-HtoD reason columns. | New |
 | F12 | Early CUDA copy is not enough for prefetch success. | In Milestone 11C300, CUDA copy was ready before replay for `6 / 6` sessions, but full hint completion succeeded for only `5 / 6`, replay reloaded KV for `6 / 6`, and clean success was `0 / 6`. | Even when CUDA copy happens before replay, the software-managed path can still fail because the full hint path is late, replay reloads KV again, or prefetched KV is not protected/reused predictably. | The need is not just "copy memory earlier"; the system must copy the right KV, finish predictably, protect residency, and make reuse visible/enforceable. | Strong |
+| F13 | Failure-heavy stress shows software hints are not deadline-predictable. | Milestone 13 manager stress: clean `oracle_direct_load` improved avg replay TTFT by `629.573 ms` vs `no_prefetch`, but clean outcomes were `late_prefetch: 32 / 32`. Profiled attribution showed `cuda_ready=0 / 32`, `hint_done=0 / 32`, `replay_reloaded=32 / 32`, `clean_success=0 / 32`. | Hints can still help average latency while failing the actual deadline/residency requirement for every session under pressure. | This is the strongest case so far for deadline-aware migration, prefetch protection, and hardware-visible progress/telemetry. | Strong |
 
 Main deduction from the latest timeline:
 
@@ -2602,7 +2604,7 @@ It is a useful case showing why raw copy visibility is only one part of the pref
 
 ### Milestone 12: Paired Clean + Attribution Evidence
 
-Status: implemented and ready to run on EC2.
+Status: completed on EC2 with both smoke and manager stress presets.
 
 What it is:
 
@@ -2773,6 +2775,150 @@ If a value comes from the clean run, it can support performance claims.
 If a value comes from the profiled run, it supports mechanism/attribution claims.
 ```
 
+### Milestone 13: Failure Stress Experiment
+
+Status: implemented and ready to run on EC2.
+
+What it is:
+
+```text
+Milestone 13 reuses the Milestone 12 paired report,
+but runs a harsher traffic shape designed to create prefetch failures.
+
+The goal is not to show the best-case speedup.
+The goal is to show where software-managed hinting breaks down under pressure.
+```
+
+Why we need it:
+
+```text
+The richer Milestone 12 run already showed:
+  CUDA copy ready before replay: 3 / 6
+  full hint done before replay: 4 / 6
+  replay reloaded KV: 6 / 6
+  clean success: 0 / 6
+
+Milestone 13 pushes harder so failures become more common and easier to explain.
+```
+
+What we observed in the manager stress run:
+
+```text
+Clean performance:
+  no_prefetch avg replay TTFT:        4204.751 ms
+  oracle_direct_load avg replay TTFT: 3575.177 ms
+  average improvement:                629.573 ms / 14.97%
+
+Clean hint outcomes:
+  no_prefetch:         no_hint: 32
+  oracle_direct_load:  late_prefetch: 32
+
+Profiled attribution:
+  sessions: 32
+  CUDA copy ready before replay: 0 / 32
+  full hint done before replay: 0 / 32
+  replay reloaded KV: 32 / 32
+  clean success: 0 / 32
+  timeline late prefetch: 32 / 32
+```
+
+Simple deduction:
+
+```text
+Even under a best-effort oracle direct-load path,
+every hinted session missed the prefetch deadline under stress.
+
+Average TTFT still improved because some work was shifted or overlapped,
+but the mechanism was not predictable:
+  no hint finished on time,
+  no CUDA copy was ready before replay,
+  every replay still reloaded KV.
+
+This is the core hardware argument:
+software can issue hints,
+but the memory movement path needs deadline-aware, priority-aware,
+and residency-aware enforcement to make those hints reliable.
+```
+
+Important profiling note:
+
+```text
+The manager profiled run is for mechanism evidence only.
+torch.profiler added large overhead.
+Use the clean run for TTFT claims.
+
+The profiled report still matters because it shows the internal outcome:
+all selected sessions were late and all replays reloaded KV.
+```
+
+Failure conditions we intentionally create:
+
+| Stress knob | Setting | Why it creates failures |
+| --- | --- | --- |
+| Short tool waits | `100-700 ms` | The prefetch window is tiny. |
+| Bursty arrivals | `10-60 ms` between sessions | Many agents need service at nearly the same time. |
+| More sessions | `32` sessions in manager preset | Many hints compete for the same serving path. |
+| Larger prompts | `1536` and `2048` tokens | Larger KV footprint and more cache pressure. |
+| Delayed hints | `HINT_DELAY_MS=200` | Emulates runtime/software overhead before prefetch starts. |
+| Tight oracle lead | `ORACLE_LEAD_MS=100` | Even oracle-style direct load has little time to finish. |
+| Higher concurrency | `TRAFFIC_CONCURRENCY=16` | Hints compete with active model work and replays. |
+
+What success looks like:
+
+```text
+We expect more rows like:
+  late_prefetch
+  too_early_or_unprotected
+  copy_ready_but_replay_reloaded
+  hint_done_but_no_cuda_ready
+
+These are useful failures.
+They support the argument that generic DMA/copy paths do not understand
+agent deadline, priority, residency, or reuse context.
+```
+
+Smoke run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+STRESS_PRESET=smoke \
+bash scripts/run_milestone13_failure_stress.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Manager stress run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+STRESS_PRESET=manager \
+bash scripts/run_milestone13_failure_stress.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Main output:
+
+```text
+artifacts/results/latest_paired_report.html
+artifacts/results/milestone13_failure_stress/paired_report/paired_report.html
+```
+
+How to read the result:
+
+```text
+Clean Performance Summary:
+  use this for TTFT and latency numbers
+
+Timeline + Checkpoints:
+  use this to show whether KV movement was ready before replay,
+  whether the full hint request completed on time,
+  and whether replay still reloaded KV
+
+Key Observations Per Session:
+  use this as the manager-facing explanation of each failure case
+```
+
 ## Directory Layout
 
 ```text
@@ -2799,6 +2945,7 @@ sglang_direct_kv/
     run_milestone10_dma_timeline.sh
     run_milestone11_agentic_timeline.sh
     run_milestone12_paired_evidence.sh
+    run_milestone13_failure_stress.sh
     run_agentic_traffic_workload.py
     build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py
