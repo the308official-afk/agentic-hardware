@@ -14,6 +14,9 @@ See also: [Hardware Emulation Environment](HARDWARE_EMULATION_ENVIRONMENT.md)
 
 Direct SGLang testbed: [sglang_direct_kv](sglang_direct_kv/README.md)
 
+Realistic AgentBench/DeepAgents path: see Milestones 16-19 in
+[sglang_direct_kv](sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct).
+
 ## Workload Scenario
 
 Use coding-agent-style workflows inspired by SWE-bench:

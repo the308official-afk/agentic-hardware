@@ -27,6 +27,8 @@ class AgentSession:
     tool_wait_ms: int
     prompt_tokens: int
     priority: str
+    prompt: str | None = None
+    replay_prompt: str | None = None
 
 
 def trace_path() -> Path | None:
@@ -179,6 +181,34 @@ def build_sessions(
     return sessions
 
 
+def read_replay_workload(path: Path) -> list[AgentSession]:
+    sessions: list[AgentSession] = []
+    with path.open("r", encoding="utf-8") as f:
+        for idx, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            session_id = str(row.get("session_id") or f"agentbench_{idx:03d}")
+            prompt = str(row.get("prompt") or "")
+            replay_prompt = str(row.get("replay_prompt") or prompt)
+            prompt_tokens = int(row.get("prompt_tokens") or max(1, len(prompt.split())))
+            sessions.append(
+                AgentSession(
+                    session_id=session_id,
+                    arrival_ms=int(row.get("arrival_ms") or 0),
+                    tool_wait_ms=int(row.get("tool_wait_ms") or 0),
+                    prompt_tokens=prompt_tokens,
+                    priority=str(row.get("priority") or "normal"),
+                    prompt=prompt,
+                    replay_prompt=replay_prompt,
+                )
+            )
+    if not sessions:
+        raise ValueError(f"no replay sessions found in {path}")
+    return sessions
+
+
 async def main_async() -> None:
     parser = argparse.ArgumentParser(description="Run overlapping agent sessions with tool waits and replay hints.")
     parser.add_argument("--base-url", default="http://127.0.0.1:30000/v1")
@@ -202,6 +232,12 @@ async def main_async() -> None:
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--out", default="artifacts/results/agentic_traffic_metrics.jsonl")
+    parser.add_argument(
+        "--workload-jsonl",
+        type=Path,
+        default=None,
+        help="Optional replay workload built from real AgentBench/DeepAgents traces.",
+    )
     args = parser.parse_args()
 
     output_path = Path(args.out)
@@ -212,16 +248,19 @@ async def main_async() -> None:
     prompt_token_values = parse_int_list(args.prompt_token_list)
     arrival_gap_range_ms = parse_range(args.arrival_gap_range_ms)
     tool_wait_range_ms = parse_range(args.tool_wait_range_ms)
-    sessions = build_sessions(
-        session_count=args.session_count,
-        arrival_gap_ms=args.arrival_gap_ms,
-        tool_wait_values=tool_wait_values,
-        prompt_token_values=prompt_token_values,
-        randomize=args.randomize_traffic,
-        seed=args.seed,
-        arrival_gap_range_ms=arrival_gap_range_ms,
-        tool_wait_range_ms=tool_wait_range_ms,
-    )
+    if args.workload_jsonl is not None:
+        sessions = read_replay_workload(args.workload_jsonl)
+    else:
+        sessions = build_sessions(
+            session_count=args.session_count,
+            arrival_gap_ms=args.arrival_gap_ms,
+            tool_wait_values=tool_wait_values,
+            prompt_token_values=prompt_token_values,
+            randomize=args.randomize_traffic,
+            seed=args.seed,
+            arrival_gap_range_ms=arrival_gap_range_ms,
+            tool_wait_range_ms=tool_wait_range_ms,
+        )
 
     write_trace_event(
         {
@@ -238,6 +277,7 @@ async def main_async() -> None:
             "prompt_token_list": prompt_token_values,
             "hint_delay_ms": args.hint_delay_ms,
             "oracle_lead_ms": args.oracle_lead_ms,
+            "workload_jsonl": str(args.workload_jsonl) if args.workload_jsonl else "",
         }
     )
 
@@ -395,8 +435,8 @@ async def main_async() -> None:
 
         async def run_session(session: AgentSession) -> None:
             await sleep_until(session.arrival_ms)
-            base_prompt = make_prompt(session.session_id, session.prompt_tokens)
-            replay_prompt = make_prompt(session.session_id, session.prompt_tokens, replay=True)
+            base_prompt = session.prompt or make_prompt(session.session_id, session.prompt_tokens)
+            replay_prompt = session.replay_prompt or make_prompt(session.session_id, session.prompt_tokens, replay=True)
             trace_and_mark(
                 {
                     "event": "agent.session_arrival",

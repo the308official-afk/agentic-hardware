@@ -33,6 +33,10 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 13B: Green-Bar Failure Stress | Completed | [Milestone 13B](#milestone-13b-green-bar-failure-stress) |
 | Milestone 14: Lightweight KV Copy Telemetry | Completed | [Milestone 14](#milestone-14-lightweight-kv-copy-telemetry) |
 | Milestone 15: Targeted DMA/HtoD Validation | Completed | [Milestone 15](#milestone-15-targeted-dmahtod-validation) |
+| Milestone 16: AgentBench -> SGLang Direct | Ready | [Milestone 16](#milestone-16-agentbench--sglang-direct) |
+| Milestone 17: Real Trace Replay Workload | Ready | [Milestone 17](#milestone-17-real-trace-replay-workload) |
+| Milestone 18: Real Prompt Prefetch Modes | Ready | [Milestone 18](#milestone-18-real-prompt-prefetch-modes) |
+| Milestone 19: Realistic Manager Report | Ready | [Milestone 19](#milestone-19-realistic-manager-report) |
 
 ## What We Are Testing
 
@@ -3355,6 +3359,265 @@ The report also keeps Timeline Sanity Checks:
   replay_reloaded_kv
 ```
 
+### Milestone 16: AgentBench -> SGLang Direct
+
+Status: ready to run on EC2/GPU.
+
+What it is:
+
+```text
+Run the realistic SWE-bench Pro -> AgentBench -> Deep Agents harness against
+SGLang directly, with Dynamo removed.
+
+Runtime path:
+  SWE-bench Pro
+  -> AgentBench
+  -> Deep Agents
+  -> SGLang OpenAI-compatible endpoint
+  -> direct KV trace/reporting
+```
+
+Why we need it:
+
+```text
+The synthetic workload proves the mechanism.
+This milestone proves the system can connect to real agent traffic:
+  real SWE-bench tasks
+  real repo checkout
+  real Deep Agents planning/execution/review turns
+  real tool-capable prompts
+  real SGLang serving
+  real KV trace hooks
+```
+
+Important design choice:
+
+```text
+Dynamo is not used.
+
+The old AgentBench code normally sends Dynamo-style nvext fields.
+For this direct-SGLang path, the wrapper patches only the ChatOpenAI client
+construction point so requests carry:
+
+  custom_params.agentic_kv
+
+That gives SGLang trace hooks session/phase context without requiring Dynamo.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=0 \
+bash scripts/run_milestone16_agentbench_sglang_direct.sh \
+  Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Recommended first run:
+
+```text
+START_INDEX=0
+END_INDEX=0
+RUN_PREFLIGHT=1
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=3
+```
+
+Useful knobs:
+
+```bash
+AGENTBENCH_ROOT=~/kv_cache_offloading
+START_INDEX=0
+END_INDEX=2
+RUN_PREFLIGHT=1
+AGENTBENCH_INSTALL_DEPS=1
+PROMPT_EVOLUTION_VALUE_CHAR_LIMIT=50000
+MAX_TOTAL_TOKENS=4096
+```
+
+Important events to observe:
+
+```text
+SGLang /model_info becomes ready
+Deep Agents tool-loop preflight passes
+AgentBench task produces a run directory
+SGLang trace file is written
+AgentBench direct report is written
+Replay workload is extracted
+```
+
+Outputs:
+
+```text
+artifacts/results/milestone16_agentbench_sglang_direct/report/agentbench_sglang_direct_report.html
+artifacts/results/latest_agentbench_sglang_direct_report.html
+artifacts/results/latest_agentbench_replay_workload.jsonl
+```
+
+What this milestone does not prove yet:
+
+```text
+It does not compare prefetch modes yet.
+It proves the realistic live traffic path works without Dynamo.
+```
+
+### Milestone 17: Real Trace Replay Workload
+
+Status: ready.
+
+What it is:
+
+```text
+Convert real AgentBench/Deep Agents model-turn traces into replayable sessions.
+Each replay session contains:
+  prompt from one real model turn
+  replay_prompt from the next real model turn
+  observed gap between those turns
+  task id, repo, phase names, and priority metadata
+```
+
+Why we need it:
+
+```text
+Deep Agents owns the internal tool loop.
+That makes live tool-gap prefetch hard to control directly on day one.
+
+Trace replay gives us realistic prompts and realistic agent phase structure,
+while keeping the timing/prefetch policy controlled enough for comparison.
+```
+
+Run manually if needed:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/extract_agentbench_trace_replay_workload.py \
+  --index-csv artifacts/results/milestone16_agentbench_sglang_direct/agentbench_sglang_task_index.csv \
+  --out-jsonl artifacts/results/milestone16_agentbench_sglang_direct/agentbench_replay_workload.jsonl \
+  --out-csv artifacts/results/milestone16_agentbench_sglang_direct/agentbench_replay_workload.csv \
+  --max-sessions 24
+```
+
+Important events to observe:
+
+```text
+The extractor finds AgentBench phase request/response pairs.
+The JSONL workload has real prompts.
+The workload has enough rows for a replay experiment.
+```
+
+### Milestone 18: Real Prompt Prefetch Modes
+
+Status: ready to run on EC2/GPU.
+
+What it is:
+
+```text
+Use the real AgentBench replay workload from Milestone 16/17, then compare:
+
+  no_prefetch
+  request_warm
+  direct_load
+  oracle_direct_load
+
+This is the controlled prefetch experiment using real SWE-bench/DeepAgents
+prompts instead of synthetic filler prompts.
+```
+
+Why we need it:
+
+```text
+Milestone 16 gives live realism.
+Milestone 18 gives clean A/B comparison.
+
+Together:
+  live run shows the harness is real
+  replay run shows the prefetch policy impact
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+WORKLOAD_JSONL=artifacts/results/latest_agentbench_replay_workload.jsonl \
+MODES="no_prefetch request_warm direct_load oracle_direct_load" \
+ORACLE_LEAD_MS=500 \
+TRAFFIC_CONCURRENCY=4 \
+bash scripts/run_milestone18_agentbench_trace_replay_modes.sh \
+  Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Important events to observe:
+
+```text
+Each mode starts a fresh SGLang server.
+The same real AgentBench prompts are replayed for every mode.
+Hint outcomes are classified for each mode.
+Traffic summary shows avg replay TTFT and outcomes.
+```
+
+Outputs:
+
+```text
+artifacts/results/milestone18_agentbench_trace_replay_modes/traffic_summary.html
+artifacts/results/latest_agentbench_replay_mode_summary.html
+artifacts/results/latest_agentbench_replay_mode_summary.csv
+```
+
+### Milestone 19: Realistic Manager Report
+
+Status: ready as a report path.
+
+What it is:
+
+```text
+A manager-facing evidence package combining:
+  live AgentBench -> SGLang direct report
+  real prompt replay workload
+  prefetch-mode comparison summary
+  SGLang KV movement trace summary
+```
+
+Why we need it:
+
+```text
+This lets us tell the full story:
+
+1. The workload is realistic.
+2. Agent/tool pauses naturally create prefetch windows.
+3. Software-only prefetch can help, but can also be late or wasted.
+4. Direct KV movement gives better mechanism visibility.
+5. The missing piece is enforceable, deadline-aware, residency-aware hardware/runtime support.
+```
+
+Current report files:
+
+```text
+artifacts/results/latest_agentbench_sglang_direct_report.html
+artifacts/results/latest_agentbench_replay_mode_summary.html
+artifacts/results/latest_agentbench_replay_workload.csv
+```
+
+Simple interpretation:
+
+```text
+Milestone 16 answers:
+  Can we run real AgentBench/DeepAgents traffic directly on SGLang?
+
+Milestone 18 answers:
+  On real AgentBench prompts, how do the prefetch modes compare?
+
+The next deeper step after this is live tool-gap hooks inside Deep Agents,
+so hints can be issued exactly when a real tool starts and evaluated exactly
+when that tool returns.
+```
+
 ## Directory Layout
 
 ```text
@@ -3385,6 +3648,12 @@ sglang_direct_kv/
     run_milestone13b_green_bar_failure_stress.sh
     run_milestone14_lightweight_copy_telemetry.sh
     run_milestone15_targeted_dma_validation.sh
+    run_milestone16_agentbench_sglang_direct.sh
+    run_milestone18_agentbench_trace_replay_modes.sh
+    run_agentbench_sglang_task.py
+    run_agentbench_sglang_preflight.py
+    extract_agentbench_trace_replay_workload.py
+    summarize_agentbench_sglang_direct.py
     run_agentic_traffic_workload.py
     build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py
