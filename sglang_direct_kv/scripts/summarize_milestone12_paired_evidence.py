@@ -425,6 +425,11 @@ def write_timeline_md(
             "## Timeline Layers",
             "",
             *md_table(timeline_layers_rows()),
+            "## Timeline Sanity Checks",
+            "",
+            "Green copy windows should usually be inside the purple hint request. Hint/replay overlap means the software hint path was still running when replay arrived.",
+            "",
+            *md_table(timeline_sanity_rows(selected_rows)),
             "## Prefetch Checkpoints",
             "",
             *md_table(prefetch_checkpoint_rows()),
@@ -491,11 +496,11 @@ def build_timeline_svg(
     else:
         start, end = 0.0, 1.0
     span = max(1.0, end - start)
-    width = 1500
-    left = 225
-    right = 55
-    row_h = 84
-    top = 78
+    width = 1600
+    left = 255
+    right = 60
+    row_h = 138
+    top = 90
     height = top + row_h * max(1, len(selected)) + 104
     plot_w = width - left - right
     colors = {
@@ -512,6 +517,20 @@ def build_timeline_svg(
 
     def x_pos(ms: float) -> float:
         return left + (ms - start) / span * plot_w
+
+    def lane(kind: str) -> tuple[int, int, str]:
+        lanes = {
+            "initial": (8, 18, "initial"),
+            "tool_wait": (30, 70, "tool wait"),
+            "hint_submitted": (33, 20, "hint"),
+            "hint_request": (34, 18, "hint request"),
+            "sglang_copy": (59, 14, "SGLang KV"),
+            "telemetry_copy": (57, 18, "KV"),
+            "torch_copy": (79, 18, "HtoD"),
+            "replay_due": (28, 94, "due"),
+            "replay": (104, 18, "replay"),
+        }
+        return lanes.get(kind, (34, 18, kind))
 
     def layer_order(item: dict[str, Any]) -> int:
         order = {
@@ -541,20 +560,42 @@ def build_timeline_svg(
         y = top + row_index[sid] * row_h
         row = row_by_session.get(sid, {})
         status_label, status_color = timeline_status(row)
-        svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
+        svg.append(f'<text x="10" y="{y + 17}" font-weight="700">{html.escape(sid)}</text>')
         svg.append(
-            f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>'
+            f'<text x="10" y="{y + 38}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>'
         )
-        svg.append(f'<line x1="{left}" y1="{y + 12}" x2="{left + plot_w}" y2="{y + 12}" stroke="#f3f4f6"/>')
-        svg.append(f'<line x1="{left}" y1="{y + 48}" x2="{left + plot_w}" y2="{y + 48}" stroke="#f9fafb"/>')
-        prefetch_done = to_float(row.get("torch_copy_end_ms")) or to_float(row.get("sglang_copy_end_ms"))
+        overlap_ms = as_float(row, "hint_replay_overlap_ms")
+        if overlap_ms > 0:
+            svg.append(f'<text x="10" y="{y + 59}" font-size="12" fill="#b91c1c" font-weight="700">overlap {overlap_ms:.0f} ms</text>')
+        for label, offset in (("hint", 47), ("copy", 70), ("replay", 117)):
+            svg.append(f'<text x="{left - 8}" y="{y + offset}" text-anchor="end" font-size="10" fill="#64748b">{label}</text>')
+        for offset in (20, 54, 77, 101, 126):
+            svg.append(f'<line x1="{left}" y1="{y + offset}" x2="{left + plot_w}" y2="{y + offset}" stroke="#f8fafc"/>')
+        prefetch_done = to_float(row.get("visible_copy_end_ms")) or to_float(row.get("sglang_copy_end_ms"))
         replay_due = to_float(row.get("replay_due_ms"))
         margin = to_float(row.get("prefetch_margin_ms"))
+        hint_start_for_overlap = to_float(row.get("hint_request_start_ms"))
+        hint_end_for_overlap = to_float(row.get("hint_request_end_ms"))
+        replay_start_for_overlap = to_float(row.get("replay_start_ms"))
+        replay_end_for_overlap = to_float(row.get("replay_end_ms"))
+        if (
+            hint_start_for_overlap is not None
+            and hint_end_for_overlap is not None
+            and replay_start_for_overlap is not None
+            and replay_end_for_overlap is not None
+        ):
+            overlap_start = max(hint_start_for_overlap, replay_start_for_overlap)
+            overlap_end = min(hint_end_for_overlap, replay_end_for_overlap)
+            if overlap_end > overlap_start:
+                svg.append(
+                    f'<rect x="{x_pos(overlap_start):.1f}" y="{y + 28}" width="{max(2, x_pos(overlap_end) - x_pos(overlap_start)):.1f}" '
+                    'height="98" fill="#fecaca" opacity="0.45"><title>hint and replay overlap</title></rect>'
+                )
         if prefetch_done is not None and replay_due is not None and margin is not None:
             x_done = x_pos(prefetch_done)
             x_due = x_pos(replay_due)
-            y_margin = y + 48
-            y_label = y + 70
+            y_margin = y + 128
+            y_label = y + 136
             if margin >= 0:
                 svg.append(
                     f'<line x1="{x_done:.1f}" y1="{y_margin}" x2="{x_due:.1f}" y2="{y_margin}" '
@@ -569,7 +610,7 @@ def build_timeline_svg(
             else:
                 x1 = min(x_due, x_done)
                 x2 = max(x_due, x_done)
-                svg.append(f'<rect x="{x1:.1f}" y="{y + 3}" width="{max(2, x2 - x1):.1f}" height="40" fill="#fee2e2" opacity="0.7"/>')
+                svg.append(f'<rect x="{x1:.1f}" y="{y + 28}" width="{max(2, x2 - x1):.1f}" height="98" fill="#fee2e2" opacity="0.55"/>')
                 svg.append(
                     f'<line x1="{x_due:.1f}" y1="{y_margin}" x2="{x_done:.1f}" y2="{y_margin}" '
                     'stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>'
@@ -591,24 +632,24 @@ def build_timeline_svg(
         x2 = x_pos(float(item.get("end_ms", 0.0)))
         label = html.escape(str(item.get("label", kind)))
         if x1 == x2:
+            lane_y, lane_h, _ = lane(kind)
             stroke_width = 6 if kind == "replay_due" else 3
             svg.append(
-                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
+                f'<line x1="{x1:.1f}" y1="{y + lane_y}" x2="{x1:.1f}" y2="{y + lane_y + lane_h}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
             )
             if kind == "replay_due":
                 svg.append(
-                    f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>'
+                    f'<text x="{x1:.1f}" y="{y + 27}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>'
                 )
         else:
             display_x2 = x2
-            bar_y = y + 4
-            bar_h = 24
+            lane_y, lane_h, lane_label = lane(kind)
+            bar_y = y + lane_y
+            bar_h = lane_h
             opacity = "0.88"
             stroke = ""
             if kind in {"telemetry_copy", "torch_copy"}:
                 display_x2 = max(x2, x1 + 24)
-                bar_y = y
-                bar_h = 32
                 opacity = "1"
                 stroke = ' stroke="#f8fafc" stroke-width="3"'
             svg.append(
@@ -617,12 +658,12 @@ def build_timeline_svg(
             if kind in {"telemetry_copy", "torch_copy"}:
                 text_label = "KV" if kind == "telemetry_copy" else "HtoD"
                 svg.append(
-                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{text_label}</text>'
+                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{bar_y + 13}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{text_label}</text>'
                 )
             elif kind == "sglang_copy" and x2 - x1 > 45:
                 text_label = "KV load" if kind == "sglang_copy" else "HtoD"
                 svg.append(
-                    f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{text_label}</text>'
+                    f'<text x="{(x1 + x2) / 2:.1f}" y="{bar_y + 11}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{text_label}</text>'
                 )
     legend_x = left
     legend_y = height - 32
@@ -656,6 +697,7 @@ def visible_copy_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "telemetry_events": row.get("telemetry_h2d_copy_events", ""),
                 "torch_h2d_events": row.get("torch_h2d_copy_events", ""),
                 "torch_h2d_bytes": row.get("torch_h2d_bytes", ""),
+                "copy_inside_hint": yes_no(row.get("visible_copy_inside_hint")),
                 "replay_due_ms": row.get("replay_due_ms", ""),
                 "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
             }
@@ -695,7 +737,7 @@ def timeline_layers_rows() -> list[dict[str, Any]]:
         },
         {
             "Layer": "purple hint_request",
-            "Meaning": "The software request we currently send to SGLang to trigger KV load-back.",
+            "Meaning": "The software request we currently send to SGLang to trigger KV load-back. It has its own lane above the copy lane.",
             "Why it matters": "This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.",
         },
         {
@@ -707,6 +749,11 @@ def timeline_layers_rows() -> list[dict[str, Any]]:
             "Layer": "dark green torch_copy",
             "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short bars are visually widened so they are easy to see.",
             "Why it matters": "This is the heavier CUDA-level validation source. Use it on small runs to validate that SGLang KV-copy telemetry maps to real CUDA HtoD activity.",
+        },
+        {
+            "Layer": "red replay",
+            "Meaning": "The real agent replay request. It has its own lower lane so it does not visually merge with the purple hint request.",
+            "Why it matters": "If the purple hint request overlaps the red replay in time, the prefetch path was still running when the agent needed to resume.",
         },
         {
             "Layer": "black replay_due",
@@ -760,6 +807,21 @@ def checkpoint_result_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{key: row.get(key, "") for key in keys} for row in rows]
 
 
+def timeline_sanity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "session_id": row.get("session_id", ""),
+            "green_inside_purple": yes_no(row.get("visible_copy_inside_hint")),
+            "light_green_inside_purple": yes_no(row.get("telemetry_copy_inside_hint")),
+            "dark_green_inside_purple": yes_no(row.get("torch_copy_inside_hint")),
+            "hint_overlaps_replay": yes_no(row.get("hint_overlaps_replay")),
+            "hint_replay_overlap_ms": row.get("hint_replay_overlap_ms", ""),
+            "replay_reloaded_kv": yes_no(row.get("replay_reloaded_kv")),
+        }
+        for row in rows
+    ]
+
+
 def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -782,6 +844,8 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "tool_wait_ms",
         "prompt_tokens",
         "hint_submitted_ms",
+        "hint_request_start_ms",
+        "hint_request_end_ms",
         "sglang_copy_start_ms",
         "sglang_copy_end_ms",
         "telemetry_copy_start_ms",
@@ -801,6 +865,13 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "profiler_end_ms",
         "profiler_stop_reason",
         "replay_due_ms",
+        "replay_start_ms",
+        "replay_end_ms",
+        "hint_replay_overlap_ms",
+        "hint_overlaps_replay",
+        "telemetry_copy_inside_hint",
+        "torch_copy_inside_hint",
+        "visible_copy_inside_hint",
         "prefetch_margin_ms",
         "late_prefetch",
         "kv_copy_ready_before_replay",
@@ -901,10 +972,16 @@ def write_html(
         lines.append("</div></div>")
         lines.append('<div class="panel"><h2>Timeline</h2>')
         lines.append(
-            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Bright green is lightweight SGLang KV-copy telemetry. Dark green is optional torch-profiler CUDA HtoD validation. Green bars are drawn on top with a minimum visual width so short copy windows are not lost at full timeline scale. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>'
+            '<p class="caption">How to read this: each agent now has separate lanes. Gray is the tool-wait window. Purple is the software hint request. Bright green is lightweight SGLang KV-copy telemetry. Dark green is optional torch-profiler CUDA HtoD validation. The green copy lanes should normally sit within the purple hint time window. Red is the replay request on its own lower lane, so purple/red overlap means the hint was still running when replay started. The black line is replay due.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
+        sanity_rows = timeline_sanity_rows(selected_timeline_rows)
+        if sanity_rows:
+            lines.append('<div class="panel"><h2>Timeline Sanity Checks</h2>')
+            lines.append('<p class="caption">This table makes the visual invariants explicit. For hint-side KV movement, green copy windows should usually be inside the purple hint request. If hint overlaps replay, the software prefetch path was still running when the real agent turn arrived.</p>')
+            lines.append(html_table(sanity_rows))
+            lines.append("</div>")
         copy_rows = visible_copy_rows(selected_timeline_rows)
         if copy_rows:
             lines.append('<div class="panel"><h2>Visible KV Copy Telemetry</h2>')
@@ -1063,6 +1140,7 @@ def copy_latest_reports(out_root: Path, latest_root: Path) -> None:
         "paired_attribution_summary.csv": "latest_paired_attribution_summary.csv",
         "paired_session_evidence.csv": "latest_paired_session_evidence.csv",
         "paired_timeline_summary.csv": "latest_paired_timeline_summary.csv",
+        "paired_timeline_sanity_checks.csv": "latest_paired_timeline_sanity_checks.csv",
         "paired_checkpoint_results.csv": "latest_paired_checkpoint_results.csv",
         "paired_key_observations.csv": "latest_paired_key_observations.csv",
         "paired_session_details.csv": "latest_paired_session_details.csv",
@@ -1120,6 +1198,7 @@ def main() -> None:
     write_csv(out_root / "paired_attribution_summary.csv", sections["Profiled Attribution Summary"])
     write_csv(out_root / "paired_session_evidence.csv", sections["Paired Session Evidence"])
     write_csv(out_root / "paired_timeline_summary.csv", timeline_summary_rows(attribution_rows))
+    write_csv(out_root / "paired_timeline_sanity_checks.csv", timeline_sanity_rows(selected_timeline_rows))
     write_csv(out_root / "paired_checkpoint_results.csv", checkpoint_result_rows(selected_timeline_rows))
     write_csv(out_root / "paired_key_observations.csv", key_observation_rows(selected_timeline_rows))
     write_csv(out_root / "paired_session_details.csv", session_detail_rows(selected_timeline_rows))
@@ -1131,6 +1210,7 @@ def main() -> None:
                 "timeline": {
                     "summary": timeline_summary_rows(attribution_rows),
                     "layers": timeline_layers_rows(),
+                    "sanity_checks": timeline_sanity_rows(selected_timeline_rows),
                     "prefetch_checkpoints": prefetch_checkpoint_rows(),
                     "checkpoint_results": checkpoint_result_rows(selected_timeline_rows),
                     "key_observations": key_observation_rows(selected_timeline_rows),

@@ -32,6 +32,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 13: Failure Stress Experiment | Completed | [Milestone 13](#milestone-13-failure-stress-experiment) |
 | Milestone 13B: Green-Bar Failure Stress | Completed | [Milestone 13B](#milestone-13b-green-bar-failure-stress) |
 | Milestone 14: Lightweight KV Copy Telemetry | Completed | [Milestone 14](#milestone-14-lightweight-kv-copy-telemetry) |
+| Milestone 15: Targeted DMA/HtoD Validation | Completed | [Milestone 15](#milestone-15-targeted-dmahtod-validation) |
 
 ## What We Are Testing
 
@@ -96,6 +97,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F14 | Green-bar stress gives both CUDA-copy visibility and failure evidence. | Milestone 13B captured visible CUDA HtoD bars in `4 / 12` sessions while still showing `late_prefetch: 12 / 12`, `replay_reloaded=12 / 12`, and `clean_success=0 / 12`. | The report now shows the concrete host-to-device copy windows for some agents, while still proving that the software hint path missed every replay deadline under stress. | Use this report as the manager-facing visual bridge between SGLang-level KV movement and CUDA-level data movement. | Strong |
 | F15 | Full torch-profiler traces do not scale to large timelines. | 32-session profiler traces can produce hundreds of thousands of unrelated CUDA/kernel events, while we only need per-agent KV movement windows. | Large profiler traces make reports slow and can still miss late sessions if the profiler window ends early. | Use lightweight SGLang KV-copy telemetry for large runs, and use short torch-profiler runs only to validate that this telemetry maps to real CUDA HtoD movement. | Strong |
 | F16 | Lightweight KV-copy telemetry scales to all sessions in a 32-session stress run. | Milestone 14 captured lightweight KV-copy telemetry for `32 / 32` sessions with `0` torch-profiler files. The telemetry stream had `2848` compact rows. | We can now show green KV movement bars for larger traffic without collecting massive unrelated CUDA traces. | Use movement-only telemetry as the default evidence path, then use small torch-profiler runs as CUDA validation. | New |
+| F17 | Targeted profiler validation can recover dark-green CUDA HtoD bars. | Milestone 15 captured `1` torch-profiler trace, `31941` CUDA events, and profiler-attributed HtoD rows for `3 / 6` sessions. For those sessions, the sanity table showed green copy bars were inside the purple hint window. | This validates that the lightweight SGLang KV-copy telemetry corresponds to lower-level CUDA HtoD activity in small runs. | Use Milestone 15 as the dark-green validation companion to Milestone 14's scalable light-green telemetry. | New |
 
 Main deduction from the latest timeline:
 
@@ -3173,6 +3175,113 @@ Use Milestone 13B or smaller torch-profiler runs to validate that the
 SGLang KV-copy telemetry corresponds to real CUDA HtoD movement.
 ```
 
+### Milestone 15: Targeted DMA/HtoD Validation
+
+Status: completed on EC2.
+
+What it is:
+
+```text
+Milestone 15 is the small validation run for dark-green CUDA HtoD bars.
+
+Milestone 14 scales to many sessions by using lightweight SGLang KV-copy
+telemetry only.
+
+Milestone 15 turns torch.profiler back on, but keeps the run small and
+starts profiling near the hint-side KV host-to-device load path.
+```
+
+Why we need it:
+
+```text
+Light green bars show:
+  SGLang executed the KV host-to-device load path.
+
+Dark green bars show:
+  torch.profiler observed CUDA host-to-device transfer events nearby.
+
+The dark-green signal is closer to real GPU/DMA traffic, but it is too
+expensive to use for large traffic runs.
+```
+
+What changed:
+
+```text
+The torch profiler can now be started with filters:
+
+AGENTIC_KV_TORCH_PROFILER_START_EVENTS=hostpool.load_to_device_per_layer
+AGENTIC_KV_TORCH_PROFILER_START_AGENT_PHASE=hint_prefetch
+
+This means:
+  do not start profiling at the first random SGLang event.
+  start profiling when the hint-side KV load path begins.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+bash scripts/run_milestone15_targeted_dma_validation.sh Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Default shape:
+
+```text
+SESSION_COUNT=6
+ATTRIBUTION_TORCH_PROFILER_ENABLE=1
+AGENTIC_KV_TORCH_PROFILER_STOP_AFTER_EVENTS=220
+AGENTIC_KV_TORCH_PROFILER_START_EVENTS=hostpool.load_to_device_per_layer
+AGENTIC_KV_TORCH_PROFILER_START_AGENT_PHASE=hint_prefetch
+```
+
+Completed EC2 result:
+
+```text
+Profile files:                  1
+CUDA events:                31941
+Correlated windows:           180
+Sessions with light-green KV telemetry: 3 / 6
+Sessions with dark-green CUDA HtoD:     3 / 6
+Green inside purple for visible rows:   yes
+Hint/replay overlap observed: agent_000, 126.318 ms
+Replay reloaded KV:                    6 / 6
+Clean success:                         0 / 6
+```
+
+Important:
+
+```text
+Do not use Milestone 15 TTFT as performance evidence.
+torch.profiler export can add large latency overhead.
+
+Use Milestone 15 for mechanism evidence:
+  light green SGLang KV telemetry
+  dark green CUDA HtoD validation
+  whether green bars are inside purple hint windows
+  whether purple hint overlaps red replay
+
+Use Milestone 14 for larger clean timeline behavior.
+```
+
+Timeline clarity changes:
+
+```text
+Each agent row now has separate lanes:
+  hint lane: purple software hint request
+  copy lane: light-green SGLang KV telemetry and dark-green CUDA HtoD
+  replay lane: red real replay request
+
+The report also includes Timeline Sanity Checks:
+  green_inside_purple
+  light_green_inside_purple
+  dark_green_inside_purple
+  hint_overlaps_replay
+  hint_replay_overlap_ms
+  replay_reloaded_kv
+```
+
 ## Directory Layout
 
 ```text
@@ -3202,6 +3311,7 @@ sglang_direct_kv/
     run_milestone13_failure_stress.sh
     run_milestone13b_green_bar_failure_stress.sh
     run_milestone14_lightweight_copy_telemetry.sh
+    run_milestone15_targeted_dma_validation.sh
     run_agentic_traffic_workload.py
     build_agentic_prefetch_timeline.py
     run_pressure_resume_workload.py

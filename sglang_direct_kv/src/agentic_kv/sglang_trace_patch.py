@@ -700,6 +700,35 @@ def _write_copy_telemetry(event: dict[str, Any] | None) -> None:
         f.write(json.dumps(event, sort_keys=True) + "\n")
 
 
+def _env_set(name: str) -> set[str]:
+    raw = os.environ.get(name, "")
+    return {item.strip() for item in re.split(r"[,\s]+", raw) if item.strip()}
+
+
+def _context_has_agent_phase(context: dict[str, Any], phase: str) -> bool:
+    if not phase:
+        return True
+    if context.get("agent_phase") == phase:
+        return True
+    req = context.get("request")
+    if isinstance(req, dict) and req.get("agent_phase") == phase:
+        return True
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list):
+        return any(isinstance(item, dict) and item.get("agent_phase") == phase for item in sessions)
+    return False
+
+
+def _should_start_torch_profiler(event_name: str, context: dict[str, Any]) -> bool:
+    start_events = _env_set("AGENTIC_KV_TORCH_PROFILER_START_EVENTS")
+    if start_events and event_name not in start_events:
+        return False
+    start_phase = os.environ.get("AGENTIC_KV_TORCH_PROFILER_START_AGENT_PHASE", "").strip()
+    if start_phase and not _context_has_agent_phase(context, start_phase):
+        return False
+    return True
+
+
 def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
     original = getattr(cls, method_name, None)
     if original is None or getattr(original, "_agentic_kv_wrapped", False):
@@ -736,7 +765,8 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                 context=start_kv_context,
             )
         )
-        maybe_start_torch_profiler(nvtx_name)
+        if _should_start_torch_profiler(event_name, start_kv_context):
+            maybe_start_torch_profiler(nvtx_name)
         try:
             with range_scope(nvtx_name):
                 result = original(self, *args, **kwargs)
