@@ -37,6 +37,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 17: Real Trace Replay Workload | Ready | [Milestone 17](#milestone-17-real-trace-replay-workload) |
 | Milestone 18: Real Prompt Prefetch Modes | Ready | [Milestone 18](#milestone-18-real-prompt-prefetch-modes) |
 | Milestone 19: Realistic Manager Report | Ready | [Milestone 19](#milestone-19-realistic-manager-report) |
+| Milestone 20: SWE-bench Trajectory Prompt Replay | Ready | [Milestone 20](#milestone-20-swe-bench-trajectory-prompt-replay) |
 
 ## What We Are Testing
 
@@ -3649,6 +3650,88 @@ so hints can be issued exactly when a real tool starts and evaluated exactly
 when that tool returns.
 ```
 
+### Milestone 20: SWE-bench Trajectory Prompt Replay
+
+Status: ready.
+
+What it is:
+
+```text
+Use real SWE-bench trajectory prompts as the request source for the existing
+paired-report experiment.
+
+This milestone changes only the prompt source:
+  synthetic prompts
+  -> real prompts from latest_swebench_trajectory_prompt_catalog.csv
+
+The rest stays the same:
+  clean performance run
+  profiled/lightweight attribution run
+  paired evidence report
+  same timeline/checkpoint/session-detail format as latest_paired_report.html
+```
+
+Why we need it:
+
+```text
+This makes the manager-facing report look almost identical to the synthetic
+paired report, while replacing toy prompts with real SWE-bench trajectory
+prompts.
+
+For now, tool waits are synthetic/speculated. Later, we can replace them with
+actual tool wait timestamps from the trajectory source.
+```
+
+Expected input:
+
+```text
+experiments/reports/latest_swebench_trajectory_prompt_catalog.csv
+
+The catalog must contain prompt_text_path or a similar prompt-path column.
+Each row points to a real prompt text file.
+```
+
+Run it:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+CATALOG_CSV=~/kv_cache_offloading/experiments/reports/latest_swebench_trajectory_prompt_catalog.csv \
+MAX_SESSIONS=6 \
+CLEAN_MODES="no_prefetch oracle_direct_load" \
+ATTRIBUTION_TORCH_PROFILER_ENABLE=0 \
+TOOL_WAIT_LIST_MS="250 500 900 1600 3000" \
+bash scripts/run_milestone20_swebench_trajectory_replay.sh \
+  Qwen/Qwen2.5-1.5B-Instruct
+```
+
+Important events to observe:
+
+```text
+The converter writes a real-prompt workload JSONL.
+Milestone 12 runs using WORKLOAD_JSONL instead of synthetic prompts.
+latest_paired_report.html is regenerated with the same paired-report format.
+latest_swebench_trajectory_paired_report.html is also written as a stable alias.
+```
+
+Outputs:
+
+```text
+artifacts/results/milestone20_swebench_trajectory_replay/swebench_trajectory_replay_workload.jsonl
+artifacts/results/latest_swebench_trajectory_replay_workload.jsonl
+artifacts/results/latest_paired_report.html
+artifacts/results/latest_swebench_trajectory_paired_report.html
+```
+
+Simple interpretation:
+
+```text
+Milestone 20 answers:
+  What happens when we keep the paired evidence experiment the same,
+  but replace synthetic prompts with real SWE-bench trajectory prompts?
+```
+
 ## Directory Layout
 
 ```text
@@ -3672,6 +3755,8 @@ sglang_direct_kv/
     run_milestone8_direct_load_design_space.sh
     run_milestone9_agentic_traffic.sh
     run_milestone9_oracle_lead_sweep.sh
+    extract_swebench_trajectory_prompt_workload.py
+    run_milestone20_swebench_trajectory_replay.sh
     run_milestone10_dma_timeline.sh
     run_milestone11_agentic_timeline.sh
     run_milestone12_paired_evidence.sh

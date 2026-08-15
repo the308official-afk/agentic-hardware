@@ -17,6 +17,7 @@ RANDOMIZE_TRAFFIC="${RANDOMIZE_TRAFFIC:-0}"
 RANDOM_SEED="${RANDOM_SEED:-7}"
 ARRIVAL_GAP_RANGE_MS="${ARRIVAL_GAP_RANGE_MS:-60 220}"
 TOOL_WAIT_RANGE_MS="${TOOL_WAIT_RANGE_MS:-250 2200}"
+WORKLOAD_JSONL="${WORKLOAD_JSONL:-}"
 
 mkdir -p artifacts "${RESULT_ROOT}"
 
@@ -86,6 +87,7 @@ run_mode() {
   echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
   echo "TOOL_WAIT_RANGE_MS=${TOOL_WAIT_RANGE_MS}"
   echo "PROMPT_TOKEN_LIST=${PROMPT_TOKEN_LIST}"
+  echo "WORKLOAD_JSONL=${WORKLOAD_JSONL}"
   echo "HINT_DELAY_MS=${HINT_DELAY_MS}"
   echo "ORACLE_LEAD_MS=${ORACLE_LEAD_MS}"
 
@@ -115,6 +117,10 @@ run_mode() {
     --concurrency "${TRAFFIC_CONCURRENCY}" \
     --out "${metrics}"
   )
+
+  if [[ -n "${WORKLOAD_JSONL}" ]]; then
+    traffic_args+=(--workload-jsonl "${WORKLOAD_JSONL}")
+  fi
 
   if [[ "${RANDOMIZE_TRAFFIC}" == "1" ]]; then
     traffic_args+=(
