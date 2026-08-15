@@ -3257,8 +3257,9 @@ Do not use Milestone 15 TTFT as performance evidence.
 torch.profiler export can add large latency overhead.
 
 Use Milestone 15 for mechanism evidence:
-  light green SGLang KV telemetry
-  dark green CUDA HtoD validation
+  one green copy-activity bar in the main timeline
+  dark green when CUDA HtoD validation exists
+  light green fallback when only SGLang KV telemetry exists
   whether green bars are inside purple hint windows
   whether purple hint overlaps red replay
 
@@ -3268,12 +3269,27 @@ Use Milestone 14 for larger clean timeline behavior.
 Timeline clarity changes:
 
 ```text
-Each agent row now has separate lanes:
-  hint lane: purple software hint request
-  copy lane: light-green SGLang KV telemetry and dark-green CUDA HtoD
-  replay lane: red real replay request
+Each agent row uses the compact overlapping style:
+  gray: tool wait
+  purple: software hint request
+  green: one visible KV copy-activity bar
+  black: replay due
+  red: real replay request
 
-The report also includes Timeline Sanity Checks:
+Purple and red may overlap intentionally.
+If they overlap, the software hint was still running when replay arrived.
+
+The chart does not draw separate SGLang, telemetry, and torch copy bars.
+It draws one green copy bar:
+  prefer dark green CUDA HtoD when available
+  otherwise use light green SGLang KV telemetry fallback
+
+The detailed source timings remain in the tables:
+  telemetry_copy_start_ms / telemetry_copy_end_ms
+  torch_copy_start_ms / torch_copy_end_ms
+  visible_copy_source
+
+The report also keeps Timeline Sanity Checks:
   green_inside_purple
   light_green_inside_purple
   dark_green_inside_purple

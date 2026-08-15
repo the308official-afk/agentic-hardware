@@ -496,11 +496,11 @@ def build_timeline_svg(
     else:
         start, end = 0.0, 1.0
     span = max(1.0, end - start)
-    width = 1600
-    left = 255
-    right = 60
-    row_h = 138
-    top = 90
+    width = 1500
+    left = 225
+    right = 55
+    row_h = 84
+    top = 78
     height = top + row_h * max(1, len(selected)) + 104
     plot_w = width - left - right
     colors = {
@@ -508,9 +508,7 @@ def build_timeline_svg(
         "tool_wait": "#d1d5db",
         "hint_submitted": "#7c3aed",
         "hint_request": "#a855f7",
-        "sglang_copy": "#f59e0b",
-        "telemetry_copy": "#22c55e",
-        "torch_copy": "#16a34a",
+        "copy_activity": "#16a34a",
         "replay_due": "#111827",
         "replay": "#dc2626",
     }
@@ -518,31 +516,15 @@ def build_timeline_svg(
     def x_pos(ms: float) -> float:
         return left + (ms - start) / span * plot_w
 
-    def lane(kind: str) -> tuple[int, int, str]:
-        lanes = {
-            "initial": (8, 18, "initial"),
-            "tool_wait": (30, 70, "tool wait"),
-            "hint_submitted": (33, 20, "hint"),
-            "hint_request": (34, 18, "hint request"),
-            "sglang_copy": (59, 14, "SGLang KV"),
-            "telemetry_copy": (57, 18, "KV"),
-            "torch_copy": (79, 18, "HtoD"),
-            "replay_due": (28, 94, "due"),
-            "replay": (104, 18, "replay"),
-        }
-        return lanes.get(kind, (34, 18, kind))
-
     def layer_order(item: dict[str, Any]) -> int:
         order = {
             "tool_wait": 0,
             "initial": 1,
             "hint_submitted": 2,
             "hint_request": 3,
-            "replay": 4,
-            "sglang_copy": 5,
-            "telemetry_copy": 6,
-            "torch_copy": 7,
-            "replay_due": 8,
+            "copy_activity": 4,
+            "replay_due": 5,
+            "replay": 6,
         }
         return order.get(str(item.get("kind", "")), 10)
 
@@ -560,17 +542,15 @@ def build_timeline_svg(
         y = top + row_index[sid] * row_h
         row = row_by_session.get(sid, {})
         status_label, status_color = timeline_status(row)
-        svg.append(f'<text x="10" y="{y + 17}" font-weight="700">{html.escape(sid)}</text>')
+        svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
         svg.append(
-            f'<text x="10" y="{y + 38}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>'
+            f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>'
         )
         overlap_ms = as_float(row, "hint_replay_overlap_ms")
         if overlap_ms > 0:
-            svg.append(f'<text x="10" y="{y + 59}" font-size="12" fill="#b91c1c" font-weight="700">overlap {overlap_ms:.0f} ms</text>')
-        for label, offset in (("hint", 47), ("copy", 70), ("replay", 117)):
-            svg.append(f'<text x="{left - 8}" y="{y + offset}" text-anchor="end" font-size="10" fill="#64748b">{label}</text>')
-        for offset in (20, 54, 77, 101, 126):
-            svg.append(f'<line x1="{left}" y1="{y + offset}" x2="{left + plot_w}" y2="{y + offset}" stroke="#f8fafc"/>')
+            svg.append(f'<text x="10" y="{y + 57}" font-size="12" fill="#b91c1c" font-weight="700">hint/replay overlap {overlap_ms:.0f} ms</text>')
+        svg.append(f'<line x1="{left}" y1="{y + 12}" x2="{left + plot_w}" y2="{y + 12}" stroke="#f3f4f6"/>')
+        svg.append(f'<line x1="{left}" y1="{y + 48}" x2="{left + plot_w}" y2="{y + 48}" stroke="#f9fafb"/>')
         prefetch_done = to_float(row.get("visible_copy_end_ms")) or to_float(row.get("sglang_copy_end_ms"))
         replay_due = to_float(row.get("replay_due_ms"))
         margin = to_float(row.get("prefetch_margin_ms"))
@@ -588,14 +568,14 @@ def build_timeline_svg(
             overlap_end = min(hint_end_for_overlap, replay_end_for_overlap)
             if overlap_end > overlap_start:
                 svg.append(
-                    f'<rect x="{x_pos(overlap_start):.1f}" y="{y + 28}" width="{max(2, x_pos(overlap_end) - x_pos(overlap_start)):.1f}" '
-                    'height="98" fill="#fecaca" opacity="0.45"><title>hint and replay overlap</title></rect>'
+                    f'<rect x="{x_pos(overlap_start):.1f}" y="{y + 3}" width="{max(2, x_pos(overlap_end) - x_pos(overlap_start)):.1f}" '
+                    'height="40" fill="#fecaca" opacity="0.55"><title>hint and replay overlap</title></rect>'
                 )
         if prefetch_done is not None and replay_due is not None and margin is not None:
             x_done = x_pos(prefetch_done)
             x_due = x_pos(replay_due)
-            y_margin = y + 128
-            y_label = y + 136
+            y_margin = y + 48
+            y_label = y + 70
             if margin >= 0:
                 svg.append(
                     f'<line x1="{x_done:.1f}" y1="{y_margin}" x2="{x_due:.1f}" y2="{y_margin}" '
@@ -610,7 +590,7 @@ def build_timeline_svg(
             else:
                 x1 = min(x_due, x_done)
                 x2 = max(x_due, x_done)
-                svg.append(f'<rect x="{x1:.1f}" y="{y + 28}" width="{max(2, x2 - x1):.1f}" height="98" fill="#fee2e2" opacity="0.55"/>')
+                svg.append(f'<rect x="{x1:.1f}" y="{y + 3}" width="{max(2, x2 - x1):.1f}" height="40" fill="#fee2e2" opacity="0.55"/>')
                 svg.append(
                     f'<line x1="{x_due:.1f}" y1="{y_margin}" x2="{x_done:.1f}" y2="{y_margin}" '
                     'stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>'
@@ -632,45 +612,50 @@ def build_timeline_svg(
         x2 = x_pos(float(item.get("end_ms", 0.0)))
         label = html.escape(str(item.get("label", kind)))
         if x1 == x2:
-            lane_y, lane_h, _ = lane(kind)
             stroke_width = 6 if kind == "replay_due" else 3
             svg.append(
-                f'<line x1="{x1:.1f}" y1="{y + lane_y}" x2="{x1:.1f}" y2="{y + lane_y + lane_h}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
+                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
             )
             if kind == "replay_due":
                 svg.append(
-                    f'<text x="{x1:.1f}" y="{y + 27}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>'
+                    f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>'
                 )
         else:
             display_x2 = x2
-            lane_y, lane_h, lane_label = lane(kind)
-            bar_y = y + lane_y
-            bar_h = lane_h
-            opacity = "0.88"
+            bar_y = y + 4
+            bar_h = 24
+            opacity = "0.72" if kind in {"hint_request", "replay"} else "0.88"
             stroke = ""
-            if kind in {"telemetry_copy", "torch_copy"}:
+            if kind == "copy_activity":
                 display_x2 = max(x2, x1 + 24)
+                bar_y = y
+                bar_h = 32
                 opacity = "1"
                 stroke = ' stroke="#f8fafc" stroke-width="3"'
+                color = "#16a34a" if item.get("copy_source") == "torch_profiler_h2d" else "#22c55e"
             svg.append(
                 f'<rect x="{x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{label}</title></rect>'
             )
-            if kind in {"telemetry_copy", "torch_copy"}:
-                text_label = "KV" if kind == "telemetry_copy" else "HtoD"
+            if kind == "copy_activity":
+                text_label = "HtoD" if item.get("copy_source") == "torch_profiler_h2d" else "KV"
                 svg.append(
-                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{bar_y + 13}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{text_label}</text>'
-                )
-            elif kind == "sglang_copy" and x2 - x1 > 45:
-                text_label = "KV load" if kind == "sglang_copy" else "HtoD"
-                svg.append(
-                    f'<text x="{(x1 + x2) / 2:.1f}" y="{bar_y + 11}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{text_label}</text>'
+                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{bar_y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{text_label}</text>'
                 )
     legend_x = left
     legend_y = height - 32
+    legend_labels = {
+        "initial": "initial",
+        "tool_wait": "tool wait",
+        "hint_submitted": "hint submitted",
+        "hint_request": "hint request",
+        "copy_activity": "copy activity",
+        "replay_due": "replay due",
+        "replay": "replay",
+    }
     for idx, (kind, color) in enumerate(colors.items()):
         lx = legend_x + idx * 130
         svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
-        svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(kind)}</text>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(legend_labels.get(kind, kind))}</text>')
     svg.append(
         f'<line x1="{left}" y1="{height - 8}" x2="{left + 90}" y2="{height - 8}" stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>'
     )
@@ -737,22 +722,17 @@ def timeline_layers_rows() -> list[dict[str, Any]]:
         },
         {
             "Layer": "purple hint_request",
-            "Meaning": "The software request we currently send to SGLang to trigger KV load-back. It has its own lane above the copy lane.",
+            "Meaning": "The software request we currently send to SGLang to trigger KV load-back.",
             "Why it matters": "This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.",
         },
         {
-            "Layer": "bright green telemetry_copy",
-            "Meaning": "Lightweight SGLang host-to-device KV copy telemetry from the exact KV load path. On the chart, short bars are visually widened so they are easy to see.",
-            "Why it matters": "This is the scalable evidence path for larger experiments. It avoids huge torch.profiler traces while preserving per-session KV movement timing.",
-        },
-        {
-            "Layer": "dark green torch_copy",
-            "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short bars are visually widened so they are easy to see.",
-            "Why it matters": "This is the heavier CUDA-level validation source. Use it on small runs to validate that SGLang KV-copy telemetry maps to real CUDA HtoD activity.",
+            "Layer": "green copy activity",
+            "Meaning": "The single visible KV copy-activity bar. Dark green is used when CUDA HtoD profiler evidence exists. Light green is used as a fallback when only lightweight SGLang KV telemetry exists.",
+            "Why it matters": "This keeps the main chart simple while preserving the exact telemetry and torch timings in the tables.",
         },
         {
             "Layer": "red replay",
-            "Meaning": "The real agent replay request. It has its own lower lane so it does not visually merge with the purple hint request.",
+            "Meaning": "The real agent replay request.",
             "Why it matters": "If the purple hint request overlaps the red replay in time, the prefetch path was still running when the agent needed to resume.",
         },
         {
@@ -972,7 +952,7 @@ def write_html(
         lines.append("</div></div>")
         lines.append('<div class="panel"><h2>Timeline</h2>')
         lines.append(
-            '<p class="caption">How to read this: each agent now has separate lanes. Gray is the tool-wait window. Purple is the software hint request. Bright green is lightweight SGLang KV-copy telemetry. Dark green is optional torch-profiler CUDA HtoD validation. The green copy lanes should normally sit within the purple hint time window. Red is the replay request on its own lower lane, so purple/red overlap means the hint was still running when replay started. The black line is replay due.</p>'
+            '<p class="caption">How to read this: bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request. If purple overlaps red, the hint was still running when replay arrived. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. The black line is replay due.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
