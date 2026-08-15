@@ -378,6 +378,17 @@ def load_clean_timelines(
                 if replay_start is not None and replay_due is not None
                 else ""
             )
+            replay_ttft = to_float(request_metric(events, session_id, "replay", "ttft_ms"))
+            first_token_ms = (
+                round(float(replay_start) + replay_ttft, 3)
+                if replay_start is not None and replay_ttft is not None
+                else None
+            )
+            effective_wait_after_due = (
+                round(float(replay_delay) + replay_ttft, 3)
+                if replay_delay != "" and replay_ttft is not None
+                else ""
+            )
             hint_done_before_due = (
                 "yes"
                 if hint_end is not None and replay_due is not None and hint_end <= replay_due
@@ -395,10 +406,12 @@ def load_clean_timelines(
                     "outcome": outcome.get("outcome", "no_hint" if mode == "no_prefetch" else ""),
                     "initial_ttft_ms": request_metric(events, session_id, "initial_turn", "ttft_ms"),
                     "hint_ttft_ms": request_metric(events, session_id, "hint_prefetch", "ttft_ms"),
-                    "replay_ttft_ms": request_metric(events, session_id, "replay", "ttft_ms"),
+                    "replay_ttft_ms": replay_ttft if replay_ttft is not None else "",
                     "replay_due_ms": replay_due if replay_due is not None else "",
                     "replay_start_ms": replay_start if replay_start is not None else "",
                     "replay_delay_after_due_ms": replay_delay,
+                    "first_token_ms": first_token_ms if first_token_ms is not None else "",
+                    "effective_wait_after_due_ms": effective_wait_after_due,
                     "hint_done_before_replay_due": hint_done_before_due,
                 }
             )
@@ -408,6 +421,7 @@ def load_clean_timelines(
             add_bar(session_id, "hint_request", hint_start, hint_end, "hint request")
             add_marker(session_id, "replay_due", replay_due, "replay due")
             add_bar(session_id, "replay", replay_start, replay_end, "replay request")
+            add_marker(session_id, "first_token", first_token_ms, "first token")
         timelines[mode] = {"rows": rows, "timeline": timeline}
     return timelines
 
@@ -692,13 +706,13 @@ def build_clean_timeline_svg(
         kind = str(item.get("kind", ""))
         item_start = float(item["start_ms"])
         item_end = float(item["end_ms"])
-        if kind in {"initial", "tool_wait", "hint_submitted", "hint_request", "replay_due"}:
+        if kind in {"initial", "tool_wait", "hint_submitted", "hint_request", "replay_due", "first_token"}:
             start_values.append(item_start)
             focus_values.extend([item_start, item_end])
         elif kind == "replay":
             focus_values.append(item_start)
     for row in selected_rows:
-        for key in ("replay_due_ms", "replay_start_ms"):
+        for key in ("replay_due_ms", "replay_start_ms", "first_token_ms"):
             value = to_float(row.get(key))
             if value is not None:
                 focus_values.append(value)
@@ -722,6 +736,7 @@ def build_clean_timeline_svg(
         "hint_request": "#a855f7",
         "replay_due": "#111827",
         "replay": "#dc2626",
+        "first_token": "#f59e0b",
     }
 
     def x_pos(ms: float) -> float:
@@ -738,6 +753,7 @@ def build_clean_timeline_svg(
             "hint_request": 3,
             "replay_due": 4,
             "replay": 5,
+            "first_token": 6,
         }
         return order.get(str(item.get("kind", "")), 10)
 
@@ -756,7 +772,10 @@ def build_clean_timeline_svg(
         row = row_by_session.get(sid, {})
         status_label, status_color = clean_timeline_status(row)
         ttft = to_float(row.get("replay_ttft_ms"))
+        effective_wait = to_float(row.get("effective_wait_after_due_ms"))
         ttft_label = f"replay TTFT {ttft:.0f} ms" if ttft is not None else "replay TTFT n/a"
+        if effective_wait is not None:
+            ttft_label += f"; due->token {effective_wait:.0f} ms"
         svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
         svg.append(f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>')
         svg.append(f'<text x="10" y="{y + 55}" font-size="12" fill="#4b5563">{html.escape(ttft_label)}</text>')
@@ -775,10 +794,16 @@ def build_clean_timeline_svg(
         x2 = x_clamped(raw_end_ms)
         label = html.escape(str(item.get("label", kind)))
         if raw_start_ms == raw_end_ms:
-            stroke_width = 6 if kind == "replay_due" else 3
+            stroke_width = 6 if kind == "replay_due" else 4 if kind == "first_token" else 3
+            dash = ' stroke-dasharray="5 3"' if kind == "first_token" else ""
             svg.append(
-                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
+                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"{dash}><title>{label}</title></line>'
             )
+            if kind == "first_token":
+                row = row_by_session.get(sid, {})
+                ttft = to_float(row.get("replay_ttft_ms"))
+                text = f"first token +{ttft:.0f} ms" if ttft is not None else "first token"
+                svg.append(f'<text x="{x1:.1f}" y="{y + 44}" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">{html.escape(text)}</text>')
         else:
             display_x1 = x1
             display_x2 = x2
@@ -814,9 +839,10 @@ def build_clean_timeline_svg(
         "hint_request": "hint request",
         "replay_due": "replay due",
         "replay": "replay",
+        "first_token": "first token",
     }
     for idx, (kind, color) in enumerate(colors.items()):
-        lx = legend_x + idx * 145
+        lx = legend_x + idx * 130
         svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
         svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(legend_labels.get(kind, kind))}</text>')
     svg.append("</svg>")
@@ -1367,7 +1393,7 @@ def write_html(
                 )
                 lines.append(f'<h3>{html.escape(mode)}</h3>')
                 lines.append(
-                    '<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, and red is replay. Long replay bars are clipped so the chart focuses on the resume boundary.</p>'
+                    '<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, red is replay admission/execution, and yellow is first token. No-prefetch can start replay exactly on time but still pay TTFT inside the red replay bar. Long replay bars are clipped so the chart focuses on the resume boundary.</p>'
                 )
                 lines.append(clean_svg)
                 lines.append('<div class="table-wrap">')

@@ -3280,10 +3280,19 @@ They show:
   hint request, when the mode sends one
   replay due
   replay request
+  first token
   replay TTFT per session
+  effective wait from replay due to first token
 
 They intentionally do not show green CUDA/KV copy bars.
 Use the profiled mechanism timeline for DMA/KV attribution.
+
+Important:
+  red replay start means the replay request was admitted.
+  yellow first-token marker shows when the user actually sees output.
+
+So no-prefetch may start replay exactly at replay due, but still pay TTFT
+inside the replay request before first token appears.
 ```
 
 Timeline clarity changes:
