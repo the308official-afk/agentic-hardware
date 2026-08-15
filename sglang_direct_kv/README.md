@@ -3481,7 +3481,7 @@ It proves the realistic live traffic path works without Dynamo.
 
 ### Milestone 17: Real Trace Replay Workload
 
-Status: ready.
+Status: ready, with one current hardware compatibility blocker on `g5.2xlarge`.
 
 What it is:
 
@@ -3767,7 +3767,7 @@ What changed from the original Experiment 6:
 | --- | --- |
 | Dynamo frontend on port 8000 | SGLang endpoint on port 30000 |
 | Dynamo start/stop wrapper | direct SGLang server launcher |
-| large GH200-oriented model | smaller Qwen model for g5.2xlarge |
+| GH200-oriented model path | direct SGLang path using `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` |
 | same Deep Agents tool loop | kept |
 | same SWE-bench task loop | kept |
 | same prompt-evolution reports | kept |
@@ -3785,19 +3785,51 @@ PROMPT_EVOLUTION_BATCH_ID="${RUN_ID}" \
 START_INDEX=0 \
 END_INDEX=1 \
 SERVER_MODE=simple \
-MAX_TOTAL_TOKENS=8192 \
+MAX_TOTAL_TOKENS=32768 \
+SERVER_READY_TIMEOUT_SECS=1800 \
+TOOL_CALL_PARSER=qwen3_coder \
+REASONING_PARSER=qwen3 \
+EXTRA_SERVER_ARGS="--disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule" \
+AGENTBENCH_DEEPAGENTS_SOURCE=upstream \
 AGENTBENCH_EXECUTION_LOOP=1 \
 AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=3 \
+AGENTBENCH_EXECUTION_LOOP_REQUIRE_TEST=0 \
+AGENTBENCH_EXECUTION_GUARD=0 \
 AGENTBENCH_FORCE_TOOL_CHOICE=auto \
+AGENTBENCH_DISABLE_GENERAL_PURPOSE_SUBAGENT=1 \
+AGENTBENCH_SOFT_STOP_RECURSION=1 \
+AGENTBENCH_AGENT_RECURSION_LIMIT=1000 \
+AGENTBENCH_TRACE_AGENT_STREAM=0 \
+PROMPT_EVOLUTION_REQUIRE_TOOL_LOOP=1 \
+PROMPT_EVOLUTION_TOOL_LOOP_CASE=edit-validate \
 bash scripts/run_milestone21_exp6_direct_sglang.sh \
-  Qwen/Qwen2.5-Coder-7B-Instruct
+  Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
 ```
 
-If the 7B model is too tight on `g5.2xlarge`, use:
+Expected good preflight:
 
-```bash
-bash scripts/run_milestone21_exp6_direct_sglang.sh \
-  Qwen/Qwen2.5-3B-Instruct
+```text
+tool_calls=2
+tool_messages=2
+unique_tools=execute,write_file
+multi_tool_loop_observed=True
+case_success=True
+Deep Agents tool-loop preflight passed.
+```
+
+Current `g5.2xlarge` note:
+
+```text
+The Qwen3-Coder-30B-FP8 model can be found and loaded on the current A10G
+machine, but the first generation request fails inside the FP8 MoE Triton path:
+
+ValueError("type fp8e4nv not supported in this architecture...")
+
+That means HF access and parser wiring are not the main blocker anymore.
+The current blocker is GPU/backend compatibility for this FP8 MoE model.
+For the real Exp6-style run, use a GPU/backend with compatible FP8 MoE support,
+for example a GH200/H100/H200-class setup. A smaller model can validate wiring,
+but should not be treated as final realistic evidence.
 ```
 
 Important events to observe:

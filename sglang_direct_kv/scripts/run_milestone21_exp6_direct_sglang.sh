@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL="${1:-Qwen/Qwen2.5-Coder-7B-Instruct}"
+MODEL="${1:-Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8}"
 HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
 FRONTEND_URL="${FRONTEND_URL:-${HOST_URL}/v1/chat/completions}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone21_exp6_direct_sglang}"
@@ -42,12 +42,15 @@ AGENTBENCH_INSTALL_DEPS="${AGENTBENCH_INSTALL_DEPS:-1}"
 RUN_PREFLIGHT="${RUN_PREFLIGHT:-1}"
 REUSE_SERVER="${REUSE_SERVER:-0}"
 SERVER_MODE="${SERVER_MODE:-simple}"
-MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-8192}"
+MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-32768}"
+TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-auto}"
+REASONING_PARSER="${REASONING_PARSER:-auto}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-14}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.45}"
 MODEL_SMOKE_RETRIES="${MODEL_SMOKE_RETRIES:-120}"
 MODEL_SMOKE_DELAY_SECS="${MODEL_SMOKE_DELAY_SECS:-5}"
 MODEL_COOLDOWN_SECS="${MODEL_COOLDOWN_SECS:-5}"
+SERVER_READY_TIMEOUT_SECS="${SERVER_READY_TIMEOUT_SECS:-360}"
 SHARED_CHART_DIR="${SHARED_CHART_DIR:-experiments/charts}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
@@ -58,6 +61,24 @@ cd "${DIRECT_ROOT}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
+fi
+
+MODEL_LC="$(printf '%s' "${MODEL}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${TOOL_CALL_PARSER}" = "auto" ]]; then
+  if [[ "${MODEL_LC}" == *"qwen3-coder"* || "${MODEL_LC}" == *"qwen3_coder"* ]]; then
+    TOOL_CALL_PARSER="qwen3_coder"
+  elif [[ "${MODEL_LC}" == *"qwen"* ]]; then
+    TOOL_CALL_PARSER="qwen"
+  else
+    TOOL_CALL_PARSER=""
+  fi
+fi
+if [[ "${REASONING_PARSER}" = "auto" ]]; then
+  if [[ "${MODEL_LC}" == *"qwen3-coder"* || "${MODEL_LC}" == *"qwen3_coder"* ]]; then
+    REASONING_PARSER="qwen3"
+  else
+    REASONING_PARSER=""
+  fi
 fi
 
 if [[ -n "${AGENTBENCH_ROOT:-}" ]]; then
@@ -110,7 +131,7 @@ server_is_ready() {
 
 wait_for_server() {
   local ready=0
-  for _ in $(seq 1 360); do
+  for _ in $(seq 1 "${SERVER_READY_TIMEOUT_SECS}"); do
     if server_is_ready; then
       ready=1
       break
@@ -379,6 +400,8 @@ fi
   echo "SWEBENCH_TRAJECTORY_CATALOG_ID=${SWEBENCH_TRAJECTORY_CATALOG_ID}"
   echo "TASK_RANGE=${START_INDEX}-${END_INDEX}"
   echo "SERVER_MODE=${SERVER_MODE}"
+  echo "TOOL_CALL_PARSER=${TOOL_CALL_PARSER:-<unset>}"
+  echo "REASONING_PARSER=${REASONING_PARSER:-<unset>}"
   echo "Dynamo is not used."
   echo
 } | tee -a "${DRIVER_LOG}"
@@ -402,8 +425,16 @@ if server_is_ready; then
   fi
 else
   rm -f "${SERVER_LOG}"
-  export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:-} --max-total-tokens ${MAX_TOTAL_TOKENS}"
+  SERVER_EXTRA_ARGS="${EXTRA_SERVER_ARGS:-} --max-total-tokens ${MAX_TOTAL_TOKENS}"
+  if [[ -n "${TOOL_CALL_PARSER}" && "${SERVER_EXTRA_ARGS}" != *"--tool-call-parser"* ]]; then
+    SERVER_EXTRA_ARGS="${SERVER_EXTRA_ARGS} --tool-call-parser ${TOOL_CALL_PARSER}"
+  fi
+  if [[ -n "${REASONING_PARSER}" && "${SERVER_EXTRA_ARGS}" != *"--reasoning-parser"* ]]; then
+    SERVER_EXTRA_ARGS="${SERVER_EXTRA_ARGS} --reasoning-parser ${REASONING_PARSER}"
+  fi
+  export EXTRA_SERVER_ARGS="${SERVER_EXTRA_ARGS}"
   echo "Starting SGLang direct server..." | tee -a "${DRIVER_LOG}"
+  echo "EXTRA_SERVER_ARGS=${EXTRA_SERVER_ARGS}" | tee -a "${DRIVER_LOG}"
   if [[ "${SERVER_MODE}" = "hicache" ]]; then
     export HICACHE_SIZE_GB MEM_FRACTION_STATIC
     setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${SERVER_LOG}" 2>&1 &
@@ -442,6 +473,38 @@ if [[ "${RUN_PREFLIGHT}" = "1" && "${PROMPT_EVOLUTION_REQUIRE_TOOL_LOOP}" = "1" 
       --case "${PROMPT_EVOLUTION_TOOL_LOOP_CASE}" \
       --output-dir "${PREFLIGHT_DIR}"
   ) 2>&1 | tee "${PREFLIGHT_LOG}"
+  "${PYTHON_BIN}" - "${PREFLIGHT_DIR}/summary.json" "${DRIVER_LOG}" "${PREFLIGHT_LOG}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1])
+driver_log = Path(sys.argv[2])
+preflight_log = Path(sys.argv[3])
+if not summary_path.exists():
+    message = f"CRITICAL FAIL: preflight summary missing. See {preflight_log}"
+    with driver_log.open("a", encoding="utf-8") as handle:
+        handle.write(message + "\n")
+    raise SystemExit(message)
+
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+tool_calls = int(summary.get("ai_tool_call_count") or 0)
+tool_messages = int(summary.get("tool_message_count") or 0)
+case_success = bool(summary.get("case_success"))
+multi_tool_loop = bool(summary.get("multi_tool_loop_observed"))
+lines = [
+    "Deep Agents tool-loop preflight result:",
+    f"  tool_calls={tool_calls}",
+    f"  tool_messages={tool_messages}",
+    f"  multi_tool_loop_observed={multi_tool_loop}",
+    f"  case_success={case_success}",
+]
+print("\n".join(lines))
+with driver_log.open("a", encoding="utf-8") as handle:
+    handle.write("\n".join(lines) + "\n")
+if not case_success:
+    raise SystemExit(f"CRITICAL FAIL: tool-loop preflight failed. See {preflight_log}")
+PY
 fi
 
 total_cases=$((END_INDEX - START_INDEX + 1))
