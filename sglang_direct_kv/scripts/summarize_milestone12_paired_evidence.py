@@ -242,6 +242,176 @@ def load_timeline_json(path: Path) -> list[dict[str, Any]]:
     return timeline if isinstance(timeline, list) else []
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def ns_to_ms(ts_ns: int, start_ns: int) -> float:
+    return round((ts_ns - start_ns) / 1_000_000, 3)
+
+
+def first_agent_event(
+    events: list[dict[str, Any]],
+    name: str,
+    session_id: str,
+    phase: str | None = None,
+) -> dict[str, Any] | None:
+    for event in events:
+        if event.get("event") != name or event.get("session_id") != session_id:
+            continue
+        if phase is not None and event.get("phase") != phase:
+            continue
+        return event
+    return None
+
+
+def request_window_ms(
+    events: list[dict[str, Any]],
+    session_id: str,
+    phase: str,
+    trace_start_ns: int,
+) -> tuple[float | None, float | None]:
+    start = first_agent_event(events, "agent.request.start", session_id, phase)
+    end = first_agent_event(events, "agent.request.end", session_id, phase)
+    if not start or not end:
+        return None, None
+    return ns_to_ms(int(start["ts_ns"]), trace_start_ns), ns_to_ms(int(end["ts_ns"]), trace_start_ns)
+
+
+def event_ms(
+    events: list[dict[str, Any]],
+    name: str,
+    session_id: str,
+    trace_start_ns: int,
+) -> float | None:
+    event = first_agent_event(events, name, session_id)
+    if not event or not event.get("ts_ns"):
+        return None
+    return ns_to_ms(int(event["ts_ns"]), trace_start_ns)
+
+
+def request_metric(events: list[dict[str, Any]], session_id: str, phase: str, key: str) -> Any:
+    event = first_agent_event(events, "agent.request.end", session_id, phase)
+    if not event:
+        return ""
+    return event.get(key, "")
+
+
+def load_clean_timelines(
+    clean_root: Path,
+    modes: list[str],
+    clean_rows: dict[str, list[dict[str, Any]]],
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    timelines: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for mode in modes:
+        trace_path = clean_root / f"{mode}_traffic_trace.jsonl"
+        events = read_jsonl(trace_path)
+        if not events:
+            continue
+        trace_start_ns = min(int(event["ts_ns"]) for event in events if event.get("ts_ns"))
+        outcome_by_session = {
+            str(row.get("session_id", "")): row
+            for row in clean_rows.get(mode, [])
+            if row.get("session_id")
+        }
+        session_ids = sorted(
+            {
+                str(event["session_id"])
+                for event in events
+                if isinstance(event.get("session_id"), str) and str(event.get("session_id")).startswith("agent_")
+            }
+        )
+        rows: list[dict[str, Any]] = []
+        timeline: list[dict[str, Any]] = []
+
+        def add_bar(
+            session_id: str,
+            kind: str,
+            start: float | None,
+            end: float | None,
+            label: str,
+        ) -> None:
+            if start is None or end is None:
+                return
+            timeline.append(
+                {
+                    "session_id": session_id,
+                    "kind": kind,
+                    "start_ms": round(float(start), 3),
+                    "end_ms": round(float(end), 3),
+                    "label": label,
+                }
+            )
+
+        def add_marker(session_id: str, kind: str, at: float | None, label: str) -> None:
+            if at is None:
+                return
+            timeline.append(
+                {
+                    "session_id": session_id,
+                    "kind": kind,
+                    "start_ms": round(float(at), 3),
+                    "end_ms": round(float(at), 3),
+                    "label": label,
+                }
+            )
+
+        for session_id in session_ids:
+            arrival = first_agent_event(events, "agent.session_arrival", session_id) or {}
+            initial_start, initial_end = request_window_ms(events, session_id, "initial_turn", trace_start_ns)
+            hint_start, hint_end = request_window_ms(events, session_id, "hint_prefetch", trace_start_ns)
+            replay_start, replay_end = request_window_ms(events, session_id, "replay", trace_start_ns)
+            tool_wait_start = event_ms(events, "agent.tool_wait_start", session_id, trace_start_ns)
+            hint_submitted = event_ms(events, "agent.hint_submitted", session_id, trace_start_ns)
+            replay_due = event_ms(events, "agent.replay_due", session_id, trace_start_ns)
+            outcome = outcome_by_session.get(session_id, {})
+            replay_delay = (
+                round(float(replay_start) - float(replay_due), 3)
+                if replay_start is not None and replay_due is not None
+                else ""
+            )
+            hint_done_before_due = (
+                "yes"
+                if hint_end is not None and replay_due is not None and hint_end <= replay_due
+                else "no"
+                if hint_end is not None and replay_due is not None
+                else ""
+            )
+            rows.append(
+                {
+                    "mode": mode,
+                    "session_id": session_id,
+                    "priority": arrival.get("priority", ""),
+                    "prompt_tokens": arrival.get("prompt_tokens", ""),
+                    "tool_wait_ms": arrival.get("tool_wait_ms", ""),
+                    "outcome": outcome.get("outcome", "no_hint" if mode == "no_prefetch" else ""),
+                    "initial_ttft_ms": request_metric(events, session_id, "initial_turn", "ttft_ms"),
+                    "hint_ttft_ms": request_metric(events, session_id, "hint_prefetch", "ttft_ms"),
+                    "replay_ttft_ms": request_metric(events, session_id, "replay", "ttft_ms"),
+                    "replay_due_ms": replay_due if replay_due is not None else "",
+                    "replay_start_ms": replay_start if replay_start is not None else "",
+                    "replay_delay_after_due_ms": replay_delay,
+                    "hint_done_before_replay_due": hint_done_before_due,
+                }
+            )
+            add_bar(session_id, "initial", initial_start, initial_end, "initial request")
+            add_bar(session_id, "tool_wait", tool_wait_start, replay_due, "tool wait")
+            add_marker(session_id, "hint_submitted", hint_submitted, "hint submitted")
+            add_bar(session_id, "hint_request", hint_start, hint_end, "hint request")
+            add_marker(session_id, "replay_due", replay_due, "replay due")
+            add_bar(session_id, "replay", replay_start, replay_end, "replay request")
+        timelines[mode] = {"rows": rows, "timeline": timeline}
+    return timelines
+
+
 def choose_timeline_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
     late = [row for row in rows if truthy(row.get("late_prefetch"))]
     visible = [row for row in rows if row.get("visible_copy_end_ms") not in ("", None)]
@@ -479,6 +649,178 @@ def html_table(rows: list[dict[str, Any]]) -> str:
         out.append("</tr>")
     out.append("</tbody></table>")
     return "\n".join(out)
+
+
+def choose_clean_timeline_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            -(to_float(row.get("replay_delay_after_due_ms")) or 0.0),
+            -(to_float(row.get("replay_ttft_ms")) or 0.0),
+            str(row.get("session_id", "")),
+        ),
+    )
+    return [str(row.get("session_id", "")) for row in sorted_rows[:max_sessions] if row.get("session_id")]
+
+
+def clean_timeline_status(row: dict[str, Any]) -> tuple[str, str]:
+    outcome = str(row.get("outcome", ""))
+    ttft = to_float(row.get("replay_ttft_ms"))
+    delay = to_float(row.get("replay_delay_after_due_ms"))
+    if outcome == "no_hint":
+        return f"TTFT {ttft:.0f} ms" if ttft is not None else "baseline", "#374151"
+    if delay is not None and delay > 5:
+        return f"delayed +{delay:.0f} ms", "#b91c1c"
+    if outcome:
+        return outcome.replace("_", " "), "#92400e"
+    return f"TTFT {ttft:.0f} ms" if ttft is not None else "clean run", "#374151"
+
+
+def build_clean_timeline_svg(
+    mode: str,
+    rows: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    max_sessions: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    selected = choose_clean_timeline_sessions(rows, max_sessions)
+    row_by_session = {str(row.get("session_id", "")): row for row in rows}
+    selected_rows = [row_by_session[sid] for sid in selected if sid in row_by_session]
+    selected_timeline = [item for item in timeline if item.get("session_id") in selected]
+    focus_values: list[float] = []
+    start_values: list[float] = []
+    for item in selected_timeline:
+        kind = str(item.get("kind", ""))
+        item_start = float(item["start_ms"])
+        item_end = float(item["end_ms"])
+        if kind in {"initial", "tool_wait", "hint_submitted", "hint_request", "replay_due"}:
+            start_values.append(item_start)
+            focus_values.extend([item_start, item_end])
+        elif kind == "replay":
+            focus_values.append(item_start)
+    for row in selected_rows:
+        for key in ("replay_due_ms", "replay_start_ms"):
+            value = to_float(row.get(key))
+            if value is not None:
+                focus_values.append(value)
+    if focus_values:
+        start = min(start_values or focus_values) - 120.0
+        end = max(focus_values) + 500.0
+    else:
+        start, end = 0.0, 1.0
+    span = max(1.0, end - start)
+    width = 1500
+    left = 225
+    right = 55
+    row_h = 72
+    top = 78
+    height = top + row_h * max(1, len(selected)) + 92
+    plot_w = width - left - right
+    colors = {
+        "initial": "#2563eb",
+        "tool_wait": "#d1d5db",
+        "hint_submitted": "#7c3aed",
+        "hint_request": "#a855f7",
+        "replay_due": "#111827",
+        "replay": "#dc2626",
+    }
+
+    def x_pos(ms: float) -> float:
+        return left + (ms - start) / span * plot_w
+
+    def x_clamped(ms: float) -> float:
+        return max(left, min(left + plot_w, x_pos(ms)))
+
+    def layer_order(item: dict[str, Any]) -> int:
+        order = {
+            "tool_wait": 0,
+            "initial": 1,
+            "hint_submitted": 2,
+            "hint_request": 3,
+            "replay_due": 4,
+            "replay": 5,
+        }
+        return order.get(str(item.get("kind", "")), 10)
+
+    row_index = {sid: idx for idx, sid in enumerate(selected)}
+    svg: list[str] = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Clean performance timeline for {html.escape(mode)}">',
+        f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
+    ]
+    for tick in range(6):
+        ms = start + span * tick / 5
+        x = x_pos(ms)
+        svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 30}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+    for sid in selected:
+        y = top + row_index[sid] * row_h
+        row = row_by_session.get(sid, {})
+        status_label, status_color = clean_timeline_status(row)
+        ttft = to_float(row.get("replay_ttft_ms"))
+        ttft_label = f"replay TTFT {ttft:.0f} ms" if ttft is not None else "replay TTFT n/a"
+        svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
+        svg.append(f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>')
+        svg.append(f'<text x="10" y="{y + 55}" font-size="12" fill="#4b5563">{html.escape(ttft_label)}</text>')
+        svg.append(f'<line x1="{left}" y1="{y + 12}" x2="{left + plot_w}" y2="{y + 12}" stroke="#f3f4f6"/>')
+
+    for item in sorted(selected_timeline, key=layer_order):
+        sid = str(item.get("session_id", ""))
+        if sid not in row_index:
+            continue
+        y = top + row_index[sid] * row_h
+        kind = str(item.get("kind", ""))
+        color = colors.get(kind, "#6b7280")
+        raw_start_ms = float(item.get("start_ms", 0.0))
+        raw_end_ms = float(item.get("end_ms", 0.0))
+        x1 = x_clamped(raw_start_ms)
+        x2 = x_clamped(raw_end_ms)
+        label = html.escape(str(item.get("label", kind)))
+        if raw_start_ms == raw_end_ms:
+            stroke_width = 6 if kind == "replay_due" else 3
+            svg.append(
+                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
+            )
+        else:
+            display_x1 = x1
+            display_x2 = x2
+            bar_y = y + 4
+            bar_h = 24
+            opacity = "0.72" if kind in {"hint_request", "replay"} else "0.88"
+            replay_continues = kind == "replay" and x_pos(raw_end_ms) > left + plot_w
+            svg.append(
+                f'<rect x="{display_x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - display_x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"><title>{label}</title></rect>'
+            )
+            if kind == "hint_request":
+                svg.append(
+                    f'<text x="{x1:.1f}" y="{bar_y - 6}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>'
+                )
+                svg.append(
+                    f'<text x="{x2:.1f}" y="{bar_y + bar_h + 13}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>'
+                )
+            if replay_continues:
+                arrow_x = left + plot_w - 7
+                arrow_y = bar_y + bar_h / 2
+                svg.append(
+                    f'<path d="M {arrow_x - 7:.1f} {arrow_y - 7:.1f} L {arrow_x:.1f} {arrow_y:.1f} L {arrow_x - 7:.1f} {arrow_y + 7:.1f}" '
+                    'fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>'
+                )
+                svg.append(f'<text x="{left + plot_w - 82:.1f}" y="{bar_y - 4}" font-size="10" fill="#991b1b" font-weight="700">continues</text>')
+
+    legend_x = left
+    legend_y = height - 30
+    legend_labels = {
+        "initial": "initial",
+        "tool_wait": "tool wait",
+        "hint_submitted": "hint submitted",
+        "hint_request": "hint request",
+        "replay_due": "replay due",
+        "replay": "replay",
+    }
+    for idx, (kind, color) in enumerate(colors.items()):
+        lx = legend_x + idx * 145
+        svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(legend_labels.get(kind, kind))}</text>')
+    svg.append("</svg>")
+    return "\n".join(svg), selected_rows
 
 
 def build_timeline_svg(
@@ -941,6 +1283,7 @@ def write_html(
     metadata: dict[str, Any],
     attribution_rows: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
+    clean_timelines: dict[str, dict[str, list[dict[str, Any]]]],
     max_timeline_sessions: int,
 ) -> None:
     cards = summary_cards(sections)
@@ -1010,6 +1353,27 @@ def write_html(
         lines.append('<div class="table-wrap">')
         lines.append(html_table(rows))
         lines.append("</div></div>")
+        if title == "Clean Performance Summary" and clean_timelines:
+            lines.append('<div class="panel"><h2>Clean Performance Timelines</h2>')
+            lines.append(
+                '<p class="caption">These timelines come from clean runs with torch.profiler off. Use them for manager-facing request-flow and TTFT behavior. They intentionally do not show CUDA HtoD bars; the profiled mechanism timeline below is the place for DMA/KV attribution.</p>'
+            )
+            for mode, data in clean_timelines.items():
+                clean_svg, selected_clean_rows = build_clean_timeline_svg(
+                    mode,
+                    data.get("rows", []),
+                    data.get("timeline", []),
+                    max_timeline_sessions,
+                )
+                lines.append(f'<h3>{html.escape(mode)}</h3>')
+                lines.append(
+                    '<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, and red is replay. Long replay bars are clipped so the chart focuses on the resume boundary.</p>'
+                )
+                lines.append(clean_svg)
+                lines.append('<div class="table-wrap">')
+                lines.append(html_table(selected_clean_rows))
+                lines.append("</div>")
+            lines.append("</div>")
     if attribution_rows and timeline:
         lines.append('<div class="panel"><h2>Timeline Summary</h2>')
         lines.append('<p class="caption">This is the profiled mechanism view. It shows what happened inside the hinted path, not clean TTFT performance.</p>')
@@ -1216,6 +1580,7 @@ def main() -> None:
     modes = [mode for mode in args.modes.split() if mode]
 
     clean_rows = load_clean_rows(clean_root, modes)
+    clean_timelines = load_clean_timelines(clean_root, modes, clean_rows)
     attribution_rows = read_csv(attribution_root / f"{args.attribution_mode}_agentic_prefetch_timeline.csv")
     timeline_json = Path(args.timeline_json) if args.timeline_json else attribution_root / f"{args.attribution_mode}_agentic_prefetch_timeline.json"
     timeline_rows = load_timeline_json(timeline_json)
@@ -1248,12 +1613,20 @@ def main() -> None:
     write_csv(out_root / "paired_checkpoint_results.csv", checkpoint_result_rows(selected_timeline_rows))
     write_csv(out_root / "paired_key_observations.csv", key_observation_rows(selected_timeline_rows))
     write_csv(out_root / "paired_session_details.csv", session_detail_rows(selected_timeline_rows))
+    for mode, data in clean_timelines.items():
+        selected_clean_ids = choose_clean_timeline_sessions(data.get("rows", []), args.max_timeline_sessions)
+        clean_by_session = {str(row.get("session_id", "")): row for row in data.get("rows", [])}
+        write_csv(
+            out_root / f"clean_{mode}_timeline_details.csv",
+            [clean_by_session[sid] for sid in selected_clean_ids if sid in clean_by_session],
+        )
     (out_root / "paired_report.json").write_text(
         json.dumps(
             {
                 "metadata": metadata,
                 "sections": sections,
                 "timeline": {
+                    "clean_performance_timelines": clean_timelines,
                     "summary": timeline_summary_rows(attribution_rows),
                     "layers": timeline_layers_rows(),
                     "sanity_checks": timeline_sanity_rows(selected_timeline_rows),
@@ -1278,6 +1651,7 @@ def main() -> None:
         metadata,
         attribution_rows,
         timeline_rows,
+        clean_timelines,
         args.max_timeline_sessions,
     )
     if args.latest_root:

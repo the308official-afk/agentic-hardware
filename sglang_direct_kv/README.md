@@ -3266,6 +3266,26 @@ Use Milestone 15 for mechanism evidence:
 Use Milestone 14 for larger clean timeline behavior.
 ```
 
+Clean performance timeline:
+
+```text
+The paired report also includes Clean Performance Timelines.
+
+These are built from runs with torch.profiler off, so they are better for
+manager-facing TTFT and request-flow evidence.
+
+They show:
+  initial request
+  tool wait
+  hint request, when the mode sends one
+  replay due
+  replay request
+  replay TTFT per session
+
+They intentionally do not show green CUDA/KV copy bars.
+Use the profiled mechanism timeline for DMA/KV attribution.
+```
+
 Timeline clarity changes:
 
 ```text
