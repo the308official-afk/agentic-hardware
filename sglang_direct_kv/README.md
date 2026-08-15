@@ -3279,10 +3279,29 @@ Each agent row uses the compact overlapping style:
 Purple and red may overlap intentionally.
 If they overlap, the software hint was still running when replay arrived.
 
+The timeline is now focused around the prefetch/replay boundary.
+This avoids spending most of the chart width on long replay generation.
+
+Long red replay bars are clipped in the timeline and marked as continuing.
+The exact replay duration still remains in the detailed tables.
+
 The chart does not draw separate SGLang, telemetry, and torch copy bars.
 It draws one green copy bar:
   prefer dark green CUDA HtoD when available
   otherwise use light green SGLang KV telemetry fallback
+
+Green bars can be visually widened so they are easy to see.
+Thin dark ticks on the green bar show the exact copy start and end.
+
+If a session has no green bar, the status says:
+  NO VISIBLE COPY
+
+That does not automatically mean the experiment failed.
+It means this report did not observe a host-to-device KV copy for that session.
+The likely explanations are:
+  the KV was already resident,
+  the hint path did not trigger a load,
+  or the copy was outside the captured telemetry/profiler window.
 
 The detailed source timings remain in the tables:
   telemetry_copy_start_ms / telemetry_copy_end_ms

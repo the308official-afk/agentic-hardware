@@ -681,7 +681,7 @@ def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
         return f"SUCCESS +{margin:.0f} ms", "#166534"
     if int(row.get("sglang_copy_events") or 0) > 0 and margin is not None:
         return f"SGLang OK +{margin:.0f} ms", "#92400e"
-    return "INCOMPLETE", "#6b7280"
+    return "NO VISIBLE COPY", "#6b7280"
 
 
 def choose_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
@@ -703,9 +703,25 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
     row_by_session = {str(row["session_id"]): row for row in rows}
     selected_rows = [row_by_session[sid] for sid in selected if sid in row_by_session]
     selected_timeline = [item for item in timeline if item["session_id"] in selected]
-    if selected_timeline:
-        start = min(float(item["start_ms"]) for item in selected_timeline)
-        end = max(float(item["end_ms"]) for item in selected_timeline)
+    focus_values: list[float] = []
+    start_values: list[float] = []
+    for item in selected_timeline:
+        kind = str(item.get("kind", ""))
+        item_start = float(item["start_ms"])
+        item_end = float(item["end_ms"])
+        if kind in {"initial", "tool_wait", "hint_submitted", "hint_request", "copy_activity", "replay_due"}:
+            start_values.append(item_start)
+            focus_values.extend([item_start, item_end])
+        elif kind == "replay":
+            focus_values.append(item_start)
+    for row in selected_rows:
+        for key in ("hint_request_end_ms", "visible_copy_end_ms", "replay_due_ms", "replay_start_ms"):
+            value = to_float(row.get(key))
+            if value is not None:
+                focus_values.append(value)
+    if focus_values:
+        start = min(start_values or focus_values) - 120.0
+        end = max(focus_values) + 500.0
     else:
         start, end = 0.0, 1.0
     span = max(1.0, end - start)
@@ -728,6 +744,9 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
 
     def x_pos(ms: float) -> float:
         return left + (ms - start) / span * plot_w
+
+    def x_clamped(ms: float) -> float:
+        return max(left, min(left + plot_w, x_pos(ms)))
 
     def layer_order(item: dict[str, Any]) -> int:
         order = {
@@ -778,13 +797,15 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
             overlap_start = max(hint_start_for_overlap, replay_start_for_overlap)
             overlap_end = min(hint_end_for_overlap, replay_end_for_overlap)
             if overlap_end > overlap_start:
+                overlap_x1 = x_clamped(overlap_start)
+                overlap_x2 = x_clamped(overlap_end)
                 svg.append(
-                    f'<rect x="{x_pos(overlap_start):.1f}" y="{y + 3}" width="{max(2, x_pos(overlap_end) - x_pos(overlap_start)):.1f}" '
+                    f'<rect x="{overlap_x1:.1f}" y="{y + 3}" width="{max(2, overlap_x2 - overlap_x1):.1f}" '
                     'height="40" fill="#fecaca" opacity="0.55"><title>hint and replay overlap</title></rect>'
                 )
         if prefetch_done is not None and replay_due is not None and margin is not None:
-            x_done = x_pos(prefetch_done)
-            x_due = x_pos(replay_due)
+            x_done = x_clamped(prefetch_done)
+            x_due = x_clamped(replay_due)
             y_margin = y + 48
             y_label = y + 70
             if margin >= 0:
@@ -809,30 +830,58 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         y = top + row_index[sid] * row_h
         kind = item["kind"]
         color = colors.get(kind, "#6b7280")
-        x1 = x_pos(float(item["start_ms"]))
-        x2 = x_pos(float(item["end_ms"]))
-        if x1 == x2:
+        raw_start_ms = float(item["start_ms"])
+        raw_end_ms = float(item["end_ms"])
+        x1 = x_clamped(raw_start_ms)
+        x2 = x_clamped(raw_end_ms)
+        if raw_start_ms == raw_end_ms:
             stroke_width = 6 if kind == "replay_due" else 3
             svg.append(f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{html.escape(item["label"])}</title></line>')
             if kind == "replay_due":
                 svg.append(f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>')
         else:
             display_x2 = x2
+            display_x1 = x1
             bar_y = y + 4
             bar_h = 24
             opacity = "0.72" if kind in {"hint_request", "replay"} else "0.88"
             stroke = ""
+            replay_continues = kind == "replay" and x_pos(raw_end_ms) > left + plot_w
             if kind == "copy_activity":
                 display_x2 = max(x2, x1 + 24)
+                row = row_by_session.get(sid, {})
+                hint_start = to_float(row.get("hint_request_start_ms"))
+                hint_end = to_float(row.get("hint_request_end_ms"))
+                if (
+                    hint_start is not None
+                    and hint_end is not None
+                    and raw_start_ms >= hint_start
+                    and raw_end_ms <= hint_end
+                ):
+                    hint_x1 = x_clamped(hint_start)
+                    hint_x2 = x_clamped(hint_end)
+                    if hint_x2 > hint_x1:
+                        display_x1 = max(hint_x1, min(display_x1, hint_x2 - 2))
+                        display_x2 = min(hint_x2, max(display_x2, display_x1 + 2))
                 bar_y = y
                 bar_h = 32
                 opacity = "1"
                 stroke = ' stroke="#f8fafc" stroke-width="3"'
                 color = "#16a34a" if item.get("copy_source") == "torch_profiler_h2d" else "#22c55e"
-            svg.append(f'<rect x="{x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{html.escape(item["label"])}</title></rect>')
+            svg.append(f'<rect x="{display_x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - display_x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{html.escape(item["label"])}</title></rect>')
+            if replay_continues:
+                arrow_x = left + plot_w - 7
+                arrow_y = bar_y + bar_h / 2
+                svg.append(
+                    f'<path d="M {arrow_x - 7:.1f} {arrow_y - 7:.1f} L {arrow_x:.1f} {arrow_y:.1f} L {arrow_x - 7:.1f} {arrow_y + 7:.1f}" '
+                    'fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>'
+                )
+                svg.append(f'<text x="{left + plot_w - 82:.1f}" y="{bar_y - 4}" font-size="10" fill="#991b1b" font-weight="700">continues</text>')
             if kind == "copy_activity":
                 label = "HtoD" if item.get("copy_source") == "torch_profiler_h2d" else "KV"
-                svg.append(f'<text x="{(x1 + display_x2) / 2:.1f}" y="{bar_y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{label}</text>')
+                svg.append(f'<line x1="{x1:.1f}" y1="{bar_y - 3}" x2="{x1:.1f}" y2="{bar_y + bar_h + 3}" stroke="#064e3b" stroke-width="1.5"><title>exact copy start</title></line>')
+                svg.append(f'<line x1="{x2:.1f}" y1="{bar_y - 3}" x2="{x2:.1f}" y2="{bar_y + bar_h + 3}" stroke="#064e3b" stroke-width="1.5"><title>exact copy end</title></line>')
+                svg.append(f'<text x="{(display_x1 + display_x2) / 2:.1f}" y="{bar_y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{label}</text>')
     legend_x = left
     legend_y = height - 32
     legend_labels = {
@@ -987,7 +1036,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         [
             "</tbody></table></div>",
             '<div class="panel"><h2>Timeline</h2>',
-            '<p class="caption">How to read this: bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request. If purple overlaps red, the hint was still running when replay arrived. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. The black line is replay due.</p>',
+            '<p class="caption">How to read this: this focused view zooms into the prefetch/replay boundary. Bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request; long replay bars are clipped and marked as continuing. If purple overlaps red, the hint was still running when replay arrived. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. Green bars may be widened for visibility; thin dark ticks mark the exact copy start and end. The black line is replay due.</p>',
             *svg,
             "</div>",
         ]
