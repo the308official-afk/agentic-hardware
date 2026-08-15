@@ -838,7 +838,10 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
             stroke_width = 6 if kind == "replay_due" else 3
             svg.append(f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{html.escape(item["label"])}</title></line>')
             if kind == "replay_due":
-                svg.append(f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>')
+                row = row_by_session.get(sid, {})
+                replay_start = to_float(row.get("replay_start_ms"))
+                due_label = "replay due/start" if replay_start is not None and abs(replay_start - raw_start_ms) < 5.0 else "replay due"
+                svg.append(f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">{due_label}</text>')
         else:
             display_x2 = x2
             display_x1 = x1
@@ -869,6 +872,17 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
                 stroke = ' stroke="#f8fafc" stroke-width="3"'
                 color = "#16a34a" if item.get("copy_source") == "torch_profiler_h2d" else "#22c55e"
             svg.append(f'<rect x="{display_x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - display_x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{html.escape(item["label"])}</title></rect>')
+            if kind == "hint_request":
+                svg.append(f'<line x1="{x1:.1f}" y1="{bar_y - 3}" x2="{x1:.1f}" y2="{bar_y + bar_h + 3}" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>')
+                svg.append(f'<line x1="{x2:.1f}" y1="{bar_y - 3}" x2="{x2:.1f}" y2="{bar_y + bar_h + 3}" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>')
+                svg.append(f'<text x="{x1:.1f}" y="{bar_y - 6}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>')
+                svg.append(f'<text x="{x2:.1f}" y="{bar_y + bar_h + 13}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>')
+            if kind == "replay":
+                svg.append(f'<line x1="{x1:.1f}" y1="{bar_y - 3}" x2="{x1:.1f}" y2="{bar_y + bar_h + 3}" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>')
+                row = row_by_session.get(sid, {})
+                replay_due_ms = to_float(row.get("replay_due_ms"))
+                if replay_due_ms is None or abs(raw_start_ms - replay_due_ms) >= 5.0:
+                    svg.append(f'<text x="{x1:.1f}" y="{bar_y + bar_h + 13}" text-anchor="middle" font-size="9" fill="#991b1b" font-weight="700">replay start</text>')
             if replay_continues:
                 arrow_x = left + plot_w - 7
                 arrow_y = bar_y + bar_h / 2
@@ -881,6 +895,8 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
                 label = "HtoD" if item.get("copy_source") == "torch_profiler_h2d" else "KV"
                 svg.append(f'<line x1="{x1:.1f}" y1="{bar_y - 3}" x2="{x1:.1f}" y2="{bar_y + bar_h + 3}" stroke="#064e3b" stroke-width="1.5"><title>exact copy start</title></line>')
                 svg.append(f'<line x1="{x2:.1f}" y1="{bar_y - 3}" x2="{x2:.1f}" y2="{bar_y + bar_h + 3}" stroke="#064e3b" stroke-width="1.5"><title>exact copy end</title></line>')
+                svg.append(f'<text x="{x1:.1f}" y="{bar_y + bar_h + 22}" text-anchor="middle" font-size="9" fill="#064e3b" font-weight="700">copy start</text>')
+                svg.append(f'<text x="{x2:.1f}" y="{bar_y - 10}" text-anchor="middle" font-size="9" fill="#064e3b" font-weight="700">copy end</text>')
                 svg.append(f'<text x="{(display_x1 + display_x2) / 2:.1f}" y="{bar_y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">{label}</text>')
     legend_x = left
     legend_y = height - 32
@@ -1036,7 +1052,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], timeline: list[dict[str, 
         [
             "</tbody></table></div>",
             '<div class="panel"><h2>Timeline</h2>',
-            '<p class="caption">How to read this: this focused view zooms into the prefetch/replay boundary. Bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request; long replay bars are clipped and marked as continuing. If purple overlaps red, the hint was still running when replay arrived. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. Green bars may be widened for visibility; thin dark ticks mark the exact copy start and end. The black line is replay due.</p>',
+            '<p class="caption">How to read this: this focused view zooms into the prefetch/replay boundary. Bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request; long replay bars are clipped and marked as continuing. If purple overlaps red, the hint was still running when replay arrived. Small labels mark hint start/end, copy start/end, replay due, and replay start. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. Green bars may be widened for visibility; thin dark ticks mark the exact copy start and end.</p>',
             *svg,
             "</div>",
         ]

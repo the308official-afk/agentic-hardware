@@ -3293,6 +3293,16 @@ It draws one green copy bar:
 Green bars can be visually widened so they are easy to see.
 Thin dark ticks on the green bar show the exact copy start and end.
 
+Small labels mark the important boundaries:
+  hint start / hint end
+  copy start / copy end
+  replay due
+  replay start
+
+When replay starts almost exactly at the replay deadline, the chart may
+merge those labels into:
+  replay due/start
+
 If a session has no green bar, the status says:
   NO VISIBLE COPY
 
