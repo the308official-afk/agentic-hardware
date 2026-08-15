@@ -38,6 +38,42 @@ def yes(row: dict[str, Any], key: str) -> bool:
     return str(row.get(key, "")).strip() in {"1", "True", "true", "yes"}
 
 
+def truthy(value: Any) -> bool:
+    return str(value).strip() in {"1", "True", "true", "yes"}
+
+
+def to_float(value: Any) -> float | None:
+    if value in ("", None):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def fmt(value: Any) -> str:
+    if value is None:
+        return ""
+    return html.escape(str(value))
+
+
+def fmt_ms(value: Any) -> str:
+    number = to_float(value)
+    if number is None:
+        return "not attributed"
+    return f"{number:.3f} ms"
+
+
+def yes_no(value: Any) -> str:
+    return "yes" if truthy(value) else "no"
+
+
+def checkpoint_class(value: Any, good_when_yes: bool = True) -> str:
+    is_yes = truthy(value)
+    good = is_yes if good_when_yes else not is_yes
+    return "good" if good else "bad"
+
+
 def load_clean_rows(root: Path, modes: list[str]) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
     for mode in modes:
@@ -182,6 +218,106 @@ def paired_takeaway(clean: dict[str, Any], baseline: dict[str, Any], attr: dict[
     return "no clean prefetch win"
 
 
+def load_timeline_json(path: Path) -> list[dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    timeline = data.get("timeline", [])
+    return timeline if isinstance(timeline, list) else []
+
+
+def choose_timeline_sessions(rows: list[dict[str, Any]], max_sessions: int) -> list[str]:
+    late = [row for row in rows if truthy(row.get("late_prefetch"))]
+    visible = [row for row in rows if as_int(row, "torch_h2d_copy_events") > 0]
+    ordered: list[str] = []
+    for group in (late, visible, rows):
+        for row in sorted(group, key=lambda item: to_float(item.get("prefetch_margin_ms")) or 1_000_000):
+            sid = str(row.get("session_id", ""))
+            if sid and sid not in ordered:
+                ordered.append(sid)
+            if len(ordered) >= max_sessions:
+                return ordered
+    return ordered
+
+
+def timeline_status(row: dict[str, Any]) -> tuple[str, str]:
+    margin = to_float(row.get("prefetch_margin_ms"))
+    checkpoint = row.get("checkpoint_result")
+    if checkpoint == "no_prefetch_needed":
+        return "NO LOAD", "#6b7280"
+    if checkpoint == "clean_success":
+        return f"CLEAN +{margin:.0f} ms" if margin is not None else "CLEAN", "#166534"
+    if checkpoint == "copy_ready_but_replay_reloaded":
+        return f"RELOAD +{margin:.0f} ms" if margin is not None else "RELOAD", "#92400e"
+    if checkpoint == "copy_ready_but_hint_not_done":
+        return f"HINT LATE +{margin:.0f} ms" if margin is not None else "HINT LATE", "#b45309"
+    if truthy(row.get("late_prefetch")) and margin is not None:
+        return f"LATE {margin:.0f} ms", "#b91c1c"
+    if as_int(row, "torch_h2d_copy_events") > 0 and margin is not None:
+        return f"SUCCESS +{margin:.0f} ms", "#166534"
+    if as_int(row, "sglang_copy_events") > 0 and margin is not None:
+        return f"SGLang OK +{margin:.0f} ms", "#92400e"
+    return "INCOMPLETE", "#6b7280"
+
+
+def session_observation(row: dict[str, Any]) -> tuple[str, str, str]:
+    margin = to_float(row.get("prefetch_margin_ms"))
+    torch_copy_events = as_int(row, "torch_h2d_copy_events")
+    sglang_events = as_int(row, "sglang_copy_events")
+    missing_reason = str(row.get("h2d_missing_reason") or "")
+    cuda_ready = yes_no(row.get("cuda_copy_ready_before_replay"))
+    hint_done = yes_no(row.get("full_hint_done_before_replay"))
+    replay_reloaded = yes_no(row.get("replay_reloaded_kv"))
+
+    if truthy(row.get("no_visible_prefetch")):
+        status = "No visible prefetch"
+        observation = "The trace did not show a SGLang KV load or CUDA HtoD copy for this hint."
+        deduction = "This session is weak evidence for movement timing; use it mainly to show missing visibility."
+    elif truthy(row.get("late_prefetch")) and margin is not None:
+        status = "Late prefetch"
+        if missing_reason == "profiler_stopped_before_kv_load":
+            observation = (
+                f"SGLang KV movement completed {abs(margin):.3f} ms after replay was already due. "
+                "CUDA HtoD is not shown because torch.profiler had already stopped before this KV window."
+            )
+            deduction = "This is a real late SGLang prefetch, but the missing green bar is a profiler-coverage issue, not proof that no CUDA copy happened."
+        else:
+            observation = f"The hinted KV movement completed {abs(margin):.3f} ms after replay was already due."
+            deduction = "The software hint existed, but the normal serving/KV path did not act early enough."
+    elif torch_copy_events > 0 and margin is not None:
+        status = "Clean useful prefetch"
+        observation = f"SGLang KV load and CUDA HtoD copies were visible, and movement completed {margin:.3f} ms before replay."
+        deduction = "This is the clean success case for movement timing: the hint moved KV early enough for the agent replay."
+    elif sglang_events > 0 and margin is not None:
+        status = "SGLang-level useful prefetch"
+        if missing_reason:
+            observation = (
+                f"SGLang KV load was visible and completed {margin:.3f} ms before replay, "
+                f"but CUDA HtoD attribution is missing because: {missing_reason}."
+            )
+        else:
+            observation = f"SGLang KV load was visible and completed {margin:.3f} ms before replay, but CUDA HtoD rows were not confidently attributed to this session."
+        deduction = "This is useful SGLang-level evidence, but weaker CUDA-level evidence."
+    else:
+        status = "Incomplete timing"
+        observation = "Some required timing fields were missing."
+        deduction = "Do not use this row as a strong success or failure example."
+
+    evidence = (
+        f"tool wait {fmt_ms(row.get('tool_wait_ms'))}; "
+        f"CUDA copy ready before replay {cuda_ready}; "
+        f"full hint done before replay {hint_done}; "
+        f"replay reloaded KV {replay_reloaded}; "
+        f"SGLang load {fmt_ms(row.get('sglang_copy_start_ms'))} -> {fmt_ms(row.get('sglang_copy_end_ms'))}; "
+        f"CUDA HtoD {fmt_ms(row.get('torch_copy_start_ms'))} -> {fmt_ms(row.get('torch_copy_end_ms'))}; "
+        f"profiler window {fmt_ms(row.get('profiler_start_ms'))} -> {fmt_ms(row.get('profiler_end_ms'))}; "
+        f"HtoD missing reason {fmt(row.get('h2d_missing_reason')) or 'none'}; "
+        f"replay due {fmt_ms(row.get('replay_due_ms'))}; "
+        f"margin {fmt_ms(row.get('prefetch_margin_ms'))}"
+    )
+    return status, observation, deduction + " " + evidence
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -240,6 +376,48 @@ def write_md(path: Path, sections: dict[str, list[dict[str, Any]]], metadata: di
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def write_timeline_md(
+    path: Path,
+    attribution_rows: list[dict[str, Any]],
+    timeline_rows: list[dict[str, Any]],
+    max_timeline_sessions: int,
+) -> None:
+    if not attribution_rows:
+        return
+    selected_ids = choose_timeline_sessions(attribution_rows, max_timeline_sessions)
+    row_by_session = {str(row.get("session_id", "")): row for row in attribution_rows}
+    selected_rows = [row_by_session[sid] for sid in selected_ids if sid in row_by_session]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines.extend(
+        [
+            "",
+            "## Timeline Summary",
+            "",
+            "This is the profiled mechanism view. The HTML report includes the visual timeline.",
+            "",
+            *md_table(timeline_summary_rows(attribution_rows)),
+            "## Timeline Layers",
+            "",
+            *md_table(timeline_layers_rows()),
+            "## Prefetch Checkpoints",
+            "",
+            *md_table(prefetch_checkpoint_rows()),
+            "## Checkpoint Results Per Session",
+            "",
+            *md_table(checkpoint_result_rows(selected_rows)),
+            "## Key Observations Per Session",
+            "",
+            *md_table(key_observation_rows(selected_rows)),
+            "## Session Details",
+            "",
+            *md_table(session_detail_rows(selected_rows)),
+        ]
+    )
+    if timeline_rows:
+        lines.extend(["", "Timeline rows are available in the paired report JSON and the HTML report."])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def html_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p>No rows.</p>"
@@ -267,8 +445,284 @@ def html_table(rows: list[dict[str, Any]]) -> str:
     return "\n".join(out)
 
 
-def write_html(path: Path, sections: dict[str, list[dict[str, Any]]], metadata: dict[str, Any]) -> None:
+def build_timeline_svg(
+    rows: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    max_sessions: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    selected = choose_timeline_sessions(rows, max_sessions)
+    row_by_session = {str(row.get("session_id", "")): row for row in rows}
+    selected_rows = [row_by_session[sid] for sid in selected if sid in row_by_session]
+    selected_timeline = [item for item in timeline if item.get("session_id") in selected]
+    if selected_timeline:
+        start = min(float(item["start_ms"]) for item in selected_timeline)
+        end = max(float(item["end_ms"]) for item in selected_timeline)
+    else:
+        start, end = 0.0, 1.0
+    span = max(1.0, end - start)
+    width = 1500
+    left = 225
+    right = 55
+    row_h = 84
+    top = 78
+    height = top + row_h * max(1, len(selected)) + 104
+    plot_w = width - left - right
+    colors = {
+        "initial": "#2563eb",
+        "tool_wait": "#d1d5db",
+        "hint_submitted": "#7c3aed",
+        "hint_request": "#a855f7",
+        "sglang_copy": "#f59e0b",
+        "torch_copy": "#16a34a",
+        "replay_due": "#111827",
+        "replay": "#dc2626",
+    }
+
+    def x_pos(ms: float) -> float:
+        return left + (ms - start) / span * plot_w
+
+    row_index = {sid: idx for idx, sid in enumerate(selected)}
+    svg: list[str] = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Agentic prefetch timeline">',
+        f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
+    ]
+    for tick in range(6):
+        ms = start + span * tick / 5
+        x = x_pos(ms)
+        svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 30}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+    for sid in selected:
+        y = top + row_index[sid] * row_h
+        row = row_by_session.get(sid, {})
+        status_label, status_color = timeline_status(row)
+        svg.append(f'<text x="10" y="{y + 15}" font-weight="700">{html.escape(sid)}</text>')
+        svg.append(
+            f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>'
+        )
+        svg.append(f'<line x1="{left}" y1="{y + 12}" x2="{left + plot_w}" y2="{y + 12}" stroke="#f3f4f6"/>')
+        svg.append(f'<line x1="{left}" y1="{y + 48}" x2="{left + plot_w}" y2="{y + 48}" stroke="#f9fafb"/>')
+        prefetch_done = to_float(row.get("torch_copy_end_ms")) or to_float(row.get("sglang_copy_end_ms"))
+        replay_due = to_float(row.get("replay_due_ms"))
+        margin = to_float(row.get("prefetch_margin_ms"))
+        if prefetch_done is not None and replay_due is not None and margin is not None:
+            x_done = x_pos(prefetch_done)
+            x_due = x_pos(replay_due)
+            y_margin = y + 48
+            y_label = y + 70
+            if margin >= 0:
+                svg.append(
+                    f'<line x1="{x_done:.1f}" y1="{y_margin}" x2="{x_due:.1f}" y2="{y_margin}" '
+                    'stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>'
+                )
+                svg.append(
+                    f'<circle cx="{x_done:.1f}" cy="{y_margin}" r="5" fill="#16a34a"><title>prefetch done</title></circle>'
+                )
+                svg.append(
+                    f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_label}" text-anchor="middle" font-size="12" fill="#166534" font-weight="700">ready +{margin:.0f} ms</text>'
+                )
+            else:
+                x1 = min(x_due, x_done)
+                x2 = max(x_due, x_done)
+                svg.append(f'<rect x="{x1:.1f}" y="{y + 3}" width="{max(2, x2 - x1):.1f}" height="40" fill="#fee2e2" opacity="0.7"/>')
+                svg.append(
+                    f'<line x1="{x_due:.1f}" y1="{y_margin}" x2="{x_done:.1f}" y2="{y_margin}" '
+                    'stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>'
+                )
+                svg.append(
+                    f'<circle cx="{x_done:.1f}" cy="{y_margin}" r="5" fill="#dc2626"><title>prefetch done after replay due</title></circle>'
+                )
+                svg.append(
+                    f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_label}" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">{abs(margin):.0f} ms late</text>'
+                )
+    for item in selected_timeline:
+        sid = str(item.get("session_id", ""))
+        if sid not in row_index:
+            continue
+        y = top + row_index[sid] * row_h
+        kind = str(item.get("kind", ""))
+        color = colors.get(kind, "#6b7280")
+        x1 = x_pos(float(item.get("start_ms", 0.0)))
+        x2 = x_pos(float(item.get("end_ms", 0.0)))
+        label = html.escape(str(item.get("label", kind)))
+        if x1 == x2:
+            stroke_width = 6 if kind == "replay_due" else 3
+            svg.append(
+                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"><title>{label}</title></line>'
+            )
+            if kind == "replay_due":
+                svg.append(
+                    f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>'
+                )
+        else:
+            svg.append(
+                f'<rect x="{x1:.1f}" y="{y + 4}" width="{max(2, x2 - x1):.1f}" height="24" rx="3" fill="{color}" opacity="0.88"><title>{label}</title></rect>'
+            )
+            if kind in {"sglang_copy", "torch_copy"} and x2 - x1 > 45:
+                text_label = "KV load" if kind == "sglang_copy" else "HtoD"
+                svg.append(
+                    f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{text_label}</text>'
+                )
+    legend_x = left
+    legend_y = height - 32
+    for idx, (kind, color) in enumerate(colors.items()):
+        lx = legend_x + idx * 130
+        svg.append(f'<rect x="{lx}" y="{legend_y}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y + 12}">{html.escape(kind)}</text>')
+    svg.append(
+        f'<line x1="{left}" y1="{height - 8}" x2="{left + 90}" y2="{height - 8}" stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>'
+    )
+    svg.append(f'<text x="{left + 100}" y="{height - 4}" fill="#166534">green gap = prefetch done before replay</text>')
+    svg.append(
+        f'<line x1="{left + 420}" y1="{height - 8}" x2="{left + 510}" y2="{height - 8}" stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>'
+    )
+    svg.append(f'<text x="{left + 520}" y="{height - 4}" fill="#b91c1c">red gap = prefetch finished after replay was due</text>')
+    svg.append("</svg>")
+    return "\n".join(svg), selected_rows
+
+
+def timeline_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    margins = [float(row["prefetch_margin_ms"]) for row in rows if row.get("prefetch_margin_ms") not in ("", None)]
+    missing_reasons = sorted({str(row.get("h2d_missing_reason")) for row in rows if row.get("h2d_missing_reason")})
+    return [
+        {
+            "sessions": len(rows),
+            "sessions_with_visible_h2d_copy": sum(1 for row in rows if as_int(row, "torch_h2d_copy_events") > 0),
+            "late_prefetch_sessions": sum(1 for row in rows if truthy(row.get("late_prefetch"))),
+            "cuda_copy_ready_before_replay": sum(1 for row in rows if truthy(row.get("cuda_copy_ready_before_replay"))),
+            "full_hint_done_before_replay": sum(1 for row in rows if truthy(row.get("full_hint_done_before_replay"))),
+            "sessions_where_replay_reloaded_kv": sum(1 for row in rows if truthy(row.get("replay_reloaded_kv"))),
+            "clean_success_sessions": sum(1 for row in rows if row.get("checkpoint_result") == "clean_success"),
+            "h2d_missing_reasons": ", ".join(missing_reasons),
+            "avg_prefetch_margin_ms": round(mean(margins), 3) if margins else "",
+        }
+    ]
+
+
+def timeline_layers_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "Layer": "gray tool_wait",
+            "Meaning": "The agent is waiting for a tool result, such as tests, search, or build output.",
+            "Why it matters": "This is the opportunity window where prefetch can happen before the next model turn.",
+        },
+        {
+            "Layer": "purple hint_request",
+            "Meaning": "The software request we currently send to SGLang to trigger KV load-back.",
+            "Why it matters": "This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.",
+        },
+        {
+            "Layer": "green torch_copy",
+            "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request.",
+            "Why it matters": "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request.",
+        },
+        {
+            "Layer": "black replay_due",
+            "Meaning": "The time when the tool result is ready and the real replay request is due.",
+            "Why it matters": "If prefetch finishes after this line, the agent can still stall waiting for KV.",
+        },
+        {
+            "Layer": "green/red dashed gap",
+            "Meaning": "The time between KV/copy completion and replay due.",
+            "Why it matters": "Green means KV movement finished before replay. Red means replay was already due before movement finished.",
+        },
+    ]
+
+
+def prefetch_checkpoint_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "Checkpoint": "CUDA copy ready before replay",
+            "Simple meaning": "The green HtoD copy ended before the black replay-due line.",
+            "Why it matters": "This proves profiler-visible GPU copy work happened early enough, but only for the copied slice we attributed.",
+        },
+        {
+            "Checkpoint": "Full hint done before replay",
+            "Simple meaning": "The whole purple hint request finished before replay resumed.",
+            "Why it matters": "This catches cases where the copy started early but the normal SGLang request path was still busy.",
+        },
+        {
+            "Checkpoint": "Replay reloaded KV",
+            "Simple meaning": "The real replay request still triggered SGLang KV load-back events.",
+            "Why it matters": "This catches cases where prefetched KV was incomplete, evicted, or not enough for the replay.",
+        },
+    ]
+
+
+def checkpoint_result_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    keys = [
+        "session_id",
+        "cuda_copy_ready_before_replay",
+        "full_hint_done_before_replay",
+        "replay_reloaded_kv",
+        "resume_load_count",
+        "hint_outcome",
+        "checkpoint_result",
+    ]
+    return [{key: row.get(key, "") for key in keys} for row in rows]
+
+
+def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        status, observation, deduction = session_observation(row)
+        out.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "status": status,
+                "what happened": observation,
+                "deduction and evidence": deduction,
+            }
+        )
+    return out
+
+
+def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    columns = [
+        "session_id",
+        "priority",
+        "tool_wait_ms",
+        "prompt_tokens",
+        "hint_submitted_ms",
+        "sglang_copy_start_ms",
+        "sglang_copy_end_ms",
+        "torch_copy_start_ms",
+        "torch_copy_end_ms",
+        "torch_h2d_copy_events",
+        "torch_h2d_bytes",
+        "sglang_kv_profiler_status",
+        "h2d_missing_reason",
+        "profiler_start_ms",
+        "profiler_end_ms",
+        "profiler_stop_reason",
+        "replay_due_ms",
+        "prefetch_margin_ms",
+        "late_prefetch",
+        "cuda_copy_ready_before_replay",
+        "full_hint_done_before_replay",
+        "replay_reloaded_kv",
+        "resume_load_count",
+        "resume_hicache_load_count",
+        "eviction_pressure_after_prefetch",
+        "hint_total_duration_ms",
+        "hint_outcome",
+        "checkpoint_result",
+        "replay_ttft_ms",
+    ]
+    return [{column: row.get(column, "") for column in columns} for row in rows]
+
+
+def write_html(
+    path: Path,
+    sections: dict[str, list[dict[str, Any]]],
+    metadata: dict[str, Any],
+    attribution_rows: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    max_timeline_sessions: int,
+) -> None:
     cards = summary_cards(sections)
+    timeline_svg, selected_timeline_rows = build_timeline_svg(attribution_rows, timeline, max_timeline_sessions)
     lines = [
         "<!doctype html>",
         '<html lang="en">',
@@ -290,6 +744,7 @@ def write_html(path: Path, sections: dict[str, list[dict[str, Any]]], metadata: 
         "th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}",
         "th{background:#f3f4f6;font-weight:700;white-space:nowrap}",
         "td{white-space:normal;min-width:90px}",
+        ".wide td{min-width:180px}",
         ".caption{color:#374151;line-height:1.5}",
         ".good{color:var(--good);font-weight:700}",
         ".bad{color:var(--bad);font-weight:700}",
@@ -326,12 +781,59 @@ def write_html(path: Path, sections: dict[str, list[dict[str, Any]]], metadata: 
         html.escape(json.dumps(metadata, indent=2, sort_keys=True)),
         "</pre></div>",
     ]
-    for title, rows in sections.items():
+    for title in ("Clean Performance Summary", "Profiled Attribution Summary"):
+        rows = sections.get(title, [])
         lines.append(f'<div class="panel"><h2>{html.escape(title)}</h2>')
         lines.append(f'<p class="caption">{html.escape(section_caption(title))}</p>')
         lines.append('<div class="table-wrap">')
         lines.append(html_table(rows))
         lines.append("</div></div>")
+    if attribution_rows and timeline:
+        lines.append('<div class="panel"><h2>Timeline Summary</h2>')
+        lines.append('<p class="caption">This is the profiled mechanism view. It shows what happened inside the hinted path, not clean TTFT performance.</p>')
+        lines.append('<div class="table-wrap">')
+        lines.append(html_table(timeline_summary_rows(attribution_rows)))
+        lines.append("</div></div>")
+        lines.append('<div class="panel"><h2>Timeline</h2>')
+        lines.append(
+            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Green is the profiler-attributed CUDA HtoD copy observed inside that hint request. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>'
+        )
+        lines.append(timeline_svg)
+        lines.append("</div>")
+        timeline_sections = [
+            ("Timeline Layers", timeline_layers_rows(), "These rows explain what each visual layer in the timeline means."),
+            ("Prefetch Checkpoints", prefetch_checkpoint_rows(), "These checkpoints separate copy readiness, full hint completion, and replay reuse."),
+            (
+                "Checkpoint Results Per Session",
+                checkpoint_result_rows(selected_timeline_rows),
+                "This table shows whether each selected session passed or failed each checkpoint.",
+            ),
+            (
+                "Key Observations Per Session",
+                key_observation_rows(selected_timeline_rows),
+                "Plain-English interpretation of the selected sessions in the timeline.",
+            ),
+            (
+                "Session Details",
+                session_detail_rows(selected_timeline_rows),
+                "Raw timing fields for the selected sessions. Use this to defend the visual conclusions.",
+            ),
+        ]
+        for title, rows, caption in timeline_sections:
+            lines.append(f'<div class="panel"><h2>{html.escape(title)}</h2>')
+            lines.append(f'<p class="caption">{html.escape(caption)}</p>')
+            lines.append('<div class="table-wrap wide">')
+            lines.append(html_table(rows))
+            lines.append("</div></div>")
+    else:
+        lines.append(
+            '<div class="panel"><h2>Timeline</h2><p class="caption">No profiled timeline JSON was found for this report. Run the profiled attribution step to populate the visual timeline sections.</p></div>'
+        )
+    lines.append('<div class="panel"><h2>Paired Session Evidence</h2>')
+    lines.append(f'<p class="caption">{html.escape(section_caption("Paired Session Evidence"))}</p>')
+    lines.append('<div class="table-wrap">')
+    lines.append(html_table(sections.get("Paired Session Evidence", [])))
+    lines.append("</div></div>")
     lines.extend(["</body>", "</html>"])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -441,6 +943,10 @@ def copy_latest_reports(out_root: Path, latest_root: Path) -> None:
         "paired_clean_summary.csv": "latest_paired_clean_summary.csv",
         "paired_attribution_summary.csv": "latest_paired_attribution_summary.csv",
         "paired_session_evidence.csv": "latest_paired_session_evidence.csv",
+        "paired_timeline_summary.csv": "latest_paired_timeline_summary.csv",
+        "paired_checkpoint_results.csv": "latest_paired_checkpoint_results.csv",
+        "paired_key_observations.csv": "latest_paired_key_observations.csv",
+        "paired_session_details.csv": "latest_paired_session_details.csv",
     }
     for src_name, dst_name in copies.items():
         src = out_root / src_name
@@ -456,6 +962,8 @@ def main() -> None:
     parser.add_argument("--modes", default="no_prefetch direct_load oracle_direct_load")
     parser.add_argument("--attribution-mode", default="oracle_direct_load")
     parser.add_argument("--latest-root", default="")
+    parser.add_argument("--timeline-json", default="")
+    parser.add_argument("--max-timeline-sessions", type=int, default=12)
     args = parser.parse_args()
 
     clean_root = Path(args.clean_root)
@@ -466,6 +974,11 @@ def main() -> None:
 
     clean_rows = load_clean_rows(clean_root, modes)
     attribution_rows = read_csv(attribution_root / f"{args.attribution_mode}_agentic_prefetch_timeline.csv")
+    timeline_json = Path(args.timeline_json) if args.timeline_json else attribution_root / f"{args.attribution_mode}_agentic_prefetch_timeline.json"
+    timeline_rows = load_timeline_json(timeline_json)
+    selected_ids = choose_timeline_sessions(attribution_rows, args.max_timeline_sessions)
+    attr_by_session = {str(row.get("session_id", "")): row for row in attribution_rows}
+    selected_timeline_rows = [attr_by_session[sid] for sid in selected_ids if sid in attr_by_session]
 
     sections = {
         "Clean Performance Summary": build_clean_summary(clean_rows),
@@ -478,6 +991,8 @@ def main() -> None:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "modes": modes,
         "attribution_mode": args.attribution_mode,
+        "timeline_json": str(timeline_json),
+        "max_timeline_sessions": args.max_timeline_sessions,
         "latest_root": args.latest_root,
         "note": "Profiled attribution rows should not be used for TTFT performance claims.",
     }
@@ -485,12 +1000,41 @@ def main() -> None:
     write_csv(out_root / "paired_clean_summary.csv", sections["Clean Performance Summary"])
     write_csv(out_root / "paired_attribution_summary.csv", sections["Profiled Attribution Summary"])
     write_csv(out_root / "paired_session_evidence.csv", sections["Paired Session Evidence"])
+    write_csv(out_root / "paired_timeline_summary.csv", timeline_summary_rows(attribution_rows))
+    write_csv(out_root / "paired_checkpoint_results.csv", checkpoint_result_rows(selected_timeline_rows))
+    write_csv(out_root / "paired_key_observations.csv", key_observation_rows(selected_timeline_rows))
+    write_csv(out_root / "paired_session_details.csv", session_detail_rows(selected_timeline_rows))
     (out_root / "paired_report.json").write_text(
-        json.dumps({"metadata": metadata, "sections": sections}, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            {
+                "metadata": metadata,
+                "sections": sections,
+                "timeline": {
+                    "summary": timeline_summary_rows(attribution_rows),
+                    "layers": timeline_layers_rows(),
+                    "prefetch_checkpoints": prefetch_checkpoint_rows(),
+                    "checkpoint_results": checkpoint_result_rows(selected_timeline_rows),
+                    "key_observations": key_observation_rows(selected_timeline_rows),
+                    "session_details": session_detail_rows(selected_timeline_rows),
+                    "timeline_rows": timeline_rows,
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     write_md(out_root / "paired_report.md", sections, metadata)
-    write_html(out_root / "paired_report.html", sections, metadata)
+    write_timeline_md(out_root / "paired_report.md", attribution_rows, timeline_rows, args.max_timeline_sessions)
+    write_html(
+        out_root / "paired_report.html",
+        sections,
+        metadata,
+        attribution_rows,
+        timeline_rows,
+        args.max_timeline_sessions,
+    )
     if args.latest_root:
         copy_latest_reports(out_root, Path(args.latest_root))
 

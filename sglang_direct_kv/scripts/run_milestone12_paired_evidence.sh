@@ -107,6 +107,7 @@ python scripts/summarize_milestone12_paired_evidence.py \
   --out-root "${REPORT_ROOT}" \
   --modes "${CLEAN_MODES}" \
   --attribution-mode "${ATTRIBUTION_MODE}" \
+  --max-timeline-sessions "${TIMELINE_MAX_SESSIONS}" \
   --latest-root "${LATEST_REPORT_ROOT}"
 
 echo
@@ -118,3 +119,5 @@ echo "Paired report Markdown: ${REPORT_ROOT}/paired_report.md"
 echo "Latest paired report HTML: ${LATEST_REPORT_ROOT}/latest_paired_report.html"
 echo "Latest paired report Markdown: ${LATEST_REPORT_ROOT}/latest_paired_report.md"
 echo "Latest paired report JSON: ${LATEST_REPORT_ROOT}/latest_paired_report.json"
+echo "Latest checkpoint CSV: ${LATEST_REPORT_ROOT}/latest_paired_checkpoint_results.csv"
+echo "Latest key observations CSV: ${LATEST_REPORT_ROOT}/latest_paired_key_observations.csv"

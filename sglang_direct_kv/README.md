@@ -2642,6 +2642,9 @@ Stable latest report copies:
 artifacts/results/latest_paired_report.html
 artifacts/results/latest_paired_report.md
 artifacts/results/latest_paired_report.json
+artifacts/results/latest_paired_checkpoint_results.csv
+artifacts/results/latest_paired_key_observations.csv
+artifacts/results/latest_paired_session_details.csv
 ```
 
 The run-specific report stays in the milestone folder.
@@ -2665,8 +2668,39 @@ Clean Performance Summary:
 Profiled Attribution Summary:
   profiler-on CUDA HtoD, hint completion, and replay reload evidence
 
+Timeline Summary:
+  count of sessions, visible CUDA copies, late prefetches, reloads, and clean successes
+
+Timeline:
+  visual timeline from the profiled attribution run
+
+Timeline Layers:
+  explains the visual bars and markers
+
+Prefetch Checkpoints:
+  explains the three checkpoint questions: copy ready, hint done, replay reloaded KV
+
+Checkpoint Results Per Session:
+  shows pass/fail checkpoint results for each selected agent session
+
+Key Observations Per Session:
+  plain-English interpretation of what happened in each selected session
+
+Session Details:
+  raw timing fields used to defend the visual conclusions
+
 Paired Session Evidence:
   one row per session joining the clean performance result with profiled mechanism evidence
+```
+
+Important:
+
+```text
+The timeline sections come from the profiled attribution run.
+They are for mechanism evidence, not clean TTFT claims.
+
+The clean performance table comes from the profiler-off run.
+It is the right place to make latency claims.
 ```
 
 Recommended run:
