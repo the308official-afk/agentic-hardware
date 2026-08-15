@@ -481,6 +481,19 @@ def build_timeline_svg(
     def x_pos(ms: float) -> float:
         return left + (ms - start) / span * plot_w
 
+    def layer_order(item: dict[str, Any]) -> int:
+        order = {
+            "tool_wait": 0,
+            "initial": 1,
+            "hint_submitted": 2,
+            "hint_request": 3,
+            "replay": 4,
+            "sglang_copy": 5,
+            "torch_copy": 6,
+            "replay_due": 7,
+        }
+        return order.get(str(item.get("kind", "")), 10)
+
     row_index = {sid: idx for idx, sid in enumerate(selected)}
     svg: list[str] = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Agentic prefetch timeline">',
@@ -534,7 +547,7 @@ def build_timeline_svg(
                 svg.append(
                     f'<text x="{(x_done + x_due) / 2:.1f}" y="{y_label}" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">{abs(margin):.0f} ms late</text>'
                 )
-    for item in selected_timeline:
+    for item in sorted(selected_timeline, key=layer_order):
         sid = str(item.get("session_id", ""))
         if sid not in row_index:
             continue
@@ -554,10 +567,25 @@ def build_timeline_svg(
                     f'<text x="{x1:.1f}" y="{y + 43}" text-anchor="middle" font-size="11" fill="#111827" font-weight="700">due</text>'
                 )
         else:
+            display_x2 = x2
+            bar_y = y + 4
+            bar_h = 24
+            opacity = "0.88"
+            stroke = ""
+            if kind == "torch_copy":
+                display_x2 = max(x2, x1 + 24)
+                bar_y = y
+                bar_h = 32
+                opacity = "1"
+                stroke = ' stroke="#f8fafc" stroke-width="3"'
             svg.append(
-                f'<rect x="{x1:.1f}" y="{y + 4}" width="{max(2, x2 - x1):.1f}" height="24" rx="3" fill="{color}" opacity="0.88"><title>{label}</title></rect>'
+                f'<rect x="{x1:.1f}" y="{bar_y}" width="{max(2, display_x2 - x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"{stroke}><title>{label}</title></rect>'
             )
-            if kind in {"sglang_copy", "torch_copy"} and x2 - x1 > 45:
+            if kind == "torch_copy":
+                svg.append(
+                    f'<text x="{(x1 + display_x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="10" fill="white" font-weight="700">HtoD</text>'
+                )
+            elif kind == "sglang_copy" and x2 - x1 > 45:
                 text_label = "KV load" if kind == "sglang_copy" else "HtoD"
                 svg.append(
                     f'<text x="{(x1 + x2) / 2:.1f}" y="{y + 20}" text-anchor="middle" font-size="11" fill="white" font-weight="700">{text_label}</text>'
@@ -578,6 +606,26 @@ def build_timeline_svg(
     svg.append(f'<text x="{left + 520}" y="{height - 4}" fill="#b91c1c">red gap = prefetch finished after replay was due</text>')
     svg.append("</svg>")
     return "\n".join(svg), selected_rows
+
+
+def visible_h2d_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        events = as_int(row, "torch_h2d_copy_events")
+        if events <= 0:
+            continue
+        out.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "h2d_start_ms": row.get("torch_copy_start_ms", ""),
+                "h2d_end_ms": row.get("torch_copy_end_ms", ""),
+                "h2d_events": events,
+                "h2d_bytes": row.get("torch_h2d_bytes", ""),
+                "replay_due_ms": row.get("replay_due_ms", ""),
+                "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+            }
+        )
+    return out
 
 
 def timeline_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -614,8 +662,8 @@ def timeline_layers_rows() -> list[dict[str, Any]]:
         },
         {
             "Layer": "green torch_copy",
-            "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request.",
-            "Why it matters": "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request.",
+            "Meaning": "Profiler-attributed CUDA host-to-device copy activity inside the hint request. On the chart, short green bars are visually widened so they are easy to see.",
+            "Why it matters": "This is the closest signal we have for actual GPU-side KV movement. It should usually live inside the purple hint request. Use the HtoD table for exact start/end times.",
         },
         {
             "Layer": "black replay_due",
@@ -796,10 +844,19 @@ def write_html(
         lines.append("</div></div>")
         lines.append('<div class="panel"><h2>Timeline</h2>')
         lines.append(
-            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Green is the profiler-attributed CUDA HtoD copy observed inside that hint request. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>'
+            '<p class="caption">How to read this: gray is the tool-wait window. Purple is the software hint request that runs during the tool wait. Green is the profiler-attributed CUDA HtoD copy observed inside that hint request. Green HtoD bars are drawn on top with a minimum visual width so short copy windows are not lost at full timeline scale. The black line is replay due. A green dashed gap means KV movement finished before replay. A red dashed gap means replay was already due before KV movement finished.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
+        h2d_rows = visible_h2d_rows(selected_timeline_rows)
+        if h2d_rows:
+            lines.append('<div class="panel"><h2>Visible CUDA HtoD Copies</h2>')
+            lines.append(
+                '<p class="caption">These are the selected sessions where the profiler attributed host-to-device CUDA copy activity. The green bars in the timeline correspond to these rows.</p>'
+            )
+            lines.append('<div class="table-wrap">')
+            lines.append(html_table(h2d_rows))
+            lines.append("</div></div>")
         timeline_sections = [
             ("Timeline Layers", timeline_layers_rows(), "These rows explain what each visual layer in the timeline means."),
             ("Prefetch Checkpoints", prefetch_checkpoint_rows(), "These checkpoints separate copy readiness, full hint completion, and replay reuse."),
