@@ -3765,7 +3765,7 @@ What changed from the original Experiment 6:
 
 | Original Exp6 Piece | Direct-SGLang Version |
 | --- | --- |
-| Dynamo frontend on port 8000 | SGLang endpoint on port 30000 |
+| Dynamo frontend on port 8000 | SGLang endpoint on port 30000 plus a lightweight tool-normalizer proxy |
 | Dynamo start/stop wrapper | direct SGLang server launcher |
 | GH200-oriented model path | direct SGLang path using `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` |
 | same Deep Agents tool loop | kept |
@@ -3773,22 +3773,28 @@ What changed from the original Experiment 6:
 | same prompt-evolution reports | kept |
 | same trajectory catalog format | kept |
 
-Recommended first run:
+Recommended g5.2xlarge validation run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RUN_ID="exp6_direct_sglang_smoke_1"
+RUN_ID="exp6_direct_qwen7b_synced_smoke_$(date +%Y%m%d_%H%M%S)"
 
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
 PROMPT_EVOLUTION_BATCH_ID="${RUN_ID}" \
 START_INDEX=0 \
 END_INDEX=1 \
+REUSE_SERVER=0 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
 SERVER_READY_TIMEOUT_SECS=1800 \
-TOOL_CALL_PARSER=qwen3_coder \
-REASONING_PARSER=qwen3 \
+TOOL_CALL_PARSER=hermes \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
 EXTRA_SERVER_ARGS="--disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule" \
 AGENTBENCH_DEEPAGENTS_SOURCE=upstream \
 AGENTBENCH_EXECUTION_LOOP=1 \
@@ -3801,17 +3807,17 @@ AGENTBENCH_SOFT_STOP_RECURSION=1 \
 AGENTBENCH_AGENT_RECURSION_LIMIT=1000 \
 AGENTBENCH_TRACE_AGENT_STREAM=0 \
 PROMPT_EVOLUTION_REQUIRE_TOOL_LOOP=1 \
-PROMPT_EVOLUTION_TOOL_LOOP_CASE=edit-validate \
+PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
 bash scripts/run_milestone21_exp6_direct_sglang.sh \
-  Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-Expected good preflight:
+Expected good 7B preflight on g5.2xlarge:
 
 ```text
-tool_calls=2
-tool_messages=2
-unique_tools=execute,write_file
+tool_calls=3
+tool_messages=3
+unique_tools=execute,ls,read_file
 multi_tool_loop_observed=True
 case_success=True
 Deep Agents tool-loop preflight passed.
@@ -3837,14 +3843,36 @@ Observed 7B fallback result on `g5.2xlarge`:
 ```text
 Model: Qwen/Qwen2.5-Coder-7B-Instruct
 Server result: SGLang loaded successfully, allocated KV cache, and passed smoke chat.
-Natural tool preflight: failed with tool_calls=0 and final_text=TOOL_CALL_FAILED.
-Forced tool preflight: produced repeated SGLang requests and growing cached context,
-but did not complete the required edit/execute loop cleanly.
+Raw SGLang result: required/named tool_choice can produce structured tool calls.
+Deep Agents result after fixes: natural auto mode can execute a real multi-tool loop
+through the normalizer proxy.
+
+Validated preflight:
+tool_calls=3
+tool_messages=3
+unique_tools=execute,ls,read_file
+case_success=True
+
+Validated smoke batch:
+2 SWE-bench Pro tasks ran through Deep Agents -> direct SGLang.
+The runs produced real tool calls across execution, patch_generation, and review.
+The trajectory prompt catalog was rebuilt with 2 tasks and 12 phase prompts.
 
 Interpretation:
-The 7B model is useful for checking that direct SGLang serving works on A10G.
-It is not a good substitute for the realistic Exp6 tool-calling workload because
-it does not reliably emit structured Deep Agents tool calls in this setup.
+The 7B model is now useful for validating direct-SGLang wiring on A10G.
+For manager-grade performance evidence, still prefer the larger Qwen3-Coder path
+on a compatible GPU/backend.
+```
+
+Why the tool-normalizer proxy exists:
+
+```text
+Without Dynamo, direct SGLang sometimes returns Qwen/Hermes tool calls as text,
+for example JSON inside <tools> or <|im_start|> wrappers.
+
+Deep Agents needs OpenAI-style structured tool_calls.
+The proxy converts clear textual tool-call payloads into structured tool_calls,
+which restores the frontend behavior needed for the Dynamo-free testbed.
 ```
 
 Important events to observe:

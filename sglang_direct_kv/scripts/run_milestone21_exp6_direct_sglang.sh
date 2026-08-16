@@ -3,6 +3,7 @@ set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8}"
 HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
+FRONTEND_URL_EXPLICIT="${FRONTEND_URL+x}"
 FRONTEND_URL="${FRONTEND_URL:-${HOST_URL}/v1/chat/completions}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone21_exp6_direct_sglang}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
@@ -42,9 +43,14 @@ AGENTBENCH_INSTALL_DEPS="${AGENTBENCH_INSTALL_DEPS:-1}"
 RUN_PREFLIGHT="${RUN_PREFLIGHT:-1}"
 REUSE_SERVER="${REUSE_SERVER:-0}"
 SERVER_MODE="${SERVER_MODE:-simple}"
+ENABLE_TOOL_NORMALIZER_PROXY="${ENABLE_TOOL_NORMALIZER_PROXY:-1}"
+TOOL_NORMALIZER_HOST="${TOOL_NORMALIZER_HOST:-127.0.0.1}"
+TOOL_NORMALIZER_PORT="${TOOL_NORMALIZER_PORT:-31003}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-32768}"
 TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-auto}"
 REASONING_PARSER="${REASONING_PARSER:-auto}"
+SAMPLING_BACKEND="${SAMPLING_BACKEND:-pytorch}"
+SAMPLING_DEFAULTS="${SAMPLING_DEFAULTS:-openai}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-14}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.45}"
 MODEL_SMOKE_RETRIES="${MODEL_SMOKE_RETRIES:-120}"
@@ -70,10 +76,8 @@ MODEL_LC="$(printf '%s' "${MODEL}" | tr '[:upper:]' '[:lower:]')"
 if [[ "${TOOL_CALL_PARSER}" = "auto" ]]; then
   if [[ "${MODEL_LC}" == *"qwen3-coder"* || "${MODEL_LC}" == *"qwen3_coder"* ]]; then
     TOOL_CALL_PARSER="qwen3_coder"
-  elif [[ "${MODEL_LC}" == *"qwen"* ]]; then
-    TOOL_CALL_PARSER="qwen"
   else
-    TOOL_CALL_PARSER=""
+    TOOL_CALL_PARSER="hermes"
   fi
 fi
 if [[ "${REASONING_PARSER}" = "auto" ]]; then
@@ -110,10 +114,16 @@ PREFLIGHT_DIR="${RESULT_ROOT}/tool_loop_preflight"
 PREFLIGHT_LOG="${RESULT_ROOT}/tool_loop_preflight.log"
 TASK_INDEX_CSV="${RESULT_ROOT}/exp6_direct_sglang_task_index.csv"
 server_pid=""
+normalizer_pid=""
 
 mkdir -p "${RESULT_ROOT}" "${LATEST_REPORT_ROOT}" "${BATCH_DIR}" "${SHARED_CHART_DIR}"
 
 cleanup_server() {
+  if [[ -n "${normalizer_pid}" ]]; then
+    kill "${normalizer_pid}" >/dev/null 2>&1 || true
+    wait "${normalizer_pid}" >/dev/null 2>&1 || true
+    normalizer_pid=""
+  fi
   if [[ -n "${server_pid}" ]]; then
     kill "-${server_pid}" >/dev/null 2>&1 || true
     sleep 2
@@ -151,6 +161,56 @@ wait_for_server() {
     tail -160 "${SERVER_LOG}" | tee -a "${DRIVER_LOG}" || true
     exit 1
   fi
+}
+
+start_tool_normalizer_proxy() {
+  [[ "${ENABLE_TOOL_NORMALIZER_PROXY}" = "1" ]] || return 0
+
+  if [[ -n "${FRONTEND_URL_EXPLICIT}" && "${FRONTEND_URL}" != "${HOST_URL}/v1/chat/completions" ]]; then
+    echo "Using explicit FRONTEND_URL=${FRONTEND_URL}; not starting tool normalizer proxy." | tee -a "${DRIVER_LOG}"
+    return 0
+  fi
+
+  local proxy_log="${RESULT_ROOT}/tool_normalizer_proxy.log"
+  local proxy_jsonl="${RESULT_ROOT}/tool_normalizer_proxy.jsonl"
+  local existing_pids
+  existing_pids="$(pgrep -f "openai_proxy_logger.py --listen-port ${TOOL_NORMALIZER_PORT}" || true)"
+  if [[ -n "${existing_pids}" ]]; then
+    echo "Stopping existing tool normalizer proxy on port ${TOOL_NORMALIZER_PORT}: ${existing_pids}" | tee -a "${DRIVER_LOG}"
+    kill ${existing_pids} >/dev/null 2>&1 || true
+    sleep 1
+  fi
+
+  : > "${proxy_jsonl}"
+  echo "Starting direct-SGLang tool normalizer proxy on ${TOOL_NORMALIZER_HOST}:${TOOL_NORMALIZER_PORT}." | tee -a "${DRIVER_LOG}"
+  "${PYTHON_BIN}" scripts/openai_proxy_logger.py \
+    --listen-host "${TOOL_NORMALIZER_HOST}" \
+    --listen-port "${TOOL_NORMALIZER_PORT}" \
+    --target-base "${HOST_URL}" \
+    --log "${proxy_jsonl}" \
+    --normalize-tool-calls \
+    >"${proxy_log}" 2>&1 &
+  normalizer_pid="$!"
+  echo "${normalizer_pid}" > "${RESULT_ROOT}/tool_normalizer_proxy.pid"
+
+  local proxy_model_info="http://${TOOL_NORMALIZER_HOST}:${TOOL_NORMALIZER_PORT}/model_info"
+  for _ in $(seq 1 30); do
+    if curl -fsS "${proxy_model_info}" >/dev/null 2>&1; then
+      FRONTEND_URL="http://${TOOL_NORMALIZER_HOST}:${TOOL_NORMALIZER_PORT}/v1/chat/completions"
+      echo "Tool normalizer proxy ready. FRONTEND_URL=${FRONTEND_URL}" | tee -a "${DRIVER_LOG}"
+      return 0
+    fi
+    if ! kill -0 "${normalizer_pid}" >/dev/null 2>&1; then
+      echo "Tool normalizer proxy exited early. Log tail:" | tee -a "${DRIVER_LOG}"
+      tail -80 "${proxy_log}" | tee -a "${DRIVER_LOG}" || true
+      return 1
+    fi
+    sleep 1
+  done
+
+  echo "Tool normalizer proxy did not become ready. Log tail:" | tee -a "${DRIVER_LOG}"
+  tail -80 "${proxy_log}" | tee -a "${DRIVER_LOG}" || true
+  return 1
 }
 
 smoke_test_model() {
@@ -405,6 +465,9 @@ fi
   echo "SERVER_MODE=${SERVER_MODE}"
   echo "TOOL_CALL_PARSER=${TOOL_CALL_PARSER:-<unset>}"
   echo "REASONING_PARSER=${REASONING_PARSER:-<unset>}"
+  echo "SAMPLING_BACKEND=${SAMPLING_BACKEND:-<unset>}"
+  echo "SAMPLING_DEFAULTS=${SAMPLING_DEFAULTS:-<unset>}"
+  echo "ENABLE_TOOL_NORMALIZER_PROXY=${ENABLE_TOOL_NORMALIZER_PROXY}"
   echo "Dynamo is not used."
   echo
 } | tee -a "${DRIVER_LOG}"
@@ -435,6 +498,12 @@ else
   if [[ -n "${REASONING_PARSER}" && "${SERVER_EXTRA_ARGS}" != *"--reasoning-parser"* ]]; then
     SERVER_EXTRA_ARGS="${SERVER_EXTRA_ARGS} --reasoning-parser ${REASONING_PARSER}"
   fi
+  if [[ -n "${SAMPLING_BACKEND}" && "${SAMPLING_BACKEND}" != "auto" && "${SERVER_EXTRA_ARGS}" != *"--sampling-backend"* ]]; then
+    SERVER_EXTRA_ARGS="${SERVER_EXTRA_ARGS} --sampling-backend ${SAMPLING_BACKEND}"
+  fi
+  if [[ -n "${SAMPLING_DEFAULTS}" && "${SAMPLING_DEFAULTS}" != "auto" && "${SERVER_EXTRA_ARGS}" != *"--sampling-defaults"* ]]; then
+    SERVER_EXTRA_ARGS="${SERVER_EXTRA_ARGS} --sampling-defaults ${SAMPLING_DEFAULTS}"
+  fi
   export EXTRA_SERVER_ARGS="${SERVER_EXTRA_ARGS}"
   echo "Starting SGLang direct server..." | tee -a "${DRIVER_LOG}"
   echo "EXTRA_SERVER_ARGS=${EXTRA_SERVER_ARGS}" | tee -a "${DRIVER_LOG}"
@@ -450,6 +519,7 @@ else
   echo "SGLang ready." | tee -a "${DRIVER_LOG}"
 fi
 
+start_tool_normalizer_proxy
 smoke_test_model
 if [[ "${MODEL_COOLDOWN_SECS}" -gt 0 ]]; then
   echo "Cooldown: ${MODEL_COOLDOWN_SECS}s" | tee -a "${DRIVER_LOG}"

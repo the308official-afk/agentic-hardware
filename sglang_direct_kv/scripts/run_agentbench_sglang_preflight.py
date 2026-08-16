@@ -37,6 +37,12 @@ def main() -> None:
 
     from agentbench import diagnose_deepagents_tool_loop
 
+    if os.environ.get("AGENTBENCH_SGLANG_RELATIVE_TOOL_PROBE_PATHS", "0") == "1":
+        diagnose_deepagents_tool_loop.PROMPTS = {
+            key: value.replace("/tool_probe", "tool_probe")
+            for key, value in diagnose_deepagents_tool_loop.PROMPTS.items()
+        }
+
     sys.argv = [str(agentbench_root / "agentbench" / "diagnose_deepagents_tool_loop.py"), *forwarded]
     diagnose_deepagents_tool_loop.main()
 
