@@ -40,6 +40,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 20: SWE-bench Trajectory Prompt Replay | Ready | [Milestone 20](#milestone-20-swe-bench-trajectory-prompt-replay) |
 | Milestone 21: Direct SGLang Experiment 6 Prompt Evolution | Ready | [Milestone 21](#milestone-21-direct-sglang-experiment-6-prompt-evolution) |
 | Milestone 22: Live AgentBench Tool-Gap Bridge | Ready | [Milestone 22](#milestone-22-live-agentbench-tool-gap-bridge) |
+| Milestone 23: Live Prefetch Intervention | Ready | [Milestone 23](#milestone-23-live-prefetch-intervention) |
 
 ## What We Are Testing
 
@@ -4000,6 +4001,31 @@ bash scripts/run_milestone22_live_agentbench_bridge.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Bigger live-gap distribution run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="milestone22_live_qwen7b_bigger_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=5 \
+REUSE_SERVER=1 \
+SERVER_MODE=simple \
+MAX_TOTAL_TOKENS=32768 \
+TOOL_CALL_PARSER=hermes \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
+PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
+bash scripts/run_milestone22_live_agentbench_bridge.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 Build the Milestone 22 report from an existing Milestone 21 result:
 
 ```bash
@@ -4048,6 +4074,114 @@ Next step after this:
   then compare whether the prefetch path finishes before the real resume turn.
 ```
 
+### Milestone 23: Live Prefetch Intervention
+
+Status: ready.
+
+What it is:
+
+```text
+Turn the Milestone 22 live gap observer into a first live intervention path.
+
+When the proxy sees a real model response with structured tool_calls,
+it writes a live hint event.
+
+A controller tails those hint events and immediately sends a tiny
+prefetch/direct-load request directly to SGLang while Deep Agents is busy
+executing the tool.
+```
+
+Why we need it:
+
+```text
+Milestone 22 proves the opportunity window exists.
+Milestone 23 tests whether a software hint path can act inside that window.
+
+This is the first live version of the hardware story:
+
+agent emits tool call
+  -> runtime knows this session may resume soon
+  -> runtime submits a prefetch hint
+  -> SGLang receives a marked prefetch/direct-load request
+  -> real agent resume request arrives later
+```
+
+Simple timeline:
+
+```text
+0 ms:   live model request returns tool_call=execute
+2 ms:   proxy writes live_hint.submitted
+5 ms:   controller starts live prefetch request
+40 ms:  controller prefetch request ends
+120 ms: tool finishes and the real agent resume request starts
+
+If the purple controller bar ends before the black resume boundary,
+the software hint path was early enough for that turn.
+If it ends after the black boundary, the software hint path was late.
+```
+
+Recommended `g5.2xlarge` smoke:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="milestone23_live_prefetch_qwen7b_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=1 \
+REUSE_SERVER=1 \
+SERVER_MODE=simple \
+MAX_TOTAL_TOKENS=32768 \
+TOOL_CALL_PARSER=hermes \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
+PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
+bash scripts/run_milestone23_live_prefetch_intervention.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important events to observe:
+
+```text
+live_hint.submitted appears after a real tool-call response.
+live_prefetch.start appears when the controller begins acting on the hint.
+live_prefetch.end appears when the controller request finishes.
+The HTML report shows:
+  blue   = real model turn that emitted tool calls
+  gray   = real tool/harness wait gap
+  purple = live controller prefetch/direct-load request
+  black  = real resume boundary
+  red    = real resume model turn
+```
+
+Key output files:
+
+```text
+artifacts/results/<run>/live_hint_events.jsonl
+artifacts/results/<run>/live_hint_payloads/
+artifacts/results/<run>/live_prefetch_controller.jsonl
+artifacts/results/<run>/live_agentbench_prefetch_report/live_agentbench_tool_gap_report.html
+artifacts/results/latest_live_agentbench_prefetch_report.html
+artifacts/results/latest_live_agentbench_tool_gaps.csv
+```
+
+Simple interpretation:
+
+```text
+Milestone 23 answers:
+  Once real tool calls create a wait gap, can a software controller react
+  quickly enough to submit and finish a prefetch-style request before resume?
+
+This is still software emulation.
+The hardware argument becomes stronger when purple bars are late,
+overlap red bars, or add interference despite having the right semantic hint.
+```
+
 ## Directory Layout
 
 ```text
@@ -4074,6 +4208,10 @@ sglang_direct_kv/
     extract_swebench_trajectory_prompt_workload.py
     run_milestone20_swebench_trajectory_replay.sh
     run_milestone21_exp6_direct_sglang.sh
+    run_milestone22_live_agentbench_bridge.sh
+    run_milestone23_live_prefetch_intervention.sh
+    live_prefetch_controller.py
+    build_live_agentbench_tool_gap_report.py
     run_milestone10_dma_timeline.sh
     run_milestone11_agentic_timeline.sh
     run_milestone12_paired_evidence.sh

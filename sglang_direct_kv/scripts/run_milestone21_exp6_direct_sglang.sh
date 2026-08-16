@@ -183,13 +183,21 @@ start_tool_normalizer_proxy() {
 
   : > "${proxy_jsonl}"
   echo "Starting direct-SGLang tool normalizer proxy on ${TOOL_NORMALIZER_HOST}:${TOOL_NORMALIZER_PORT}." | tee -a "${DRIVER_LOG}"
-  "${PYTHON_BIN}" scripts/openai_proxy_logger.py \
+  proxy_args=(
+    scripts/openai_proxy_logger.py
     --listen-host "${TOOL_NORMALIZER_HOST}" \
     --listen-port "${TOOL_NORMALIZER_PORT}" \
     --target-base "${HOST_URL}" \
     --log "${proxy_jsonl}" \
-    --normalize-tool-calls \
-    >"${proxy_log}" 2>&1 &
+    --normalize-tool-calls
+  )
+  if [[ -n "${LIVE_HINT_LOG:-}" ]]; then
+    proxy_args+=(--hint-log "${LIVE_HINT_LOG}")
+  fi
+  if [[ -n "${LIVE_HINT_PAYLOAD_DIR:-}" ]]; then
+    proxy_args+=(--hint-payload-dir "${LIVE_HINT_PAYLOAD_DIR}")
+  fi
+  "${PYTHON_BIN}" "${proxy_args[@]}" >"${proxy_log}" 2>&1 &
   normalizer_pid="$!"
   echo "${normalizer_pid}" > "${RESULT_ROOT}/tool_normalizer_proxy.pid"
 

@@ -196,6 +196,10 @@ def build_tool_gaps(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "task_instance_id": task_id,
                     "from_request_id": current.get("request_id"),
                     "to_request_id": resume.get("request_id"),
+                    "from_proxy_ordinal": current.get("ordinal"),
+                    "to_proxy_ordinal": resume.get("ordinal"),
+                    "from_context_request_id": current.get("context_request_id"),
+                    "to_context_request_id": resume.get("context_request_id"),
                     "from_phase": phase,
                     "to_phase": next_phase,
                     "tool_names": current.get("tool_names") or "",
@@ -233,6 +237,8 @@ def summary_rows(
     task_rows: list[dict[str, Any]],
     captured_request_count: int,
     excluded_preflight_count: int,
+    hint_rows: list[dict[str, Any]],
+    controller_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     tool_counter: Counter[str] = Counter()
     for request in requests:
@@ -241,6 +247,12 @@ def summary_rows(
                 tool_counter[name] += 1
     gap_values = [float(row.get("tool_gap_ms") or 0.0) for row in gaps]
     request_context_count = sum(1 for row in requests if row.get("request_context_present"))
+    prefetch_attempts = [
+        row
+        for row in gaps
+        if row.get("prefetch_start_ms") not in ("", None) or row.get("prefetch_end_ms") not in ("", None)
+    ]
+    margins = [float(row["prefetch_margin_ms"]) for row in gaps if row.get("prefetch_margin_ms") not in ("", None)]
     return [
         {
             "captured_model_requests": captured_request_count,
@@ -253,9 +265,93 @@ def summary_rows(
             "max_observed_tool_gap_ms": round(max(gap_values), 3) if gap_values else 0.0,
             "requests_with_context": request_context_count,
             "agentbench_tasks_in_index": len(task_rows),
+            "live_hints_submitted": len(hint_rows),
+            "controller_events": len(controller_rows),
+            "prefetch_attempts_matched_to_gaps": len(prefetch_attempts),
+            "prefetch_done_before_resume": sum(1 for row in gaps if row.get("prefetch_done_before_resume") == 1),
+            "avg_prefetch_margin_ms": round(sum(margins) / len(margins), 3) if margins else "",
             "top_tools": ", ".join(f"{name}: {count}" for name, count in tool_counter.most_common(8)),
         }
     ]
+
+
+def seconds_to_ms(ts: Any, base_ts: float) -> str | float:
+    value = maybe_float(ts)
+    if value is None:
+        return ""
+    return round((value - base_ts) * 1000.0, 3)
+
+
+def controller_windows(controller_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    starts: dict[str, dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in controller_rows:
+        hint_id = str(row.get("hint_id") or "")
+        if not hint_id:
+            continue
+        if row.get("event") == "live_prefetch.start":
+            starts[hint_id] = row
+        elif row.get("event") in {"live_prefetch.end", "live_prefetch.error"}:
+            start = starts.get(hint_id, {})
+            merged = dict(start)
+            merged.update(row)
+            out[hint_id] = merged
+    return out
+
+
+def augment_gaps_with_prefetch(
+    gaps: list[dict[str, Any]],
+    hint_rows: list[dict[str, Any]],
+    controller_rows: list[dict[str, Any]],
+    base_ts: float,
+) -> list[dict[str, Any]]:
+    hints_by_ordinal: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in hint_rows:
+        if row.get("event") != "live_hint.submitted":
+            continue
+        hints_by_ordinal[str(row.get("source_proxy_ordinal"))].append(row)
+
+    windows = controller_windows(controller_rows)
+    out: list[dict[str, Any]] = []
+    for gap in gaps:
+        row = dict(gap)
+        hints = hints_by_ordinal.get(str(gap.get("from_proxy_ordinal")), [])
+        if hints:
+            hint = hints[0]
+            hint_id = str(hint.get("hint_id") or "")
+            window = windows.get(hint_id, {})
+            row["hint_id"] = hint_id
+            row["hint_submitted_ms"] = seconds_to_ms(hint.get("ts"), base_ts)
+            row["hint_payload_path"] = hint.get("payload_path", "")
+            row["prefetch_status"] = "submitted"
+            row["prefetch_start_ms"] = seconds_to_ms(window.get("request_start_ts") or window.get("ts"), base_ts)
+            row["prefetch_end_ms"] = seconds_to_ms(window.get("request_end_ts"), base_ts)
+            row["prefetch_duration_ms"] = window.get("duration_ms", "")
+            row["prefetch_error"] = window.get("error", "")
+            if window:
+                row["prefetch_status"] = "error" if window.get("event") == "live_prefetch.error" else "done"
+            prefetch_end = maybe_float(row.get("prefetch_end_ms"))
+            resume_start = maybe_float(row.get("resume_start_ms"))
+            prefetch_start = maybe_float(row.get("prefetch_start_ms"))
+            if prefetch_end is not None and resume_start is not None:
+                margin = round(resume_start - prefetch_end, 3)
+                row["prefetch_margin_ms"] = margin
+                row["prefetch_done_before_resume"] = 1 if margin >= 0 else 0
+            if prefetch_start is not None and prefetch_end is not None and resume_start is not None:
+                row["prefetch_resume_overlap_ms"] = round(max(0.0, prefetch_end - max(prefetch_start, resume_start)), 3)
+        else:
+            row["hint_id"] = ""
+            row["hint_submitted_ms"] = ""
+            row["prefetch_status"] = "no_hint"
+            row["prefetch_start_ms"] = ""
+            row["prefetch_end_ms"] = ""
+            row["prefetch_duration_ms"] = ""
+            row["prefetch_error"] = ""
+            row["prefetch_margin_ms"] = ""
+            row["prefetch_done_before_resume"] = ""
+            row["prefetch_resume_overlap_ms"] = ""
+        out.append(row)
+    return out
 
 
 def table_html(rows: list[dict[str, Any]], columns: list[str] | None = None, limit: int | None = None) -> str:
@@ -317,8 +413,13 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
         title = f"{row.get('from_phase') or 'turn'} -> {row.get('to_phase') or 'resume'}"
         tools = str(row.get("tool_names") or "")
         gap_ms = float(row.get("tool_gap_ms") or 0.0)
-        status = "SHORT GAP" if gap_ms < 500 else "MEDIUM GAP" if gap_ms < 1500 else "LONG GAP"
-        status_color = "#b45309" if gap_ms < 500 else "#166534"
+        margin = maybe_float(row.get("prefetch_margin_ms"))
+        if margin is not None:
+            status = f"PREFETCH READY {margin:.0f} ms" if margin >= 0 else f"PREFETCH LATE {abs(margin):.0f} ms"
+            status_color = "#166534" if margin >= 0 else "#b91c1c"
+        else:
+            status = "SHORT GAP" if gap_ms < 500 else "MEDIUM GAP" if gap_ms < 1500 else "LONG GAP"
+            status_color = "#b45309" if gap_ms < 500 else "#166534"
         svg.append(f'<text x="10" y="{y + 16}" font-weight="700">{fmt(label)}</text>')
         svg.append(f'<text x="10" y="{y + 36}" font-size="12" fill="#334155">{fmt(title)}</text>')
         svg.append(
@@ -332,6 +433,8 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
         wait_x2 = x_pos(row.get("tool_gap_end_ms"))
         replay_x1 = x_pos(row.get("resume_start_ms"))
         replay_x2 = x_pos(row.get("resume_end_ms"))
+        prefetch_start = row.get("prefetch_start_ms")
+        prefetch_end = row.get("prefetch_end_ms")
 
         svg.append(
             f'<rect x="{wait_x1:.1f}" y="{y + 4}" width="{max(2, wait_x2 - wait_x1):.1f}" height="30" rx="3" fill="#d1d5db" opacity="0.72">'
@@ -349,6 +452,17 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
             f'<line x1="{replay_x1:.1f}" y1="{y - 4}" x2="{replay_x1:.1f}" y2="{y + 68}" stroke="#111827" stroke-width="3">'
             '<title>resume request starts</title></line>'
         )
+        if prefetch_start not in ("", None) and prefetch_end not in ("", None):
+            prefetch_x1 = x_pos(prefetch_start)
+            prefetch_x2 = x_pos(prefetch_end)
+            svg.append(
+                f'<rect x="{prefetch_x1:.1f}" y="{y + 23}" width="{max(3, prefetch_x2 - prefetch_x1):.1f}" height="16" rx="3" fill="#a855f7" opacity="0.78">'
+                f'<title>live controller prefetch attempt; status={fmt(row.get("prefetch_status"))}</title></rect>'
+            )
+            if prefetch_x2 - prefetch_x1 > 50:
+                svg.append(
+                    f'<text x="{(prefetch_x1 + prefetch_x2) / 2:.1f}" y="{y + 35}" fill="white" font-size="10" text-anchor="middle" font-weight="700">prefetch</text>'
+                )
         if current_x2 - current_x1 > 75:
             svg.append(f'<text x="{(current_x1 + current_x2) / 2:.1f}" y="{y + 17}" fill="white" font-size="11" text-anchor="middle" font-weight="700">tool turn</text>')
         if replay_x2 - replay_x1 > 75:
@@ -357,6 +471,7 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
     legend = [
         ("model turn with tool call", "#2563eb"),
         ("observed tool gap", "#d1d5db"),
+        ("live prefetch attempt", "#a855f7"),
         ("resume model turn", "#ef4444"),
         ("resume start boundary", "#111827"),
     ]
@@ -364,7 +479,7 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
     for label, color in legend:
         svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
         svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
-        lx += 245
+        lx += 220
     svg.append("</svg>")
     return "\n".join(svg)
 
@@ -405,6 +520,16 @@ def key_observations(requests: list[dict[str, Any]], gaps: list[dict[str, Any]])
                 "deduction": "Future experiments can attach prefetch decisions to task, phase, session, priority, and reuse-likelihood metadata.",
             }
         )
+    prefetch_attempts = [row for row in gaps if row.get("prefetch_start_ms") not in ("", None)]
+    if prefetch_attempts:
+        ready = sum(1 for row in prefetch_attempts if row.get("prefetch_done_before_resume") == 1)
+        rows.append(
+            {
+                "observation": "Live software prefetch attempts were issued from tool-call hints.",
+                "evidence": f"{len(prefetch_attempts)} prefetch attempts matched live tool gaps; {ready}/{len(prefetch_attempts)} finished before the resume request.",
+                "deduction": "This is the first live intervention path: tool-call hint -> controller prefetch request -> next real agent turn.",
+            }
+        )
     return rows
 
 
@@ -423,16 +548,18 @@ def render_markdown(summary: list[dict[str, Any]], observations: list[dict[str, 
     for row in observations:
         lines.append(f"- **{row['observation']}** {row['evidence']} {row['deduction']}")
     lines.extend(["", "## Tool Gaps", ""])
-    lines.append("| session | phases | tools | gap_ms | current_ms | resume_ms |")
-    lines.append("| --- | --- | --- | --- | --- | --- |")
+    lines.append("| session | phases | tools | gap_ms | prefetch_status | prefetch_margin_ms | current_ms | resume_ms |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for row in gaps:
         lines.append(
-            "| {session} | {from_phase} -> {to_phase} | {tools} | {gap} | {current} | {resume} |".format(
+            "| {session} | {from_phase} -> {to_phase} | {tools} | {gap} | {status} | {margin} | {current} | {resume} |".format(
                 session=row.get("session_id", ""),
                 from_phase=row.get("from_phase", ""),
                 to_phase=row.get("to_phase", ""),
                 tools=row.get("tool_names", ""),
                 gap=row.get("tool_gap_ms", ""),
+                status=row.get("prefetch_status", ""),
+                margin=row.get("prefetch_margin_ms", ""),
                 current=row.get("current_latency_ms", ""),
                 resume=row.get("resume_latency_ms", ""),
             )
@@ -471,6 +598,11 @@ def render_html(
         "tool_gap_ms",
         "current_latency_ms",
         "resume_latency_ms",
+        "prefetch_status",
+        "prefetch_duration_ms",
+        "prefetch_margin_ms",
+        "prefetch_done_before_resume",
+        "prefetch_resume_overlap_ms",
         "hint_priority",
         "reuse_likelihood",
     ]
@@ -500,7 +632,7 @@ def render_html(
   <section>
     <h1>Live AgentBench Tool-Gap Report</h1>
     <p>This is the live bridge from real SWE-bench/Deep Agents traffic into the KV-prefetch analysis infrastructure.</p>
-    <p class="note">Mode: observe-only. Blue bars are real model turns that emitted tool calls. Gray bars are observed tool execution / harness wait gaps. Red bars are the next live model turns. No synthetic replay and no prefetch is injected in this milestone. Deep Agents preflight rows are excluded by default so the timeline focuses on the SWE-bench task traffic.</p>
+    <p class="note">Mode: live analysis. Blue bars are real model turns that emitted tool calls. Gray bars are observed tool execution / harness wait gaps. Red bars are the next live model turns. If live intervention is enabled, purple bars show the controller's prefetch/direct-load request. Deep Agents preflight rows are excluded by default so the timeline focuses on the SWE-bench task traffic.</p>
   </section>
   <section>
     <h2>Summary</h2>
@@ -508,7 +640,7 @@ def render_html(
   </section>
   <section>
     <h2>Timeline</h2>
-    <p>How to read this: a blue request produced one or more structured tool calls. The gray window is the time until the next model request in the same live AgentBench run. That gray window is where a future hint-aware KV prefetch engine would try to act.</p>
+    <p>How to read this: a blue request produced one or more structured tool calls. The gray window is the time until the next model request in the same live AgentBench run. Purple, when present, is the software prefetch attempt launched from that live tool-call hint. If purple ends after the black resume boundary, the software hint path was late.</p>
     {build_timeline_svg(gaps, max_timeline_gaps)}
   </section>
   <section>
@@ -533,6 +665,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build a live AgentBench tool-gap report from the direct-SGLang proxy log.")
     parser.add_argument("--proxy-jsonl", type=Path, required=True)
     parser.add_argument("--task-index-csv", type=Path)
+    parser.add_argument("--hint-log", type=Path)
+    parser.add_argument("--controller-log", type=Path)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--latest-root", type=Path)
     parser.add_argument("--max-timeline-gaps", type=int, default=16)
@@ -544,6 +678,8 @@ def main() -> None:
     args = parser.parse_args()
 
     raw_rows = read_jsonl(args.proxy_jsonl)
+    hint_rows = read_jsonl(args.hint_log) if args.hint_log else []
+    controller_rows = read_jsonl(args.controller_log) if args.controller_log else []
     task_rows = read_csv(args.task_index_csv)
     all_requests = normalize_requests(raw_rows)
     if args.include_preflight:
@@ -553,7 +689,17 @@ def main() -> None:
         requests = [row for row in all_requests if not is_preflight_request(row)]
         excluded_preflight_count = len(all_requests) - len(requests)
     gaps = build_tool_gaps(requests)
-    summary = summary_rows(requests, gaps, task_rows, len(all_requests), excluded_preflight_count)
+    base_ts = min((float(row["start_ts"]) for row in all_requests), default=0.0)
+    gaps = augment_gaps_with_prefetch(gaps, hint_rows, controller_rows, base_ts)
+    summary = summary_rows(
+        requests,
+        gaps,
+        task_rows,
+        len(all_requests),
+        excluded_preflight_count,
+        hint_rows,
+        controller_rows,
+    )
     observations = key_observations(requests, gaps)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -567,6 +713,8 @@ def main() -> None:
     report_json = {
         "proxy_jsonl": str(args.proxy_jsonl),
         "task_index_csv": str(args.task_index_csv or ""),
+        "hint_log": str(args.hint_log or ""),
+        "controller_log": str(args.controller_log or ""),
         "summary": summary[0] if summary else {},
         "key_observations": observations,
         "tool_gaps": gaps,
@@ -592,6 +740,17 @@ def main() -> None:
             (args.out_dir / "live_requests.csv", "latest_live_agentbench_requests.csv"),
             (html_path, "latest_agentbench_live_tool_gap_report.html"),
         ]
+        if hint_rows or controller_rows:
+            latest_pairs.extend(
+                [
+                    (html_path, "latest_live_agentbench_prefetch_report.html"),
+                    (md_path, "latest_live_agentbench_prefetch_report.md"),
+                    (
+                        args.out_dir / "live_agentbench_tool_gap_report.json",
+                        "latest_live_agentbench_prefetch_report.json",
+                    ),
+                ]
+            )
         for source, name in latest_pairs:
             if source.exists():
                 shutil.copyfile(source, args.latest_root / name)

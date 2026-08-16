@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -93,6 +94,17 @@ def response_tool_names(payload: Any) -> list[str]:
             if isinstance(function, dict) and isinstance(function.get("name"), str):
                 names.append(function["name"])
     return names
+
+
+def safe_file_stem(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_")[:180] or "request"
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+    shutil.move(str(tmp), str(path))
 
 
 def summarize_request(payload: Any) -> dict[str, Any]:
@@ -307,7 +319,13 @@ def normalize_tool_call_response(response_json: Any, request_json: Any) -> tuple
     return response_json, normalized_names
 
 
-def make_handler(target_base: str, log_path: Path, normalize_tool_calls: bool):
+def make_handler(
+    target_base: str,
+    log_path: Path,
+    normalize_tool_calls: bool,
+    hint_log_path: Path | None,
+    hint_payload_dir: Path | None,
+):
     class ProxyHandler(BaseHTTPRequestHandler):
         server_version = "OpenAIProxyLogger/0.1"
 
@@ -317,6 +335,51 @@ def make_handler(target_base: str, log_path: Path, normalize_tool_calls: bool):
         def _write_log(self, row: dict[str, Any]) -> None:
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+        def _write_hint_event(self, row: dict[str, Any], request_json: Any) -> None:
+            if hint_log_path is None or hint_payload_dir is None:
+                return
+            if row.get("method") != "POST" or row.get("path") != "/v1/chat/completions":
+                return
+            names = row.get("normalized_tool_call_names") or row.get("response_tool_call_names") or []
+            if not isinstance(names, list) or not names:
+                return
+            if not isinstance(request_json, dict):
+                return
+
+            ordinal = row.get("proxy_ordinal")
+            context_request_id = str(row.get("request_id") or "")
+            parent_run_id = str(row.get("parent_run_id") or "")
+            phase = str(row.get("phase") or "")
+            session_id = str(row.get("agent_session_id") or context_request_id or parent_run_id or f"proxy_{ordinal}")
+            hint_id = f"hint_{int(time.time() * 1_000_000)}_{safe_file_stem(str(ordinal))}"
+            payload_path = hint_payload_dir / f"{hint_id}_{safe_file_stem(session_id)}.json"
+            write_json(payload_path, request_json)
+
+            hint_row = {
+                "event": "live_hint.submitted",
+                "hint_id": hint_id,
+                "ts": time.time(),
+                "source_proxy_ordinal": ordinal,
+                "source_request_start_ts": row.get("request_start_ts"),
+                "source_request_end_ts": row.get("request_end_ts"),
+                "source_elapsed_ms": row.get("elapsed_ms"),
+                "source_request_id": context_request_id,
+                "source_parent_run_id": parent_run_id,
+                "source_task_instance_id": row.get("task_instance_id") or "",
+                "source_phase": phase,
+                "source_sequence_index": row.get("sequence_index", ""),
+                "source_agent_session_id": session_id,
+                "tool_names": names,
+                "tool_call_count": len(names),
+                "hint_priority": row.get("agent_priority") or "",
+                "reuse_likelihood": row.get("agent_reuse_likelihood") or "",
+                "payload_path": str(payload_path),
+                "intended_action": "live_direct_kv_prefetch_emulation",
+            }
+            hint_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with hint_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(hint_row, sort_keys=True) + "\n")
 
         def _proxy(self) -> None:
             started = time.perf_counter()
@@ -372,6 +435,7 @@ def make_handler(target_base: str, log_path: Path, normalize_tool_calls: bool):
                 "ts": ended_wall,
                 "request_start_ts": started_wall,
                 "request_end_ts": ended_wall,
+                "proxy_ordinal": getattr(self.server, "proxy_ordinal", 0),
                 "method": self.command,
                 "path": self.path,
                 "status": status,
@@ -382,7 +446,9 @@ def make_handler(target_base: str, log_path: Path, normalize_tool_calls: bool):
                 **summarize_request(request_json),
                 **summarize_response(response_json),
             }
+            setattr(self.server, "proxy_ordinal", int(row["proxy_ordinal"]) + 1)
             self._write_log(row)
+            self._write_hint_event(row, request_json)
 
             self.send_response(status)
             for key, value in response_headers.items():
@@ -413,16 +479,26 @@ def main() -> None:
         action="store_true",
         help="Convert common Qwen/Hermes textual tool-call payloads into OpenAI tool_calls.",
     )
+    parser.add_argument("--hint-log", type=Path, help="Optional JSONL file for live tool-call hint events.")
+    parser.add_argument("--hint-payload-dir", type=Path, help="Directory for request payloads referenced by hint events.")
     args = parser.parse_args()
 
     args.log.parent.mkdir(parents=True, exist_ok=True)
+    if args.hint_log:
+        args.hint_log.parent.mkdir(parents=True, exist_ok=True)
+    if args.hint_payload_dir:
+        args.hint_payload_dir.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer(
         (args.listen_host, args.listen_port),
-        make_handler(args.target_base, args.log, args.normalize_tool_calls),
+        make_handler(args.target_base, args.log, args.normalize_tool_calls, args.hint_log, args.hint_payload_dir),
     )
+    setattr(server, "proxy_ordinal", 0)
     print(f"proxy listening on http://{args.listen_host}:{args.listen_port} -> {args.target_base}")
     print(f"log: {args.log}")
     print(f"normalize tool calls: {args.normalize_tool_calls}")
+    if args.hint_log:
+        print(f"hint log: {args.hint_log}")
+        print(f"hint payload dir: {args.hint_payload_dir}")
     server.serve_forever()
 
 
