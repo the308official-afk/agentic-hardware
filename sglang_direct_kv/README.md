@@ -108,6 +108,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F17 | Targeted profiler validation can recover dark-green CUDA HtoD bars. | Milestone 15 captured `1` torch-profiler trace, `31941` CUDA events, and profiler-attributed HtoD rows for `3 / 6` sessions. For those sessions, the sanity table showed green copy bars were inside the purple hint window. | This validates that the lightweight SGLang KV-copy telemetry corresponds to lower-level CUDA HtoD activity in small runs. | Use Milestone 15 as the dark-green validation companion to Milestone 14's scalable light-green telemetry. | New |
 | F18 | Direct software prefetch can be worse than no prefetch when it is late. | Latest clean paired report, `agent_000`: `no_prefetch` replay TTFT was `125.252 ms`, while `oracle_direct_load` replay TTFT was `234.449 ms`. Oracle direct load issued a hint, but `hint_completed_before_replay=0`, `hint_total_duration_ms=171.615`, and replay still loaded KV (`resume_load_count=10`, `resume_hicache_load_count=4`). | This shows that software prefetch is not automatically beneficial. A late hint can add work, compete with replay, and still fail to prevent replay-side KV loading. | Need deadline-aware migration, priority scheduling, residency protection, and telemetry so hints become enforceable rather than best-effort. | Strong |
 | F19 | Real DeepAgents/SWE-bench tool gaps can be much shorter than the software prefetch path. | Milestone 22 bigger live run captured `12` real tool gaps across `4` SWE-bench tasks, with average gap about `11.5 ms` and max gap about `14.1 ms`. Milestone 23 live prefetch smoke matched `2` live prefetch attempts, but they took about `438 ms` and `498 ms`, with average prefetch margin about `-471 ms` and `0 / 2` finishing before resume. | This is a strong early live-traffic finding: the runtime can see useful tool-call hints, but the normal software/controller/SGLang request path is far too slow for very short resume windows. | Need a deadline-aware, hint-aware hardware/runtime path that can act on agent context quickly and predictably, instead of routing prefetch through ordinary best-effort serving work. | Strong |
+| F20 | Low 7B tool-call counts were caused by harness/parser/tool-interface issues plus model weakness, not by lack of tool traffic in the workload. | Direct-SGLang debugging found three issues: Qwen2.5 needed `--tool-call-parser qwen25`, DeepAgents tools see the repo at `/` rather than the host checkout path, and the 7B model sometimes emits unsafe empty-string `edit_file` calls. After fixes, a 4-task run produced `93` real task model requests, `49` structured tool calls, `44` trajectory prompts, and `0` prose-only tool-intent misses. | The direct SGLang path is now useful for live tool-gap/KV experiments. The remaining gap versus prior 30B/40B runs is mostly model capability and batch size. | Keep the parser/root/safe-edit safeguards on for A10G 7B runs; use Qwen3-Coder 30B/40B-class models on compatible GPUs for manager-grade SWE-bench tool diversity. | Strong |
 
 Main deduction from the latest timeline:
 
@@ -3418,7 +3419,7 @@ source .venv/bin/activate
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 START_INDEX=0 \
 END_INDEX=0 \
-EXTRA_SERVER_ARGS="--tool-call-parser qwen" \
+TOOL_CALL_PARSER=qwen25 \
 bash scripts/run_milestone16_agentbench_sglang_direct.sh \
   Qwen/Qwen2.5-1.5B-Instruct
 ```
@@ -3794,7 +3795,7 @@ REUSE_SERVER=0 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
 SERVER_READY_TIMEOUT_SECS=1800 \
-TOOL_CALL_PARSER=hermes \
+TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \
@@ -3809,6 +3810,10 @@ AGENTBENCH_DISABLE_GENERAL_PURPOSE_SUBAGENT=1 \
 AGENTBENCH_SOFT_STOP_RECURSION=1 \
 AGENTBENCH_AGENT_RECURSION_LIMIT=1000 \
 AGENTBENCH_TRACE_AGENT_STREAM=0 \
+AGENTBENCH_DIRECT_SGLANG_TOOL_RICH=1 \
+AGENTBENCH_DIRECT_SGLANG_VIRTUAL_TOOL_ROOT=1 \
+AGENTBENCH_DIRECT_SGLANG_EXCLUDE_WRITE_TODOS=1 \
+AGENTBENCH_DIRECT_SGLANG_SAFE_EDIT_GUARD=1 \
 PROMPT_EVOLUTION_REQUIRE_TOOL_LOOP=1 \
 PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
 bash scripts/run_milestone21_exp6_direct_sglang.sh \
@@ -3826,6 +3831,52 @@ case_success=True
 Deep Agents tool-loop preflight passed.
 ```
 
+Validated 4-task tool-traffic run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="qwen25_safeedit_4tasks_steps10_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+PROMPT_EVOLUTION_BATCH_ID="${RUN_ID}" \
+START_INDEX=0 \
+END_INDEX=3 \
+REUSE_SERVER=0 \
+SERVER_MODE=simple \
+MAX_TOTAL_TOKENS=32768 \
+SERVER_READY_TIMEOUT_SECS=1800 \
+TOOL_CALL_PARSER=auto \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
+TOOL_NORMALIZER_PORT=31032 \
+EXTRA_SERVER_ARGS="--disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule" \
+AGENTBENCH_INSTALL_DEPS=0 \
+RUN_PREFLIGHT=0 \
+AGENTBENCH_DEEPAGENTS_SOURCE=upstream \
+AGENTBENCH_EXECUTION_LOOP=1 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+AGENTBENCH_EXECUTION_LOOP_REQUIRE_TEST=0 \
+AGENTBENCH_EXECUTION_GUARD=0 \
+AGENTBENCH_FORCE_TOOL_CHOICE=auto \
+AGENTBENCH_DISABLE_GENERAL_PURPOSE_SUBAGENT=1 \
+AGENTBENCH_SOFT_STOP_RECURSION=1 \
+AGENTBENCH_AGENT_RECURSION_LIMIT=1000 \
+AGENTBENCH_TRACE_AGENT_STREAM=0 \
+PROMPT_EVOLUTION_REQUIRE_TOOL_LOOP=0 \
+AGENTBENCH_DIRECT_SGLANG_TOOL_RICH=1 \
+AGENTBENCH_DIRECT_SGLANG_VIRTUAL_TOOL_ROOT=1 \
+AGENTBENCH_DIRECT_SGLANG_EXCLUDE_WRITE_TODOS=1 \
+AGENTBENCH_DIRECT_SGLANG_SAFE_EDIT_GUARD=1 \
+AGENTBENCH_BATCH_CONTINUE_ON_ERROR=1 \
+bash scripts/run_milestone21_exp6_direct_sglang.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 Current `g5.2xlarge` note:
 
 ```text
@@ -3841,13 +3892,37 @@ for example a GH200/H100/H200-class setup. A smaller model can validate wiring,
 but should not be treated as final realistic evidence.
 ```
 
-Observed 7B fallback result on `g5.2xlarge`:
+Direct-SGLang tool-call health fixes:
+
+```text
+1. Parser:
+   Qwen/Qwen2.5-Coder-7B-Instruct must use SGLang tool parser qwen25.
+   The wrapper now maps TOOL_CALL_PARSER=auto -> qwen25 for Qwen2.5 models.
+
+2. Tool filesystem root:
+   DeepAgents tools see the SWE-bench repo mounted at `/`.
+   The prompt patch now tells the model to use `/` or relative paths,
+   not the EC2 host checkout path.
+
+3. Tool discipline:
+   The prompt/tool descriptions now say:
+   - use ls for directories,
+   - use read_file for file paths,
+   - read before edit,
+   - never call edit_file with empty old_string.
+
+4. Safe edit guard:
+   The harness now rejects empty edit_file old_string at the backend layer.
+   This prevents one bad 7B edit call from creating a huge corrupt patch.
+```
+
+Observed 7B fallback result on `g5.2xlarge` after the fixes:
 
 ```text
 Model: Qwen/Qwen2.5-Coder-7B-Instruct
 Server result: SGLang loaded successfully, allocated KV cache, and passed smoke chat.
-Raw SGLang result: required/named tool_choice can produce structured tool calls.
-Deep Agents result after fixes: natural auto mode can execute a real multi-tool loop
+Parser result: TOOL_CALL_PARSER=auto selected qwen25.
+Deep Agents result: natural auto mode executed real structured tools
 through the normalizer proxy.
 
 Validated preflight:
@@ -3856,15 +3931,31 @@ tool_messages=3
 unique_tools=execute,ls,read_file
 case_success=True
 
-Validated smoke batch:
-2 SWE-bench Pro tasks ran through Deep Agents -> direct SGLang.
-The runs produced real tool calls across execution, patch_generation, and review.
-The trajectory prompt catalog was rebuilt with 2 tasks and 12 phase prompts.
+Validated single-task debug:
+actual task model requests=38
+actual structured tool calls=25
+tool_intent_without_structured_call=0
+workspace.patch size=0 bytes
+
+Validated 4-task batch:
+actual task model requests=93
+structured tool-call rows=49
+structured tool calls=49
+tool mix: read_file=24, ls=12, edit_file=11, write_file=2
+tool_intent_without_structured_call=0
+trajectory prompt catalog rows=44
+tasks completed=4/4
 
 Interpretation:
-The 7B model is now useful for validating direct-SGLang wiring on A10G.
-For manager-grade performance evidence, still prefer the larger Qwen3-Coder path
-on a compatible GPU/backend.
+The "less than a dozen tools" symptom is no longer a parser/harness blocker.
+The direct-SGLang path can now produce real structured SWE-bench tool traffic.
+
+However, the 7B model is still weaker than the 30B/40B coder setup:
+it sometimes loops, uses shallow tool strategies, or attempts bad edits that
+the safe edit guard must reject. Use the 7B path for A10G wiring and live
+tool-gap/KV experiments. For manager-grade SWE-bench tool diversity and
+solution quality, still prefer a larger Qwen3-Coder/40B-class model on a
+compatible GPU/backend.
 ```
 
 Why the tool-normalizer proxy exists:
@@ -3882,8 +3973,12 @@ Important events to observe:
 
 ```text
 SGLang starts directly; Dynamo is not used.
+TOOL_CALL_PARSER=auto resolves to qwen25 for Qwen2.5 models.
 The smoke chat request passes.
 The Deep Agents tool-loop preflight passes.
+The proxy shows structured tool_calls, not only tool-looking text.
+tool_intent_without_structured_call stays near zero.
+Unsafe empty edit_file old_string calls are rejected by the safe edit guard.
 Each SWE-bench task produces a new AgentBench result directory.
 The task trace index is updated.
 The trajectory prompt catalog is generated.
@@ -3993,7 +4088,7 @@ END_INDEX=1 \
 REUSE_SERVER=0 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
-TOOL_CALL_PARSER=hermes \
+TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \
@@ -4018,7 +4113,7 @@ END_INDEX=5 \
 REUSE_SERVER=1 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
-TOOL_CALL_PARSER=hermes \
+TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \
@@ -4137,7 +4232,7 @@ END_INDEX=1 \
 REUSE_SERVER=1 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
-TOOL_CALL_PARSER=hermes \
+TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \

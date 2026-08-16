@@ -90,6 +90,33 @@ def tool_count(row: dict[str, Any]) -> int:
     return max(normalized, response, len(tool_names(row)))
 
 
+def likely_tool_intent_without_call(row: dict[str, Any]) -> bool:
+    if tool_count(row) > 0:
+        return False
+    if int(maybe_float(row.get("tools_count")) or 0) <= 0:
+        return False
+    if str(row.get("finish_reason") or "").lower() != "stop":
+        return False
+    preview = str(row.get("content_preview") or "").lower()
+    intent_terms = (
+        "inspect",
+        "read the",
+        "read_file",
+        "open the",
+        "look at",
+        "grep",
+        "search",
+        "run ",
+        "execute",
+        "edit",
+        "write_file",
+        "list",
+        "ls ",
+        "test",
+    )
+    return any(term in preview for term in intent_terms)
+
+
 def request_start(row: dict[str, Any]) -> float:
     value = maybe_float(row.get("request_start_ts"))
     if value is not None:
@@ -151,6 +178,7 @@ def normalize_requests(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tool_names": ",".join(tool_names(row)),
                 "finish_reason": row.get("finish_reason") or "",
                 "content_preview": row.get("content_preview") or "",
+                "tool_intent_without_call": likely_tool_intent_without_call(row),
                 "elapsed_ms": round(maybe_float(row.get("elapsed_ms")) or max(0.0, (end - start) * 1000.0), 3),
                 "start_ts": start,
                 "end_ts": end,
@@ -247,6 +275,7 @@ def summary_rows(
                 tool_counter[name] += 1
     gap_values = [float(row.get("tool_gap_ms") or 0.0) for row in gaps]
     request_context_count = sum(1 for row in requests if row.get("request_context_present"))
+    tool_intent_misses = sum(1 for row in requests if row.get("tool_intent_without_call"))
     prefetch_attempts = [
         row
         for row in gaps
@@ -265,6 +294,7 @@ def summary_rows(
             "max_observed_tool_gap_ms": round(max(gap_values), 3) if gap_values else 0.0,
             "requests_with_context": request_context_count,
             "agentbench_tasks_in_index": len(task_rows),
+            "tool_intent_without_structured_call": tool_intent_misses,
             "live_hints_submitted": len(hint_rows),
             "controller_events": len(controller_rows),
             "prefetch_attempts_matched_to_gaps": len(prefetch_attempts),
@@ -512,6 +542,15 @@ def key_observations(requests: list[dict[str, Any]], gaps: list[dict[str, Any]])
                 "deduction": "Short gaps make deadline-aware scheduling important because prefetch work must start and finish quickly.",
             }
         )
+    misses = sum(1 for row in requests if row.get("tool_intent_without_call"))
+    if misses:
+        rows.append(
+            {
+                "observation": "Some model turns looked like tool intent but did not produce structured tool calls.",
+                "evidence": f"{misses} tool-capable turns returned plain text with inspect/read/run/edit-style intent.",
+                "deduction": "This is a parser/model/tool-loop health signal; if this number is high, the run is not yet a faithful tool-heavy AgentBench workload.",
+            }
+        )
     if any(row.get("request_context_present") for row in requests):
         rows.append(
             {
@@ -614,6 +653,7 @@ def render_html(
         "message_count",
         "tool_count",
         "tool_names",
+        "tool_intent_without_call",
         "elapsed_ms",
         "request_context_present",
         "agentic_kv_present",
