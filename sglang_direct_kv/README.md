@@ -41,6 +41,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 21: Direct SGLang Experiment 6 Prompt Evolution | Ready | [Milestone 21](#milestone-21-direct-sglang-experiment-6-prompt-evolution) |
 | Milestone 22: Live AgentBench Tool-Gap Bridge | Ready | [Milestone 22](#milestone-22-live-agentbench-tool-gap-bridge) |
 | Milestone 23: Live Prefetch Intervention | Ready | [Milestone 23](#milestone-23-live-prefetch-intervention) |
+| Milestone 24: Live Paired AgentBench Report | Ready | [Milestone 24](#milestone-24-live-paired-agentbench-report) |
 
 ## What We Are Testing
 
@@ -109,6 +110,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F18 | Direct software prefetch can be worse than no prefetch when it is late. | Latest clean paired report, `agent_000`: `no_prefetch` replay TTFT was `125.252 ms`, while `oracle_direct_load` replay TTFT was `234.449 ms`. Oracle direct load issued a hint, but `hint_completed_before_replay=0`, `hint_total_duration_ms=171.615`, and replay still loaded KV (`resume_load_count=10`, `resume_hicache_load_count=4`). | This shows that software prefetch is not automatically beneficial. A late hint can add work, compete with replay, and still fail to prevent replay-side KV loading. | Need deadline-aware migration, priority scheduling, residency protection, and telemetry so hints become enforceable rather than best-effort. | Strong |
 | F19 | Real DeepAgents/SWE-bench tool gaps can be much shorter than the software prefetch path. | Milestone 22 bigger live run captured `12` real tool gaps across `4` SWE-bench tasks, with average gap about `11.5 ms` and max gap about `14.1 ms`. Milestone 23 live prefetch smoke matched `2` live prefetch attempts, but they took about `438 ms` and `498 ms`, with average prefetch margin about `-471 ms` and `0 / 2` finishing before resume. | This is a strong early live-traffic finding: the runtime can see useful tool-call hints, but the normal software/controller/SGLang request path is far too slow for very short resume windows. | Need a deadline-aware, hint-aware hardware/runtime path that can act on agent context quickly and predictably, instead of routing prefetch through ordinary best-effort serving work. | Strong |
 | F20 | Low 7B tool-call counts were caused by harness/parser/tool-interface issues plus model weakness, not by lack of tool traffic in the workload. | Direct-SGLang debugging found three issues: Qwen2.5 needed `--tool-call-parser qwen25`, DeepAgents tools see the repo at `/` rather than the host checkout path, and the 7B model sometimes emits unsafe empty-string `edit_file` calls. After fixes, a 4-task run produced `93` real task model requests, `49` structured tool calls, `44` trajectory prompts, and `0` prose-only tool-intent misses. | The direct SGLang path is now useful for live tool-gap/KV experiments. The remaining gap versus prior 30B/40B runs is mostly model capability and batch size. | Keep the parser/root/safe-edit safeguards on for A10G 7B runs; use Qwen3-Coder 30B/40B-class models on compatible GPUs for manager-grade SWE-bench tool diversity. | Strong |
+| F21 | Full live paired AgentBench traffic shows software prefetch usually misses the real tool-gap deadline. | Milestone 24 ran `START_INDEX=0`, `END_INDEX=15`, `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10` twice: no-prefetch captured `267` analyzed live requests and `127` tool gaps; live-prefetch captured `254` analyzed live requests and `114` tool gaps. The live-prefetch run submitted `117` hints, matched `114` prefetch attempts, but only `2 / 114` finished before resume. Average tool gap was about `19.9 ms`, while average prefetch request duration was about `629.5 ms`; `112 / 114` attempts were late. | This is the strongest live-system evidence so far: the runtime can observe the agent/tool context, but the ordinary software/controller/SGLang request path is much slower than the real resume window. The paired run was slower on average by about `130 ms`, with `105` slower pairs and only `9` faster pairs. | Need a hint-aware, deadline-aware prefetch/migration path that does not compete as an ordinary best-effort request, plus residency protection and telemetry to make useful prefetch enforceable. | Strong |
 
 Main deduction from the latest timeline:
 
@@ -4331,6 +4333,148 @@ The hardware argument becomes stronger when purple bars are late,
 overlap red bars, or add interference despite having the right semantic hint.
 ```
 
+### Milestone 24: Live Paired AgentBench Report
+
+Status: ready.
+
+What it is:
+
+```text
+Run two live SWE-bench / Deep Agents / direct-SGLang experiments:
+
+1. no_prefetch
+2. live_prefetch_intervention
+
+Then build one paired report that looks like the earlier paired evidence report,
+but uses real live AgentBench traffic instead of synthetic requests.
+```
+
+Why we need it:
+
+```text
+Milestone 12 gave us a clear manager-style report, but the traffic was synthetic.
+Milestone 22 and 23 gave us live traffic, but each report was single-run.
+
+Milestone 24 combines both ideas:
+
+real SWE-bench task
+  -> real Deep Agents tool calls
+  -> direct SGLang
+  -> no-prefetch run
+  -> live-prefetch run
+  -> paired report
+```
+
+Simple timeline:
+
+```text
+No prefetch:
+blue model turn -> gray tool wait -> black resume boundary -> red resume turn
+
+Live prefetch:
+blue model turn -> gray tool wait
+                 -> purple prefetch request
+                 -> black resume boundary -> red resume turn
+
+If purple ends after black, the software prefetch path was late.
+If purple ends before black, the software prefetch path met that resume window.
+```
+
+Standard `g5.2xlarge` command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="milestone24_live_paired_qwen7b_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=15 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+TOOL_CALL_PARSER=auto \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
+AGENTBENCH_BATCH_CONTINUE_ON_ERROR=1 \
+bash scripts/run_milestone24_live_paired_agentbench_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Useful faster debug command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="milestone24_debug_qwen7b_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=3 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+RUN_PREFLIGHT=0 \
+bash scripts/run_milestone24_live_paired_agentbench_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important events to observe:
+
+```text
+The no-prefetch run captures real structured tool calls.
+The live-prefetch run emits live_hint.submitted events.
+The live-prefetch controller emits live_prefetch.start and live_prefetch.end.
+The paired report shows:
+  Summary
+  Manager Summary
+  Key Deductions
+  Clean Performance Summary
+  Clean Performance Timelines
+  Timeline Summary
+  Timeline
+  Timeline Layers
+  Prefetch Checkpoints
+  Checkpoint Results Per Session
+  Key Observations Per Session
+  Session Details
+  Paired Session Evidence
+```
+
+Key output files:
+
+```text
+artifacts/results/<run>/no_prefetch_live/
+artifacts/results/<run>/live_prefetch/
+artifacts/results/<run>/live_paired_report/live_paired_agentbench_report.html
+artifacts/results/<run>/live_paired_report/live_paired_session_evidence.csv
+artifacts/results/latest_live_paired_agentbench_report.html
+artifacts/results/latest_live_paired_agentbench_report.json
+artifacts/results/latest_live_paired_agentbench_session_evidence.csv
+artifacts/results/latest_agentbench_sglang_direct_report.html
+```
+
+Simple interpretation:
+
+```text
+Milestone 24 answers:
+  In a real live AgentBench/SGLang workflow, does the software hint path
+  finish before the real post-tool resume request, and does the paired run
+  improve resume request latency?
+
+Important metric note:
+  The live proxy measures full resume request latency, not streaming TTFT.
+  Use it as a clean end-to-end latency signal until we add streaming TTFT.
+
+Important pairing note:
+  The two live runs can diverge because the model may choose different tools.
+  The report pairs rows by SWE-bench task index plus gap order inside the task.
+  Aggregate trends are stronger than any single row.
+```
+
 ## Directory Layout
 
 ```text
@@ -4359,8 +4503,10 @@ sglang_direct_kv/
     run_milestone21_exp6_direct_sglang.sh
     run_milestone22_live_agentbench_bridge.sh
     run_milestone23_live_prefetch_intervention.sh
+    run_milestone24_live_paired_agentbench_report.sh
     live_prefetch_controller.py
     build_live_agentbench_tool_gap_report.py
+    build_live_paired_agentbench_report.py
     run_milestone10_dma_timeline.sh
     run_milestone11_agentic_timeline.sh
     run_milestone12_paired_evidence.sh
