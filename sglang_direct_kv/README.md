@@ -39,6 +39,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 19: Realistic Manager Report | Ready | [Milestone 19](#milestone-19-realistic-manager-report) |
 | Milestone 20: SWE-bench Trajectory Prompt Replay | Ready | [Milestone 20](#milestone-20-swe-bench-trajectory-prompt-replay) |
 | Milestone 21: Direct SGLang Experiment 6 Prompt Evolution | Ready | [Milestone 21](#milestone-21-direct-sglang-experiment-6-prompt-evolution) |
+| Milestone 22: Live AgentBench Tool-Gap Bridge | Ready | [Milestone 22](#milestone-22-live-agentbench-tool-gap-bridge) |
 
 ## What We Are Testing
 
@@ -3920,6 +3921,131 @@ Milestone 21 answers:
 Milestone 20 answers:
   What happens when those real trajectories replace the synthetic prompts
   in our paired prefetch evidence report?
+```
+
+### Milestone 22: Live AgentBench Tool-Gap Bridge
+
+Status: ready.
+
+What it is:
+
+```text
+Run real AgentBench / Deep Agents traffic directly through SGLang,
+capture the live OpenAI-compatible requests at the proxy,
+and build an analysis report from the actual tool-call gaps.
+```
+
+Why we need it:
+
+```text
+Milestone 20 used real prompts, but still replayed them in a controlled driver.
+Milestone 22 starts moving closer to the real system:
+
+SWE-bench task
+  -> Deep Agents
+  -> real tool calls
+  -> tool execution gap
+  -> next live model request
+  -> direct SGLang
+
+This lets us observe the real wait windows created by real tools.
+Those windows are where a future hint-guided KV prefetch path would act.
+```
+
+Simple timeline:
+
+```text
+0 ms:    live model request finishes and emits tool_calls=[ls, read_file]
+10 ms:   Deep Agents executes those tools
+420 ms:  next live model request starts with the tool results
+
+The 410 ms gap is the live prefetch opportunity window.
+```
+
+What this milestone does not do yet:
+
+```text
+It does not inject prefetch requests yet.
+It is observe-only.
+
+The goal is to prove that live Deep Agents traffic gives us real,
+measurable tool-gap windows that can feed the same analysis infrastructure.
+
+The Deep Agents preflight is excluded from the report by default.
+Set INCLUDE_PREFLIGHT_IN_REPORT=1 only when debugging the preflight itself.
+```
+
+Recommended `g5.2xlarge` command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="milestone22_live_qwen7b_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=1 \
+REUSE_SERVER=0 \
+SERVER_MODE=simple \
+MAX_TOTAL_TOKENS=32768 \
+TOOL_CALL_PARSER=hermes \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
+PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
+bash scripts/run_milestone22_live_agentbench_bridge.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Build the Milestone 22 report from an existing Milestone 21 result:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_AGENTBENCH=0 \
+EXISTING_RESULT_ROOT=artifacts/results/milestone21_qwen7b_synced_smoke_20260816_002909 \
+LATEST_REPORT_ROOT=artifacts/results \
+bash scripts/run_milestone22_live_agentbench_bridge.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important events to observe:
+
+```text
+The proxy log captures live chat/completions requests.
+Some requests return structured tool_calls.
+The next request in the same live run starts after the tool executes.
+The report converts that into a blue -> gray -> red timeline:
+  blue = model turn that emitted tool calls
+  gray = observed tool/harness wait gap
+  red = next live model turn
+```
+
+Key output files:
+
+```text
+artifacts/results/<run>/tool_normalizer_proxy.jsonl
+artifacts/results/<run>/live_agentbench_tool_gap_report/live_agentbench_tool_gap_report.html
+artifacts/results/<run>/live_agentbench_tool_gap_report/live_tool_gaps.csv
+artifacts/results/<run>/live_agentbench_tool_gap_report/live_requests.csv
+artifacts/results/latest_live_agentbench_tool_gap_report.html
+artifacts/results/latest_live_agentbench_tool_gaps.csv
+artifacts/results/latest_live_agentbench_requests.csv
+```
+
+Simple interpretation:
+
+```text
+Milestone 22 answers:
+  Can we feed real Deep Agents tool-call traffic into the analysis system live?
+
+Next step after this:
+  Use these live tool-gap windows to trigger direct SGLang KV loads,
+  then compare whether the prefetch path finishes before the real resume turn.
 ```
 
 ## Directory Layout
