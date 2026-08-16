@@ -3777,7 +3777,7 @@ What changed from the original Experiment 6:
 | same prompt-evolution reports | kept |
 | same trajectory catalog format | kept |
 
-Recommended g5.2xlarge validation run:
+Tiny g5.2xlarge wiring validation run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -3820,6 +3820,56 @@ bash scripts/run_milestone21_exp6_direct_sglang.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Standard g5.2xlarge tool-traffic run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RUN_ID="qwen25_standard_16tasks_steps10_$(date +%Y%m%d_%H%M%S)"
+
+RESULT_ROOT="artifacts/results/${RUN_ID}" \
+LATEST_REPORT_ROOT="artifacts/results" \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+PROMPT_EVOLUTION_BATCH_ID="${RUN_ID}" \
+START_INDEX=0 \
+END_INDEX=15 \
+REUSE_SERVER=0 \
+SERVER_MODE=simple \
+MAX_TOTAL_TOKENS=32768 \
+SERVER_READY_TIMEOUT_SECS=1800 \
+TOOL_CALL_PARSER=auto \
+SAMPLING_BACKEND=pytorch \
+SAMPLING_DEFAULTS=openai \
+ENABLE_TOOL_NORMALIZER_PROXY=1 \
+EXTRA_SERVER_ARGS="--disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule" \
+AGENTBENCH_INSTALL_DEPS=0 \
+RUN_PREFLIGHT=1 \
+AGENTBENCH_DEEPAGENTS_SOURCE=upstream \
+AGENTBENCH_EXECUTION_LOOP=1 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+AGENTBENCH_EXECUTION_LOOP_REQUIRE_TEST=0 \
+AGENTBENCH_EXECUTION_GUARD=0 \
+AGENTBENCH_FORCE_TOOL_CHOICE=auto \
+AGENTBENCH_DISABLE_GENERAL_PURPOSE_SUBAGENT=1 \
+AGENTBENCH_SOFT_STOP_RECURSION=1 \
+AGENTBENCH_AGENT_RECURSION_LIMIT=1000 \
+AGENTBENCH_TRACE_AGENT_STREAM=0 \
+PROMPT_EVOLUTION_REQUIRE_TOOL_LOOP=1 \
+PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
+AGENTBENCH_DIRECT_SGLANG_TOOL_RICH=1 \
+AGENTBENCH_DIRECT_SGLANG_VIRTUAL_TOOL_ROOT=1 \
+AGENTBENCH_DIRECT_SGLANG_EXCLUDE_WRITE_TODOS=1 \
+AGENTBENCH_DIRECT_SGLANG_SAFE_EDIT_GUARD=1 \
+AGENTBENCH_BATCH_CONTINUE_ON_ERROR=1 \
+bash scripts/run_milestone21_exp6_direct_sglang.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Use `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=15` when you want a deeper, longer run.
+The Milestone 21, 22, and 23 wrappers now default to this standard:
+`START_INDEX=0`, `END_INDEX=15`, and `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10`.
+
 Expected good 7B preflight on g5.2xlarge:
 
 ```text
@@ -3831,7 +3881,7 @@ case_success=True
 Deep Agents tool-loop preflight passed.
 ```
 
-Validated 4-task tool-traffic run:
+Previously validated 4-task tool-traffic run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -4072,7 +4122,7 @@ The Deep Agents preflight is excluded from the report by default.
 Set INCLUDE_PREFLIGHT_IN_REPORT=1 only when debugging the preflight itself.
 ```
 
-Recommended `g5.2xlarge` command:
+Standard `g5.2xlarge` command:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -4084,7 +4134,7 @@ RESULT_ROOT="artifacts/results/${RUN_ID}" \
 LATEST_REPORT_ROOT="artifacts/results" \
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 START_INDEX=0 \
-END_INDEX=1 \
+END_INDEX=15 \
 REUSE_SERVER=0 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
@@ -4092,12 +4142,13 @@ TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
 PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
 bash scripts/run_milestone22_live_agentbench_bridge.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-Bigger live-gap distribution run:
+Deeper live-gap distribution run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -4109,7 +4160,7 @@ RESULT_ROOT="artifacts/results/${RUN_ID}" \
 LATEST_REPORT_ROOT="artifacts/results" \
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 START_INDEX=0 \
-END_INDEX=5 \
+END_INDEX=15 \
 REUSE_SERVER=1 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
@@ -4117,6 +4168,7 @@ TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=15 \
 PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
 bash scripts/run_milestone22_live_agentbench_bridge.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
@@ -4228,7 +4280,7 @@ RESULT_ROOT="artifacts/results/${RUN_ID}" \
 LATEST_REPORT_ROOT="artifacts/results" \
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 START_INDEX=0 \
-END_INDEX=1 \
+END_INDEX=15 \
 REUSE_SERVER=1 \
 SERVER_MODE=simple \
 MAX_TOTAL_TOKENS=32768 \
@@ -4236,6 +4288,7 @@ TOOL_CALL_PARSER=auto \
 SAMPLING_BACKEND=pytorch \
 SAMPLING_DEFAULTS=openai \
 ENABLE_TOOL_NORMALIZER_PROXY=1 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
 PROMPT_EVOLUTION_TOOL_LOOP_CASE=ls-read-execute \
 bash scripts/run_milestone23_live_prefetch_intervention.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
