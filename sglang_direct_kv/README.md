@@ -112,6 +112,54 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F20 | Low 7B tool-call counts were caused by harness/parser/tool-interface issues plus model weakness, not by lack of tool traffic in the workload. | Direct-SGLang debugging found three issues: Qwen2.5 needed `--tool-call-parser qwen25`, DeepAgents tools see the repo at `/` rather than the host checkout path, and the 7B model sometimes emits unsafe empty-string `edit_file` calls. After fixes, a 4-task run produced `93` real task model requests, `49` structured tool calls, `44` trajectory prompts, and `0` prose-only tool-intent misses. | The direct SGLang path is now useful for live tool-gap/KV experiments. The remaining gap versus prior 30B/40B runs is mostly model capability and batch size. | Keep the parser/root/safe-edit safeguards on for A10G 7B runs; use Qwen3-Coder 30B/40B-class models on compatible GPUs for manager-grade SWE-bench tool diversity. | Strong |
 | F21 | Full live paired AgentBench traffic shows software prefetch usually misses the real tool-gap deadline. | Milestone 24 ran `START_INDEX=0`, `END_INDEX=15`, `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10` twice: no-prefetch captured `267` analyzed live requests and `127` tool gaps; live-prefetch captured `254` analyzed live requests and `114` tool gaps. The live-prefetch run submitted `117` hints, matched `114` prefetch attempts, but only `2 / 114` finished before resume. Average tool gap was about `19.9 ms`, while average prefetch request duration was about `629.5 ms`; `112 / 114` attempts were late. | This is the strongest live-system evidence so far: the runtime can observe the agent/tool context, but the ordinary software/controller/SGLang request path is much slower than the real resume window. The paired run was slower on average by about `130 ms`, with `105` slower pairs and only `9` faster pairs. | Need a hint-aware, deadline-aware prefetch/migration path that does not compete as an ordinary best-effort request, plus residency protection and telemetry to make useful prefetch enforceable. | Strong |
 
+Current strongest claim:
+
+```text
+In real tool-heavy DeepAgents/SWE-bench traffic, the runtime can observe useful
+agentic hints, but a normal software prefetch path through SGLang is usually
+too slow and unpredictable to meet post-tool resume deadlines.
+```
+
+Concrete evidence from Milestone 24:
+
+```text
+Average live tool gap: ~19.9 ms
+Average software prefetch request duration: ~629.5 ms
+Matched live prefetch attempts: 114
+Prefetch attempts finished before resume: 2 / 114
+Late prefetch attempts: 112 / 114
+Prefetch slower than no-prefetch: 105 / 114 paired cases
+Prefetch faster than no-prefetch: 9 / 114 paired cases
+Average paired prefetch gain: -130 ms
+```
+
+What we can claim strongly:
+
+```text
+There is a real deadline mismatch.
+The runtime sees useful agent/tool context.
+The normal software/controller/SGLang request path is not predictable enough
+for short post-tool resume windows.
+This motivates deadline-aware, priority-aware KV movement below the ordinary
+best-effort request path.
+```
+
+What we should not claim yet:
+
+```text
+Hardware will definitely improve performance by a specific percentage.
+```
+
+Manager-facing version:
+
+```text
+Our live AgentBench/SGLang experiment shows that real agent tool gaps can be
+tens of milliseconds, while the software prefetch path takes hundreds of
+milliseconds. That means the system often knows what KV may be needed next,
+but cannot move or protect it fast enough through today's generic serving path.
+This is concrete motivation for hint-aware GPU/runtime support.
+```
+
 Main deduction from the latest timeline:
 
 ```text
