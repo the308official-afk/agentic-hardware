@@ -1337,43 +1337,34 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def synthetic_setup_diagram_svg() -> str:
     boxes = [
-        (70, 40, 250, 64, "Synthetic Agentic Driver", "controlled sessions and tool waits"),
-        (390, 40, 250, 64, "Agent Turn Emulator", "initial request, tool gap, replay"),
-        (710, 40, 250, 64, "SGLang OpenAI Server", "same serving backend path"),
-        (1030, 40, 250, 64, "Qwen Model + KV Cache", "real model and KV behavior"),
-        (1030, 170, 250, 64, "Measured Resume Behavior", "TTFT, reloads, late hints"),
-        (710, 170, 250, 64, "KV / Copy Telemetry", "SGLang load and CUDA HtoD evidence"),
-        (390, 170, 250, 64, "Hint / Direct-Load Path", "request warm, direct load, oracle load"),
-        (70, 170, 250, 64, "Cache Pressure Controls", "fillers, prompt sizes, timing sweeps"),
+        (70, 65, 210, 74, "1. Agent Task", "synthetic session"),
+        (330, 65, 210, 74, "2. First Turn", "model builds context / KV"),
+        (590, 65, 210, 74, "3. Tool Wait", "controlled pause"),
+        (850, 65, 210, 74, "4. Prefetch Try", "warm/direct-load/oracle"),
+        (1110, 65, 210, 74, "5. Resume Turn", "measure TTFT + reloads"),
     ]
     arrows = [
-        (320, 72, 390, 72),
-        (640, 72, 710, 72),
-        (960, 72, 1030, 72),
-        (1155, 104, 1155, 170),
-        (1030, 202, 960, 202),
-        (710, 202, 640, 202),
-        (390, 202, 320, 202),
-        (195, 170, 195, 104),
-        (320, 202, 390, 202),
-        (640, 202, 710, 202),
+        (280, 102, 330, 102),
+        (540, 102, 590, 102),
+        (800, 102, 850, 102),
+        (1060, 102, 1110, 102),
     ]
     parts = [
-        '<svg viewBox="0 0 1350 290" width="100%" role="img" aria-label="Synthetic experiment setup flow diagram">',
+        '<svg viewBox="0 0 1390 210" width="100%" role="img" aria-label="Simple synthetic experiment setup flow diagram">',
         "<defs>",
         '<marker id="synthetic-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">',
         '<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>',
         "</marker>",
         "</defs>",
-        '<rect x="20" y="15" width="1310" height="250" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
+        '<rect x="20" y="25" width="1350" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
     ]
     for x1, y1, x2, y2 in arrows:
         parts.append(
             f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>'
         )
-    for x, y, w, h, title, subtitle in boxes:
-        fill = "#eff6ff" if x >= 710 else "#ffffff"
-        stroke = "#2563eb" if x >= 710 else "#cbd5e1"
+    for idx, (x, y, w, h, title, subtitle) in enumerate(boxes):
+        fill = "#fff7ed" if idx == 3 else "#eff6ff" if idx == 4 else "#ffffff"
+        stroke = "#ea580c" if idx == 3 else "#2563eb" if idx == 4 else "#cbd5e1"
         parts.extend(
             [
                 f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>',
@@ -1383,7 +1374,7 @@ def synthetic_setup_diagram_svg() -> str:
         )
     parts.extend(
         [
-            '<text x="675" y="268" text-anchor="middle" font-size="13" fill="#475569">Top row is the controlled request path. Bottom row is the synthetic hint/prefetch and telemetry path.</text>',
+            '<text x="695" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>',
             "</svg>",
         ]
     )
@@ -1400,11 +1391,13 @@ def synthetic_setup_html(sections: dict[str, list[dict[str, Any]]]) -> str:
         default={},
     )
     setup_rows = [
-        {"item": "Traffic source", "description": "Controlled synthetic agentic sessions with explicit initial requests, tool waits, cache pressure, and replay requests."},
-        {"item": "Backend", "description": "The requests still go through the real SGLang serving path and real model/KV-cache behavior."},
-        {"item": "Modes compared", "description": "No prefetch versus request warm, direct load, oracle direct load, or whichever synthetic modes were selected for the run."},
-        {"item": "Control knobs", "description": "The experiment can vary prefetch timing, cache pressure/fillers, prompt size, tool-wait duration, and concurrency."},
-        {"item": "Attribution split", "description": "Clean runs measure TTFT/performance. Profiled runs explain KV movement, CUDA HtoD visibility, hint completion, and replay reloads."},
+        {"part": "1. Request source", "simple meaning": "Synthetic agent sessions send controlled model turns to SGLang."},
+        {"part": "2. Tool wait window", "simple meaning": "The driver inserts a controlled pause. That pause is the chance to prefetch KV."},
+        {"part": "3. Resume request", "simple meaning": "The replay turn arrives, and we measure whether KV was ready before first token generation."},
+    ]
+    mode_rows = [
+        {"mode": "No prefetch", "what happens": "The system waits until replay arrives, then SGLang handles KV reuse/load normally."},
+        {"mode": "Prefetch modes", "what happens": "During the tool wait, request-warm/direct-load/oracle modes try to prepare KV before replay."},
     ]
     metric_rows = [
         {"metric": "replay TTFT", "meaning": "Time from replay admission to first generated token in the clean run."},
@@ -1425,9 +1418,13 @@ def synthetic_setup_html(sections: dict[str, list[dict[str, Any]]]) -> str:
             '<div class="panel"><h2>Experiment Setup And Manager Summary</h2>',
             '<p class="caption">This section is intended for slide-building. It explains how the controlled synthetic experiment was set up, what was measured, and how to read the hardware motivation.</p>',
             synthetic_setup_diagram_svg(),
-            "<h3>How The Experiment Was Set Up</h3>",
+            "<h3>Simple Setup</h3>",
             '<div class="table-wrap">',
             html_table(setup_rows),
+            "</div>",
+            "<h3>Modes Compared</h3>",
+            '<div class="table-wrap">',
+            html_table(mode_rows),
             "</div>",
             "<h3>What Was Measured</h3>",
             '<div class="table-wrap">',
@@ -1468,8 +1465,56 @@ def html_toc(items: list[tuple[str, str]]) -> str:
         '<div class="panel"><h2>Table of Contents</h2>'
         '<p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, '
         'profiled mechanism, interpretation, and appendix.</p>'
-        f'<div class="toc">{links}</div></div>'
+        f'<div class="toc">{links}</div>'
+        '<div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button>'
+        '<button type="button" data-action="collapse-all">Collapse All</button></div></div>'
     )
+
+
+def report_script() -> str:
+    return """
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".panel[id][class*='theme-']").forEach(function (panel) {
+    const id = panel.id;
+    const h2 = panel.querySelector(":scope > h2");
+    if (!id || !h2) return;
+    const details = document.createElement("details");
+    details.id = id;
+    details.className = panel.className.replace("panel", "section-card").trim();
+    if (id === "executive") details.open = true;
+    const summary = document.createElement("summary");
+    summary.appendChild(h2);
+    details.appendChild(summary);
+    panel.removeAttribute("id");
+    while (panel.firstChild) {
+      details.appendChild(panel.firstChild);
+    }
+    panel.replaceWith(details);
+  });
+  const cards = Array.from(document.querySelectorAll("details.section-card"));
+  document.querySelectorAll(".toc a[href^='#']").forEach(function (link) {
+    link.addEventListener("click", function () {
+      const id = link.getAttribute("href").slice(1);
+      const target = document.getElementById(id);
+      if (target && target.tagName.toLowerCase() === "details") {
+        target.open = true;
+      }
+    });
+  });
+  document.querySelectorAll("[data-action='expand-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = true; });
+    });
+  });
+  document.querySelectorAll("[data-action='collapse-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = false; });
+    });
+  });
+});
+</script>
+"""
 
 
 def synthetic_timeline_guide_html() -> str:
@@ -1545,9 +1590,18 @@ def write_html(
         ".theme-appendix{--theme:#64748b;--theme-bg:#f8fafc}",
         ".panel[class*='theme-']{border-top:5px solid var(--theme)}",
         ".panel[class*='theme-']>h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme)}",
+        "details.section-card{background:var(--panel);border:1px solid var(--line);border-top:5px solid var(--theme);border-radius:8px;padding:18px;margin:18px 0;box-shadow:0 1px 2px rgba(15,23,42,.04)}",
+        "details.section-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}",
+        "details.section-card summary::-webkit-details-marker{display:none}",
+        "details.section-card summary h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme);margin:0}",
+        "details.section-card summary h2::before{content:'▶';display:inline-block;color:var(--theme);font-size:16px;margin-right:8px;transform:translateY(-1px)}",
+        "details.section-card[open] summary h2::before{content:'▼'}",
         ".section-color-legend{color:#475569;font-size:14px;margin:8px 0 12px}",
         ".toc{display:flex;flex-wrap:wrap;gap:10px 12px;margin-top:14px}",
         ".toc a{background:var(--theme-bg,#f1f5f9);border:1px solid #e2e8f0;border-left:7px solid var(--theme,#64748b);border-radius:6px;padding:7px 10px;color:#0f172a;text-decoration:none;font-weight:650}",
+        ".toc-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}",
+        ".toc-actions button{border:1px solid #cbd5e1;background:#fff;color:#0f172a;border-radius:6px;padding:7px 10px;font-weight:650;cursor:pointer}",
+        ".toc-actions button:hover{background:#f8fafc}",
         ".table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}",
         "table{border-collapse:collapse;width:100%;font-size:13px;background:white}",
         "th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}",
@@ -1691,6 +1745,7 @@ def write_html(
     lines.append('<div class="panel theme-appendix" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>')
     lines.append(html.escape(json.dumps(metadata, indent=2, sort_keys=True)))
     lines.append("</pre></div>")
+    lines.append(report_script())
     lines.extend(["</body>", "</html>"])
     path.write_text("\n".join(lines), encoding="utf-8")
 

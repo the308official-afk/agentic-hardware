@@ -454,7 +454,7 @@ def css() -> str:
     return """
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
     main { max-width: 1760px; margin: 0 auto; padding: 24px; }
-    section { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px 24px; margin: 18px 0; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+    section, details.section-card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px 24px; margin: 18px 0; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
     h1 { font-size: 34px; margin: 0 0 8px; }
     h2 { font-size: 26px; margin: 0 0 12px; }
     h3 { font-size: 18px; margin: 18px 0 8px; }
@@ -473,13 +473,21 @@ def css() -> str:
     .theme-observations { --theme: #0f766e; --theme-bg: #f0fdfa; }
     .theme-paired { --theme: #be123c; --theme-bg: #fff1f2; }
     .theme-appendix { --theme: #64748b; --theme-bg: #f8fafc; }
-    section[class*="theme-"] { border-top: 5px solid var(--theme); }
-    section[class*="theme-"] > h2 { border-left: 8px solid var(--theme); padding-left: 10px; color: var(--theme); }
+    section[class*="theme-"], details.section-card[class*="theme-"] { border-top: 5px solid var(--theme); }
+    section[class*="theme-"] > h2, details.section-card summary h2 { border-left: 8px solid var(--theme); padding-left: 10px; color: var(--theme); }
+    details.section-card summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+    details.section-card summary::-webkit-details-marker { display: none; }
+    details.section-card summary h2 { margin: 0; }
+    details.section-card summary h2::before { content: "▶"; display: inline-block; color: var(--theme); font-size: 18px; margin-right: 8px; transform: translateY(-1px); }
+    details.section-card[open] summary h2::before { content: "▼"; }
     .section-color-legend { color: #475569; font-size: 14px; margin: 8px 0 12px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
     .setup-diagram { margin: 12px 0 18px; }
     .toc { display: flex; flex-wrap: wrap; gap: 10px 16px; }
     .toc a { background: var(--theme-bg, #f1f5f9); border: 1px solid #e2e8f0; border-left: 7px solid var(--theme, #64748b); border-radius: 6px; padding: 7px 10px; color: #0f172a; font-weight: 650; }
+    .toc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .toc-actions button { border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
+    .toc-actions button:hover { background: #f8fafc; }
     .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #f8fafc; }
     .card .label { color: #64748b; font-size: 13px; }
@@ -512,44 +520,34 @@ def metric_cards(mode_rows: list[dict[str, Any]], pair_summary_rows: list[dict[s
 
 def setup_diagram_svg() -> str:
     boxes = [
-        (70, 40, 250, 64, "SWE-bench / AgentBench Tasks", "real coding-agent task inputs"),
-        (390, 40, 250, 64, "DeepAgents Harness", "agent loop and tool orchestration"),
-        (710, 40, 250, 64, "Tool-Calling Loop", "read_file, edit_file, ls, grep, execute"),
-        (1030, 40, 250, 64, "SGLang OpenAI Server", "direct backend, no Dynamo"),
-        (1030, 170, 250, 64, "Qwen Coder + KV Cache", "model turns and cached context"),
-        (710, 170, 250, 64, "Observed Resume Traffic", "model turns, tool gaps, resume requests"),
-        (390, 170, 250, 64, "Live Hint Path", "hint emitted after tool-call response"),
-        (70, 170, 250, 64, "Prefetch Controller", "software request sent during tool gap"),
+        (70, 65, 210, 74, "1. Agent Task", "SWE-bench / DeepAgents"),
+        (330, 65, 210, 74, "2. First Turn", "model builds context / KV"),
+        (590, 65, 210, 74, "3. Tool Wait", "read_file, grep, execute"),
+        (850, 65, 210, 74, "4. Prefetch Try", "hint during the gap"),
+        (1110, 65, 210, 74, "5. Resume Turn", "measure resume latency"),
     ]
     arrows = [
-        (320, 72, 390, 72),
-        (640, 72, 710, 72),
-        (960, 72, 1030, 72),
-        (1155, 104, 1155, 170),
-        (1030, 202, 960, 202),
-        (710, 202, 640, 202),
-        (390, 202, 320, 202),
-        (195, 170, 195, 104),
-        (320, 202, 390, 202),
-        (640, 202, 710, 202),
-        (960, 202, 1030, 202),
+        (280, 102, 330, 102),
+        (540, 102, 590, 102),
+        (800, 102, 850, 102),
+        (1060, 102, 1110, 102),
     ]
     parts = [
-        '<svg viewBox="0 0 1350 290" width="100%" role="img" aria-label="Experiment setup flow diagram">',
+        '<svg viewBox="0 0 1390 210" width="100%" role="img" aria-label="Simple experiment setup flow diagram">',
         "<defs>",
         '<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">',
         '<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>',
         "</marker>",
         "</defs>",
-        '<rect x="20" y="15" width="1310" height="250" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
+        '<rect x="20" y="25" width="1350" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
     ]
     for x1, y1, x2, y2 in arrows:
         parts.append(
             f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>'
         )
-    for x, y, w, h, title, subtitle in boxes:
-        fill = "#eff6ff" if x >= 1030 else "#ffffff"
-        stroke = "#2563eb" if x >= 1030 else "#cbd5e1"
+    for idx, (x, y, w, h, title, subtitle) in enumerate(boxes):
+        fill = "#fff7ed" if idx == 3 else "#eff6ff" if idx == 4 else "#ffffff"
+        stroke = "#ea580c" if idx == 3 else "#2563eb" if idx == 4 else "#cbd5e1"
         parts.extend(
             [
                 f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>',
@@ -559,7 +557,7 @@ def setup_diagram_svg() -> str:
         )
     parts.extend(
         [
-            '<text x="675" y="268" text-anchor="middle" font-size="13" fill="#475569">Main request path runs left-to-right on top. Hint/prefetch path is shown on the lower loop during tool gaps.</text>',
+            '<text x="695" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>',
             "</svg>",
         ]
     )
@@ -572,12 +570,13 @@ def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: li
     live_prefetch = by_mode.get("live_prefetch", {})
     paired = pair_summary_rows[0] if pair_summary_rows else {}
     setup_rows = [
-        {"item": "Traffic source", "description": "Real SWE-bench / AgentBench-style tasks driven through the DeepAgents harness."},
-        {"item": "Agent behavior", "description": "DeepAgents generated structured tool calls such as read_file, edit_file, ls, grep, execute, and write_file."},
-        {"item": "Backend", "description": "Requests were sent directly to an SGLang OpenAI-compatible server. Dynamo was not used in this experiment."},
-        {"item": "Model path", "description": "SGLang served the Qwen Coder model and managed the model context / KV-cache path."},
-        {"item": "Modes compared", "description": "No prefetch versus live software prefetch using hints emitted after observed tool-call responses."},
-        {"item": "Pairing method", "description": "Tool gaps were paired by SWE-bench task index and gap order inside that task."},
+        {"part": "1. Request source", "simple meaning": "Real SWE-bench / DeepAgents tasks send model turns to SGLang."},
+        {"part": "2. Tool wait window", "simple meaning": "The agent calls a tool, then pauses. That pause is the chance to prefetch KV."},
+        {"part": "3. Resume request", "simple meaning": "The tool returns, the agent asks the model to continue, and we measure whether KV was ready."},
+    ]
+    mode_rows_simple = [
+        {"mode": "No prefetch", "what happens": "The system waits until the resume turn arrives, then SGLang handles KV reuse/load normally."},
+        {"mode": "Live prefetch", "what happens": "During the tool wait, the hint path tries to prepare KV before the resume turn arrives."},
     ]
     metric_rows = [
         {"metric": "tool gap", "meaning": "Time between a tool-call response and the next model request from the same live agent run."},
@@ -595,8 +594,10 @@ def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: li
     ]
     return f"""
     <div class="setup-diagram">{setup_diagram_svg()}</div>
-    <h3>How The Experiment Was Set Up</h3>
-    {table_html(setup_rows, ["item", "description"])}
+    <h3>Simple Setup</h3>
+    {table_html(setup_rows, ["part", "simple meaning"])}
+    <h3>Modes Compared</h3>
+    {table_html(mode_rows_simple, ["mode", "what happens"])}
     <h3>What Was Measured</h3>
     {table_html(metric_rows, ["metric", "meaning"])}
     <h3>What Was Observed</h3>
@@ -651,7 +652,38 @@ def toc_html(items: list[tuple[str, str]]) -> str:
         '<p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, '
         'profiled mechanism, interpretation, and appendix.</p>'
         f'<div class="toc">{links}</div>'
+        '<div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button>'
+        '<button type="button" data-action="collapse-all">Collapse All</button></div>'
     )
+
+
+def report_script() -> str:
+    return """
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const cards = Array.from(document.querySelectorAll("details.section-card"));
+  document.querySelectorAll(".toc a[href^='#']").forEach(function (link) {
+    link.addEventListener("click", function () {
+      const id = link.getAttribute("href").slice(1);
+      const target = document.getElementById(id);
+      if (target && target.tagName.toLowerCase() === "details") {
+        target.open = true;
+      }
+    });
+  });
+  document.querySelectorAll("[data-action='expand-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = true; });
+    });
+  });
+  document.querySelectorAll("[data-action='collapse-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = false; });
+    });
+  });
+});
+</script>
+"""
 
 
 def render_html(
@@ -714,26 +746,26 @@ def render_html(
     {toc_html(toc)}
   </section>
 
-  <section id="summary" class="theme-summary">
-    <h2>Summary</h2>
+  <details id="summary" class="section-card theme-summary" open>
+    <summary><h2>Summary</h2></summary>
     <p>This report uses real SWE-bench / DeepAgents traffic. It answers whether the live software hint path finishes before the next real agent turn resumes.</p>
     {metric_cards(mode_rows, pair_summary_rows)}
-  </section>
+  </details>
 
-  <section id="setup" class="theme-setup">
-    <h2>Experiment Setup And Manager Summary</h2>
+  <details id="setup" class="section-card theme-setup">
+    <summary><h2>Experiment Setup And Manager Summary</h2></summary>
     <p>This section is intended for slide-building: it shows the live request path, the hint/prefetch path, how the experiment was conducted, and the main evidence collected.</p>
     {experiment_setup_html(mode_rows, pair_summary_rows)}
-  </section>
+  </details>
 
-  <section id="timeline-guide" class="theme-guide">
-    <h2>How To Read The Timelines</h2>
+  <details id="timeline-guide" class="section-card theme-guide">
+    <summary><h2>How To Read The Timelines</h2></summary>
     <p>The timelines are the primary visual evidence. Tables below each timeline provide the exact numbers behind the picture.</p>
     {timeline_guide_html(profiled_available=False)}
-  </section>
+  </details>
 
-  <section id="timelines" class="theme-clean">
-    <h2>A. Clean Performance Timelines</h2>
+  <details id="timelines" class="section-card theme-clean">
+    <summary><h2>A. Clean Performance Timelines</h2></summary>
     <p class="note">Profiler is off. Use this section for live request-flow and latency claims.</p>
     <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request.</p>
     <div class="grid">
@@ -746,54 +778,55 @@ def render_html(
         {build_timeline_svg(pref_gaps, max_timeline_gaps)}
       </div>
     </div>
-  </section>
+  </details>
 
-  <section id="performance" class="theme-clean-table">
-    <h2>A.1 Clean Performance Tables</h2>
+  <details id="performance" class="section-card theme-clean-table">
+    <summary><h2>A.1 Clean Performance Tables</h2></summary>
     <p>These tables provide the exact request counts, tool-gap counts, latency values, and paired aggregate numbers behind the clean timelines.</p>
     <h3>By Mode</h3>
     {table_html(mode_rows)}
     <h3>Paired Aggregate</h3>
     {table_html(pair_summary_rows)}
-  </section>
+  </details>
 
-  <section id="profiled" class="theme-profiled">
-    <h2>B. Profiled Mechanism Evidence</h2>
+  <details id="profiled" class="section-card theme-profiled">
+    <summary><h2>B. Profiled Mechanism Evidence</h2></summary>
     <p class="warn">Not available yet for the real SWE-bench / DeepAgents master report. This report currently shows clean live request timing and live hint-controller timing, but it does not yet include torch-profiler CUDA HtoD attribution for live SWE-bench traffic.</p>
     <p>After we add the live profiled attribution run, this section will show dark-green CUDA HtoD copy bars, KV/copy telemetry, replay reload evidence, and checkpoint tables for the real traffic path.</p>
-  </section>
+  </details>
 
-  <section id="deductions" class="theme-deductions">
-    <h2>Key Deductions</h2>
+  <details id="deductions" class="section-card theme-deductions">
+    <summary><h2>Key Deductions</h2></summary>
     {table_html(deductions, ["finding", "evidence", "why_it_matters"])}
-  </section>
+  </details>
 
-  <section id="checkpoints" class="theme-checkpoints">
-    <h2>Prefetch Checkpoints</h2>
+  <details id="checkpoints" class="section-card theme-checkpoints">
+    <summary><h2>Prefetch Checkpoints</h2></summary>
     <p>These checkpoints make the live intervention path explicit: hint submitted, controller started, controller finished, and whether it finished before resume.</p>
     {table_html(checkpoint[:max_timeline_gaps])}
-  </section>
+  </details>
 
-  <section id="observations" class="theme-observations">
-    <h2>Key Observations Per Session</h2>
+  <details id="observations" class="section-card theme-observations">
+    <summary><h2>Key Observations Per Session</h2></summary>
     {table_html(observations, ["session_id", "status", "what_happened", "deduction_and_evidence"])}
-  </section>
+  </details>
 
-  <section id="paired" class="theme-paired">
-    <h2>Paired Session Evidence</h2>
+  <details id="paired" class="section-card theme-paired">
+    <summary><h2>Paired Session Evidence</h2></summary>
     {table_html(pair_rows)}
-  </section>
+  </details>
 
-  <section id="appendix" class="theme-appendix">
-    <h2>Appendix: Detailed Evidence</h2>
+  <details id="appendix" class="section-card theme-appendix">
+    <summary><h2>Appendix: Detailed Evidence</h2></summary>
     <h3>Timeline Summary</h3>
     {table_html(timeline_rows)}
     <h3>Input Runs</h3>
     {table_html(detail_rows)}
     <h3>Live Request Details</h3>
     {table_html(request_details(pref_run, 80))}
-  </section>
+  </details>
 </main>
+{report_script()}
 </body>
 </html>
 """
