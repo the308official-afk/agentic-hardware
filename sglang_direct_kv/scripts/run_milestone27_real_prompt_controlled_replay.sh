@@ -24,6 +24,7 @@ HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-8}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.45}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-18}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+BASE_EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -141,8 +142,7 @@ run_case() {
   export AGENTIC_KV_COPY_TELEMETRY_PATH="${telemetry}"
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
-  local base_extra_args="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
-  export EXTRA_SERVER_ARGS="${base_extra_args} --max-total-tokens ${MAX_TOTAL_TOKENS}"
+  export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
   server_pid="$!"

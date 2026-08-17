@@ -18,10 +18,13 @@ from build_live_agentbench_tool_gap_report import (
     write_csv,
 )
 from build_live_paired_agentbench_report import (
+    css as master_css,
     global_prefetch_margin_html,
     movement_events_by_session,
+    report_script,
     setup_diagram_svg,
     timeline_guide_html,
+    toc_html,
 )
 
 
@@ -297,6 +300,27 @@ def manager_setup_html() -> str:
     """
 
 
+def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
+    by_mode = {str(row.get("mode") or ""): row for row in mode_rows}
+    no_prefetch = by_mode.get("no_prefetch", {})
+    direct = by_mode.get("direct_prefetch", {})
+    oracle = by_mode.get("oracle_prefetch", {})
+    cards = [
+        ("controlled gaps", sum(int(row.get("controlled_gaps") or 0) for row in mode_rows)),
+        ("no-prefetch avg TTFT", f"{no_prefetch.get('avg_resume_ttft_ms', '')} ms"),
+        ("direct-prefetch avg TTFT", f"{direct.get('avg_resume_ttft_ms', '')} ms"),
+        ("oracle-prefetch avg TTFT", f"{oracle.get('avg_resume_ttft_ms', '')} ms"),
+        ("direct late prefetches", direct.get("late_prefetches", "")),
+        ("oracle late prefetches", oracle.get("late_prefetches", "")),
+        ("direct H2D gaps", direct.get("hint_h2d_gaps", "")),
+        ("oracle H2D gaps", oracle.get("hint_h2d_gaps", "")),
+    ]
+    return "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+        for label, value in cards
+    ) + "</div>"
+
+
 def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps: int) -> str:
     mode_rows = mode_summary_rows(gaps)
     interesting = selected_timeline_gaps(gaps, max_timeline_gaps)
@@ -313,82 +337,91 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
         "direct_kv_h2d_events",
         "replay_kv_h2d_events",
     ]
-    css = """
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
-    main { max-width: 1760px; margin: 0 auto; padding: 24px; }
-    section { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px 24px; margin: 18px 0; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
-    h1 { font-size: 34px; margin: 0 0 8px; }
-    h2 { font-size: 26px; margin: 0 0 12px; }
-    h3 { font-size: 19px; margin: 16px 0 8px; }
-    p { color: #334155; line-height: 1.45; }
-    .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 14px; color: #1e3a8a; }
-    .toc a { display: inline-block; margin: 4px 8px 4px 0; padding: 7px 10px; border-radius: 999px; background: #eef2ff; color: #3730a3; text-decoration: none; font-weight: 700; font-size: 13px; }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th { text-align: left; background: #f1f5f9; padding: 9px 10px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
-    td { padding: 9px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-    code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
-    svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
-    """
     run_cmd = (
         "RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) "
         "WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl "
         "bash scripts/run_milestone27_real_prompt_controlled_replay.sh Qwen/Qwen2.5-Coder-7B-Instruct"
     )
+    toc = [
+        ("summary", "Summary"),
+        ("setup", "Experiment Setup"),
+        ("global-prefetch", "Global Prefetch Margin"),
+        ("timeline-guide", "How To Read Timelines"),
+        ("timelines", "Controlled Replay Timeline"),
+        ("performance", "Mode Tables"),
+        ("direct-kv", "Direct KV Evidence"),
+        ("appendix", "Gap Details"),
+        ("reproduce", "Reproduce This Report"),
+    ]
     return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Milestone 27 Controlled Real-Prompt Replay Report</title>
-  <style>{css}</style>
+  <title>Real-Prompt Controlled Replay Master Report</title>
+  <style>{master_css()}</style>
 </head>
 <body>
 <main>
   <section>
-    <h1>Milestone 27: Controlled Real-Prompt Replay</h1>
-    <p>This report uses real AgentBench/DeepAgents prompt pairs, then controls tool wait, cache pressure, and direct KV hint timing. It is designed to be the cleaner hardware-story experiment after the fully live run.</p>
-    <div class="toc">
-      <a href="#setup">Setup</a>
-      <a href="#summary">Summary</a>
-      <a href="#margin">Global Margin</a>
-      <a href="#guide">Timeline Guide</a>
-      <a href="#timeline">Timeline</a>
-      <a href="#details">Gap Details</a>
-      <a href="#reproduce">Reproduce</a>
-    </div>
+    <h1>Real-Prompt Controlled Replay Master Report</h1>
+    <p>This is the controlled real-prompt version of the master report. The prompts come from real SWE-bench / DeepAgents traces, while the experiment controls tool-wait time, cache pressure, and direct KV prefetch timing.</p>
+    <p class="note">Use this report for the clean hardware-story experiment: real prompt content, known resume deadlines, known pressure levels, direct SGLang KV-hook attempts, and replay-side KV movement evidence.</p>
+    <h2>Table of Contents</h2>
+    {toc_html(toc)}
   </section>
-  <section id="setup">
-    <h2>Experiment Setup</h2>
+
+  <details id="summary" class="section-card theme-summary" open>
+    <summary><h2>Summary</h2></summary>
+    <p>This section gives the headline numbers across no-prefetch, direct-prefetch, and oracle-prefetch modes.</p>
+    {metric_cards_html(mode_rows)}
+  </details>
+
+  <details id="setup" class="section-card theme-setup">
+    <summary><h2>Experiment Setup And Manager Summary</h2></summary>
     {manager_setup_html()}
-  </section>
-  <section id="summary">
-    <h2>Mode Summary</h2>
-    {table_html(mode_rows)}
-  </section>
-  <section id="margin">
-    <h2>Global Prefetch Margin</h2>
+  </details>
+
+  <details id="global-prefetch" class="section-card theme-global">
+    <summary><h2>Global Prefetch Margin</h2></summary>
     <p>Positive margin means the hint path finished before replay. Negative margin means replay arrived first.</p>
     {global_prefetch_margin_html(gaps)}
-  </section>
-  <section id="guide">
-    <h2>How To Read The Timelines</h2>
+  </details>
+
+  <details id="timeline-guide" class="section-card theme-guide">
+    <summary><h2>How To Read The Timelines</h2></summary>
     {timeline_guide_html(profiled_available=True)}
-  </section>
-  <section id="timeline">
-    <h2>Controlled Replay Timeline</h2>
+  </details>
+
+  <details id="timelines" class="section-card theme-clean">
+    <summary><h2>Controlled Replay Timeline</h2></summary>
     <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence. Cyan is replay-side HtoD evidence.</p>
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
-  </section>
-  <section id="details">
-    <h2>Controlled Gap Details</h2>
+  </details>
+
+  <details id="performance" class="section-card theme-clean-table">
+    <summary><h2>Mode Tables</h2></summary>
+    <h3>Mode Summary</h3>
+    {table_html(mode_rows)}
+  </details>
+
+  <details id="direct-kv" class="section-card theme-directkv">
+    <summary><h2>Direct KV Load Evidence</h2></summary>
+    <p>Green bars and <code>direct_kv_h2d_*</code> columns come from SGLang-level KV movement hooks and lightweight copy telemetry during the prefetch attempt. Cyan/replay columns show KV movement performed by the real resume request.</p>
+    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms"])}
+  </details>
+
+  <details id="appendix" class="section-card theme-appendix">
+    <summary><h2>Gap Details</h2></summary>
     {table_html(gaps, gap_columns)}
-  </section>
-  <section id="reproduce">
-    <h2>Reproduce This Report</h2>
+  </details>
+
+  <details id="reproduce" class="section-card theme-reproduce">
+    <summary><h2>Reproduce This Report</h2></summary>
     <pre><code>{html.escape(run_cmd)}</code></pre>
     <p>Result root: <code>{html.escape(str(result_root))}</code></p>
-  </section>
+  </details>
 </main>
+{report_script()}
 </body>
 </html>
 """
@@ -436,6 +469,7 @@ def main() -> None:
     if args.latest_root:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         shutil.copy2(report_path, args.latest_root / "latest_controlled_replay_report.html")
+        shutil.copy2(report_path, args.latest_root / "latest_master_report.html")
 
     print(f"Wrote Milestone 27 report to {report_path}")
 
