@@ -828,6 +828,36 @@ def global_prefetch_margin_html(gaps: list[dict[str, Any]]) -> str:
     """
 
 
+def per_task_prefetch_breakdown(run: dict[str, Any]) -> list[dict[str, Any]]:
+    gaps_by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in run["gaps"]:
+        gaps_by_task[str(row.get("task_index", ""))].append(row)
+
+    rows: list[dict[str, Any]] = []
+    for task in run.get("task_rows", []):
+        task_index = str(task.get("task_index", ""))
+        gaps = gaps_by_task.get(task_index, [])
+        tools: Counter[str] = Counter()
+        for gap in gaps:
+            for name in str(gap.get("tool_names") or "").split(","):
+                name = name.strip()
+                if name:
+                    tools[name] += 1
+        tool_summary = ", ".join(f"{name}:{count}" for name, count in tools.most_common()) or "-"
+        status = str(task.get("status", ""))
+        rows.append(
+            {
+                "task_index": task_index,
+                "task_status": status,
+                "status_meaning": "completed" if status == "0" else "failed/no complete result" if status else "",
+                "tool_gaps_prefetch_attempts": len(gaps),
+                "tool_calls_in_gaps": sum(int(gap.get("tool_call_count") or 0) for gap in gaps),
+                "tools": tool_summary,
+            }
+        )
+    return rows
+
+
 SECTION_THEMES = {
     "summary": "theme-summary",
     "setup": "theme-setup",
@@ -970,6 +1000,9 @@ def render_html(
     <summary><h2>Global Prefetch Margin</h2></summary>
     <p>This is the high-level view across all live prefetch attempts. It answers whether most hints finished early enough or arrived late.</p>
     {global_prefetch_margin_html(pref_gaps)}
+    <h3>Per-Task Prefetch Breakdown</h3>
+    <p>This table explains where the plotted dots came from. One launched task can produce many tool gaps, and each matched live-prefetch tool gap becomes one dot in the global chart.</p>
+    {table_html(per_task_prefetch_breakdown(pref_run))}
   </details>
 
   <details id="timelines" class="section-card theme-clean">
