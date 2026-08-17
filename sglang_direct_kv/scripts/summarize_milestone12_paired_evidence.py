@@ -1444,11 +1444,32 @@ def synthetic_setup_html(sections: dict[str, list[dict[str, Any]]]) -> str:
     )
 
 
+SECTION_THEMES = {
+    "executive": "theme-summary",
+    "setup": "theme-setup",
+    "timeline-guide": "theme-guide",
+    "clean-timelines": "theme-clean",
+    "clean-tables": "theme-clean-table",
+    "profiled-timelines": "theme-profiled",
+    "profiled-tables": "theme-profiled",
+    "deductions": "theme-deductions",
+    "observations": "theme-observations",
+    "paired": "theme-paired",
+    "appendix": "theme-appendix",
+}
+
+
 def html_toc(items: list[tuple[str, str]]) -> str:
     links = "".join(
-        f'<a href="#{html.escape(anchor)}">{html.escape(label)}</a>' for anchor, label in items
+        f'<a class="{SECTION_THEMES.get(anchor, "theme-appendix")}" href="#{html.escape(anchor)}">{html.escape(label)}</a>'
+        for anchor, label in items
     )
-    return f'<div class="panel"><h2>Table of Contents</h2><div class="toc">{links}</div></div>'
+    return (
+        '<div class="panel"><h2>Table of Contents</h2>'
+        '<p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, '
+        'profiled mechanism, interpretation, and appendix.</p>'
+        f'<div class="toc">{links}</div></div>'
+    )
 
 
 def synthetic_timeline_guide_html() -> str:
@@ -1463,7 +1484,7 @@ def synthetic_timeline_guide_html() -> str:
     ]
     return "\n".join(
         [
-            '<div class="panel" id="timeline-guide"><h2>How To Read The Timelines</h2>',
+            '<div class="panel theme-guide" id="timeline-guide"><h2>How To Read The Timelines</h2>',
             '<p class="caption">The timelines are the main visual evidence. Read the clean timelines first for performance, then the profiled mechanism timeline for KV/copy attribution.</p>',
             '<div class="table-wrap">',
             html_table(rows),
@@ -1491,6 +1512,7 @@ def write_html(
         ("clean-tables", "Clean Performance Tables"),
         ("profiled-timelines", "Profiled Mechanism Timelines"),
         ("profiled-tables", "Profiled Mechanism Tables"),
+        ("deductions", "Key Deductions"),
         ("observations", "Session Observations"),
         ("paired", "Paired Evidence"),
         ("appendix", "Appendix"),
@@ -1511,8 +1533,21 @@ def write_html(
         ".card{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fbfdff}",
         ".card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}",
         ".card .value{font-size:24px;font-weight:700;margin-top:6px}",
+        ".theme-summary{--theme:#1e3a8a;--theme-bg:#eff6ff}",
+        ".theme-setup{--theme:#2563eb;--theme-bg:#eff6ff}",
+        ".theme-guide{--theme:#475569;--theme-bg:#f1f5f9}",
+        ".theme-clean{--theme:#15803d;--theme-bg:#f0fdf4}",
+        ".theme-clean-table{--theme:#65a30d;--theme-bg:#f7fee7}",
+        ".theme-profiled{--theme:#7e22ce;--theme-bg:#faf5ff}",
+        ".theme-deductions{--theme:#b45309;--theme-bg:#fffbeb}",
+        ".theme-observations{--theme:#0f766e;--theme-bg:#f0fdfa}",
+        ".theme-paired{--theme:#be123c;--theme-bg:#fff1f2}",
+        ".theme-appendix{--theme:#64748b;--theme-bg:#f8fafc}",
+        ".panel[class*='theme-']{border-top:5px solid var(--theme)}",
+        ".panel[class*='theme-']>h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme)}",
+        ".section-color-legend{color:#475569;font-size:14px;margin:8px 0 12px}",
         ".toc{display:flex;flex-wrap:wrap;gap:10px 12px;margin-top:14px}",
-        ".toc a{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:7px 10px;color:#0f172a;text-decoration:none}",
+        ".toc a{background:var(--theme-bg,#f1f5f9);border:1px solid #e2e8f0;border-left:7px solid var(--theme,#64748b);border-radius:6px;padding:7px 10px;color:#0f172a;text-decoration:none;font-weight:650}",
         ".table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}",
         "table{border-collapse:collapse;width:100%;font-size:13px;background:white}",
         "th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}",
@@ -1533,7 +1568,7 @@ def write_html(
         "<h1>Milestone 12 Paired Evidence Report</h1>",
         '<p class="subtle">Clean runs answer performance questions. Profiled runs answer mechanism questions. This keeps the TTFT story separate from profiler overhead.</p>',
         html_toc(toc),
-        '<div class="panel" id="executive"><h2>Executive Summary</h2>',
+        '<div class="panel theme-summary" id="executive"><h2>Executive Summary</h2>',
         '<p class="caption">This report is designed to answer two different questions without mixing them together.</p>',
         "<ul>",
         *[f"<li>{html.escape(line)}</li>" for line in manager_summary_lines(sections)],
@@ -1544,19 +1579,19 @@ def write_html(
             for card in cards
         ],
         "</div></div>",
-        synthetic_setup_html(sections).replace('<div class="panel"><h2>', '<div class="panel" id="setup"><h2>', 1),
+        synthetic_setup_html(sections).replace('<div class="panel"><h2>', '<div class="panel theme-setup" id="setup"><h2>', 1),
         synthetic_timeline_guide_html(),
-        '<div class="panel"><h2>How To Read This Report</h2>',
+        '<div class="panel theme-guide"><h2>How To Read This Report</h2>',
         '<p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>',
         '<p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>',
         '<p class="caption"><span class="pill">Paired evidence</span> joins the two views by session id, so we can say what improved and what mechanism was observed.</p>',
         "</div>",
-        '<div class="panel"><h2>Key Deductions</h2><ul>',
+        '<div class="panel theme-deductions" id="deductions"><h2>Key Deductions</h2><ul>',
         *[f"<li>{html.escape(line)}</li>" for line in key_deduction_lines(sections)],
         "</ul></div>",
     ]
 
-    lines.append('<div class="panel" id="clean-timelines"><h2>A. Clean Performance Timelines</h2>')
+    lines.append('<div class="panel theme-clean" id="clean-timelines"><h2>A. Clean Performance Timelines</h2>')
     lines.append(
         '<p class="caption"><span class="pill">Profiler OFF</span> Use these timelines for request-flow, replay timing, and TTFT/performance claims. They intentionally do not show CUDA HtoD bars.</p>'
     )
@@ -1580,21 +1615,21 @@ def write_html(
         lines.append('<p class="caption">No clean performance timeline data was found for this run.</p>')
     lines.append("</div>")
 
-    lines.append('<div class="panel" id="clean-tables"><h2>A.1 Clean Performance Tables</h2>')
+    lines.append('<div class="panel theme-clean-table" id="clean-tables"><h2>A.1 Clean Performance Tables</h2>')
     lines.append(f'<p class="caption">{html.escape(section_caption("Clean Performance Summary"))}</p>')
     lines.append('<div class="table-wrap">')
     lines.append(html_table(sections.get("Clean Performance Summary", [])))
     lines.append("</div></div>")
 
     if attribution_rows and timeline:
-        lines.append('<div class="panel" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2>')
+        lines.append('<div class="panel theme-profiled" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2>')
         lines.append(
             '<p class="caption"><span class="pill">Profiler / telemetry view</span> Use this for KV-copy and DMA-style attribution, not clean TTFT claims. Dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
 
-        lines.append('<div class="panel" id="profiled-tables"><h2>B.1 Profiled Mechanism Tables</h2>')
+        lines.append('<div class="panel theme-profiled" id="profiled-tables"><h2>B.1 Profiled Mechanism Tables</h2>')
         lines.append(f'<p class="caption">{html.escape(section_caption("Profiled Attribution Summary"))}</p>')
         lines.append('<div class="table-wrap">')
         lines.append(html_table(sections.get("Profiled Attribution Summary", [])))
@@ -1638,21 +1673,22 @@ def write_html(
         ]
         for title, rows, caption in timeline_sections:
             section_id = "observations" if title == "Key Observations Per Session" else "appendix"
-            lines.append(f'<div class="panel" id="{section_id}"><h2>{html.escape(title)}</h2>')
+            theme_class = "theme-observations" if title == "Key Observations Per Session" else "theme-appendix"
+            lines.append(f'<div class="panel {theme_class}" id="{section_id}"><h2>{html.escape(title)}</h2>')
             lines.append(f'<p class="caption">{html.escape(caption)}</p>')
             lines.append('<div class="table-wrap wide">')
             lines.append(html_table(rows))
             lines.append("</div></div>")
     else:
         lines.append(
-            '<div class="panel" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2><p class="caption">No profiled timeline JSON was found for this report. Run the profiled attribution step to populate the visual timeline sections.</p></div>'
+            '<div class="panel theme-profiled" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2><p class="caption">No profiled timeline JSON was found for this report. Run the profiled attribution step to populate the visual timeline sections.</p></div>'
         )
-    lines.append('<div class="panel" id="paired"><h2>Paired Session Evidence</h2>')
+    lines.append('<div class="panel theme-paired" id="paired"><h2>Paired Session Evidence</h2>')
     lines.append(f'<p class="caption">{html.escape(section_caption("Paired Session Evidence"))}</p>')
     lines.append('<div class="table-wrap">')
     lines.append(html_table(sections.get("Paired Session Evidence", [])))
     lines.append("</div></div>")
-    lines.append('<div class="panel" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>')
+    lines.append('<div class="panel theme-appendix" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>')
     lines.append(html.escape(json.dumps(metadata, indent=2, sort_keys=True)))
     lines.append("</pre></div>")
     lines.extend(["</body>", "</html>"])

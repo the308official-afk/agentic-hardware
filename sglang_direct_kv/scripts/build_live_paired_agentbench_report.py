@@ -462,10 +462,24 @@ def css() -> str:
     a { color: #2563eb; text-decoration: none; }
     .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 14px; color: #1e3a8a; }
     .warn { background: #fff7ed; border-left: 4px solid #f97316; padding: 12px 14px; color: #7c2d12; }
+    .theme-summary { --theme: #1e3a8a; --theme-bg: #eff6ff; }
+    .theme-setup { --theme: #2563eb; --theme-bg: #eff6ff; }
+    .theme-guide { --theme: #475569; --theme-bg: #f1f5f9; }
+    .theme-clean { --theme: #15803d; --theme-bg: #f0fdf4; }
+    .theme-clean-table { --theme: #65a30d; --theme-bg: #f7fee7; }
+    .theme-profiled { --theme: #7e22ce; --theme-bg: #faf5ff; }
+    .theme-deductions { --theme: #b45309; --theme-bg: #fffbeb; }
+    .theme-checkpoints { --theme: #ea580c; --theme-bg: #fff7ed; }
+    .theme-observations { --theme: #0f766e; --theme-bg: #f0fdfa; }
+    .theme-paired { --theme: #be123c; --theme-bg: #fff1f2; }
+    .theme-appendix { --theme: #64748b; --theme-bg: #f8fafc; }
+    section[class*="theme-"] { border-top: 5px solid var(--theme); }
+    section[class*="theme-"] > h2 { border-left: 8px solid var(--theme); padding-left: 10px; color: var(--theme); }
+    .section-color-legend { color: #475569; font-size: 14px; margin: 8px 0 12px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
     .setup-diagram { margin: 12px 0 18px; }
     .toc { display: flex; flex-wrap: wrap; gap: 10px 16px; }
-    .toc a { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; padding: 7px 10px; color: #0f172a; }
+    .toc a { background: var(--theme-bg, #f1f5f9); border: 1px solid #e2e8f0; border-left: 7px solid var(--theme, #64748b); border-radius: 6px; padding: 7px 10px; color: #0f172a; font-weight: 650; }
     .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #f8fafc; }
     .card .label { color: #64748b; font-size: 13px; }
@@ -613,6 +627,33 @@ def timeline_guide_html(profiled_available: bool) -> str:
     """
 
 
+SECTION_THEMES = {
+    "summary": "theme-summary",
+    "setup": "theme-setup",
+    "timeline-guide": "theme-guide",
+    "timelines": "theme-clean",
+    "performance": "theme-clean-table",
+    "profiled": "theme-profiled",
+    "deductions": "theme-deductions",
+    "checkpoints": "theme-checkpoints",
+    "observations": "theme-observations",
+    "paired": "theme-paired",
+    "appendix": "theme-appendix",
+}
+
+
+def toc_html(items: list[tuple[str, str]]) -> str:
+    links = "".join(
+        f'<a class="{SECTION_THEMES.get(anchor, "theme-appendix")}" href="#{anchor}">{html.escape(label)}</a>'
+        for anchor, label in items
+    )
+    return (
+        '<p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, '
+        'profiled mechanism, interpretation, and appendix.</p>'
+        f'<div class="toc">{links}</div>'
+    )
+
+
 def render_html(
     no_run: dict[str, Any],
     pref_run: dict[str, Any],
@@ -670,28 +711,28 @@ def render_html(
     <p>This is the live version of the paired evidence report. The request generator is real SWE-bench / Deep Agents traffic; the backend is direct SGLang; the comparison is no-prefetch versus live software prefetch intervention.</p>
     <p class="note">Important metric note: this report uses full resume request latency captured by the proxy, not streaming TTFT. It still shows whether the next real agent turn became faster or slower after the prefetch intervention.</p>
     <h2>Table of Contents</h2>
-    <div class="toc">{''.join(f'<a href="#{anchor}">{label}</a>' for anchor, label in toc)}</div>
+    {toc_html(toc)}
   </section>
 
-  <section id="summary">
+  <section id="summary" class="theme-summary">
     <h2>Summary</h2>
     <p>This report uses real SWE-bench / DeepAgents traffic. It answers whether the live software hint path finishes before the next real agent turn resumes.</p>
     {metric_cards(mode_rows, pair_summary_rows)}
   </section>
 
-  <section id="setup">
+  <section id="setup" class="theme-setup">
     <h2>Experiment Setup And Manager Summary</h2>
     <p>This section is intended for slide-building: it shows the live request path, the hint/prefetch path, how the experiment was conducted, and the main evidence collected.</p>
     {experiment_setup_html(mode_rows, pair_summary_rows)}
   </section>
 
-  <section id="timeline-guide">
+  <section id="timeline-guide" class="theme-guide">
     <h2>How To Read The Timelines</h2>
     <p>The timelines are the primary visual evidence. Tables below each timeline provide the exact numbers behind the picture.</p>
     {timeline_guide_html(profiled_available=False)}
   </section>
 
-  <section id="timelines">
+  <section id="timelines" class="theme-clean">
     <h2>A. Clean Performance Timelines</h2>
     <p class="note">Profiler is off. Use this section for live request-flow and latency claims.</p>
     <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request.</p>
@@ -707,7 +748,7 @@ def render_html(
     </div>
   </section>
 
-  <section id="performance">
+  <section id="performance" class="theme-clean-table">
     <h2>A.1 Clean Performance Tables</h2>
     <p>These tables provide the exact request counts, tool-gap counts, latency values, and paired aggregate numbers behind the clean timelines.</p>
     <h3>By Mode</h3>
@@ -716,34 +757,34 @@ def render_html(
     {table_html(pair_summary_rows)}
   </section>
 
-  <section id="profiled">
+  <section id="profiled" class="theme-profiled">
     <h2>B. Profiled Mechanism Evidence</h2>
     <p class="warn">Not available yet for the real SWE-bench / DeepAgents master report. This report currently shows clean live request timing and live hint-controller timing, but it does not yet include torch-profiler CUDA HtoD attribution for live SWE-bench traffic.</p>
     <p>After we add the live profiled attribution run, this section will show dark-green CUDA HtoD copy bars, KV/copy telemetry, replay reload evidence, and checkpoint tables for the real traffic path.</p>
   </section>
 
-  <section id="deductions">
+  <section id="deductions" class="theme-deductions">
     <h2>Key Deductions</h2>
     {table_html(deductions, ["finding", "evidence", "why_it_matters"])}
   </section>
 
-  <section id="checkpoints">
+  <section id="checkpoints" class="theme-checkpoints">
     <h2>Prefetch Checkpoints</h2>
     <p>These checkpoints make the live intervention path explicit: hint submitted, controller started, controller finished, and whether it finished before resume.</p>
     {table_html(checkpoint[:max_timeline_gaps])}
   </section>
 
-  <section id="observations">
+  <section id="observations" class="theme-observations">
     <h2>Key Observations Per Session</h2>
     {table_html(observations, ["session_id", "status", "what_happened", "deduction_and_evidence"])}
   </section>
 
-  <section id="paired">
+  <section id="paired" class="theme-paired">
     <h2>Paired Session Evidence</h2>
     {table_html(pair_rows)}
   </section>
 
-  <section id="appendix">
+  <section id="appendix" class="theme-appendix">
     <h2>Appendix: Detailed Evidence</h2>
     <h3>Timeline Summary</h3>
     {table_html(timeline_rows)}
