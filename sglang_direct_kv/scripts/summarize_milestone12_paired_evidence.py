@@ -1455,6 +1455,7 @@ SECTION_THEMES = {
     "deductions": "theme-deductions",
     "observations": "theme-observations",
     "paired": "theme-paired",
+    "reproduce": "theme-reproduce",
     "appendix": "theme-appendix",
 }
 
@@ -1518,6 +1519,60 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 """
+
+
+def html_code_block(text: str) -> str:
+    return f"<pre><code>{html.escape(text.strip())}</code></pre>"
+
+
+def synthetic_reproduce_html() -> str:
+    build_existing = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_manager_demo_1 \
+UPDATE_LATEST=0 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh
+"""
+    refresh_latest = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_latest_refresh \
+UPDATE_LATEST=1 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh
+"""
+    rerun_full = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone12_rerun_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+SESSION_COUNT=12 \
+RANDOMIZE_TRAFFIC=1 \
+ORACLE_LEAD_MS=1000 \
+bash scripts/run_milestone12_paired_evidence.sh Qwen/Qwen2.5-1.5B-Instruct
+"""
+    return "\n".join(
+        [
+            '<div class="panel theme-reproduce" id="reproduce"><h2>Reproduce This Report</h2>',
+            '<p class="caption">These commands reproduce or archive the controlled synthetic master report. Labeled builds do not overwrite the current latest report unless <code>UPDATE_LATEST=1</code>.</p>',
+            "<h3>Archive A Labeled Synthetic Report From Existing Runs</h3>",
+            html_code_block(build_existing),
+            '<p class="caption">Output:</p>',
+            html_code_block("artifacts/results/labeled/synthetic/synthetic_manager_demo_1/master_report.html"),
+            "<h3>Deliberately Refresh The Latest Synthetic Master Report</h3>",
+            html_code_block(refresh_latest),
+            "<h3>Rerun The Full Synthetic Experiment</h3>",
+            '<p class="caption">This reruns the clean and profiled synthetic experiment, then regenerates the standard latest synthetic report.</p>',
+            html_code_block(rerun_full),
+            "</div>",
+        ]
+    )
 
 
 def synthetic_timeline_guide_html() -> str:
@@ -1756,6 +1811,7 @@ def write_html(
         ("deductions", "Key Deductions"),
         ("observations", "Session Observations"),
         ("paired", "Paired Evidence"),
+        ("reproduce", "Reproduce This Report"),
         ("appendix", "Appendix"),
     ]
     lines = [
@@ -1784,6 +1840,7 @@ def write_html(
         ".theme-deductions{--theme:#b45309;--theme-bg:#fffbeb}",
         ".theme-observations{--theme:#0f766e;--theme-bg:#f0fdfa}",
         ".theme-paired{--theme:#be123c;--theme-bg:#fff1f2}",
+        ".theme-reproduce{--theme:#0891b2;--theme-bg:#ecfeff}",
         ".theme-appendix{--theme:#64748b;--theme-bg:#f8fafc}",
         ".panel[class*='theme-']{border-top:5px solid var(--theme)}",
         ".panel[class*='theme-']>h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme)}",
@@ -1940,6 +1997,7 @@ def write_html(
     lines.append('<div class="table-wrap">')
     lines.append(html_table(sections.get("Paired Session Evidence", [])))
     lines.append("</div></div>")
+    lines.append(synthetic_reproduce_html())
     lines.append('<div class="panel theme-appendix" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>')
     lines.append(html.escape(json.dumps(metadata, indent=2, sort_keys=True)))
     lines.append("</pre></div>")

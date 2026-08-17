@@ -42,6 +42,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 22: Live AgentBench Tool-Gap Bridge | Ready | [Milestone 22](#milestone-22-live-agentbench-tool-gap-bridge) |
 | Milestone 23: Live Prefetch Intervention | Ready | [Milestone 23](#milestone-23-live-prefetch-intervention) |
 | Milestone 24: Live Paired AgentBench Report | Ready | [Milestone 24](#milestone-24-live-paired-agentbench-report) |
+| Milestone 25: Labeled Reproducible Master Reports | Ready | [Milestone 25](#milestone-25-labeled-reproducible-master-reports) |
 
 ## What We Are Testing
 
@@ -4612,6 +4613,122 @@ Important pairing note:
   The two live runs can diverge because the model may choose different tools.
   The report pairs rows by SWE-bench task index plus gap order inside the task.
   Aggregate trends are stronger than any single row.
+```
+
+### Milestone 25: Labeled Reproducible Master Reports
+
+Status: ready.
+
+Why this milestone is needed:
+
+```text
+The master reports are now the main artifacts we show and discuss.
+But repeated runs should not accidentally overwrite the current latest report.
+
+Milestone 25 adds labeled report scripts so each run can create an archived
+manager-demo copy, while still allowing us to refresh the standard latest
+report only when we explicitly ask for it.
+```
+
+What it is:
+
+```text
+Three small wrapper scripts:
+
+1. run_labeled_live_master_report.sh
+   Runs the full real SWE-bench / DeepAgents / SGLang paired experiment
+   and writes a labeled live master report.
+
+2. build_labeled_live_master_report.sh
+   Rebuilds a labeled live master report from existing no-prefetch and
+   live-prefetch run folders.
+
+3. build_labeled_synthetic_master_report.sh
+   Rebuilds a labeled synthetic master report from existing clean and
+   profiled synthetic run folders.
+```
+
+Run a new labeled real live experiment:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_1 \
+UPDATE_LATEST=0 \
+MODEL=Qwen/Qwen2.5-Coder-7B-Instruct \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+bash scripts/run_labeled_live_master_report.sh
+```
+
+Output:
+
+```text
+artifacts/results/labeled/live/manager_demo_1/master_report.html
+```
+
+Rebuild a labeled live report from existing run folders:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_1_rebuild \
+UPDATE_LATEST=0 \
+NO_PREFETCH_ROOT=artifacts/results/<run>/no_prefetch_live \
+PREFETCH_ROOT=artifacts/results/<run>/live_prefetch \
+bash scripts/build_labeled_live_master_report.sh
+```
+
+Build a labeled synthetic report from existing synthetic runs:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_manager_demo_1 \
+UPDATE_LATEST=0 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh
+```
+
+Output:
+
+```text
+artifacts/results/labeled/synthetic/synthetic_manager_demo_1/master_report.html
+```
+
+When to update the standard latest reports:
+
+```text
+Default:
+  UPDATE_LATEST=0
+  Create an archived labeled report.
+  Do not overwrite latest_master_report.html or latest_synthetic_master_report.html.
+
+Explicit refresh:
+  UPDATE_LATEST=1
+  Also update the standard latest report:
+    artifacts/results/latest_master_report.html
+    artifacts/results/latest_synthetic_master_report.html
+```
+
+Important events to observe:
+
+```text
+The script prints the labeled output path.
+The labeled folder contains:
+  master_report.html
+  master_report.json, when available
+  master_report.md, when available
+  run_config.env
+
+The generated HTML reports also include a "Reproduce This Report" section
+with these same copy-paste commands.
 ```
 
 ## Directory Layout

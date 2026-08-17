@@ -473,6 +473,7 @@ def css() -> str:
     .theme-checkpoints { --theme: #ea580c; --theme-bg: #fff7ed; }
     .theme-observations { --theme: #0f766e; --theme-bg: #f0fdfa; }
     .theme-paired { --theme: #be123c; --theme-bg: #fff1f2; }
+    .theme-reproduce { --theme: #0891b2; --theme-bg: #ecfeff; }
     .theme-appendix { --theme: #64748b; --theme-bg: #f8fafc; }
     section[class*="theme-"], details.section-card[class*="theme-"] { border-top: 5px solid var(--theme); }
     section[class*="theme-"] > h2, details.section-card summary h2 { border-left: 8px solid var(--theme); padding-left: 10px; color: var(--theme); }
@@ -500,6 +501,8 @@ def css() -> str:
     th { text-align: left; background: #f1f5f9; color: #111827; padding: 9px 10px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
     td { padding: 9px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
     code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+    pre { white-space: pre-wrap; background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px; overflow: auto; }
+    pre code { background: transparent; color: inherit; padding: 0; }
     svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
     @media (max-width: 1000px) { .grid, .cards { grid-template-columns: 1fr; } }
     """
@@ -870,6 +873,7 @@ SECTION_THEMES = {
     "checkpoints": "theme-checkpoints",
     "observations": "theme-observations",
     "paired": "theme-paired",
+    "reproduce": "theme-reproduce",
     "appendix": "theme-appendix",
 }
 
@@ -917,6 +921,62 @@ document.addEventListener("DOMContentLoaded", function () {
 """
 
 
+def code_block(text: str) -> str:
+    return f"<pre><code>{html.escape(text.strip())}</code></pre>"
+
+
+def reproduce_live_report_html() -> str:
+    run_new = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_1 \
+UPDATE_LATEST=0 \
+MODEL=Qwen/Qwen2.5-Coder-7B-Instruct \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+bash scripts/run_labeled_live_master_report.sh
+"""
+    build_existing = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_1_rebuild \
+UPDATE_LATEST=0 \
+NO_PREFETCH_ROOT=artifacts/results/<run>/no_prefetch_live \
+PREFETCH_ROOT=artifacts/results/<run>/live_prefetch \
+bash scripts/build_labeled_live_master_report.sh
+"""
+    update_latest = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_latest \
+UPDATE_LATEST=1 \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+bash scripts/run_labeled_live_master_report.sh Qwen/Qwen2.5-Coder-7B-Instruct
+"""
+    return "\n".join(
+        [
+            "<p>This section gives copy-paste commands for reproducing the real SWE-bench / DeepAgents master report without overwriting the current latest report by default.</p>",
+            "<h3>Run A New Labeled Live Experiment</h3>",
+            code_block(run_new),
+            "<p>Output:</p>",
+            code_block("artifacts/results/labeled/live/manager_demo_1/master_report.html"),
+            "<h3>Rebuild A Labeled Report From Existing Runs</h3>",
+            "<p>Use this when the no-prefetch and live-prefetch folders already exist and you only want to regenerate the HTML/report tables.</p>",
+            code_block(build_existing),
+            "<h3>Deliberately Refresh The Latest Master Report</h3>",
+            "<p>Only use this when you want to replace <code>artifacts/results/latest_master_report.html</code>.</p>",
+            code_block(update_latest),
+        ]
+    )
+
+
 def render_html(
     no_run: dict[str, Any],
     pref_run: dict[str, Any],
@@ -959,6 +1019,7 @@ def render_html(
         ("checkpoints", "Prefetch Checkpoints"),
         ("observations", "Key Observations Per Session"),
         ("paired", "Paired Session Evidence"),
+        ("reproduce", "Reproduce This Report"),
         ("appendix", "Appendix"),
     ]
     return f"""<!doctype html>
@@ -1055,6 +1116,11 @@ def render_html(
   <details id="paired" class="section-card theme-paired">
     <summary><h2>Paired Session Evidence</h2></summary>
     {table_html(pair_rows)}
+  </details>
+
+  <details id="reproduce" class="section-card theme-reproduce">
+    <summary><h2>Reproduce This Report</h2></summary>
+    {reproduce_live_report_html()}
   </details>
 
   <details id="appendix" class="section-card theme-appendix">
