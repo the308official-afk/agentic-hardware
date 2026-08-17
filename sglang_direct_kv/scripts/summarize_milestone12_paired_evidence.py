@@ -1335,6 +1335,115 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{column: row.get(column, "") for column in columns} for row in rows]
 
 
+def synthetic_setup_diagram_svg() -> str:
+    boxes = [
+        (70, 40, 250, 64, "Synthetic Agentic Driver", "controlled sessions and tool waits"),
+        (390, 40, 250, 64, "Agent Turn Emulator", "initial request, tool gap, replay"),
+        (710, 40, 250, 64, "SGLang OpenAI Server", "same serving backend path"),
+        (1030, 40, 250, 64, "Qwen Model + KV Cache", "real model and KV behavior"),
+        (1030, 170, 250, 64, "Measured Resume Behavior", "TTFT, reloads, late hints"),
+        (710, 170, 250, 64, "KV / Copy Telemetry", "SGLang load and CUDA HtoD evidence"),
+        (390, 170, 250, 64, "Hint / Direct-Load Path", "request warm, direct load, oracle load"),
+        (70, 170, 250, 64, "Cache Pressure Controls", "fillers, prompt sizes, timing sweeps"),
+    ]
+    arrows = [
+        (320, 72, 390, 72),
+        (640, 72, 710, 72),
+        (960, 72, 1030, 72),
+        (1155, 104, 1155, 170),
+        (1030, 202, 960, 202),
+        (710, 202, 640, 202),
+        (390, 202, 320, 202),
+        (195, 170, 195, 104),
+        (320, 202, 390, 202),
+        (640, 202, 710, 202),
+    ]
+    parts = [
+        '<svg viewBox="0 0 1350 290" width="100%" role="img" aria-label="Synthetic experiment setup flow diagram">',
+        "<defs>",
+        '<marker id="synthetic-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">',
+        '<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>',
+        "</marker>",
+        "</defs>",
+        '<rect x="20" y="15" width="1310" height="250" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
+    ]
+    for x1, y1, x2, y2 in arrows:
+        parts.append(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>'
+        )
+    for x, y, w, h, title, subtitle in boxes:
+        fill = "#eff6ff" if x >= 710 else "#ffffff"
+        stroke = "#2563eb" if x >= 710 else "#cbd5e1"
+        parts.extend(
+            [
+                f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>',
+                f'<text x="{x + w / 2}" y="{y + 27}" text-anchor="middle" font-size="15" font-weight="700">{html.escape(title)}</text>',
+                f'<text x="{x + w / 2}" y="{y + 48}" text-anchor="middle" font-size="12" fill="#475569">{html.escape(subtitle)}</text>',
+            ]
+        )
+    parts.extend(
+        [
+            '<text x="675" y="268" text-anchor="middle" font-size="13" fill="#475569">Top row is the controlled request path. Bottom row is the synthetic hint/prefetch and telemetry path.</text>',
+            "</svg>",
+        ]
+    )
+    return "\n".join(parts)
+
+
+def synthetic_setup_html(sections: dict[str, list[dict[str, Any]]]) -> str:
+    clean = {str(row.get("mode", "")): row for row in sections.get("Clean Performance Summary", [])}
+    attr = sections.get("Profiled Attribution Summary", [])
+    attr_row = attr[0] if attr else {}
+    best_mode = min(
+        (row for row in clean.values() if row.get("mode") != "no_prefetch"),
+        key=lambda row: float(row.get("avg_replay_ttft_ms") or 0.0),
+        default={},
+    )
+    setup_rows = [
+        {"item": "Traffic source", "description": "Controlled synthetic agentic sessions with explicit initial requests, tool waits, cache pressure, and replay requests."},
+        {"item": "Backend", "description": "The requests still go through the real SGLang serving path and real model/KV-cache behavior."},
+        {"item": "Modes compared", "description": "No prefetch versus request warm, direct load, oracle direct load, or whichever synthetic modes were selected for the run."},
+        {"item": "Control knobs", "description": "The experiment can vary prefetch timing, cache pressure/fillers, prompt size, tool-wait duration, and concurrency."},
+        {"item": "Attribution split", "description": "Clean runs measure TTFT/performance. Profiled runs explain KV movement, CUDA HtoD visibility, hint completion, and replay reloads."},
+    ]
+    metric_rows = [
+        {"metric": "replay TTFT", "meaning": "Time from replay admission to first generated token in the clean run."},
+        {"metric": "prefetch margin", "meaning": "Whether the copy/hint path finished before or after replay was due."},
+        {"metric": "KV copy ready", "meaning": "Whether SGLang-level KV-copy telemetry finished before replay."},
+        {"metric": "CUDA HtoD ready", "meaning": "Whether torch-profiler CUDA host-to-device copy evidence finished before replay."},
+        {"metric": "replay reloaded KV", "meaning": "Whether the replay still triggered SGLang KV load-back work even after a hint."},
+    ]
+    observation_rows = [
+        {"observation": "The synthetic setup gives controlled stress conditions.", "evidence": "We can make tool waits short, add cache pressure, and choose prefetch timing deliberately."},
+        {"observation": "Performance and attribution are intentionally separated.", "evidence": "Clean runs support TTFT claims; profiled runs support DMA/KV mechanism claims."},
+        {"observation": "The current best clean mode is recorded in the report.", "evidence": f"Best non-baseline mode shown here: {best_mode.get('mode', 'not available')}."},
+        {"observation": "The mechanism run shows whether KV movement was actually visible.", "evidence": f"CUDA HtoD visible sessions: {attr_row.get('sessions_with_profiler_cuda_h2d_copy', '')} / {attr_row.get('profiled_sessions', '')}."},
+        {"observation": "Replay reload behavior is a key failure signal.", "evidence": f"Replay reloaded KV in {attr_row.get('replay_reloaded_kv', '')} / {attr_row.get('profiled_sessions', '')} profiled sessions."},
+    ]
+    return "\n".join(
+        [
+            '<div class="panel"><h2>Experiment Setup And Manager Summary</h2>',
+            '<p class="caption">This section is intended for slide-building. It explains how the controlled synthetic experiment was set up, what was measured, and how to read the hardware motivation.</p>',
+            synthetic_setup_diagram_svg(),
+            "<h3>How The Experiment Was Set Up</h3>",
+            '<div class="table-wrap">',
+            html_table(setup_rows),
+            "</div>",
+            "<h3>What Was Measured</h3>",
+            '<div class="table-wrap">',
+            html_table(metric_rows),
+            "</div>",
+            "<h3>What Was Observed</h3>",
+            '<div class="table-wrap">',
+            html_table(observation_rows),
+            "</div>",
+            "<h3>Why This Supports The Hardware Proposal</h3>",
+            '<p class="caption">The synthetic setup lets us stress the exact failure modes we care about: short tool gaps, cache pressure, late prefetch, replay reloads, and unclear residency. If a software hint path copies or loads KV too late, or if replay reloads KV anyway, that supports the need for deadline-aware KV movement, residency protection, and better hardware/runtime telemetry.</p>',
+            "</div>",
+        ]
+    )
+
+
 def write_html(
     path: Path,
     sections: dict[str, list[dict[str, Any]]],
@@ -1392,6 +1501,7 @@ def write_html(
             for card in cards
         ],
         "</div></div>",
+        synthetic_setup_html(sections),
         '<div class="panel"><h2>How To Read This Report</h2>',
         '<p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>',
         '<p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>',

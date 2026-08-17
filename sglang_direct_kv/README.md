@@ -149,6 +149,23 @@ Most missed prefetches mean the runtime had the semantic hint, but the ordinary 
 This motivates hardware/runtime support for deadline-aware KV movement, residency protection, and telemetry.
 ```
 
+The synthetic master report also includes a setup diagram and manager-facing setup section. Its setup is controlled rather than live:
+
+```text
+synthetic agentic driver
+  -> initial request, controlled tool wait, replay request
+  -> SGLang OpenAI-compatible server
+  -> Qwen model + KV cache
+  -> clean performance results and profiled KV/copy attribution
+```
+
+Use the two master reports this way:
+
+```text
+latest_master_report.html              real SWE-bench / DeepAgents traffic
+latest_synthetic_master_report.html    controlled synthetic stress traffic
+```
+
 Most important timing insight so far:
 
 ```text
