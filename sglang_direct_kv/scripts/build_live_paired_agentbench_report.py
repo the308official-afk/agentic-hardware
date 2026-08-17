@@ -465,6 +465,7 @@ def css() -> str:
     .theme-summary { --theme: #1e3a8a; --theme-bg: #eff6ff; }
     .theme-setup { --theme: #2563eb; --theme-bg: #eff6ff; }
     .theme-guide { --theme: #475569; --theme-bg: #f1f5f9; }
+    .theme-global { --theme: #dc2626; --theme-bg: #fef2f2; }
     .theme-clean { --theme: #15803d; --theme-bg: #f0fdf4; }
     .theme-clean-table { --theme: #65a30d; --theme-bg: #f7fee7; }
     .theme-profiled { --theme: #7e22ce; --theme-bg: #faf5ff; }
@@ -645,10 +646,193 @@ def timeline_guide_html(profiled_available: bool) -> str:
     """
 
 
+def prefetch_margin_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in gaps:
+        margin = as_float(row.get("prefetch_margin_ms"))
+        if margin is None:
+            continue
+        duration = as_float(row.get("prefetch_duration_ms"))
+        if margin >= 50:
+            verdict = "early"
+        elif margin >= 0:
+            verdict = "barely early"
+        elif margin > -50:
+            verdict = "near miss"
+        else:
+            verdict = "late"
+        rows.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "task_index": row.get("task_index", ""),
+                "gap_order_in_task": row.get("gap_order_in_task", ""),
+                "tools": row.get("tool_names", ""),
+                "tool_gap_ms": as_float(row.get("tool_gap_ms")),
+                "prefetch_duration_ms": duration,
+                "prefetch_margin_ms": margin,
+                "verdict": verdict,
+            }
+        )
+    return rows
+
+
+def prefetch_margin_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    margins = [float(row["prefetch_margin_ms"]) for row in rows]
+    durations = [
+        float(row["prefetch_duration_ms"])
+        for row in rows
+        if row.get("prefetch_duration_ms") is not None
+    ]
+    early = [value for value in margins if value >= 0]
+    late = [value for value in margins if value < 0]
+    return [
+        {
+            "prefetch_attempts": len(rows),
+            "finished_before_resume": len(early),
+            "late": len(late),
+            "late_pct": round(len(late) * 100.0 / len(rows), 2) if rows else "",
+            "median_margin_ms": round(median(margins), 3) if margins else "",
+            "worst_lateness_ms": round(abs(min(late)), 3) if late else "",
+            "best_early_margin_ms": round(max(early), 3) if early else "",
+            "avg_prefetch_duration_ms": avg(durations),
+        }
+    ]
+
+
+def prefetch_margin_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets = [
+        ("> +500 ms early", lambda value: value > 500),
+        ("+100 to +500 ms early", lambda value: 100 < value <= 500),
+        ("0 to +100 ms early", lambda value: 0 <= value <= 100),
+        ("0 to -100 ms late", lambda value: -100 <= value < 0),
+        ("-100 to -500 ms late", lambda value: -500 <= value < -100),
+        ("< -500 ms late", lambda value: value < -500),
+    ]
+    total = len(rows)
+    output: list[dict[str, Any]] = []
+    for label, predicate in buckets:
+        count = sum(1 for row in rows if predicate(float(row["prefetch_margin_ms"])))
+        output.append(
+            {
+                "bucket": label,
+                "sessions": count,
+                "pct": round(count * 100.0 / total, 2) if total else "",
+            }
+        )
+    return output
+
+
+def build_prefetch_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No matched prefetch attempts were available for the global margin plot.</p>"
+    width = 1480
+    height = 520
+    left = 86
+    right = 34
+    top = 56
+    bottom = 82
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    margins = [float(row["prefetch_margin_ms"]) for row in rows]
+    min_margin = min(margins)
+    max_margin = max(margins)
+    pad = max(50.0, (max_margin - min_margin) * 0.08)
+    y_min = min(min_margin - pad, -50.0)
+    y_max = max(max_margin + pad, 50.0)
+
+    def x_pos(index: int) -> float:
+        if len(rows) <= 1:
+            return left + plot_w / 2
+        return left + index * plot_w / (len(rows) - 1)
+
+    def y_pos(value: float) -> float:
+        return top + (y_max - value) * plot_h / (y_max - y_min)
+
+    zero_y = y_pos(0.0)
+    parts = [
+        '<svg viewBox="0 0 1480 520" width="100%" role="img" aria-label="Global prefetch margin dot plot">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
+        '<text x="18" y="265" transform="rotate(-90 18 265)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 22}" text-anchor="middle" font-size="13" font-weight="700">live tool-gap order</text>',
+        '<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before resume</text>',
+        '<text x="340" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>',
+    ]
+
+    tick_values = [y_min, y_min / 2, 0.0, y_max / 2, y_max]
+    seen_ticks: set[int] = set()
+    for value in tick_values:
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+
+    x_tick_step = max(1, len(rows) // 10)
+    for index in range(0, len(rows), x_tick_step):
+        x = x_pos(index)
+        parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="10">{index}</text>')
+
+    for index, row in enumerate(rows):
+        margin = float(row["prefetch_margin_ms"])
+        duration = row.get("prefetch_duration_ms")
+        color = "#16a34a" if margin >= 50 else "#84cc16" if margin >= 0 else "#f97316" if margin > -50 else "#dc2626"
+        radius = 5
+        if isinstance(duration, (int, float)):
+            radius = max(4, min(9, 4 + float(duration) / 350.0))
+        x = x_pos(index)
+        y = y_pos(margin)
+        title = (
+            f"{row.get('session_id')} | task={row.get('task_index')} gap={row.get('gap_order_in_task')} | "
+            f"margin={margin:.3f} ms | duration={duration if duration is not None else 'n/a'} ms | "
+            f"tool_gap={row.get('tool_gap_ms')} ms | tools={row.get('tools')}"
+        )
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="{color}" opacity="0.86" stroke="#ffffff" stroke-width="1.4">'
+            f'<title>{html.escape(title)}</title></circle>'
+        )
+
+    legend = [
+        ("early", "#16a34a"),
+        ("barely early", "#84cc16"),
+        ("near miss", "#f97316"),
+        ("late", "#dc2626"),
+    ]
+    lx = left
+    ly = height - 50
+    for label, color in legend:
+        parts.append(f'<circle cx="{lx}" cy="{ly}" r="6" fill="{color}"/>')
+        parts.append(f'<text x="{lx + 12}" y="{ly + 4}" font-size="12">{html.escape(label)}</text>')
+        lx += 145
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def global_prefetch_margin_html(gaps: list[dict[str, Any]]) -> str:
+    rows = prefetch_margin_rows(gaps)
+    summary = prefetch_margin_summary(rows)
+    buckets = prefetch_margin_bucket_rows(rows)
+    detail = rows[:40]
+    return f"""
+    <p>This chart compresses every matched live prefetch attempt into one dot. The y-axis is the prefetch margin: positive means the prefetch finished before the resume request; negative means it finished after the agent already resumed.</p>
+    {table_html(summary)}
+    <div class="setup-diagram">{build_prefetch_margin_dot_plot(rows)}</div>
+    <h3>Margin Buckets</h3>
+    {table_html(buckets)}
+    <h3>First 40 Points Behind The Plot</h3>
+    {table_html(detail, ["session_id", "task_index", "gap_order_in_task", "tools", "tool_gap_ms", "prefetch_duration_ms", "prefetch_margin_ms", "verdict"])}
+    """
+
+
 SECTION_THEMES = {
     "summary": "theme-summary",
     "setup": "theme-setup",
     "timeline-guide": "theme-guide",
+    "global-prefetch": "theme-global",
     "timelines": "theme-clean",
     "performance": "theme-clean-table",
     "profiled": "theme-profiled",
@@ -737,6 +921,7 @@ def render_html(
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
         ("timeline-guide", "How To Read Timelines"),
+        ("global-prefetch", "Global Prefetch Margin"),
         ("timelines", "Clean Performance Timelines"),
         ("performance", "Clean Performance Tables"),
         ("profiled", "Profiled Mechanism Evidence"),
@@ -779,6 +964,12 @@ def render_html(
     <summary><h2>How To Read The Timelines</h2></summary>
     <p>The timelines are the primary visual evidence. Tables below each timeline provide the exact numbers behind the picture.</p>
     {timeline_guide_html(profiled_available=False)}
+  </details>
+
+  <details id="global-prefetch" class="section-card theme-global">
+    <summary><h2>Global Prefetch Margin</h2></summary>
+    <p>This is the high-level view across all live prefetch attempts. It answers whether most hints finished early enough or arrived late.</p>
+    {global_prefetch_margin_html(pref_gaps)}
   </details>
 
   <details id="timelines" class="section-card theme-clean">
