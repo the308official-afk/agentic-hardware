@@ -1337,34 +1337,36 @@ def session_detail_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def synthetic_setup_diagram_svg() -> str:
     boxes = [
-        (70, 65, 210, 74, "1. Agent Task", "synthetic session"),
-        (330, 65, 210, 74, "2. First Turn", "model builds context / KV"),
-        (590, 65, 210, 74, "3. Tool Wait", "controlled pause"),
-        (850, 65, 210, 74, "4. Prefetch Try", "warm/direct-load/oracle"),
-        (1110, 65, 210, 74, "5. Resume Turn", "measure TTFT + reloads"),
+        (50, 65, 190, 74, "Agent Task", "synthetic session"),
+        (280, 65, 190, 74, "First Turn", "model builds KV"),
+        (510, 65, 190, 74, "Tool Call", "controlled trigger"),
+        (740, 65, 190, 74, "Tool Wait Gap", "prefetch opportunity"),
+        (970, 65, 190, 74, "Hint / Prefetch", "warm/direct-load/oracle"),
+        (1200, 65, 190, 74, "Resume Turn", "measure TTFT + reloads"),
     ]
     arrows = [
-        (280, 102, 330, 102),
-        (540, 102, 590, 102),
-        (800, 102, 850, 102),
-        (1060, 102, 1110, 102),
+        (240, 102, 280, 102),
+        (470, 102, 510, 102),
+        (700, 102, 740, 102),
+        (930, 102, 970, 102),
+        (1160, 102, 1200, 102),
     ]
     parts = [
-        '<svg viewBox="0 0 1390 210" width="100%" role="img" aria-label="Simple synthetic experiment setup flow diagram">',
+        '<svg viewBox="0 0 1440 210" width="100%" role="img" aria-label="Simple synthetic experiment setup flow diagram">',
         "<defs>",
         '<marker id="synthetic-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">',
         '<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>',
         "</marker>",
         "</defs>",
-        '<rect x="20" y="25" width="1350" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
+        '<rect x="20" y="25" width="1400" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
     ]
     for x1, y1, x2, y2 in arrows:
         parts.append(
             f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>'
         )
     for idx, (x, y, w, h, title, subtitle) in enumerate(boxes):
-        fill = "#fff7ed" if idx == 3 else "#eff6ff" if idx == 4 else "#ffffff"
-        stroke = "#ea580c" if idx == 3 else "#2563eb" if idx == 4 else "#cbd5e1"
+        fill = "#fff7ed" if idx in (3, 4) else "#eff6ff" if idx == 5 else "#ffffff"
+        stroke = "#ea580c" if idx in (3, 4) else "#2563eb" if idx == 5 else "#cbd5e1"
         parts.extend(
             [
                 f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>',
@@ -1374,7 +1376,7 @@ def synthetic_setup_diagram_svg() -> str:
         )
     parts.extend(
         [
-            '<text x="695" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>',
+            '<text x="720" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>',
             "</svg>",
         ]
     )
@@ -1391,9 +1393,9 @@ def synthetic_setup_html(sections: dict[str, list[dict[str, Any]]]) -> str:
         default={},
     )
     setup_rows = [
-        {"part": "1. Request source", "simple meaning": "Synthetic agent sessions send controlled model turns to SGLang."},
-        {"part": "2. Tool wait window", "simple meaning": "The driver inserts a controlled pause. That pause is the chance to prefetch KV."},
-        {"part": "3. Resume request", "simple meaning": "The replay turn arrives, and we measure whether KV was ready before first token generation."},
+        {"part": "1. Request source", "simple meaning": "Synthetic agent sessions create controlled model turns.", "example": "synthetic task -> initial SGLang model request"},
+        {"part": "2. Tool wait window", "simple meaning": "The driver inserts a controlled pause. That pause is the chance to prefetch KV.", "example": "emulated read_file(), grep(), or run_tests() wait"},
+        {"part": "3. Resume request", "simple meaning": "The replay turn arrives, and we measure whether KV was ready before first token generation.", "example": "tool result arrives -> replay prompt starts"},
     ]
     mode_rows = [
         {"mode": "No prefetch", "what happens": "The system waits until replay arrives, then SGLang handles KV reuse/load normally."},

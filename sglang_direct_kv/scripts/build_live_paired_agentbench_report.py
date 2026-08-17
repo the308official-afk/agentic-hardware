@@ -482,6 +482,8 @@ def css() -> str:
     details.section-card[open] summary h2::before { content: "▼"; }
     .section-color-legend { color: #475569; font-size: 14px; margin: 8px 0 12px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .timeline-stack { display: grid; grid-template-columns: 1fr; gap: 26px; }
+    .timeline-panel { min-width: 0; }
     .setup-diagram { margin: 12px 0 18px; }
     .toc { display: flex; flex-wrap: wrap; gap: 10px 16px; }
     .toc a { background: var(--theme-bg, #f1f5f9); border: 1px solid #e2e8f0; border-left: 7px solid var(--theme, #64748b); border-radius: 6px; padding: 7px 10px; color: #0f172a; font-weight: 650; }
@@ -520,34 +522,36 @@ def metric_cards(mode_rows: list[dict[str, Any]], pair_summary_rows: list[dict[s
 
 def setup_diagram_svg() -> str:
     boxes = [
-        (70, 65, 210, 74, "1. Agent Task", "SWE-bench / DeepAgents"),
-        (330, 65, 210, 74, "2. First Turn", "model builds context / KV"),
-        (590, 65, 210, 74, "3. Tool Wait", "read_file, grep, execute"),
-        (850, 65, 210, 74, "4. Prefetch Try", "hint during the gap"),
-        (1110, 65, 210, 74, "5. Resume Turn", "measure resume latency"),
+        (50, 65, 190, 74, "Agent Task", "SWE-bench / DeepAgents"),
+        (280, 65, 190, 74, "First Turn", "model builds KV"),
+        (510, 65, 190, 74, "Tool Call", "read_file / run_tests"),
+        (740, 65, 190, 74, "Tool Wait Gap", "prefetch opportunity"),
+        (970, 65, 190, 74, "Hint / Prefetch", "try to prepare KV"),
+        (1200, 65, 190, 74, "Resume Turn", "measure latency"),
     ]
     arrows = [
-        (280, 102, 330, 102),
-        (540, 102, 590, 102),
-        (800, 102, 850, 102),
-        (1060, 102, 1110, 102),
+        (240, 102, 280, 102),
+        (470, 102, 510, 102),
+        (700, 102, 740, 102),
+        (930, 102, 970, 102),
+        (1160, 102, 1200, 102),
     ]
     parts = [
-        '<svg viewBox="0 0 1390 210" width="100%" role="img" aria-label="Simple experiment setup flow diagram">',
+        '<svg viewBox="0 0 1440 210" width="100%" role="img" aria-label="Simple experiment setup flow diagram">',
         "<defs>",
         '<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">',
         '<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>',
         "</marker>",
         "</defs>",
-        '<rect x="20" y="25" width="1350" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
+        '<rect x="20" y="25" width="1400" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
     ]
     for x1, y1, x2, y2 in arrows:
         parts.append(
             f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>'
         )
     for idx, (x, y, w, h, title, subtitle) in enumerate(boxes):
-        fill = "#fff7ed" if idx == 3 else "#eff6ff" if idx == 4 else "#ffffff"
-        stroke = "#ea580c" if idx == 3 else "#2563eb" if idx == 4 else "#cbd5e1"
+        fill = "#fff7ed" if idx in (3, 4) else "#eff6ff" if idx == 5 else "#ffffff"
+        stroke = "#ea580c" if idx in (3, 4) else "#2563eb" if idx == 5 else "#cbd5e1"
         parts.extend(
             [
                 f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>',
@@ -557,7 +561,7 @@ def setup_diagram_svg() -> str:
         )
     parts.extend(
         [
-            '<text x="695" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>',
+            '<text x="720" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>',
             "</svg>",
         ]
     )
@@ -570,9 +574,9 @@ def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: li
     live_prefetch = by_mode.get("live_prefetch", {})
     paired = pair_summary_rows[0] if pair_summary_rows else {}
     setup_rows = [
-        {"part": "1. Request source", "simple meaning": "Real SWE-bench / DeepAgents tasks send model turns to SGLang."},
-        {"part": "2. Tool wait window", "simple meaning": "The agent calls a tool, then pauses. That pause is the chance to prefetch KV."},
-        {"part": "3. Resume request", "simple meaning": "The tool returns, the agent asks the model to continue, and we measure whether KV was ready."},
+        {"part": "1. Request source", "simple meaning": "Real SWE-bench / DeepAgents tasks create model turns.", "example": "SWE-bench task -> DeepAgents -> SGLang model request"},
+        {"part": "2. Tool wait window", "simple meaning": "The agent calls a tool, then pauses. That pause is the chance to prefetch KV.", "example": "read_file(), grep(), or run_tests() is running"},
+        {"part": "3. Resume request", "simple meaning": "The tool returns, then the agent asks the model to continue.", "example": "tests failed with error X; what should I do next?"},
     ]
     mode_rows_simple = [
         {"mode": "No prefetch", "what happens": "The system waits until the resume turn arrives, then SGLang handles KV reuse/load normally."},
@@ -595,7 +599,7 @@ def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: li
     return f"""
     <div class="setup-diagram">{setup_diagram_svg()}</div>
     <h3>Simple Setup</h3>
-    {table_html(setup_rows, ["part", "simple meaning"])}
+    {table_html(setup_rows, ["part", "simple meaning", "example"])}
     <h3>Modes Compared</h3>
     {table_html(mode_rows_simple, ["mode", "what happens"])}
     <h3>What Was Measured</h3>
@@ -768,12 +772,12 @@ def render_html(
     <summary><h2>A. Clean Performance Timelines</h2></summary>
     <p class="note">Profiler is off. Use this section for live request-flow and latency claims.</p>
     <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request.</p>
-    <div class="grid">
-      <div>
+    <div class="timeline-stack">
+      <div class="timeline-panel">
         <h3>No Prefetch</h3>
         {build_timeline_svg(no_gaps, max_timeline_gaps)}
       </div>
-      <div>
+      <div class="timeline-panel">
         <h3>Live Prefetch Intervention</h3>
         {build_timeline_svg(pref_gaps, max_timeline_gaps)}
       </div>
