@@ -421,17 +421,22 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
     by_mode = {str(row.get("mode") or ""): row for row in mode_rows}
     no_prefetch = by_mode.get("no_prefetch", {})
     direct = by_mode.get("direct_prefetch", {})
-    oracle = by_mode.get("oracle_prefetch", {})
     cards = [
         ("controlled gaps", sum(int(row.get("controlled_gaps") or 0) for row in mode_rows)),
         ("no-prefetch avg TTFT", f"{no_prefetch.get('avg_resume_ttft_ms', '')} ms"),
         ("direct-prefetch avg TTFT", f"{direct.get('avg_resume_ttft_ms', '')} ms"),
-        ("oracle-prefetch avg TTFT", f"{oracle.get('avg_resume_ttft_ms', '')} ms"),
         ("direct late prefetches", direct.get("late_prefetches", "")),
-        ("oracle late prefetches", oracle.get("late_prefetches", "")),
         ("direct H2D gaps", direct.get("hint_h2d_gaps", "")),
-        ("oracle H2D gaps", oracle.get("hint_h2d_gaps", "")),
     ]
+    if "oracle_prefetch" in by_mode:
+        oracle = by_mode["oracle_prefetch"]
+        cards.extend(
+            [
+                ("oracle-prefetch avg TTFT", f"{oracle.get('avg_resume_ttft_ms', '')} ms"),
+                ("oracle late prefetches", oracle.get("late_prefetches", "")),
+                ("oracle H2D gaps", oracle.get("hint_h2d_gaps", "")),
+            ]
+        )
     return "<div class=\"cards\">" + "\n".join(
         f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
         for label, value in cards
@@ -464,7 +469,7 @@ export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
 
 WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
 MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch oracle_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 32" \
 REQUEST_CONCURRENCY=4 \
@@ -484,7 +489,7 @@ export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
 
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch oracle_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 32" \
 REQUEST_CONCURRENCY=4 \
@@ -502,7 +507,7 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
 MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch oracle_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 32" \
 REQUEST_CONCURRENCY=4 \
@@ -514,7 +519,7 @@ bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
 """
     return "\n".join(
         [
-            "<p>This section gives copy-paste commands for reproducing the direct-KV controlled replay master report. Labeled runs write to their own folder and do not overwrite the normal latest report.</p>",
+            "<p>This section gives copy-paste commands for reproducing the direct-KV controlled replay master report. The default experiment compares only <code>no_prefetch</code> and <code>direct_prefetch</code>. Labeled runs write to their own folder and do not overwrite the normal latest report.</p>",
             "<h3>Rebuild This Exact Report</h3>",
             "<p>Use this when the run folders already exist and you only want to regenerate the HTML, tables, and timelines.</p>",
             code_block(rebuild_current),
@@ -582,7 +587,7 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
 
   <details id="summary" class="section-card theme-summary" open>
     <summary><h2>Summary</h2></summary>
-    <p>This section gives the headline numbers across no-prefetch, direct-prefetch, and oracle-prefetch modes.</p>
+    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. Oracle prefetch remains supported for optional sensitivity studies, but it is intentionally excluded from the default report to keep the main story simple.</p>
     {metric_cards_html(mode_rows)}
   </details>
 

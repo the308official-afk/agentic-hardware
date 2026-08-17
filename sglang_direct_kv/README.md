@@ -4896,8 +4896,8 @@ direct_prefetch:
   this exercises SGLang's direct KV load-back path.
 
 oracle_prefetch:
-  same direct-load mechanism, but scheduled with known lead time before replay.
-  this approximates an ideal predictor and tests whether the software path can still miss.
+  optional advanced mode for later sensitivity studies.
+  excluded from the default run so the main report stays simple.
 ```
 
 Run with an existing real prompt-pair workload:
@@ -4910,11 +4910,10 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
 MAX_PAIRS=12 \
-MODES="no_prefetch direct_prefetch oracle_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 64" \
 PREFETCH_TIMING=near_resume \
-ORACLE_LEAD_MS=250 \
 bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
@@ -4929,7 +4928,7 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=12 \
-MODES="no_prefetch direct_prefetch oracle_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 64" \
 bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
@@ -4992,7 +4991,7 @@ export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
 
 WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
 MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch oracle_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 32" \
 REQUEST_CONCURRENCY=4 \
@@ -5012,8 +5011,8 @@ If green hint-side HtoD appears before replay:
 If cyan replay-side HtoD appears before green:
   replay got there first and had to load KV itself.
 
-If the oracle mode is still late:
-  even a good prediction can be defeated by the normal software/SGLang queue.
+If direct_prefetch is still late:
+  the software hint existed, but actual KV movement did not happen early enough.
   This strengthens the case for deadline-aware, hint-aware KV movement support.
 ```
 
