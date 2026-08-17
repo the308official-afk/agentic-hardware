@@ -44,6 +44,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 24: Live Paired AgentBench Report | Ready | [Milestone 24](#milestone-24-live-paired-agentbench-report) |
 | Milestone 25: Labeled Reproducible Master Reports | Ready | [Milestone 25](#milestone-25-labeled-reproducible-master-reports) |
 | Milestone 26: Live Direct KV Load Intervention | Ready | [Milestone 26](#milestone-26-live-direct-kv-load-intervention) |
+| Milestone 27: Real-Prompt Controlled Replay | Ready | [Milestone 27](#milestone-27-real-prompt-controlled-replay) |
 
 ## What We Are Testing
 
@@ -4850,6 +4851,141 @@ If there is no matching load-back/copy:
   cache, or attribution did not connect that hint to the internal copy event.
 ```
 
+### Milestone 27: Real-Prompt Controlled Replay
+
+Status: ready.
+
+Why this milestone is needed:
+
+```text
+The fully live AgentBench runs are realistic, but hard to control:
+  tool waits are whatever the harness produces
+  cache pressure varies naturally
+  prefetch timing is noisy
+
+Milestone 27 keeps real AgentBench/DeepAgents prompt content, but controls:
+  tool wait duration
+  cache pressure
+  direct KV hint timing
+  replay timing
+
+This gives a cleaner hardware-style experiment.
+```
+
+What it does:
+
+```text
+real prompt pair from AgentBench traces
+  -> send Turn A to SGLang
+  -> impose a controlled tool-wait window
+  -> create cache pressure with filler requests
+  -> optionally issue a direct KV load hint during the wait
+  -> send Turn B exactly at the scheduled resume time
+  -> measure whether the hint-side KV movement beat the replay path
+```
+
+Modes:
+
+```text
+no_prefetch:
+  no hint is issued.
+  replay arrives and SGLang handles KV normally.
+
+direct_prefetch:
+  a marked direct-load hint is issued during the controlled tool wait.
+  this exercises SGLang's direct KV load-back path.
+
+oracle_prefetch:
+  same direct-load mechanism, but scheduled with known lead time before replay.
+  this approximates an ideal predictor and tests whether the software path can still miss.
+```
+
+Run with an existing real prompt-pair workload:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
+MAX_PAIRS=12 \
+MODES="no_prefetch direct_prefetch oracle_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 64" \
+PREFETCH_TIMING=near_resume \
+ORACLE_LEAD_MS=250 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Build the real prompt-pair workload from an AgentBench trace index:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+MAX_PAIRS=12 \
+MODES="no_prefetch direct_prefetch oracle_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 64" \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important events to observe:
+
+```text
+m27.session.start
+  A controlled replay gap starts.
+
+m27.request.start / m27.request.end
+  Turn A, prefetch hint, filler pressure, or Turn B was sent to SGLang.
+
+m27.tool_wait.start
+  The controlled tool-wait window begins.
+
+m27.hint.submitted
+  The runtime knows this session may resume soon.
+
+m27.prefetch.start / m27.prefetch.end
+  The direct KV hint request actually runs.
+
+kv_telemetry.copy.*
+  Lightweight host-to-device copy telemetry saw KV movement.
+
+hiradix.* / hicache.* / hostpool.*
+  SGLang entered prefix-cache or HiCache load-back paths.
+```
+
+Key output files:
+
+```text
+artifacts/results/<run>/<case>/m27_trace.jsonl
+artifacts/results/<run>/<case>/m27_copy_telemetry.jsonl
+artifacts/results/<run>/<case>/m27_metrics.jsonl
+artifacts/results/<run>/controlled_replay_report/controlled_replay_report.html
+artifacts/results/<run>/controlled_replay_report/controlled_replay_gaps.csv
+artifacts/results/latest_controlled_replay_report.html
+```
+
+Simple interpretation:
+
+```text
+If green hint-side HtoD appears before replay:
+  the direct KV hint moved KV early enough.
+
+If cyan replay-side HtoD appears before green:
+  replay got there first and had to load KV itself.
+
+If the oracle mode is still late:
+  even a good prediction can be defeated by the normal software/SGLang queue.
+  This strengthens the case for deadline-aware, hint-aware KV movement support.
+```
+
 ## Directory Layout
 
 ```text
@@ -4878,6 +5014,9 @@ sglang_direct_kv/
     run_milestone21_exp6_direct_sglang.sh
     run_milestone22_live_agentbench_bridge.sh
     run_milestone23_live_prefetch_intervention.sh
+    run_milestone27_real_prompt_controlled_replay.sh
+    run_real_prompt_controlled_replay.py
+    build_milestone27_controlled_replay_report.py
     run_milestone24_live_paired_agentbench_report.sh
     live_prefetch_controller.py
     build_live_agentbench_tool_gap_report.py

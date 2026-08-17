@@ -15,7 +15,6 @@ from typing import Any
 from build_live_agentbench_tool_gap_report import (
     augment_gaps_with_prefetch,
     build_expanded_gap_timeline_svg,
-    build_timeline_svg,
     build_tool_gaps,
     is_preflight_request,
     maybe_float,
@@ -63,6 +62,21 @@ def pct(delta: float | None, baseline: float | None) -> float | str:
     return round(delta * 100.0 / baseline, 2)
 
 
+def has_events(value: Any) -> bool:
+    try:
+        return int(value or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def delta_ms(later: Any, earlier: Any) -> float | str:
+    later_value = as_float(later)
+    earlier_value = as_float(earlier)
+    if later_value is None or earlier_value is None:
+        return ""
+    return round(later_value - earlier_value, 3)
+
+
 def task_index_map(task_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(row.get("run_id") or ""): row for row in task_rows if row.get("run_id")}
 
@@ -74,6 +88,7 @@ def add_task_and_pair_fields(
     mode: str,
 ) -> None:
     by_run = task_index_map(task_rows)
+    request_by_ordinal = {str(row.get("ordinal") or ""): row for row in requests}
     for request in requests:
         run_id = str(request.get("parent_run_id") or "")
         task = by_run.get(run_id, {})
@@ -94,6 +109,206 @@ def add_task_and_pair_fields(
         gap["task_status"] = task.get("status", "")
         gap["gap_order_in_task"] = gap_order
         gap["pair_key"] = f"task_{task_key}:gap_{gap_order}"
+        current_request = request_by_ordinal.get(str(gap.get("from_proxy_ordinal") or ""), {})
+        resume_request = request_by_ordinal.get(str(gap.get("to_proxy_ordinal") or ""), {})
+        gap["current_agent_session_id"] = current_request.get("agent_session_id") or current_request.get("context_request_id") or ""
+        gap["resume_agent_session_id"] = resume_request.get("agent_session_id") or resume_request.get("context_request_id") or ""
+        gap["resume_context_request_id"] = resume_request.get("context_request_id") or ""
+
+
+def context_from_trace_event(row: dict[str, Any]) -> dict[str, Any]:
+    context = row.get("kv_context")
+    if isinstance(context, dict):
+        return context
+    return row
+
+
+def agent_session_from_context(context: dict[str, Any]) -> str:
+    for key in ("agent_session_id", "session_id"):
+        value = context.get(key)
+        if value not in ("", None):
+            return str(value)
+    req = context.get("request")
+    if isinstance(req, dict):
+        for key in ("agent_session_id", "session_id"):
+            value = req.get(key)
+            if value not in ("", None):
+                return str(value)
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list):
+        for item in sessions:
+            if isinstance(item, dict):
+                value = item.get("agent_session_id")
+                if value not in ("", None):
+                    return str(value)
+    return ""
+
+
+def relative_ms_from_ns(ts_ns: Any, base_ts: float) -> float | str:
+    value = as_float(ts_ns)
+    if value is None:
+        return ""
+    return round((value / 1_000_000_000.0 - base_ts) * 1000.0, 3)
+
+
+def movement_events_by_session(
+    trace_rows: list[dict[str, Any]],
+    telemetry_rows: list[dict[str, Any]],
+    base_ts: float,
+) -> dict[str, list[dict[str, Any]]]:
+    direct_categories = {
+        "hiradix.init_load_back.end": "init_load_back",
+        "hiradix.load_back.end": "load_back",
+        "hicache.load.end": "hicache_load",
+        "hicache.start_loading.end": "hicache_start_loading",
+        "hostpool.load_to_device_per_layer.end": "hostpool_h2d",
+    }
+    by_session: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        event = str(row.get("event") or "")
+        category = direct_categories.get(event)
+        if not category:
+            continue
+        context = context_from_trace_event(row)
+        if context.get("direction") != "host_to_device":
+            continue
+        session_id = agent_session_from_context(context)
+        if not session_id or "::live_prefetch::" in session_id:
+            continue
+        by_session[session_id].append(
+            {
+                "source": "sglang_trace",
+                "event": event,
+                "category": category,
+                "agent_session_id": session_id,
+                "direction": "host_to_device",
+                "duration_ms": row.get("duration_ms", ""),
+                "start_or_end_ms": relative_ms_from_ns(row.get("ts_ns"), base_ts),
+            }
+        )
+
+    for row in telemetry_rows:
+        event = str(row.get("event") or "")
+        if event not in {"kv_telemetry.copy.start", "kv_telemetry.copy.end"}:
+            continue
+        if str(row.get("direction") or "") != "host_to_device":
+            continue
+        session_id = str(row.get("agent_session_id") or "")
+        if not session_id or "::live_prefetch::" in session_id:
+            continue
+        by_session[session_id].append(
+            {
+                "source": "kv_copy_telemetry",
+                "event": event,
+                "category": "telemetry_h2d",
+                "agent_session_id": session_id,
+                "direction": "host_to_device",
+                "duration_ms": row.get("duration_ms", ""),
+                "start_or_end_ms": relative_ms_from_ns(row.get("ts_ns"), base_ts),
+            }
+        )
+    return by_session
+
+
+def summarize_movement_window(events: list[dict[str, Any]]) -> dict[str, Any]:
+    if not events:
+        return {
+            "start_ms": "",
+            "end_ms": "",
+            "duration_ms": "",
+            "events": "0",
+            "categories": "",
+        }
+    telemetry_events = [event for event in events if event.get("category") == "telemetry_h2d"]
+    chosen = telemetry_events or events
+    starts: list[float] = []
+    ends: list[float] = []
+    total_duration = 0.0
+    duration_count = 0
+    categories: Counter[str] = Counter()
+    for event in chosen:
+        ts = as_float(event.get("start_or_end_ms"))
+        if ts is None:
+            continue
+        duration = as_float(event.get("duration_ms"))
+        if duration is not None:
+            starts.append(ts - duration)
+            ends.append(ts)
+            total_duration += duration
+            duration_count += 1
+        else:
+            starts.append(ts)
+            ends.append(ts)
+        categories[str(event.get("category") or "")] += 1
+    if not starts or not ends:
+        return {
+            "start_ms": "",
+            "end_ms": "",
+            "duration_ms": "",
+            "events": str(len(chosen)),
+            "categories": "",
+        }
+    return {
+        "start_ms": round(min(starts), 3),
+        "end_ms": round(max(ends), 3),
+        "duration_ms": round(total_duration, 3) if duration_count else "",
+        "events": str(len(chosen)),
+        "categories": ", ".join(f"{name}:{count}" for name, count in categories.items()),
+    }
+
+
+def attach_replay_kv_windows(
+    gaps: list[dict[str, Any]],
+    events_by_session: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    replay_evidence: list[dict[str, Any]] = []
+    for gap in gaps:
+        session_id = str(gap.get("resume_agent_session_id") or "")
+        replay_start = as_float(gap.get("resume_start_ms"))
+        replay_end = as_float(gap.get("resume_end_ms"))
+        matched: list[dict[str, Any]] = []
+        if session_id and replay_start is not None and replay_end is not None:
+            for event in events_by_session.get(session_id, []):
+                ts = as_float(event.get("start_or_end_ms"))
+                if ts is None:
+                    continue
+                if replay_start <= ts <= replay_end:
+                    matched.append(event)
+        summary = summarize_movement_window(matched)
+        gap["replay_kv_h2d_start_ms"] = summary["start_ms"]
+        gap["replay_kv_h2d_end_ms"] = summary["end_ms"]
+        gap["replay_kv_h2d_duration_ms"] = summary["duration_ms"]
+        gap["replay_kv_h2d_events"] = summary["events"]
+        gap["replay_kv_h2d_categories"] = summary["categories"]
+        hint_end = as_float(gap.get("prefetch_end_ms"))
+        replay_kv_start = as_float(summary["start_ms"])
+        if replay_kv_start is not None and hint_end is not None:
+            gap["replay_kv_started_before_hint_done"] = "yes" if replay_kv_start < hint_end else "no"
+        else:
+            gap["replay_kv_started_before_hint_done"] = ""
+        replay_evidence.append(
+            {
+                "session_id": gap.get("session_id", ""),
+                "task_index": gap.get("task_index", ""),
+                "gap_order_in_task": gap.get("gap_order_in_task", ""),
+                "tools": gap.get("tool_names", ""),
+                "resume_agent_session_id": session_id,
+                "replay_kv_h2d_observed": "yes" if matched else "no",
+                "replay_kv_h2d_start_ms": gap.get("replay_kv_h2d_start_ms", ""),
+                "replay_kv_h2d_end_ms": gap.get("replay_kv_h2d_end_ms", ""),
+                "replay_kv_h2d_duration_ms": gap.get("replay_kv_h2d_duration_ms", ""),
+                "replay_kv_h2d_events": gap.get("replay_kv_h2d_events", ""),
+                "replay_kv_h2d_categories": gap.get("replay_kv_h2d_categories", ""),
+                "hint_prefetch_end_ms": gap.get("prefetch_end_ms", ""),
+                "replay_kv_started_before_hint_done": gap.get("replay_kv_started_before_hint_done", ""),
+                "interpretation": (
+                    "real replay request did host-to-device KV work while serving this resume"
+                    if matched
+                    else "no replay-side host-to-device KV movement was attributed inside this replay window"
+                ),
+            }
+        )
+    return replay_evidence
 
 
 def attach_direct_kv_windows(
@@ -183,10 +398,14 @@ def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, A
     direct_kv_summary_csv = direct_kv_report_dir / "live_direct_kv_load_summary.csv"
     direct_kv_evidence_csv = direct_kv_report_dir / "live_direct_kv_load_evidence.csv"
     direct_kv_events_csv = direct_kv_report_dir / "live_direct_kv_load_events.csv"
+    trace_jsonl = root / "live_direct_kv_trace.jsonl"
+    telemetry_jsonl = root / "live_direct_kv_copy_telemetry.jsonl"
 
     raw_rows = read_jsonl(proxy_jsonl)
     hint_rows = read_jsonl(hint_log)
     controller_rows = read_jsonl(controller_log)
+    trace_rows = read_jsonl(trace_jsonl)
+    telemetry_rows = read_jsonl(telemetry_jsonl)
     direct_kv_summary = read_csv(direct_kv_summary_csv)
     direct_kv_evidence = read_csv(direct_kv_evidence_csv)
     direct_kv_events = read_csv(direct_kv_events_csv)
@@ -204,6 +423,10 @@ def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, A
     gaps = augment_gaps_with_prefetch(gaps, hint_rows, controller_rows, base_ts)
     add_task_and_pair_fields(requests, gaps, task_rows, mode)
     attach_direct_kv_windows(gaps, direct_kv_events, direct_kv_evidence)
+    replay_kv_evidence = attach_replay_kv_windows(
+        gaps,
+        movement_events_by_session(trace_rows, telemetry_rows, base_ts),
+    )
 
     return {
         "mode": mode,
@@ -212,9 +435,12 @@ def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, A
         "task_index_csv": str(task_index_csv),
         "hint_log": str(hint_log) if hint_log.exists() else "",
         "controller_log": str(controller_log) if controller_log.exists() else "",
+        "trace_jsonl": str(trace_jsonl) if trace_jsonl.exists() else "",
+        "telemetry_jsonl": str(telemetry_jsonl) if telemetry_jsonl.exists() else "",
         "direct_kv_summary": direct_kv_summary,
         "direct_kv_evidence": direct_kv_evidence,
         "direct_kv_events": direct_kv_events,
+        "replay_kv_evidence": replay_kv_evidence,
         "direct_kv_report_html": str(direct_kv_report_dir / "live_direct_kv_load_report.html")
         if (direct_kv_report_dir / "live_direct_kv_load_report.html").exists()
         else "",
@@ -328,6 +554,9 @@ def pair_gaps(no_gaps: list[dict[str, Any]], prefetch_gaps: list[dict[str, Any]]
                 "prefetch_margin_ms": pref.get("prefetch_margin_ms", ""),
                 "prefetch_verdict": prefetch_verdict,
                 "prefetch_resume_overlap_ms": pref.get("prefetch_resume_overlap_ms", ""),
+                "hint_side_h2d_events": pref.get("direct_kv_h2d_events", ""),
+                "replay_side_h2d_events": pref.get("replay_kv_h2d_events", ""),
+                "replay_kv_started_before_hint_done": pref.get("replay_kv_started_before_hint_done", ""),
                 "pairing_note": "paired by same SWE-bench task index and same gap order; live runs can still diverge",
                 "no_prefetch_preview": short(base.get("resume_preview", "")),
                 "prefetch_preview": short(pref.get("resume_preview", "")),
@@ -419,6 +648,9 @@ def timeline_summary(gaps: list[dict[str, Any]], limit: int) -> list[dict[str, A
                 "prefetch_duration_ms": row.get("prefetch_duration_ms", ""),
                 "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
                 "prefetch_resume_overlap_ms": round(overlap, 3),
+                "hint_h2d_events": row.get("direct_kv_h2d_events", ""),
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "replay_kv_started_before_hint_done": row.get("replay_kv_started_before_hint_done", ""),
                 "timeline_verdict": status,
             }
         )
@@ -439,6 +671,9 @@ def checkpoint_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "controller_finished_prefetch": "yes" if row.get("prefetch_end_ms") not in ("", None) else "no",
                 "prefetch_finished_before_resume": "yes" if margin is not None and margin >= 0 else "no" if has_hint else "",
                 "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "hint_side_h2d_observed": "yes" if row.get("direct_kv_h2d_events") not in ("", "0", None) else "no",
+                "replay_side_h2d_observed": "yes" if row.get("replay_kv_h2d_events") not in ("", "0", None) else "no",
+                "replay_kv_started_before_hint_done": row.get("replay_kv_started_before_hint_done", ""),
                 "resume_request_latency_ms": row.get("resume_latency_ms", ""),
             }
         )
@@ -470,8 +705,142 @@ def session_observations(gaps: list[dict[str, Any]], limit: int) -> list[dict[st
                     f"{deduction} tool gap={row.get('tool_gap_ms')} ms; "
                     f"prefetch duration={row.get('prefetch_duration_ms')} ms; "
                     f"resume request latency={row.get('resume_latency_ms')} ms; "
-                    f"tools={row.get('tool_names')}."
+                    f"tools={row.get('tool_names')}; "
+                    f"hint-side HtoD events={row.get('direct_kv_h2d_events', '')}; "
+                    f"replay-side HtoD events={row.get('replay_kv_h2d_events', '')}."
                 ),
+            }
+        )
+    return rows
+
+
+def interesting_kv_gaps(gaps: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    movement_rows = [
+        row
+        for row in gaps
+        if has_events(row.get("direct_kv_h2d_events")) or has_events(row.get("replay_kv_h2d_events"))
+    ]
+    if len(movement_rows) >= limit:
+        return movement_rows[:limit]
+    seen = {id(row) for row in movement_rows}
+    filler = [row for row in gaps if id(row) not in seen]
+    return [*movement_rows, *filler[: max(0, limit - len(movement_rows))]]
+
+
+def kv_movement_classification(row: dict[str, Any]) -> str:
+    has_green = has_events(row.get("direct_kv_h2d_events"))
+    has_cyan = has_events(row.get("replay_kv_h2d_events"))
+    if has_green and has_cyan:
+        return "cyan + green"
+    if has_cyan:
+        return "cyan only"
+    if has_green:
+        return "green only"
+    return "no visible HtoD"
+
+
+def cyan_green_diagnosis(row: dict[str, Any]) -> str:
+    has_green = has_events(row.get("direct_kv_h2d_events"))
+    has_cyan = has_events(row.get("replay_kv_h2d_events"))
+    replay_h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+    direct_h2d_start = as_float(row.get("direct_kv_h2d_start_ms"))
+    prefetch_start = as_float(row.get("prefetch_start_ms"))
+    prefetch_end = as_float(row.get("prefetch_end_ms"))
+    resume_start = as_float(row.get("resume_start_ms"))
+
+    if has_cyan and not has_green:
+        if prefetch_start is None:
+            return "Replay needed KV movement, but no matched prefetch attempt started for this gap."
+        if replay_h2d_start is not None and prefetch_start > replay_h2d_start:
+            return "Replay-side KV movement began before the prefetch attempt started. The replay got there first."
+        if replay_h2d_start is not None and prefetch_end is not None and prefetch_end > replay_h2d_start:
+            return "The prefetch attempt was still running when replay-side KV movement began. Replay served itself before the hint path produced visible HtoD."
+        return "Replay-side KV movement was visible, but the hint path did not produce attributed HtoD. Check hook matching, host KV availability, or already-resident KV."
+
+    if has_green and not has_cyan:
+        if resume_start is not None and prefetch_end is not None and prefetch_end <= resume_start:
+            return "The hint path moved KV before the resume request, and the replay did not need visible replay-side HtoD."
+        if resume_start is not None and direct_h2d_start is not None and direct_h2d_start > resume_start:
+            return "The hint path moved KV after replay had already started; replay-side HtoD was not separately observed."
+        return "The hint path produced visible direct KV HtoD; replay-side HtoD was not observed."
+
+    if has_green and has_cyan:
+        if replay_h2d_start is not None and direct_h2d_start is not None and replay_h2d_start < direct_h2d_start:
+            return "Replay-side KV movement started before hint-side HtoD. This suggests the prefetch was too late for this resume."
+        if replay_h2d_start is not None and prefetch_end is not None and replay_h2d_start < prefetch_end:
+            return "Replay-side KV movement started before the full hint path finished. The two paths overlapped."
+        return "Both hint-side and replay-side KV movement were observed. Inspect timing to see which path acted first."
+
+    if row.get("prefetch_status") not in ("", "no_hint", None):
+        return "The hint path ran, but no host-to-device KV movement was attributed to either hint or replay for this gap."
+    return "No visible HtoD movement was attributed for this gap."
+
+
+def kv_movement_diagnostic_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in gaps:
+        classification = kv_movement_classification(row)
+        if classification == "no visible HtoD":
+            continue
+        rows.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "task_index": row.get("task_index", ""),
+                "gap_order_in_task": row.get("gap_order_in_task", ""),
+                "tools": row.get("tool_names", ""),
+                "movement_class": classification,
+                "tool_gap_ms": row.get("tool_gap_ms", ""),
+                "hint_submitted_ms": row.get("hint_submitted_ms", ""),
+                "prefetch_start_ms": row.get("prefetch_start_ms", ""),
+                "prefetch_start_delay_ms": delta_ms(row.get("prefetch_start_ms"), row.get("hint_submitted_ms")),
+                "prefetch_end_ms": row.get("prefetch_end_ms", ""),
+                "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "hint_h2d_start_ms": row.get("direct_kv_h2d_start_ms", ""),
+                "hint_h2d_end_ms": row.get("direct_kv_h2d_end_ms", ""),
+                "hint_h2d_events": row.get("direct_kv_h2d_events", ""),
+                "replay_start_ms": row.get("resume_start_ms", ""),
+                "replay_h2d_start_ms": row.get("replay_kv_h2d_start_ms", ""),
+                "replay_h2d_end_ms": row.get("replay_kv_h2d_end_ms", ""),
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "replay_h2d_before_hint_done": row.get("replay_kv_started_before_hint_done", ""),
+                "diagnosis": cyan_green_diagnosis(row),
+            }
+        )
+    return rows
+
+
+def direct_hook_decision_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in gaps:
+        if row.get("prefetch_status") in ("", "no_hint", None):
+            continue
+        init_events = int(row.get("direct_kv_init_load_back_events") or 0)
+        load_back_events = int(row.get("direct_kv_load_back_events") or 0)
+        hicache_load_events = int(row.get("direct_kv_hicache_load_events") or 0)
+        h2d_events = int(row.get("direct_kv_h2d_events") or 0)
+        if h2d_events:
+            decision = "direct load produced HtoD"
+        elif init_events or load_back_events or hicache_load_events:
+            decision = "load path entered but no HtoD attributed"
+        else:
+            decision = "no visible load-back path"
+        rows.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "hint_id": row.get("hint_id", ""),
+                "task_index": row.get("task_index", ""),
+                "gap_order_in_task": row.get("gap_order_in_task", ""),
+                "tools": row.get("tool_names", ""),
+                "prefetch_status": row.get("prefetch_status", ""),
+                "prefetch_duration_ms": row.get("prefetch_duration_ms", ""),
+                "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "init_load_back_events": init_events,
+                "load_back_events": load_back_events,
+                "hicache_load_events": hicache_load_events,
+                "hint_h2d_events": h2d_events,
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "decision": decision,
+                "likely_reason_if_no_hint_h2d": cyan_green_diagnosis(row) if not h2d_events else "",
             }
         )
     return rows
@@ -720,6 +1089,7 @@ def timeline_guide_html(profiled_available: bool) -> str:
         {"step": "6. Agent asks model again", "timeline color": "red bar", "simple meaning": "resume request after the tool result"},
         {"step": "During steps 3/4, if prefetch is enabled", "timeline color": "purple bar", "simple meaning": "our software prefetch attempt runs during the wait"},
         {"step": "Inside the purple window, if KV moved", "timeline color": "green bar", "simple meaning": "direct SGLang KV host-to-device movement was observed for that hint"},
+        {"step": "Inside the red replay request, if KV moved", "timeline color": "cyan bar", "simple meaning": "the real replay request itself performed host-to-device KV movement"},
     ]
     rows = [
         {
@@ -743,6 +1113,11 @@ def timeline_guide_html(profiled_available: bool) -> str:
             "simple description": "This is evidence that KV load/copy work was observed for the hint. In simple words: this is the closest timeline bar to 'KV pages were brought back toward GPU memory'.",
         },
         {
+            "color": "cyan",
+            "meaning": "Replay-side KV host-to-device movement",
+            "simple description": "This is evidence from the normal replay request path. It means the resumed request itself had to move KV from host-side memory toward GPU memory while serving the real agent turn.",
+        },
+        {
             "color": "black",
             "meaning": "Replay due boundary",
             "simple description": "This is when the tool result is ready and the next model turn should be able to start. If purple or green finishes after this line, the prefetch path was late for that resume.",
@@ -761,6 +1136,7 @@ def timeline_guide_html(profiled_available: bool) -> str:
     note = "Purple means the prefetch attempt ran. Green means that attempt had attributed direct KV host-to-device movement. Purple without green means the hint ran, but no matching HtoD load was observed for that displayed gap."
     return f"""
     <p class="note">{html.escape(note)}</p>
+    <p class="note">The timeline uses a symlog full-replay view. It compresses very long replay requests so red bars can extend to their true end while the important activity around <code>0 ms</code> remains visible.</p>
     <h3>One Row In Plain English</h3>
     <p>Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>
     {table_html(step_rows, ["step", "timeline color", "simple meaning"])}
@@ -985,11 +1361,8 @@ def global_prefetch_margin_html(gaps: list[dict[str, Any]]) -> str:
     return f"""
     <p>This chart compresses every matched live prefetch attempt into one dot. The y-axis is the prefetch margin: positive means the prefetch finished before the resume request; negative means it finished after the agent already resumed.</p>
     {table_html(summary)}
-    <h3>Linear View</h3>
-    <p>The linear view preserves the true size of large early or late margins.</p>
-    <div class="setup-diagram">{build_prefetch_margin_dot_plot(rows)}</div>
     <h3>Symlog View</h3>
-    <p>Same data as above, but compressed with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easier to see. Above zero still means early; below zero still means late.</p>
+    <p>This view compresses the y-axis with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easy to see. Above zero means early; below zero means late.</p>
     <div class="setup-diagram">{build_prefetch_margin_dot_plot(rows, scale="symlog")}</div>
     <h3>Margin Buckets</h3>
     {table_html(buckets)}
@@ -1034,7 +1407,6 @@ SECTION_THEMES = {
     "timeline-guide": "theme-guide",
     "global-prefetch": "theme-global",
     "timelines": "theme-clean",
-    "expanded-timelines": "theme-clean",
     "performance": "theme-clean-table",
     "profiled": "theme-profiled",
     "direct-kv": "theme-directkv",
@@ -1146,12 +1518,17 @@ bash scripts/run_labeled_live_master_report.sh Qwen/Qwen2.5-Coder-7B-Instruct
     )
 
 
-def direct_kv_evidence_html(pref_run: dict[str, Any]) -> str:
+def direct_kv_evidence_html(
+    pref_run: dict[str, Any],
+    movement_diagnostics: list[dict[str, Any]],
+    hook_decisions: list[dict[str, Any]],
+) -> str:
     summary = pref_run.get("direct_kv_summary") or []
     evidence = pref_run.get("direct_kv_evidence") or []
     events = pref_run.get("direct_kv_events") or []
+    replay_evidence = pref_run.get("replay_kv_evidence") or []
     report_html = pref_run.get("direct_kv_report_html") or ""
-    if not summary and not evidence:
+    if not summary and not evidence and not replay_evidence:
         return "\n".join(
             [
                 '<p class="warn">No Milestone 26 direct-KV evidence files were found for this prefetch run.</p>',
@@ -1164,10 +1541,36 @@ def direct_kv_evidence_html(pref_run: dict[str, Any]) -> str:
             f"<p>Detailed report: <code>{fmt(report_html)}</code></p>" if report_html else "",
             "<h3>Direct KV Load Summary</h3>",
             table_html(summary),
+            "<h3>KV Movement Diagnostic Table</h3>",
+            "<p>This table focuses on gaps with either green hint-side HtoD or cyan replay-side HtoD. It explains whether replay got there first, the hint produced useful HtoD, or both paths moved KV.</p>",
+            table_html(
+                movement_diagnostics,
+                [
+                    "session_id",
+                    "task_index",
+                    "gap_order_in_task",
+                    "tools",
+                    "movement_class",
+                    "tool_gap_ms",
+                    "prefetch_start_delay_ms",
+                    "prefetch_margin_ms",
+                    "hint_h2d_events",
+                    "replay_h2d_events",
+                    "replay_h2d_before_hint_done",
+                    "diagnosis",
+                ],
+                limit=120,
+            ),
+            "<h3>Direct Hook Decision Table</h3>",
+            "<p>This table checks what the direct hook appeared to do for each matched hint. It helps separate true late prefetches from possible hook/attribution issues.</p>",
+            table_html(hook_decisions, limit=120),
             "<h3>Per-Hint Direct KV Evidence</h3>",
             table_html(evidence, limit=80),
             "<h3>Matched KV/Copy Events</h3>",
             table_html(events, limit=80),
+            "<h3>Replay-Side KV Demand Evidence</h3>",
+            "<p>This table checks the real replay request path, not the hint path. If replay-side HtoD is observed, the resumed request itself performed host-to-device KV work during serving.</p>",
+            table_html(replay_evidence, limit=80),
         ]
     )
 
@@ -1183,9 +1586,12 @@ def render_html(
 ) -> str:
     pref_gaps = pref_run["gaps"]
     no_gaps = no_run["gaps"]
+    interesting_pref_gaps = interesting_kv_gaps(pref_gaps, max_timeline_gaps)
     checkpoint = checkpoint_rows(pref_gaps)
-    observations = session_observations(pref_gaps, max_timeline_gaps)
-    timeline_rows = timeline_summary(pref_gaps, max_timeline_gaps)
+    observations = session_observations(interesting_pref_gaps, max_timeline_gaps)
+    timeline_rows = timeline_summary(interesting_pref_gaps, max_timeline_gaps)
+    movement_diagnostics = kv_movement_diagnostic_rows(pref_gaps)
+    hook_decisions = direct_hook_decision_rows(pref_gaps)
     detail_rows = [
         {
             "mode": "no_prefetch",
@@ -1208,7 +1614,6 @@ def render_html(
         ("timeline-guide", "How To Read Timelines"),
         ("global-prefetch", "Global Prefetch Margin"),
         ("timelines", "Clean Performance Timelines"),
-        ("expanded-timelines", "Expanded Per-Gap Timelines"),
         ("performance", "Clean Performance Tables"),
         ("profiled", "Profiled Mechanism Evidence"),
         ("direct-kv", "Direct KV Load Evidence"),
@@ -1266,37 +1671,24 @@ def render_html(
   <details id="timelines" class="section-card theme-clean">
     <summary><h2>A. Clean Performance Timelines</h2></summary>
     <p class="note">Profiler is off. Use this section for live request-flow and latency claims.</p>
-    <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request. Green appears when that hint has attributed direct KV host-to-device movement.</p>
+    <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request. Green appears when that hint has attributed direct KV host-to-device movement. Cyan appears when the real replay request itself performed replay-side KV host-to-device movement.</p>
+    <h3>Symlog Full Replay View</h3>
+    <p>The symlog view compresses large distances far from <code>0 ms</code>, but keeps small timings near replay due visible. Use this when you want to see the full red replay duration together with the purple, green, and cyan KV activity.</p>
+    <p class="note">The live-prefetch timeline below prioritizes gaps with visible KV movement: cyan replay-side HtoD or green hint-side HtoD. This keeps the main visual focused on the agentic phases where host-to-device KV block movement actually appeared.</p>
     <div class="timeline-stack">
       <div class="timeline-panel">
         <h3>No Prefetch</h3>
-        {build_timeline_svg(no_gaps, max_timeline_gaps, show_prefetch_legend=False)}
+        {build_expanded_gap_timeline_svg(no_gaps, max_timeline_gaps, show_prefetch_legend=False, scale="symlog")}
       </div>
       <div class="timeline-panel">
-        <h3>Live Prefetch Intervention</h3>
-        {build_timeline_svg(pref_gaps, max_timeline_gaps)}
-      </div>
-    </div>
-  </details>
-
-  <details id="expanded-timelines" class="section-card theme-clean">
-    <summary><h2>A.1 Expanded Per-Gap Timelines</h2></summary>
-    <p class="note">This is the same clean-performance data, but each row has its own local clock. The black replay-due line is always <code>0 ms</code>; negative time is before the agent resumes, and positive time is after the resume boundary.</p>
-    <p>Use this view when the global timeline feels compressed. It stretches each tool gap independently so the purple prefetch window, green direct-KV movement, and black resume deadline are easier to compare.</p>
-    <div class="timeline-stack">
-      <div class="timeline-panel">
-        <h3>No Prefetch</h3>
-        {build_expanded_gap_timeline_svg(no_gaps, max_timeline_gaps, show_prefetch_legend=False)}
-      </div>
-      <div class="timeline-panel">
-        <h3>Live Prefetch Intervention</h3>
-        {build_expanded_gap_timeline_svg(pref_gaps, max_timeline_gaps)}
+        <h3>Live Prefetch Intervention: KV Movement Prioritized</h3>
+        {build_expanded_gap_timeline_svg(interesting_pref_gaps, max_timeline_gaps, scale="symlog")}
       </div>
     </div>
   </details>
 
   <details id="performance" class="section-card theme-clean-table">
-    <summary><h2>A.2 Clean Performance Tables</h2></summary>
+    <summary><h2>A.1 Clean Performance Tables</h2></summary>
     <p>These tables provide the exact request counts, tool-gap counts, latency values, and paired aggregate numbers behind the clean timelines.</p>
     <h3>By Mode</h3>
     {table_html(mode_rows)}
@@ -1312,7 +1704,7 @@ def render_html(
 
   <details id="direct-kv" class="section-card theme-directkv">
     <summary><h2>B.1 Direct KV Load Evidence</h2></summary>
-    {direct_kv_evidence_html(pref_run)}
+    {direct_kv_evidence_html(pref_run, movement_diagnostics, hook_decisions)}
   </details>
 
   <details id="deductions" class="section-card theme-deductions">
@@ -1373,6 +1765,9 @@ def main() -> None:
     pair_rows = pair_gaps(no_run["gaps"], pref_run["gaps"])
     pair_summary_rows = paired_summary(pair_rows)
     deductions = key_deductions(mode_rows, pair_summary_rows)
+    movement_diagnostics = kv_movement_diagnostic_rows(pref_run["gaps"])
+    hook_decisions = direct_hook_decision_rows(pref_run["gaps"])
+    interesting_pref_gaps = interesting_kv_gaps(pref_run["gaps"], 10_000)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(args.out_dir / "live_paired_mode_summary.csv", mode_rows)
@@ -1383,11 +1778,15 @@ def main() -> None:
     write_csv(args.out_dir / "live_prefetch_timeline_summary.csv", timeline_summary(pref_run["gaps"], 10_000))
     write_csv(args.out_dir / "live_prefetch_session_observations.csv", session_observations(pref_run["gaps"], 10_000))
     write_csv(args.out_dir / "live_prefetch_request_details.csv", request_details(pref_run, 10_000))
+    write_csv(args.out_dir / "live_prefetch_kv_movement_gaps.csv", interesting_pref_gaps)
+    write_csv(args.out_dir / "live_prefetch_kv_movement_diagnostics.csv", movement_diagnostics)
+    write_csv(args.out_dir / "live_prefetch_direct_hook_decisions.csv", hook_decisions)
     write_csv(args.out_dir / "live_no_prefetch_tool_gaps.csv", no_run["gaps"])
     write_csv(args.out_dir / "live_prefetch_tool_gaps.csv", pref_run["gaps"])
     write_csv(args.out_dir / "live_direct_kv_load_summary.csv", pref_run.get("direct_kv_summary", []))
     write_csv(args.out_dir / "live_direct_kv_load_evidence.csv", pref_run.get("direct_kv_evidence", []))
     write_csv(args.out_dir / "live_direct_kv_load_events.csv", pref_run.get("direct_kv_events", []))
+    write_csv(args.out_dir / "live_replay_kv_demand_evidence.csv", pref_run.get("replay_kv_evidence", []))
 
     report = {
         "no_prefetch": {key: value for key, value in no_run.items() if key not in {"requests", "gaps"}},
@@ -1398,6 +1797,10 @@ def main() -> None:
         "paired_session_evidence": pair_rows,
         "no_prefetch_gaps": no_run["gaps"],
         "prefetch_gaps": pref_run["gaps"],
+        "prefetch_kv_movement_gaps": interesting_pref_gaps,
+        "prefetch_kv_movement_diagnostics": movement_diagnostics,
+        "prefetch_direct_hook_decisions": hook_decisions,
+        "replay_kv_evidence": pref_run.get("replay_kv_evidence", []),
     }
     json_path = args.out_dir / "live_paired_agentbench_report.json"
     md_path = args.out_dir / "live_paired_agentbench_report.md"
@@ -1433,9 +1836,13 @@ def main() -> None:
             (args.out_dir / "live_prefetch_checkpoint_results.csv", "prefetch_checkpoint_results.csv"),
             (args.out_dir / "live_prefetch_timeline_summary.csv", "prefetch_timeline_summary.csv"),
             (args.out_dir / "live_prefetch_session_observations.csv", "prefetch_session_observations.csv"),
+            (args.out_dir / "live_prefetch_kv_movement_gaps.csv", "prefetch_kv_movement_gaps.csv"),
+            (args.out_dir / "live_prefetch_kv_movement_diagnostics.csv", "prefetch_kv_movement_diagnostics.csv"),
+            (args.out_dir / "live_prefetch_direct_hook_decisions.csv", "prefetch_direct_hook_decisions.csv"),
             (args.out_dir / "live_direct_kv_load_summary.csv", "direct_kv_load_summary.csv"),
             (args.out_dir / "live_direct_kv_load_evidence.csv", "direct_kv_load_evidence.csv"),
             (args.out_dir / "live_direct_kv_load_events.csv", "direct_kv_load_events.csv"),
+            (args.out_dir / "live_replay_kv_demand_evidence.csv", "replay_kv_demand_evidence.csv"),
         ]
         for source, name in detail_pairs:
             if source.exists():

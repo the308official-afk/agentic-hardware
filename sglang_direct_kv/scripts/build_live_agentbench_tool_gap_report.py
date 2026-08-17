@@ -5,6 +5,7 @@ import argparse
 import csv
 import html
 import json
+import math
 import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -412,11 +413,11 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
     start_candidates: list[float] = []
     end_candidates: list[float] = []
     for row in rows:
-        for key in ("current_start_ms", "prefetch_start_ms", "direct_kv_h2d_start_ms"):
+        for key in ("current_start_ms", "prefetch_start_ms", "direct_kv_h2d_start_ms", "replay_kv_h2d_start_ms"):
             value = maybe_float(row.get(key))
             if value is not None:
                 start_candidates.append(value)
-        for key in ("resume_end_ms", "prefetch_end_ms", "direct_kv_h2d_end_ms"):
+        for key in ("resume_end_ms", "prefetch_end_ms", "direct_kv_h2d_end_ms", "replay_kv_h2d_end_ms"):
             value = maybe_float(row.get(key))
             if value is not None:
                 end_candidates.append(value)
@@ -478,6 +479,8 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
         prefetch_end = row.get("prefetch_end_ms")
         direct_h2d_start = row.get("direct_kv_h2d_start_ms")
         direct_h2d_end = row.get("direct_kv_h2d_end_ms")
+        replay_h2d_start = row.get("replay_kv_h2d_start_ms")
+        replay_h2d_end = row.get("replay_kv_h2d_end_ms")
 
         svg.append(
             f'<rect x="{wait_x1:.1f}" y="{y + 4}" width="{max(2, wait_x2 - wait_x1):.1f}" height="30" rx="3" fill="#d1d5db" opacity="0.72">'
@@ -514,6 +517,18 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
             svg.append(
                 f'<text x="{max(left + 2, h2d_x1 + 3):.1f}" y="{y + 35}" font-size="10" fill="#ffffff" font-weight="700">HtoD</text>'
             )
+        if replay_h2d_start not in ("", None) and replay_h2d_end not in ("", None):
+            replay_h2d_x1 = x_pos(replay_h2d_start)
+            replay_h2d_x2 = x_pos(replay_h2d_end)
+            replay_h2d_events = row.get("replay_kv_h2d_events") or ""
+            replay_h2d_duration = row.get("replay_kv_h2d_duration_ms") or ""
+            svg.append(
+                f'<rect x="{replay_h2d_x1:.1f}" y="{y + 42}" width="{max(5, replay_h2d_x2 - replay_h2d_x1):.1f}" height="20" rx="3" fill="#06b6d4" opacity="0.94" stroke="#0e7490" stroke-width="1">'
+                f'<title>replay-side KV host-to-device movement; events={fmt(replay_h2d_events)}; duration_ms={fmt(replay_h2d_duration)}</title></rect>'
+            )
+            svg.append(
+                f'<text x="{max(left + 2, replay_h2d_x1 + 3):.1f}" y="{y + 56}" font-size="9" fill="#ffffff" font-weight="700">replay KV</text>'
+            )
     legend_y = height - 28
     legend = [
         ("model turn with tool call", "#2563eb"),
@@ -524,6 +539,7 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
     if show_prefetch_legend:
         legend.insert(2, ("live prefetch attempt", "#a855f7"))
         legend.insert(3, ("direct KV HtoD copy", "#16a34a"))
+        legend.insert(4, ("replay-side KV HtoD", "#06b6d4"))
     lx = left
     for label, color in legend:
         svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
@@ -537,7 +553,10 @@ def build_expanded_gap_timeline_svg(
     gaps: list[dict[str, Any]],
     max_rows: int,
     show_prefetch_legend: bool = True,
+    scale: str = "linear",
 ) -> str:
+    if scale not in {"linear", "symlog"}:
+        raise ValueError(f"unsupported expanded timeline scale: {scale}")
     rows = gaps[:max_rows]
     if not rows:
         return "<p>No expanded live tool-gap timeline available.</p>"
@@ -556,6 +575,8 @@ def build_expanded_gap_timeline_svg(
             "prefetch_end_ms",
             "direct_kv_h2d_start_ms",
             "direct_kv_h2d_end_ms",
+            "replay_kv_h2d_start_ms",
+            "replay_kv_h2d_end_ms",
         ):
             value = maybe_float(row.get(key))
             if value is not None:
@@ -565,13 +586,15 @@ def build_expanded_gap_timeline_svg(
         if replay_start is not None:
             rel_values.append(replay_start - due)
         if replay_end is not None:
-            rel_values.append(min(600.0, replay_end - due))
+            if scale == "symlog":
+                rel_values.append(replay_end - due)
+            else:
+                rel_values.append(min(600.0, replay_end - due))
 
     start = min(rel_values or [-500.0])
     end = max(rel_values or [500.0])
     start = min(start - 60.0, -120.0)
     end = max(end + 80.0, 220.0)
-    span = max(1.0, end - start)
     width = 1580
     left = 380
     right = 70
@@ -580,6 +603,19 @@ def build_expanded_gap_timeline_svg(
     height = top + len(rows) * row_h + 92
     plot_w = width - left - right
 
+    def symlog(value: float, linear_width: float = 50.0) -> float:
+        if value == 0:
+            return 0.0
+        return math.copysign(math.log1p(abs(value) / linear_width), value)
+
+    if scale == "symlog":
+        scaled_start = symlog(start)
+        scaled_end = symlog(end)
+    else:
+        scaled_start = start
+        scaled_end = end
+    scaled_span = max(1e-9, scaled_end - scaled_start)
+
     def rel(row: dict[str, Any], key: str, due: float) -> float | None:
         value = maybe_float(row.get(key))
         if value is None:
@@ -587,7 +623,8 @@ def build_expanded_gap_timeline_svg(
         return value - due
 
     def x_pos(relative_ms: float) -> float:
-        return left + (relative_ms - start) / span * plot_w
+        scaled = symlog(relative_ms) if scale == "symlog" else relative_ms
+        return left + (scaled - scaled_start) / scaled_span * plot_w
 
     def rect(
         svg: list[str],
@@ -607,21 +644,54 @@ def build_expanded_gap_timeline_svg(
         )
 
     zero_x = x_pos(0.0)
+    scale_label = "symlog full replay" if scale == "symlog" else "linear focused"
     svg = [
-        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due">',
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due, {scale_label} view">',
         f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
     ]
 
-    tick_count = 7
-    for tick in range(tick_count):
-        ms = start + span * tick / (tick_count - 1)
+    if scale == "symlog":
+        tick_candidates = [
+            -100000.0,
+            -50000.0,
+            -10000.0,
+            -5000.0,
+            -1000.0,
+            -500.0,
+            -100.0,
+            -50.0,
+            -10.0,
+            0.0,
+            10.0,
+            50.0,
+            100.0,
+            500.0,
+            1000.0,
+            5000.0,
+            10000.0,
+            50000.0,
+            100000.0,
+        ]
+        tick_values = [value for value in tick_candidates if start <= value <= end]
+        for value in (start, end):
+            if all(abs(value - tick) > 1 for tick in tick_values):
+                tick_values.append(value)
+        tick_values = sorted(tick_values)
+    else:
+        tick_values = [start + (end - start) * tick / 6 for tick in range(7)]
+    seen_ticks: set[int] = set()
+    for ms in tick_values:
+        rounded = int(round(ms))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
         x = x_pos(ms)
         svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 42}" stroke="#e5e7eb"/>')
-        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle" font-size="10">{ms:.0f} ms</text>')
     svg.append(f'<line x1="{zero_x:.1f}" y1="{top - 40}" x2="{zero_x:.1f}" y2="{height - 42}" stroke="#111827" stroke-width="3"/>')
     svg.append(f'<text x="{zero_x + 7:.1f}" y="{top - 48}" font-size="12" font-weight="700">0 ms replay due</text>')
     svg.append(
-        f'<text x="{left + plot_w / 2:.1f}" y="{height - 18}" text-anchor="middle" font-size="13" font-weight="700">local time around each gap: negative = before replay due, positive = after replay due</text>'
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 18}" text-anchor="middle" font-size="13" font-weight="700">local time around each gap ({scale_label}): negative = before replay due, positive = after replay due</text>'
     )
 
     for idx, row in enumerate(rows):
@@ -652,6 +722,8 @@ def build_expanded_gap_timeline_svg(
         prefetch_end = rel(row, "prefetch_end_ms", due)
         h2d_start = rel(row, "direct_kv_h2d_start_ms", due)
         h2d_end = rel(row, "direct_kv_h2d_end_ms", due)
+        replay_h2d_start = rel(row, "replay_kv_h2d_start_ms", due)
+        replay_h2d_end = rel(row, "replay_kv_h2d_end_ms", due)
         replay_start = rel(row, "resume_start_ms", due)
         replay_end = rel(row, "resume_end_ms", due)
 
@@ -671,8 +743,6 @@ def build_expanded_gap_timeline_svg(
                 0.78,
                 3,
             )
-            svg.append(f'<text x="{x_pos(prefetch_start):.1f}" y="{y + 24}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>')
-            svg.append(f'<text x="{x_pos(prefetch_end):.1f}" y="{y + 58}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>')
         if show_prefetch_legend and h2d_start is not None and h2d_end is not None:
             rect(
                 svg,
@@ -690,22 +760,35 @@ def build_expanded_gap_timeline_svg(
             replay_display_end = replay_start + 260.0
             continues = False
             if replay_end is not None:
-                replay_display_end = min(replay_end, replay_start + 520.0)
-                continues = replay_end > replay_display_end
+                if scale == "symlog":
+                    replay_display_end = replay_end
+                    continues = False
+                else:
+                    replay_display_end = min(replay_end, replay_start + 520.0)
+                    continues = replay_end > replay_display_end
             rect(svg, x_pos(replay_start), x_pos(replay_display_end), y + 48, 22, "#ef4444", "resume model request after tool result", 0.82, 4)
-            if continues:
-                svg.append(f'<text x="{x_pos(replay_display_end) - 52:.1f}" y="{y + 44}" font-size="10" fill="#991b1b" font-weight="700">continues</text>')
+        if show_prefetch_legend and replay_h2d_start is not None and replay_h2d_end is not None:
+            rect(
+                svg,
+                x_pos(replay_h2d_start),
+                x_pos(replay_h2d_end),
+                y + 48,
+                22,
+                "#06b6d4",
+                f"replay-side KV HtoD movement; events={row.get('replay_kv_h2d_events', '')}; duration_ms={row.get('replay_kv_h2d_duration_ms', '')}",
+                0.95,
+                18,
+            )
+            svg.append(f'<text x="{x_pos(replay_h2d_start) + 4:.1f}" y="{y + 63}" font-size="9" fill="#ffffff" font-weight="700">replay KV</text>')
         if margin is not None and prefetch_end is not None:
             y_margin = y + 68
             x_done = x_pos(prefetch_end)
             color = "#16a34a" if margin >= 0 else "#dc2626"
-            label = f"{margin:.0f} ms early" if margin >= 0 else f"{abs(margin):.0f} ms late"
             svg.append(
                 f'<line x1="{min(x_done, zero_x):.1f}" y1="{y_margin:.1f}" x2="{max(x_done, zero_x):.1f}" y2="{y_margin:.1f}" '
                 f'stroke="{color}" stroke-width="3" stroke-dasharray="7 5"/>'
             )
             svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin:.1f}" r="4" fill="{color}"/>')
-            svg.append(f'<text x="{(x_done + zero_x) / 2:.1f}" y="{y_margin + 13:.1f}" text-anchor="middle" font-size="10" fill="{color}" font-weight="700">{label}</text>')
 
     legend_y = height - 48
     legend = [
@@ -717,6 +800,7 @@ def build_expanded_gap_timeline_svg(
     if show_prefetch_legend:
         legend.insert(2, ("prefetch attempt", "#a855f7"))
         legend.insert(3, ("direct KV HtoD", "#16a34a"))
+        legend.insert(4, ("replay-side KV HtoD", "#06b6d4"))
     lx = left
     for label, color in legend:
         if label == "replay due":
@@ -896,10 +980,9 @@ def render_html(
   <section>
     <h2>Timeline</h2>
     <p>How to read this: blue is the model turn that produced one or more structured tool calls. Gray is the tool wait window, where the tool or harness is running and the model is idle for this session. Purple is the prefetch attempt window: detect the tool-call gap, create a hint for that agent/session, call our direct SGLang KV hook, let SGLang check whether host-side KV exists, and if needed, ask SGLang to move KV back to GPU memory. Green is direct KV host-to-device movement observed for that hint. Black is the resume boundary, when the next model turn is due. Red is the resumed model request after the tool result. If purple or green ends after the black boundary, the prefetch path was late.</p>
-    {build_timeline_svg(gaps, max_timeline_gaps)}
-    <h3>Expanded Per-Gap View</h3>
-    <p>This is the same data with each row aligned to its own replay boundary. The black line is always 0 ms. Negative time is before the agent resumes; positive time is after the resume boundary.</p>
-    {build_expanded_gap_timeline_svg(gaps, max_timeline_gaps)}
+    <h3>Symlog Full Replay View</h3>
+    <p>This view uses a symmetric log-style time axis. It keeps detail around 0 ms while compressing very long replay requests, so red replay bars can extend to their true end without hiding the prefetch/copy boundary.</p>
+    {build_expanded_gap_timeline_svg(gaps, max_timeline_gaps, scale="symlog")}
   </section>
   <section>
     <h2>Key Observations</h2>
