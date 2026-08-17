@@ -99,14 +99,14 @@ TRAFFIC_CONCURRENCY="${TRAFFIC_CONCURRENCY}" \
 TIMELINE_MAX_SESSIONS="${TIMELINE_MAX_SESSIONS}" \
 bash scripts/run_milestone12_paired_evidence.sh "${MODEL}"
 
-if [[ -f "${LATEST_REPORT_ROOT}/latest_paired_report.html" ]]; then
-  cp -f "${LATEST_REPORT_ROOT}/latest_paired_report.html" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.html"
+if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html" ]]; then
+  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.html"
 fi
-if [[ -f "${LATEST_REPORT_ROOT}/latest_paired_report.md" ]]; then
-  cp -f "${LATEST_REPORT_ROOT}/latest_paired_report.md" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.md"
+if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.md" ]]; then
+  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.md" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.md"
 fi
-if [[ -f "${LATEST_REPORT_ROOT}/latest_paired_report.json" ]]; then
-  cp -f "${LATEST_REPORT_ROOT}/latest_paired_report.json" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.json"
+if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.json" ]]; then
+  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.json" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.json"
 fi
 
 echo
@@ -114,5 +114,5 @@ echo "Milestone 20 outputs written under ${RESULT_ROOT}"
 echo "Workload JSONL: ${WORKLOAD_JSONL}"
 echo "Latest workload JSONL: ${LATEST_REPORT_ROOT}/latest_swebench_trajectory_replay_workload.jsonl"
 echo "Paired report HTML: ${RESULT_ROOT}/paired_report/paired_report.html"
-echo "Latest paired report HTML: ${LATEST_REPORT_ROOT}/latest_paired_report.html"
+echo "Latest synthetic master report HTML: ${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html"
 echo "Latest SWE-bench trajectory paired report HTML: ${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.html"

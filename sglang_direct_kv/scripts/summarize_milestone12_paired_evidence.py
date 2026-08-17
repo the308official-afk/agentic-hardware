@@ -1568,20 +1568,31 @@ def section_caption(title: str) -> str:
 
 def copy_latest_reports(out_root: Path, latest_root: Path) -> None:
     latest_root.mkdir(parents=True, exist_ok=True)
-    copies = {
-        "paired_report.html": "latest_paired_report.html",
-        "paired_report.md": "latest_paired_report.md",
-        "paired_report.json": "latest_paired_report.json",
-        "paired_clean_summary.csv": "latest_paired_clean_summary.csv",
-        "paired_attribution_summary.csv": "latest_paired_attribution_summary.csv",
-        "paired_session_evidence.csv": "latest_paired_session_evidence.csv",
-        "paired_timeline_summary.csv": "latest_paired_timeline_summary.csv",
-        "paired_timeline_sanity_checks.csv": "latest_paired_timeline_sanity_checks.csv",
-        "paired_checkpoint_results.csv": "latest_paired_checkpoint_results.csv",
-        "paired_key_observations.csv": "latest_paired_key_observations.csv",
-        "paired_session_details.csv": "latest_paired_session_details.csv",
-    }
-    for src_name, dst_name in copies.items():
+    copies = [
+        ("paired_report.html", "latest_synthetic_master_report.html"),
+        ("paired_report.md", "latest_synthetic_master_report.md"),
+        ("paired_report.json", "latest_synthetic_master_report.json"),
+        ("paired_clean_summary.csv", "latest_synthetic_master_clean_summary.csv"),
+        ("paired_attribution_summary.csv", "latest_synthetic_master_attribution_summary.csv"),
+        ("paired_session_evidence.csv", "latest_synthetic_master_session_evidence.csv"),
+        ("paired_timeline_summary.csv", "latest_synthetic_master_timeline_summary.csv"),
+        ("paired_timeline_sanity_checks.csv", "latest_synthetic_master_timeline_sanity_checks.csv"),
+        ("paired_checkpoint_results.csv", "latest_synthetic_master_checkpoint_results.csv"),
+        ("paired_key_observations.csv", "latest_synthetic_master_key_observations.csv"),
+        ("paired_session_details.csv", "latest_synthetic_master_session_details.csv"),
+        ("paired_report.html", "latest_paired_report.html"),
+        ("paired_report.md", "latest_paired_report.md"),
+        ("paired_report.json", "latest_paired_report.json"),
+        ("paired_clean_summary.csv", "latest_paired_clean_summary.csv"),
+        ("paired_attribution_summary.csv", "latest_paired_attribution_summary.csv"),
+        ("paired_session_evidence.csv", "latest_paired_session_evidence.csv"),
+        ("paired_timeline_summary.csv", "latest_paired_timeline_summary.csv"),
+        ("paired_timeline_sanity_checks.csv", "latest_paired_timeline_sanity_checks.csv"),
+        ("paired_checkpoint_results.csv", "latest_paired_checkpoint_results.csv"),
+        ("paired_key_observations.csv", "latest_paired_key_observations.csv"),
+        ("paired_session_details.csv", "latest_paired_session_details.csv"),
+    ]
+    for src_name, dst_name in copies:
         src = out_root / src_name
         if src.exists():
             shutil.copyfile(src, latest_root / dst_name)
@@ -1685,7 +1696,7 @@ def main() -> None:
 
     print(f"Wrote paired report under {out_root}")
     if args.latest_root:
-        print(f"Wrote latest paired report copies under {args.latest_root}")
+        print(f"Wrote latest synthetic master report copies under {args.latest_root}")
     for row in sections["Clean Performance Summary"]:
         print(
             f"clean {row['mode']}: avg_replay_ttft_ms={row['avg_replay_ttft_ms']}, "

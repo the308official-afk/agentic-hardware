@@ -54,5 +54,5 @@ bash scripts/run_milestone12_paired_evidence.sh "${MODEL}"
 
 echo
 echo "Milestone 14 outputs written under ${RESULT_ROOT}"
-echo "Open latest paired report: ${LATEST_REPORT_ROOT}/latest_paired_report.html"
+echo "Open latest synthetic master report: ${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html"
 echo "Run-specific paired report: ${RESULT_ROOT}/paired_report/paired_report.html"

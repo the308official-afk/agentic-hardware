@@ -84,6 +84,12 @@ Open this report first:
 artifacts/results/latest_master_report.html
 ```
 
+Use this for controlled synthetic experiments:
+
+```text
+artifacts/results/latest_synthetic_master_report.html
+```
+
 Use the milestone-specific latest reports only for debugging:
 
 ```text
@@ -92,10 +98,11 @@ latest_m23_live_prefetch_report.html    live prefetch intervention only
 latest_m24_live_paired_report.html      paired live no-prefetch vs prefetch
 ```
 
-Older `latest_live_*` report names may still exist as compatibility aliases, but the canonical master report is:
+Older `latest_live_*` and `latest_paired_report.*` names may still exist as compatibility aliases, but the canonical report names are:
 
 ```text
-latest_master_report.html
+latest_master_report.html              real SWE-bench / AgentBench live report
+latest_synthetic_master_report.html    controlled synthetic report
 ```
 
 Most important timing insight so far:
@@ -2729,12 +2736,12 @@ artifacts/results/milestone12_paired_evidence/paired_report/paired_report.md
 artifacts/results/milestone12_paired_evidence/paired_report/paired_session_evidence.csv
 
 Stable latest report copies:
-artifacts/results/latest_paired_report.html
-artifacts/results/latest_paired_report.md
-artifacts/results/latest_paired_report.json
-artifacts/results/latest_paired_checkpoint_results.csv
-artifacts/results/latest_paired_key_observations.csv
-artifacts/results/latest_paired_session_details.csv
+artifacts/results/latest_synthetic_master_report.html
+artifacts/results/latest_synthetic_master_report.md
+artifacts/results/latest_synthetic_master_report.json
+artifacts/results/latest_synthetic_master_checkpoint_results.csv
+artifacts/results/latest_synthetic_master_key_observations.csv
+artifacts/results/latest_synthetic_master_session_details.csv
 ```
 
 The run-specific report stays in the milestone folder.
@@ -2853,7 +2860,7 @@ Paired Session Evidence:
 Open the most recent report here after any run:
 
 ```text
-artifacts/results/latest_paired_report.html
+artifacts/results/latest_synthetic_master_report.html
 ```
 
 Main rule:
@@ -2988,7 +2995,7 @@ bash scripts/run_milestone13_failure_stress.sh Qwen/Qwen2.5-1.5B-Instruct
 Main output:
 
 ```text
-artifacts/results/latest_paired_report.html
+artifacts/results/latest_synthetic_master_report.html
 artifacts/results/milestone13_failure_stress/paired_report/paired_report.html
 ```
 
@@ -3057,7 +3064,7 @@ Note: the profiler event number is an export threshold. If it is too high, the r
 Main output:
 
 ```text
-artifacts/results/latest_paired_report.html
+artifacts/results/latest_synthetic_master_report.html
 artifacts/results/milestone13b_green_bar_failure_stress/paired_report/paired_report.html
 ```
 
@@ -3203,7 +3210,7 @@ TIMELINE_MAX_SESSIONS=32
 Main output:
 
 ```text
-artifacts/results/latest_paired_report.html
+artifacts/results/latest_synthetic_master_report.html
 artifacts/results/milestone14_lightweight_copy_telemetry/paired_report/paired_report.html
 ```
 
@@ -3743,7 +3750,7 @@ The rest stays the same:
   clean performance run
   profiled/lightweight attribution run
   paired evidence report
-  same timeline/checkpoint/session-detail format as latest_paired_report.html
+  same timeline/checkpoint/session-detail format as latest_synthetic_master_report.html
 ```
 
 Why we need it:
@@ -3786,7 +3793,7 @@ Important events to observe:
 ```text
 The converter writes a real-prompt workload JSONL.
 Milestone 12 runs using WORKLOAD_JSONL instead of synthetic prompts.
-latest_paired_report.html is regenerated with the same paired-report format.
+latest_synthetic_master_report.html is regenerated with the same paired-report format.
 latest_swebench_trajectory_paired_report.html is also written as a stable alias.
 ```
 
@@ -3795,7 +3802,7 @@ Outputs:
 ```text
 artifacts/results/milestone20_swebench_trajectory_replay/swebench_trajectory_replay_workload.jsonl
 artifacts/results/latest_swebench_trajectory_replay_workload.jsonl
-artifacts/results/latest_paired_report.html
+artifacts/results/latest_synthetic_master_report.html
 artifacts/results/latest_swebench_trajectory_paired_report.html
 ```
 
