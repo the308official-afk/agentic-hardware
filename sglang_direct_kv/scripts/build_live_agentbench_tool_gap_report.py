@@ -596,10 +596,10 @@ def build_expanded_gap_timeline_svg(
     start = min(start - 60.0, -120.0)
     end = max(end + 80.0, 220.0)
     width = 1580
-    left = 380
+    left = 160
     right = 70
     top = 86
-    row_h = 76
+    row_h = 84
     height = top + len(rows) * row_h + 92
     plot_w = width - left - right
 
@@ -680,6 +680,7 @@ def build_expanded_gap_timeline_svg(
     else:
         tick_values = [start + (end - start) * tick / 6 for tick in range(7)]
     seen_ticks: set[int] = set()
+    last_labeled_x = -10_000.0
     for ms in tick_values:
         rounded = int(round(ms))
         if rounded in seen_ticks:
@@ -687,7 +688,10 @@ def build_expanded_gap_timeline_svg(
         seen_ticks.add(rounded)
         x = x_pos(ms)
         svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 42}" stroke="#e5e7eb"/>')
-        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle" font-size="10">{ms:.0f} ms</text>')
+        should_label = rounded == 0 or abs(x - last_labeled_x) >= 58
+        if should_label:
+            svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle" font-size="10">{ms:.0f} ms</text>')
+            last_labeled_x = x
     svg.append(f'<line x1="{zero_x:.1f}" y1="{top - 40}" x2="{zero_x:.1f}" y2="{height - 42}" stroke="#111827" stroke-width="3"/>')
     svg.append(f'<text x="{zero_x + 7:.1f}" y="{top - 48}" font-size="12" font-weight="700">0 ms replay due</text>')
     svg.append(
@@ -699,8 +703,7 @@ def build_expanded_gap_timeline_svg(
         due = maybe_float(row.get("resume_start_ms")) or maybe_float(row.get("tool_gap_end_ms"))
         if due is None:
             continue
-        label = str(row.get("session_id") or f"gap_{idx}")
-        tools = str(row.get("tool_names") or "")
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
         gap_ms = maybe_float(row.get("tool_gap_ms")) or 0.0
         margin = maybe_float(row.get("prefetch_margin_ms"))
         if margin is not None:
@@ -709,9 +712,9 @@ def build_expanded_gap_timeline_svg(
         else:
             status = "NO PREFETCH"
             status_color = "#64748b"
-        svg.append(f'<text x="10" y="{y + 16}" font-weight="700">{fmt(label)}</text>')
-        svg.append(f'<text x="10" y="{y + 36}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
-        svg.append(f'<text x="10" y="{y + 55}" font-size="12" fill="#334155">gap={gap_ms:.0f} ms; tools={fmt(tools)}</text>')
+        svg.append(f'<text x="10" y="{y + 22}" font-size="15" font-weight="700">{fmt(label)}</text>')
+        svg.append(f'<text x="10" y="{y + 43}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
+        svg.append(f'<text x="10" y="{y + 62}" font-size="11" fill="#64748b">wait {gap_ms:.0f} ms</text>')
         svg.append(f'<line x1="{left}" y1="{y + 9}" x2="{left + plot_w}" y2="{y + 9}" stroke="#f1f5f9"/>')
 
         current_start = rel(row, "current_start_ms", due)
@@ -755,7 +758,6 @@ def build_expanded_gap_timeline_svg(
                 0.94,
                 14,
             )
-            svg.append(f'<text x="{x_pos(h2d_start) + 4:.1f}" y="{y + 40}" font-size="10" fill="#ffffff" font-weight="700">HtoD</text>')
         if replay_start is not None:
             replay_display_end = replay_start + 260.0
             continues = False
@@ -779,7 +781,6 @@ def build_expanded_gap_timeline_svg(
                 0.95,
                 18,
             )
-            svg.append(f'<text x="{x_pos(replay_h2d_start) + 4:.1f}" y="{y + 63}" font-size="9" fill="#ffffff" font-weight="700">replay KV</text>')
         if margin is not None and prefetch_end is not None:
             y_margin = y + 68
             x_done = x_pos(prefetch_end)

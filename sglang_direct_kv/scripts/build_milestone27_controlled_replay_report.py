@@ -285,6 +285,40 @@ def selected_timeline_gaps(gaps: list[dict[str, Any]], max_rows: int) -> list[di
     return interesting
 
 
+def timeline_rows_with_labels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    labeled: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        copied = dict(row)
+        copied["timeline_label"] = f"G{idx:02d}"
+        labeled.append(copied)
+    return labeled
+
+
+def case_fillers(row: dict[str, Any]) -> str:
+    name = Path(str(row.get("case_dir") or "")).name
+    if "_f" not in name:
+        return ""
+    return name.rsplit("_f", 1)[-1]
+
+
+def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        output.append(
+            {
+                "row": row.get("timeline_label") or f"G{idx:02d}",
+                "mode": row.get("mode", ""),
+                "fillers": case_fillers(row),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "movement": row.get("movement_class", ""),
+            }
+        )
+    return output
+
+
 def manager_setup_html() -> str:
     setup_rows = [
         {"part": "1. Real prompt pair", "simple meaning": "Use two adjacent model turns from real AgentBench/DeepAgents traces."},
@@ -323,7 +357,7 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
 
 def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps: int) -> str:
     mode_rows = mode_summary_rows(gaps)
-    interesting = selected_timeline_gaps(gaps, max_timeline_gaps)
+    interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     gap_columns = [
         "session_id",
         "mode",
@@ -396,6 +430,9 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
     <summary><h2>Controlled Replay Timeline</h2></summary>
     <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence. Cyan is replay-side HtoD evidence.</p>
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
+    <h3>Timeline Row Map</h3>
+    <p>This table maps the compact row names in the chart back to the full experiment details.</p>
+    {table_html(timeline_mapping_rows(interesting))}
   </details>
 
   <details id="performance" class="section-card theme-clean-table">
