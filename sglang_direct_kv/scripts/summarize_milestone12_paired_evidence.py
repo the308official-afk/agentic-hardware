@@ -857,7 +857,39 @@ def build_timeline_svg(
     selected = choose_timeline_sessions(rows, max_sessions)
     row_by_session = {str(row.get("session_id", "")): row for row in rows}
     selected_rows = [row_by_session[sid] for sid in selected if sid in row_by_session]
-    selected_timeline = [item for item in timeline if item.get("session_id") in selected]
+    raw_selected_timeline = [item for item in timeline if item.get("session_id") in selected]
+    copy_preference = {"torch_copy": 3, "telemetry_copy": 2, "sglang_copy": 1}
+    best_copy_by_session: dict[str, dict[str, Any]] = {}
+    for item in raw_selected_timeline:
+        kind = str(item.get("kind", ""))
+        if kind not in copy_preference:
+            continue
+        sid = str(item.get("session_id", ""))
+        current = best_copy_by_session.get(sid)
+        if current is None or copy_preference[kind] > copy_preference[str(current.get("kind", ""))]:
+            best_copy_by_session[sid] = item
+
+    selected_timeline: list[dict[str, Any]] = []
+    for item in raw_selected_timeline:
+        kind = str(item.get("kind", ""))
+        sid = str(item.get("session_id", ""))
+        if kind in copy_preference:
+            if best_copy_by_session.get(sid) is not item:
+                continue
+            normalized = dict(item)
+            normalized["kind"] = "copy_activity"
+            if kind == "torch_copy":
+                normalized["copy_source"] = "torch_profiler_h2d"
+                normalized["label"] = "CUDA HtoD copy"
+            elif kind == "telemetry_copy":
+                normalized["copy_source"] = "sglang_lightweight_h2d_telemetry"
+                normalized["label"] = "SGLang KV telemetry"
+            else:
+                normalized["copy_source"] = "sglang_kv_load"
+                normalized["label"] = "SGLang KV load"
+            selected_timeline.append(normalized)
+        else:
+            selected_timeline.append(item)
     focus_values: list[float] = []
     start_values: list[float] = []
     for item in selected_timeline:
