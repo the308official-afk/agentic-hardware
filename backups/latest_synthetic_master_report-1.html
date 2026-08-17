@@ -16,12 +16,14 @@ h1{font-size:32px;margin:0 0 8px} h2{font-size:22px;margin:0 0 12px} h3{font-siz
 .theme-summary{--theme:#1e3a8a;--theme-bg:#eff6ff}
 .theme-setup{--theme:#2563eb;--theme-bg:#eff6ff}
 .theme-guide{--theme:#475569;--theme-bg:#f1f5f9}
+.theme-global{--theme:#dc2626;--theme-bg:#fef2f2}
 .theme-clean{--theme:#15803d;--theme-bg:#f0fdf4}
 .theme-clean-table{--theme:#65a30d;--theme-bg:#f7fee7}
 .theme-profiled{--theme:#7e22ce;--theme-bg:#faf5ff}
 .theme-deductions{--theme:#b45309;--theme-bg:#fffbeb}
 .theme-observations{--theme:#0f766e;--theme-bg:#f0fdfa}
 .theme-paired{--theme:#be123c;--theme-bg:#fff1f2}
+.theme-reproduce{--theme:#0891b2;--theme-bg:#ecfeff}
 .theme-appendix{--theme:#64748b;--theme-bg:#f8fafc}
 .panel[class*='theme-']{border-top:5px solid var(--theme)}
 .panel[class*='theme-']>h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme)}
@@ -56,7 +58,7 @@ pre{white-space:pre-wrap;background:#0f172a;color:#e5e7eb;border-radius:8px;padd
 <body>
 <h1>Milestone 12 Paired Evidence Report</h1>
 <p class="subtle">Clean runs answer performance questions. Profiled runs answer mechanism questions. This keeps the TTFT story separate from profiler overhead.</p>
-<div class="panel"><h2>Table of Contents</h2><p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, profiled mechanism, interpretation, and appendix.</p><div class="toc"><a class="theme-summary" href="#executive">Executive Summary</a><a class="theme-setup" href="#setup">Experiment Setup</a><a class="theme-guide" href="#timeline-guide">How To Read Timelines</a><a class="theme-clean" href="#clean-timelines">Clean Performance Timelines</a><a class="theme-clean-table" href="#clean-tables">Clean Performance Tables</a><a class="theme-profiled" href="#profiled-timelines">Profiled Mechanism Timelines</a><a class="theme-profiled" href="#profiled-tables">Profiled Mechanism Tables</a><a class="theme-deductions" href="#deductions">Key Deductions</a><a class="theme-observations" href="#observations">Session Observations</a><a class="theme-paired" href="#paired">Paired Evidence</a><a class="theme-appendix" href="#appendix">Appendix</a></div><div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button><button type="button" data-action="collapse-all">Collapse All</button></div></div>
+<div class="panel"><h2>Table of Contents</h2><p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, profiled mechanism, interpretation, and appendix.</p><div class="toc"><a class="theme-summary" href="#executive">Executive Summary</a><a class="theme-setup" href="#setup">Experiment Setup</a><a class="theme-guide" href="#timeline-guide">How To Read Timelines</a><a class="theme-global" href="#global-prefetch">Global Prefetch Margin</a><a class="theme-clean" href="#clean-timelines">Clean Performance Timelines</a><a class="theme-clean-table" href="#clean-tables">Clean Performance Tables</a><a class="theme-profiled" href="#profiled-timelines">Profiled Mechanism Timelines</a><a class="theme-profiled" href="#profiled-tables">Profiled Mechanism Tables</a><a class="theme-deductions" href="#deductions">Key Deductions</a><a class="theme-observations" href="#observations">Session Observations</a><a class="theme-paired" href="#paired">Paired Evidence</a><a class="theme-reproduce" href="#reproduce">Reproduce This Report</a><a class="theme-appendix" href="#appendix">Appendix</a></div><div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button><button type="button" data-action="collapse-all">Collapse All</button></div></div>
 <div class="panel theme-summary" id="executive"><h2>Executive Summary</h2>
 <p class="caption">This report is designed to answer two different questions without mixing them together.</p>
 <ul>
@@ -295,6 +297,138 @@ pre{white-space:pre-wrap;background:#0f172a;color:#e5e7eb;border-radius:8px;padd
 </tr>
 </tbody></table>
 </div></div>
+<div class="panel theme-global" id="global-prefetch"><h2>Global Prefetch Margin</h2><p class="caption">This is the high-level view across profiled synthetic sessions with measured prefetch margins. Positive margin means prefetch finished before replay; negative margin means replay was already due before prefetch finished. Sessions without visible copy/margin attribution are counted in the summary table but are not plotted as dots.</p><div class="table-wrap"><table><thead><tr>
+<th>profiled_sessions</th>
+<th>sessions_with_measured_margin</th>
+<th>sessions_without_measured_margin</th>
+<th>finished_before_replay</th>
+<th>late</th>
+<th>late_pct</th>
+<th>median_margin_ms</th>
+<th>worst_lateness_ms</th>
+<th>best_early_margin_ms</th>
+<th>avg_hint_duration_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>6</td>
+<td>3</td>
+<td>3</td>
+<td>0</td>
+<td>3</td>
+<td>100.0</td>
+<td>-84.113</td>
+<td>224.349</td>
+<td></td>
+<td>289.394</td>
+</tr>
+</tbody></table></div><svg viewBox="0 0 1480 500" width="100%" role="img" aria-label="Synthetic global prefetch margin dot plot">
+<rect x="86" y="56" width="1360" height="362" fill="#ffffff" stroke="#e5e7eb"/>
+<line x1="86" y1="111.8" x2="1446" y2="111.8" stroke="#111827" stroke-width="2"/>
+<text x="1438" y="103.8" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>
+<text x="18" y="250" transform="rotate(-90 18 250)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms</text>
+<text x="766.0" y="478" text-anchor="middle" font-size="13" font-weight="700">synthetic session order</text>
+<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before replay</text>
+<text x="350" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>
+<line x1="80" y1="418.0" x2="1446" y2="418.0" stroke="#e5e7eb"/>
+<text x="74" y="422.0" text-anchor="end" font-size="11">-274 ms</text>
+<line x1="80" y1="264.9" x2="1446" y2="264.9" stroke="#e5e7eb"/>
+<text x="74" y="268.9" text-anchor="end" font-size="11">-137 ms</text>
+<line x1="80" y1="111.8" x2="1446" y2="111.8" stroke="#e5e7eb"/>
+<text x="74" y="115.8" text-anchor="end" font-size="11">0 ms</text>
+<line x1="80" y1="83.9" x2="1446" y2="83.9" stroke="#e5e7eb"/>
+<text x="74" y="87.9" text-anchor="end" font-size="11">25 ms</text>
+<line x1="80" y1="56.0" x2="1446" y2="56.0" stroke="#e5e7eb"/>
+<text x="74" y="60.0" text-anchor="end" font-size="11">50 ms</text>
+<circle cx="86.0" cy="205.7" r="5.9" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_000 | margin=-84.113 ms | hint_duration=226.517 ms | tool_wait=363 ms | prompt_tokens=768</title></circle>
+<text x="86.0" y="440" text-anchor="middle" font-size="10">agent_000</text>
+<circle cx="766.0" cy="362.2" r="6.4" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_003 | margin=-224.349 ms | hint_duration=357.41 ms | tool_wait=526 ms | prompt_tokens=768</title></circle>
+<text x="766.0" y="440" text-anchor="middle" font-size="10">agent_003</text>
+<circle cx="1446.0" cy="180.3" r="6.1" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_004 | margin=-61.339 ms | hint_duration=284.256 ms | tool_wait=496 ms | prompt_tokens=1024</title></circle>
+<text x="1446.0" y="440" text-anchor="middle" font-size="10">agent_004</text>
+<circle cx="86" cy="450" r="6" fill="#16a34a"/>
+<text x="98" y="454" font-size="12">early</text>
+<circle cx="231" cy="450" r="6" fill="#84cc16"/>
+<text x="243" y="454" font-size="12">barely early</text>
+<circle cx="376" cy="450" r="6" fill="#f97316"/>
+<text x="388" y="454" font-size="12">near miss</text>
+<circle cx="521" cy="450" r="6" fill="#dc2626"/>
+<text x="533" y="454" font-size="12">late</text>
+</svg><h3>Margin Buckets</h3><div class="table-wrap"><table><thead><tr>
+<th>bucket</th>
+<th>sessions</th>
+<th>pct</th>
+</tr></thead><tbody>
+<tr>
+<td>&gt; +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>+100 to +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to +100 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to -100 ms late</td>
+<td>2</td>
+<td>66.67</td>
+</tr>
+<tr>
+<td>-100 to -500 ms late</td>
+<td>1</td>
+<td>33.33</td>
+</tr>
+<tr>
+<td>&lt; -500 ms late</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+</tbody></table></div><h3>Points Behind The Plot</h3><div class="table-wrap"><table><thead><tr>
+<th>session_id</th>
+<th>priority</th>
+<th>prompt_tokens</th>
+<th>tool_wait_ms</th>
+<th>hint_total_duration_ms</th>
+<th>prefetch_margin_ms</th>
+<th>checkpoint_result</th>
+<th>verdict</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_000</td>
+<td>high</td>
+<td>768</td>
+<td>363</td>
+<td>226.517</td>
+<td>-84.113</td>
+<td>not_ready</td>
+<td>late</td>
+</tr>
+<tr>
+<td>agent_003</td>
+<td>normal</td>
+<td>768</td>
+<td>526</td>
+<td>357.41</td>
+<td>-224.349</td>
+<td>not_ready</td>
+<td>late</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>high</td>
+<td>1024</td>
+<td>496</td>
+<td>284.256</td>
+<td>-61.339</td>
+<td>not_ready</td>
+<td>late</td>
+</tr>
+</tbody></table></div></div>
 <div class="panel theme-guide"><h2>How To Read This Report</h2>
 <p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>
 <p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>
@@ -1813,20 +1947,54 @@ pre{white-space:pre-wrap;background:#0f172a;color:#e5e7eb;border-radius:8px;padd
 </tr>
 </tbody></table>
 </div></div>
+<div class="panel theme-reproduce" id="reproduce"><h2>Reproduce This Report</h2>
+<p class="caption">These commands reproduce or archive the controlled synthetic master report. Labeled builds do not overwrite the current latest report unless <code>UPDATE_LATEST=1</code>.</p>
+<h3>Archive A Labeled Synthetic Report From Existing Runs</h3>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_manager_demo_1 \
+UPDATE_LATEST=0 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh</code></pre>
+<p class="caption">Output:</p>
+<pre><code>artifacts/results/labeled/synthetic/synthetic_manager_demo_1/master_report.html</code></pre>
+<h3>Deliberately Refresh The Latest Synthetic Master Report</h3>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_latest_refresh \
+UPDATE_LATEST=1 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh</code></pre>
+<h3>Rerun The Full Synthetic Experiment</h3>
+<p class="caption">This reruns the clean and profiled synthetic experiment, then regenerates the standard latest synthetic report.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone12_rerun_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+SESSION_COUNT=12 \
+RANDOMIZE_TRAFFIC=1 \
+ORACLE_LEAD_MS=1000 \
+bash scripts/run_milestone12_paired_evidence.sh Qwen/Qwen2.5-1.5B-Instruct</code></pre>
+</div>
 <div class="panel theme-appendix" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>
 {
   &quot;attribution_mode&quot;: &quot;oracle_direct_load&quot;,
-  &quot;attribution_root&quot;: &quot;sglang_direct_kv/artifacts/results/milestone15_targeted_dma_validation/profiled_attribution&quot;,
-  &quot;clean_root&quot;: &quot;sglang_direct_kv/artifacts/results/milestone15_targeted_dma_validation/clean_performance&quot;,
-  &quot;generated_at&quot;: &quot;2026-08-17T12:18:39&quot;,
-  &quot;latest_root&quot;: &quot;sglang_direct_kv/artifacts/results&quot;,
+  &quot;attribution_root&quot;: &quot;artifacts/results/milestone15_targeted_dma_validation/profiled_attribution&quot;,
+  &quot;clean_root&quot;: &quot;artifacts/results/milestone15_targeted_dma_validation/clean_performance&quot;,
+  &quot;generated_at&quot;: &quot;2026-08-17T13:08:39&quot;,
+  &quot;latest_root&quot;: &quot;artifacts/results&quot;,
   &quot;max_timeline_sessions&quot;: 6,
   &quot;modes&quot;: [
     &quot;no_prefetch&quot;,
     &quot;oracle_direct_load&quot;
   ],
   &quot;note&quot;: &quot;Profiled attribution rows should not be used for TTFT performance claims.&quot;,
-  &quot;timeline_json&quot;: &quot;sglang_direct_kv/artifacts/results/milestone15_targeted_dma_validation/profiled_attribution/oracle_direct_load_agentic_prefetch_timeline.json&quot;
+  &quot;timeline_json&quot;: &quot;artifacts/results/milestone15_targeted_dma_validation/profiled_attribution/oracle_direct_load_agentic_prefetch_timeline.json&quot;
 }
 </pre></div>
 

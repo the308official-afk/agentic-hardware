@@ -409,8 +409,19 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
     rows = gaps[:max_rows]
     if not rows:
         return "<p>No live tool-gap timeline available.</p>"
-    start = min(float(row.get("current_start_ms") or 0.0) for row in rows)
-    end = max(float(row.get("resume_end_ms") or 0.0) for row in rows)
+    start_candidates: list[float] = []
+    end_candidates: list[float] = []
+    for row in rows:
+        for key in ("current_start_ms", "prefetch_start_ms", "direct_kv_h2d_start_ms"):
+            value = maybe_float(row.get(key))
+            if value is not None:
+                start_candidates.append(value)
+        for key in ("resume_end_ms", "prefetch_end_ms", "direct_kv_h2d_end_ms"):
+            value = maybe_float(row.get(key))
+            if value is not None:
+                end_candidates.append(value)
+    start = min(start_candidates or [0.0])
+    end = max(end_candidates or [0.0])
     padding = max(100.0, (end - start) * 0.05)
     start -= padding
     end += padding
@@ -465,6 +476,8 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
         replay_x2 = x_pos(row.get("resume_end_ms"))
         prefetch_start = row.get("prefetch_start_ms")
         prefetch_end = row.get("prefetch_end_ms")
+        direct_h2d_start = row.get("direct_kv_h2d_start_ms")
+        direct_h2d_end = row.get("direct_kv_h2d_end_ms")
 
         svg.append(
             f'<rect x="{wait_x1:.1f}" y="{y + 4}" width="{max(2, wait_x2 - wait_x1):.1f}" height="30" rx="3" fill="#d1d5db" opacity="0.72">'
@@ -489,6 +502,18 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
                 f'<rect x="{prefetch_x1:.1f}" y="{y + 23}" width="{max(3, prefetch_x2 - prefetch_x1):.1f}" height="16" rx="3" fill="#a855f7" opacity="0.78">'
                 f'<title>live controller prefetch attempt; status={fmt(row.get("prefetch_status"))}</title></rect>'
             )
+        if direct_h2d_start not in ("", None) and direct_h2d_end not in ("", None):
+            h2d_x1 = x_pos(direct_h2d_start)
+            h2d_x2 = x_pos(direct_h2d_end)
+            h2d_events = row.get("direct_kv_h2d_events") or ""
+            h2d_duration = row.get("direct_kv_h2d_duration_ms") or ""
+            svg.append(
+                f'<rect x="{h2d_x1:.1f}" y="{y + 20}" width="{max(5, h2d_x2 - h2d_x1):.1f}" height="22" rx="3" fill="#16a34a" opacity="0.92" stroke="#065f46" stroke-width="1">'
+                f'<title>direct KV host-to-device movement; events={fmt(h2d_events)}; duration_ms={fmt(h2d_duration)}</title></rect>'
+            )
+            svg.append(
+                f'<text x="{max(left + 2, h2d_x1 + 3):.1f}" y="{y + 35}" font-size="10" fill="#ffffff" font-weight="700">HtoD</text>'
+            )
     legend_y = height - 28
     legend = [
         ("model turn with tool call", "#2563eb"),
@@ -498,11 +523,208 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
     ]
     if show_prefetch_legend:
         legend.insert(2, ("live prefetch attempt", "#a855f7"))
+        legend.insert(3, ("direct KV HtoD copy", "#16a34a"))
     lx = left
     for label, color in legend:
         svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
         svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
         lx += 220
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
+def build_expanded_gap_timeline_svg(
+    gaps: list[dict[str, Any]],
+    max_rows: int,
+    show_prefetch_legend: bool = True,
+) -> str:
+    rows = gaps[:max_rows]
+    if not rows:
+        return "<p>No expanded live tool-gap timeline available.</p>"
+
+    rel_values: list[float] = []
+    for row in rows:
+        due = maybe_float(row.get("resume_start_ms")) or maybe_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        for key in (
+            "current_start_ms",
+            "current_end_ms",
+            "tool_gap_start_ms",
+            "tool_gap_end_ms",
+            "prefetch_start_ms",
+            "prefetch_end_ms",
+            "direct_kv_h2d_start_ms",
+            "direct_kv_h2d_end_ms",
+        ):
+            value = maybe_float(row.get(key))
+            if value is not None:
+                rel_values.append(value - due)
+        replay_start = maybe_float(row.get("resume_start_ms"))
+        replay_end = maybe_float(row.get("resume_end_ms"))
+        if replay_start is not None:
+            rel_values.append(replay_start - due)
+        if replay_end is not None:
+            rel_values.append(min(600.0, replay_end - due))
+
+    start = min(rel_values or [-500.0])
+    end = max(rel_values or [500.0])
+    start = min(start - 60.0, -120.0)
+    end = max(end + 80.0, 220.0)
+    span = max(1.0, end - start)
+    width = 1580
+    left = 380
+    right = 70
+    top = 86
+    row_h = 76
+    height = top + len(rows) * row_h + 92
+    plot_w = width - left - right
+
+    def rel(row: dict[str, Any], key: str, due: float) -> float | None:
+        value = maybe_float(row.get(key))
+        if value is None:
+            return None
+        return value - due
+
+    def x_pos(relative_ms: float) -> float:
+        return left + (relative_ms - start) / span * plot_w
+
+    def rect(
+        svg: list[str],
+        x1: float,
+        x2: float,
+        y: float,
+        h: float,
+        color: str,
+        title: str,
+        opacity: float = 0.88,
+        min_w: float = 3.0,
+    ) -> None:
+        width_px = max(min_w, x2 - x1)
+        svg.append(
+            f'<rect x="{x1:.1f}" y="{y:.1f}" width="{width_px:.1f}" height="{h:.1f}" rx="3" '
+            f'fill="{color}" opacity="{opacity}"><title>{fmt(title)}</title></rect>'
+        )
+
+    zero_x = x_pos(0.0)
+    svg = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due">',
+        f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
+    ]
+
+    tick_count = 7
+    for tick in range(tick_count):
+        ms = start + span * tick / (tick_count - 1)
+        x = x_pos(ms)
+        svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 42}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+    svg.append(f'<line x1="{zero_x:.1f}" y1="{top - 40}" x2="{zero_x:.1f}" y2="{height - 42}" stroke="#111827" stroke-width="3"/>')
+    svg.append(f'<text x="{zero_x + 7:.1f}" y="{top - 48}" font-size="12" font-weight="700">0 ms replay due</text>')
+    svg.append(
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 18}" text-anchor="middle" font-size="13" font-weight="700">local time around each gap: negative = before replay due, positive = after replay due</text>'
+    )
+
+    for idx, row in enumerate(rows):
+        y = top + idx * row_h
+        due = maybe_float(row.get("resume_start_ms")) or maybe_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        label = str(row.get("session_id") or f"gap_{idx}")
+        tools = str(row.get("tool_names") or "")
+        gap_ms = maybe_float(row.get("tool_gap_ms")) or 0.0
+        margin = maybe_float(row.get("prefetch_margin_ms"))
+        if margin is not None:
+            status = f"READY +{margin:.0f} ms" if margin >= 0 else f"LATE -{abs(margin):.0f} ms"
+            status_color = "#166534" if margin >= 0 else "#b91c1c"
+        else:
+            status = "NO PREFETCH"
+            status_color = "#64748b"
+        svg.append(f'<text x="10" y="{y + 16}" font-weight="700">{fmt(label)}</text>')
+        svg.append(f'<text x="10" y="{y + 36}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
+        svg.append(f'<text x="10" y="{y + 55}" font-size="12" fill="#334155">gap={gap_ms:.0f} ms; tools={fmt(tools)}</text>')
+        svg.append(f'<line x1="{left}" y1="{y + 9}" x2="{left + plot_w}" y2="{y + 9}" stroke="#f1f5f9"/>')
+
+        current_start = rel(row, "current_start_ms", due)
+        current_end = rel(row, "current_end_ms", due)
+        wait_start = rel(row, "tool_gap_start_ms", due)
+        wait_end = rel(row, "tool_gap_end_ms", due)
+        prefetch_start = rel(row, "prefetch_start_ms", due)
+        prefetch_end = rel(row, "prefetch_end_ms", due)
+        h2d_start = rel(row, "direct_kv_h2d_start_ms", due)
+        h2d_end = rel(row, "direct_kv_h2d_end_ms", due)
+        replay_start = rel(row, "resume_start_ms", due)
+        replay_end = rel(row, "resume_end_ms", due)
+
+        if wait_start is not None and wait_end is not None:
+            rect(svg, x_pos(wait_start), x_pos(wait_end), y + 5, 32, "#d1d5db", f"tool wait window {gap_ms:.3f} ms", 0.72, 2)
+        if current_start is not None and current_end is not None:
+            rect(svg, x_pos(current_start), x_pos(current_end), y + 1, 26, "#2563eb", "initial model turn that emitted tool call", 0.88, 3)
+        if show_prefetch_legend and prefetch_start is not None and prefetch_end is not None:
+            rect(
+                svg,
+                x_pos(prefetch_start),
+                x_pos(prefetch_end),
+                y + 27,
+                18,
+                "#a855f7",
+                f"prefetch attempt; status={row.get('prefetch_status', '')}; duration_ms={row.get('prefetch_duration_ms', '')}",
+                0.78,
+                3,
+            )
+            svg.append(f'<text x="{x_pos(prefetch_start):.1f}" y="{y + 24}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>')
+            svg.append(f'<text x="{x_pos(prefetch_end):.1f}" y="{y + 58}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>')
+        if show_prefetch_legend and h2d_start is not None and h2d_end is not None:
+            rect(
+                svg,
+                x_pos(h2d_start),
+                x_pos(h2d_end),
+                y + 21,
+                30,
+                "#16a34a",
+                f"direct KV HtoD movement; events={row.get('direct_kv_h2d_events', '')}; duration_ms={row.get('direct_kv_h2d_duration_ms', '')}",
+                0.94,
+                14,
+            )
+            svg.append(f'<text x="{x_pos(h2d_start) + 4:.1f}" y="{y + 40}" font-size="10" fill="#ffffff" font-weight="700">HtoD</text>')
+        if replay_start is not None:
+            replay_display_end = replay_start + 260.0
+            continues = False
+            if replay_end is not None:
+                replay_display_end = min(replay_end, replay_start + 520.0)
+                continues = replay_end > replay_display_end
+            rect(svg, x_pos(replay_start), x_pos(replay_display_end), y + 48, 22, "#ef4444", "resume model request after tool result", 0.82, 4)
+            if continues:
+                svg.append(f'<text x="{x_pos(replay_display_end) - 52:.1f}" y="{y + 44}" font-size="10" fill="#991b1b" font-weight="700">continues</text>')
+        if margin is not None and prefetch_end is not None:
+            y_margin = y + 68
+            x_done = x_pos(prefetch_end)
+            color = "#16a34a" if margin >= 0 else "#dc2626"
+            label = f"{margin:.0f} ms early" if margin >= 0 else f"{abs(margin):.0f} ms late"
+            svg.append(
+                f'<line x1="{min(x_done, zero_x):.1f}" y1="{y_margin:.1f}" x2="{max(x_done, zero_x):.1f}" y2="{y_margin:.1f}" '
+                f'stroke="{color}" stroke-width="3" stroke-dasharray="7 5"/>'
+            )
+            svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin:.1f}" r="4" fill="{color}"/>')
+            svg.append(f'<text x="{(x_done + zero_x) / 2:.1f}" y="{y_margin + 13:.1f}" text-anchor="middle" font-size="10" fill="{color}" font-weight="700">{label}</text>')
+
+    legend_y = height - 48
+    legend = [
+        ("initial model turn", "#2563eb"),
+        ("tool wait", "#d1d5db"),
+        ("replay due", "#111827"),
+        ("resume request", "#ef4444"),
+    ]
+    if show_prefetch_legend:
+        legend.insert(2, ("prefetch attempt", "#a855f7"))
+        legend.insert(3, ("direct KV HtoD", "#16a34a"))
+    lx = left
+    for label, color in legend:
+        if label == "replay due":
+            svg.append(f'<line x1="{lx}" y1="{legend_y - 12}" x2="{lx}" y2="{legend_y + 4}" stroke="{color}" stroke-width="4"/>')
+        else:
+            svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
+        lx += 185
     svg.append("</svg>")
     return "\n".join(svg)
 
@@ -673,8 +895,11 @@ def render_html(
   </section>
   <section>
     <h2>Timeline</h2>
-    <p>How to read this: a blue request produced one or more structured tool calls. The gray window is the time until the next model request in the same live AgentBench run. Purple, when present, is the software prefetch attempt launched from that live tool-call hint. If purple ends after the black resume boundary, the software hint path was late.</p>
+    <p>How to read this: blue is the model turn that produced one or more structured tool calls. Gray is the tool wait window, where the tool or harness is running and the model is idle for this session. Purple is the prefetch attempt window: detect the tool-call gap, create a hint for that agent/session, call our direct SGLang KV hook, let SGLang check whether host-side KV exists, and if needed, ask SGLang to move KV back to GPU memory. Green is direct KV host-to-device movement observed for that hint. Black is the resume boundary, when the next model turn is due. Red is the resumed model request after the tool result. If purple or green ends after the black boundary, the prefetch path was late.</p>
     {build_timeline_svg(gaps, max_timeline_gaps)}
+    <h3>Expanded Per-Gap View</h3>
+    <p>This is the same data with each row aligned to its own replay boundary. The black line is always 0 ms. Negative time is before the agent resumes; positive time is after the resume boundary.</p>
+    {build_expanded_gap_timeline_svg(gaps, max_timeline_gaps)}
   </section>
   <section>
     <h2>Key Observations</h2>

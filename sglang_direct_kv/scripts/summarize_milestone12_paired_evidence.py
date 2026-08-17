@@ -5,6 +5,7 @@ import argparse
 import csv
 import html
 import json
+import math
 import shutil
 from collections import Counter
 from datetime import datetime
@@ -849,6 +850,179 @@ def build_clean_timeline_svg(
     return "\n".join(svg), selected_rows
 
 
+def build_expanded_clean_timeline_svg(
+    mode: str,
+    rows: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    max_sessions: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    selected = choose_clean_timeline_sessions(rows, max_sessions)
+    row_by_session = {str(row.get("session_id", "")): row for row in rows}
+    selected_rows = [row_by_session[sid] for sid in selected if sid in row_by_session]
+    selected_timeline = [item for item in timeline if item.get("session_id") in selected]
+    if not selected_rows:
+        return "<p>No expanded clean timeline data was found.</p>", []
+
+    rel_values: list[float] = []
+    due_by_session = {
+        sid: to_float(row_by_session.get(sid, {}).get("replay_due_ms"))
+        for sid in selected
+    }
+    for item in selected_timeline:
+        sid = str(item.get("session_id", ""))
+        due = due_by_session.get(sid)
+        if due is None:
+            continue
+        kind = str(item.get("kind", ""))
+        start_ms = to_float(item.get("start_ms"))
+        end_ms = to_float(item.get("end_ms"))
+        if start_ms is None or end_ms is None:
+            continue
+        if kind == "replay":
+            rel_values.append(start_ms - due)
+            rel_values.append(min(600.0, end_ms - due))
+        else:
+            rel_values.extend([start_ms - due, end_ms - due])
+    start = min(rel_values or [-500.0])
+    end = max(rel_values or [500.0])
+    start = min(start - 60.0, -120.0)
+    end = max(end + 80.0, 220.0)
+    span = max(1.0, end - start)
+    width = 1500
+    left = 250
+    right = 60
+    row_h = 76
+    top = 86
+    height = top + row_h * max(1, len(selected)) + 92
+    plot_w = width - left - right
+    colors = {
+        "initial": "#2563eb",
+        "tool_wait": "#d1d5db",
+        "hint_submitted": "#7c3aed",
+        "hint_request": "#a855f7",
+        "replay_due": "#111827",
+        "replay": "#dc2626",
+        "first_token": "#f59e0b",
+    }
+
+    def x_pos(relative_ms: float) -> float:
+        return left + (relative_ms - start) / span * plot_w
+
+    def rel(item: dict[str, Any], due: float, key: str) -> float | None:
+        value = to_float(item.get(key))
+        if value is None:
+            return None
+        return value - due
+
+    def layer_order(item: dict[str, Any]) -> int:
+        order = {
+            "tool_wait": 0,
+            "initial": 1,
+            "hint_submitted": 2,
+            "hint_request": 3,
+            "replay_due": 4,
+            "replay": 5,
+            "first_token": 6,
+        }
+        return order.get(str(item.get("kind", "")), 10)
+
+    zero_x = x_pos(0.0)
+    row_index = {sid: idx for idx, sid in enumerate(selected)}
+    svg: list[str] = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Expanded clean performance timeline for {html.escape(mode)}">',
+        f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
+    ]
+    for tick in range(7):
+        ms = start + span * tick / 6
+        x = x_pos(ms)
+        svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{height - 42}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle">{ms:.0f} ms</text>')
+    svg.append(f'<line x1="{zero_x:.1f}" y1="{top - 40}" x2="{zero_x:.1f}" y2="{height - 42}" stroke="#111827" stroke-width="3"/>')
+    svg.append(f'<text x="{zero_x + 7:.1f}" y="{top - 48}" font-size="12" font-weight="700">0 ms replay due</text>')
+    svg.append(
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 18}" text-anchor="middle" font-size="13" font-weight="700">local time around each synthetic gap: negative = before replay due, positive = after replay due</text>'
+    )
+
+    for sid in selected:
+        y = top + row_index[sid] * row_h
+        row = row_by_session.get(sid, {})
+        status_label, status_color = clean_timeline_status(row)
+        ttft = to_float(row.get("replay_ttft_ms"))
+        wait = to_float(row.get("tool_wait_ms"))
+        svg.append(f'<text x="10" y="{y + 16}" font-weight="700">{html.escape(sid)}</text>')
+        svg.append(f'<text x="10" y="{y + 36}" font-size="13" fill="{status_color}" font-weight="700">{html.escape(status_label)}</text>')
+        detail = []
+        if wait is not None:
+            detail.append(f"wait={wait:.0f} ms")
+        if ttft is not None:
+            detail.append(f"TTFT={ttft:.0f} ms")
+        svg.append(f'<text x="10" y="{y + 55}" font-size="12" fill="#4b5563">{html.escape("; ".join(detail))}</text>')
+        svg.append(f'<line x1="{left}" y1="{y + 9}" x2="{left + plot_w}" y2="{y + 9}" stroke="#f3f4f6"/>')
+
+    for item in sorted(selected_timeline, key=layer_order):
+        sid = str(item.get("session_id", ""))
+        due = due_by_session.get(sid)
+        if due is None or sid not in row_index:
+            continue
+        y = top + row_index[sid] * row_h
+        kind = str(item.get("kind", ""))
+        color = colors.get(kind, "#6b7280")
+        start_rel = rel(item, due, "start_ms")
+        end_rel = rel(item, due, "end_ms")
+        if start_rel is None or end_rel is None:
+            continue
+        x1 = x_pos(start_rel)
+        x2 = x_pos(end_rel)
+        label = html.escape(str(item.get("label", kind)))
+        if kind == "replay":
+            clipped_end_rel = min(end_rel, start_rel + 520.0)
+            x2 = x_pos(clipped_end_rel)
+        if start_rel == end_rel:
+            stroke_width = 6 if kind == "replay_due" else 4 if kind == "first_token" else 3
+            dash = ' stroke-dasharray="5 3"' if kind == "first_token" else ""
+            svg.append(
+                f'<line x1="{x1:.1f}" y1="{y + 1}" x2="{x1:.1f}" y2="{y + 34}" stroke="{color}" stroke-width="{stroke_width}"{dash}><title>{label}</title></line>'
+            )
+            if kind == "first_token":
+                row = row_by_session.get(sid, {})
+                ttft = to_float(row.get("replay_ttft_ms"))
+                text = f"first token +{ttft:.0f} ms" if ttft is not None else "first token"
+                svg.append(f'<text x="{x1:.1f}" y="{y + 47}" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">{html.escape(text)}</text>')
+        else:
+            bar_y = y + 4
+            bar_h = 24
+            opacity = "0.72" if kind in {"hint_request", "replay"} else "0.88"
+            svg.append(
+                f'<rect x="{x1:.1f}" y="{bar_y}" width="{max(2, x2 - x1):.1f}" height="{bar_h}" rx="3" fill="{color}" opacity="{opacity}"><title>{label}</title></rect>'
+            )
+            if kind == "hint_request":
+                svg.append(f'<text x="{x1:.1f}" y="{bar_y - 6}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>')
+                svg.append(f'<text x="{x2:.1f}" y="{bar_y + bar_h + 13}" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>')
+            if kind == "replay" and end_rel > start_rel + 520.0:
+                svg.append(f'<text x="{x2 - 55:.1f}" y="{bar_y - 4}" font-size="10" fill="#991b1b" font-weight="700">continues</text>')
+
+    legend_x = left
+    legend_y = height - 50
+    legend_labels = {
+        "initial": "initial",
+        "tool_wait": "tool wait",
+        "hint_submitted": "hint submitted",
+        "hint_request": "hint request",
+        "replay_due": "replay due",
+        "replay": "replay",
+        "first_token": "first token",
+    }
+    for idx, (kind, color) in enumerate(colors.items()):
+        lx = legend_x + idx * 130
+        if kind == "replay_due":
+            svg.append(f'<line x1="{lx}" y1="{legend_y - 12}" x2="{lx}" y2="{legend_y + 4}" stroke="{color}" stroke-width="4"/>')
+        else:
+            svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y}">{html.escape(legend_labels.get(kind, kind))}</text>')
+    svg.append("</svg>")
+    return "\n".join(svg), selected_rows
+
+
 def build_timeline_svg(
     rows: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
@@ -1449,6 +1623,7 @@ SECTION_THEMES = {
     "timeline-guide": "theme-guide",
     "global-prefetch": "theme-global",
     "clean-timelines": "theme-clean",
+    "expanded-clean-timelines": "theme-clean",
     "clean-tables": "theme-clean-table",
     "profiled-timelines": "theme-profiled",
     "profiled-tables": "theme-profiled",
@@ -1586,13 +1761,41 @@ def synthetic_timeline_guide_html() -> str:
         {"step": "During steps 3/4, if prefetch is enabled", "timeline color": "purple bar", "simple meaning": "our prefetch/direct-load attempt runs during the wait"},
     ]
     rows = [
-        {"color": "blue", "meaning": "Initial request", "where_used": "Clean performance timelines"},
-        {"color": "gray", "meaning": "Tool wait / prefetch opportunity", "where_used": "Clean and profiled timelines"},
-        {"color": "purple", "meaning": "Hint or direct-load request", "where_used": "Prefetch modes"},
-        {"color": "black", "meaning": "Replay due / resume boundary", "where_used": "Clean and profiled timelines"},
-        {"color": "red", "meaning": "Replay request", "where_used": "Clean and profiled timelines"},
-        {"color": "yellow", "meaning": "First token marker", "where_used": "Clean performance timelines"},
-        {"color": "green", "meaning": "KV/copy activity; dark green is CUDA HtoD profiler evidence", "where_used": "Profiled mechanism timelines"},
+        {
+            "color": "blue",
+            "meaning": "Initial model turn",
+            "simple description": "The agent asks the model what to do next. In the synthetic report, this is the first request before the simulated tool wait.",
+        },
+        {
+            "color": "gray",
+            "meaning": "Tool wait window",
+            "simple description": "The tool is assumed to be running, so the model is idle for this session. This pause is the opportunity to prepare that session's KV before the agent resumes.",
+        },
+        {
+            "color": "purple",
+            "meaning": "Prefetch attempt window",
+            "simple description": "This includes detecting the tool-wait opportunity, creating a hint for that agent/session, calling our direct SGLang KV hook, letting SGLang check whether host-side KV exists, and if needed, asking SGLang to move KV back to GPU memory.",
+        },
+        {
+            "color": "green",
+            "meaning": "KV copy/load activity",
+            "simple description": "This is evidence that KV load/copy work was observed for the hint. Dark green is CUDA HtoD profiler evidence; light green is lightweight SGLang KV telemetry fallback.",
+        },
+        {
+            "color": "black",
+            "meaning": "Replay due boundary",
+            "simple description": "This is when the tool result is ready and the next model turn should be able to start. If purple or green finishes after this line, the prefetch path was late for that resume.",
+        },
+        {
+            "color": "red",
+            "meaning": "Replay request",
+            "simple description": "The agent asks the model to continue after the tool result. This is the request we want to speed up by having the right KV ready before it arrives.",
+        },
+        {
+            "color": "yellow",
+            "meaning": "First token marker",
+            "simple description": "This marks when the replay request starts producing output. It helps separate request arrival from first-token latency.",
+        },
     ]
     return "\n".join(
         [
@@ -1689,9 +1892,40 @@ def synthetic_margin_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, A
     return output
 
 
-def synthetic_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
+def symlog_value(value: float, linear_width: float = 50.0) -> float:
+    if value == 0:
+        return 0.0
+    return math.copysign(math.log1p(abs(value) / linear_width), value)
+
+
+def symlog_tick_values(min_margin: float, max_margin: float) -> list[float]:
+    candidates = [
+        -10000.0,
+        -5000.0,
+        -1000.0,
+        -500.0,
+        -100.0,
+        -50.0,
+        0.0,
+        50.0,
+        100.0,
+        500.0,
+        1000.0,
+        5000.0,
+        10000.0,
+    ]
+    ticks = [value for value in candidates if min_margin <= value <= max_margin]
+    for value in (min_margin, max_margin):
+        if all(abs(value - tick) > 1 for tick in ticks):
+            ticks.append(value)
+    return sorted(ticks)
+
+
+def synthetic_margin_dot_plot(rows: list[dict[str, Any]], scale: str = "linear") -> str:
     if not rows:
         return '<p class="caption">No synthetic prefetch margin rows were available.</p>'
+    if scale not in {"linear", "symlog"}:
+        raise ValueError(f"unsupported margin plot scale: {scale}")
     width = 1480
     height = 500
     left = 86
@@ -1706,6 +1940,14 @@ def synthetic_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
     pad = max(50.0, (max_margin - min_margin) * 0.08)
     y_min = min(min_margin - pad, -50.0)
     y_max = max(max_margin + pad, 50.0)
+    if scale == "symlog":
+        y_min = min(y_min, -50.0)
+        y_max = max(y_max, 50.0)
+        scaled_min = symlog_value(y_min)
+        scaled_max = symlog_value(y_max)
+    else:
+        scaled_min = y_min
+        scaled_max = y_max
 
     def x_pos(index: int) -> float:
         if len(rows) <= 1:
@@ -1713,20 +1955,23 @@ def synthetic_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
         return left + index * plot_w / (len(rows) - 1)
 
     def y_pos(value: float) -> float:
-        return top + (y_max - value) * plot_h / (y_max - y_min)
+        scaled = symlog_value(value) if scale == "symlog" else value
+        return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
 
     zero_y = y_pos(0.0)
+    scale_label = "symlog" if scale == "symlog" else "linear"
+    axis_label = "prefetch margin ms (symlog)" if scale == "symlog" else "prefetch margin ms"
     svg = [
-        '<svg viewBox="0 0 1480 500" width="100%" role="img" aria-label="Synthetic global prefetch margin dot plot">',
+        f'<svg viewBox="0 0 1480 500" width="100%" role="img" aria-label="Synthetic global prefetch margin dot plot {scale_label} view">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
         f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
-        '<text x="18" y="250" transform="rotate(-90 18 250)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms</text>',
+        f'<text x="18" y="250" transform="rotate(-90 18 250)" text-anchor="middle" font-size="13" font-weight="700">{axis_label}</text>',
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 22}" text-anchor="middle" font-size="13" font-weight="700">synthetic session order</text>',
         '<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before replay</text>',
         '<text x="350" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>',
     ]
-    tick_values = [y_min, y_min / 2, 0.0, y_max / 2, y_max]
+    tick_values = symlog_tick_values(y_min, y_max) if scale == "symlog" else [y_min, y_min / 2, 0.0, y_max / 2, y_max]
     seen_ticks: set[int] = set()
     for value in tick_values:
         rounded = int(round(value))
@@ -1779,7 +2024,12 @@ def synthetic_global_prefetch_margin_html(attribution_rows: list[dict[str, Any]]
         '<div class="table-wrap">'
         + html_table(synthetic_margin_summary(rows, len(attribution_rows)))
         + "</div>"
+        + "<h3>Linear View</h3>"
+        + '<p class="caption">The linear view preserves the true size of large early or late margins.</p>'
         + synthetic_margin_dot_plot(rows)
+        + "<h3>Symlog View</h3>"
+        + '<p class="caption">Same data as above, but compressed with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easier to see. Above zero still means early; below zero still means late.</p>'
+        + synthetic_margin_dot_plot(rows, scale="symlog")
         + '<h3>Margin Buckets</h3><div class="table-wrap">'
         + html_table(synthetic_margin_bucket_rows(rows))
         + '</div><h3>Points Behind The Plot</h3><div class="table-wrap">'
@@ -1805,6 +2055,7 @@ def write_html(
         ("timeline-guide", "How To Read Timelines"),
         ("global-prefetch", "Global Prefetch Margin"),
         ("clean-timelines", "Clean Performance Timelines"),
+        ("expanded-clean-timelines", "Expanded Per-Gap Timelines"),
         ("clean-tables", "Clean Performance Tables"),
         ("profiled-timelines", "Profiled Mechanism Timelines"),
         ("profiled-tables", "Profiled Mechanism Tables"),
@@ -1924,7 +2175,31 @@ def write_html(
         lines.append('<p class="caption">No clean performance timeline data was found for this run.</p>')
     lines.append("</div>")
 
-    lines.append('<div class="panel theme-clean-table" id="clean-tables"><h2>A.1 Clean Performance Tables</h2>')
+    lines.append('<div class="panel theme-clean" id="expanded-clean-timelines"><h2>A.1 Expanded Per-Gap Timelines</h2>')
+    lines.append(
+        '<p class="caption"><span class="pill">Profiler OFF</span> This is the same clean-performance data, but each row has its own local clock. The black replay-due line is always <code>0 ms</code>; negative time is before replay due, and positive time is after the resume boundary.</p>'
+    )
+    lines.append(
+        '<p class="caption">Use this view when the global timeline feels compressed. It stretches each synthetic tool gap independently so the hint window, replay boundary, replay request, and first-token marker are easier to compare.</p>'
+    )
+    if clean_timelines:
+        for mode, data in clean_timelines.items():
+            expanded_svg, selected_expanded_rows = build_expanded_clean_timeline_svg(
+                mode,
+                data.get("rows", []),
+                data.get("timeline", []),
+                max_timeline_sessions,
+            )
+            lines.append(f'<h3>{html.escape(mode)}</h3>')
+            lines.append(expanded_svg)
+            lines.append('<div class="table-wrap">')
+            lines.append(html_table(selected_expanded_rows))
+            lines.append("</div>")
+    else:
+        lines.append('<p class="caption">No expanded clean timeline data was found for this run.</p>')
+    lines.append("</div>")
+
+    lines.append('<div class="panel theme-clean-table" id="clean-tables"><h2>A.2 Clean Performance Tables</h2>')
     lines.append(f'<p class="caption">{html.escape(section_caption("Clean Performance Summary"))}</p>')
     lines.append('<div class="table-wrap">')
     lines.append(html_table(sections.get("Clean Performance Summary", [])))

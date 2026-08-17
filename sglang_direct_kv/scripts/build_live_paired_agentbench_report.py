@@ -5,6 +5,7 @@ import argparse
 import csv
 import html
 import json
+import math
 import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 from build_live_agentbench_tool_gap_report import (
     augment_gaps_with_prefetch,
+    build_expanded_gap_timeline_svg,
     build_timeline_svg,
     build_tool_gaps,
     is_preflight_request,
@@ -94,6 +96,84 @@ def add_task_and_pair_fields(
         gap["pair_key"] = f"task_{task_key}:gap_{gap_order}"
 
 
+def attach_direct_kv_windows(
+    gaps: list[dict[str, Any]],
+    direct_kv_events: list[dict[str, Any]],
+    direct_kv_evidence: list[dict[str, Any]],
+) -> None:
+    evidence_by_hint = {str(row.get("hint_id") or ""): row for row in direct_kv_evidence if row.get("hint_id")}
+    events_by_hint: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in direct_kv_events:
+        hint_id = str(event.get("hint_id") or "")
+        if not hint_id:
+            continue
+        if event.get("direction") != "host_to_device":
+            continue
+        category = str(event.get("category") or "")
+        if category not in {
+            "telemetry_h2d",
+            "hostpool_h2d",
+            "hicache_load",
+            "load_back",
+            "init_load_back",
+            "hicache_start_loading",
+        }:
+            continue
+        events_by_hint[hint_id].append(event)
+
+    for gap in gaps:
+        hint_id = str(gap.get("hint_id") or "")
+        evidence = evidence_by_hint.get(hint_id, {})
+        if evidence:
+            gap["direct_kv_load_observed"] = evidence.get("direct_kv_load_observed", "")
+            gap["direct_kv_init_load_back_events"] = evidence.get("init_load_back_events", "")
+            gap["direct_kv_load_back_events"] = evidence.get("load_back_events", "")
+            gap["direct_kv_hicache_load_events"] = evidence.get("hicache_load_events", "")
+            gap["direct_kv_telemetry_h2d_events"] = evidence.get("telemetry_h2d_events", "")
+        hint_events = events_by_hint.get(hint_id, [])
+        if not hint_events:
+            gap["direct_kv_h2d_start_ms"] = ""
+            gap["direct_kv_h2d_end_ms"] = ""
+            gap["direct_kv_h2d_duration_ms"] = ""
+            gap["direct_kv_h2d_events"] = "0"
+            continue
+
+        telemetry_events = [event for event in hint_events if event.get("category") == "telemetry_h2d"]
+        chosen = telemetry_events or hint_events
+        starts: list[float] = []
+        ends: list[float] = []
+        total_duration = 0.0
+        duration_count = 0
+        categories: Counter[str] = Counter()
+        for event in chosen:
+            ts = as_float(event.get("start_or_end_ms"))
+            if ts is None:
+                continue
+            duration = as_float(event.get("duration_ms"))
+            if duration is not None:
+                starts.append(ts - duration)
+                ends.append(ts)
+                total_duration += duration
+                duration_count += 1
+            else:
+                starts.append(ts)
+                ends.append(ts)
+            categories[str(event.get("category") or "")] += 1
+
+        if not starts or not ends:
+            gap["direct_kv_h2d_start_ms"] = ""
+            gap["direct_kv_h2d_end_ms"] = ""
+            gap["direct_kv_h2d_duration_ms"] = ""
+            gap["direct_kv_h2d_events"] = str(len(chosen))
+            continue
+
+        gap["direct_kv_h2d_start_ms"] = round(min(starts), 3)
+        gap["direct_kv_h2d_end_ms"] = round(max(ends), 3)
+        gap["direct_kv_h2d_duration_ms"] = round(total_duration, 3) if duration_count else ""
+        gap["direct_kv_h2d_events"] = str(len(chosen))
+        gap["direct_kv_h2d_categories"] = ", ".join(f"{name}:{count}" for name, count in categories.items())
+
+
 def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, Any]:
     proxy_jsonl = root / "tool_normalizer_proxy.jsonl"
     task_index_csv = root / "exp6_direct_sglang_task_index.csv"
@@ -123,6 +203,7 @@ def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, A
     base_ts = min((float(row["start_ts"]) for row in all_requests), default=0.0)
     gaps = augment_gaps_with_prefetch(gaps, hint_rows, controller_rows, base_ts)
     add_task_and_pair_fields(requests, gaps, task_rows, mode)
+    attach_direct_kv_windows(gaps, direct_kv_events, direct_kv_evidence)
 
     return {
         "mode": mode,
@@ -638,28 +719,53 @@ def timeline_guide_html(profiled_available: bool) -> str:
         {"step": "5. Tool returns", "timeline color": "black vertical line", "simple meaning": "the next model turn is due"},
         {"step": "6. Agent asks model again", "timeline color": "red bar", "simple meaning": "resume request after the tool result"},
         {"step": "During steps 3/4, if prefetch is enabled", "timeline color": "purple bar", "simple meaning": "our software prefetch attempt runs during the wait"},
+        {"step": "Inside the purple window, if KV moved", "timeline color": "green bar", "simple meaning": "direct SGLang KV host-to-device movement was observed for that hint"},
     ]
     rows = [
-        {"color": "blue", "meaning": "Initial model turn", "where_used": "Clean performance timelines"},
-        {"color": "gray", "meaning": "Tool wait / prefetch opportunity", "where_used": "Clean and profiled timelines"},
-        {"color": "purple", "meaning": "Software hint or prefetch request", "where_used": "Prefetch timelines"},
-        {"color": "black", "meaning": "Replay due / resume boundary", "where_used": "Clean and profiled timelines"},
-        {"color": "red", "meaning": "Replay request after the tool returns", "where_used": "Clean and profiled timelines"},
-        {"color": "yellow", "meaning": "First token marker", "where_used": "Synthetic clean timelines"},
-        {"color": "green", "meaning": "KV/copy activity; dark green means CUDA HtoD profiler evidence", "where_used": "Profiled mechanism timelines"},
+        {
+            "color": "blue",
+            "meaning": "Initial model turn",
+            "simple description": "The agent asks the model what to do next. This request may produce a tool call such as read_file(), grep(), edit_file(), or execute().",
+        },
+        {
+            "color": "gray",
+            "meaning": "Tool wait window",
+            "simple description": "The tool or harness is running, so the model is idle for this session. This pause is the opportunity to prepare that session's KV before the agent resumes.",
+        },
+        {
+            "color": "purple",
+            "meaning": "Prefetch attempt window",
+            "simple description": "This includes detecting that the tool call finished, creating a hint for that agent/session, calling our direct SGLang KV hook, letting SGLang check whether host-side KV exists, and if needed, asking SGLang to move KV back to GPU memory.",
+        },
+        {
+            "color": "green",
+            "meaning": "Direct KV host-to-device movement",
+            "simple description": "This is evidence that KV load/copy work was observed for the hint. In simple words: this is the closest timeline bar to 'KV pages were brought back toward GPU memory'.",
+        },
+        {
+            "color": "black",
+            "meaning": "Replay due boundary",
+            "simple description": "This is when the tool result is ready and the next model turn should be able to start. If purple or green finishes after this line, the prefetch path was late for that resume.",
+        },
+        {
+            "color": "red",
+            "meaning": "Replay request",
+            "simple description": "The agent asks the model to continue after the tool result. This is the request we want to speed up by having the right KV ready before it arrives.",
+        },
+        {
+            "color": "yellow",
+            "meaning": "First token marker",
+            "simple description": "Synthetic reports may show this as the point where the replay request starts producing output. It helps separate request arrival from first-token latency.",
+        },
     ]
-    note = (
-        "This live master report currently has clean live request timing only. CUDA HtoD / dark-green bars will appear after we add the live profiled attribution run."
-        if not profiled_available
-        else "This report includes profiled KV/DMA attribution."
-    )
+    note = "Purple means the prefetch attempt ran. Green means that attempt had attributed direct KV host-to-device movement. Purple without green means the hint ran, but no matching HtoD load was observed for that displayed gap."
     return f"""
     <p class="note">{html.escape(note)}</p>
     <h3>One Row In Plain English</h3>
     <p>Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>
     {table_html(step_rows, ["step", "timeline color", "simple meaning"])}
     <h3>Color Legend</h3>
-    {table_html(rows, ["color", "meaning", "where_used"])}
+    {table_html(rows, ["color", "meaning", "simple description"])}
     """
 
 
@@ -739,9 +845,40 @@ def prefetch_margin_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, An
     return output
 
 
-def build_prefetch_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
+def symlog_value(value: float, linear_width: float = 50.0) -> float:
+    if value == 0:
+        return 0.0
+    return math.copysign(math.log1p(abs(value) / linear_width), value)
+
+
+def symlog_tick_values(min_margin: float, max_margin: float) -> list[float]:
+    candidates = [
+        -10000.0,
+        -5000.0,
+        -1000.0,
+        -500.0,
+        -100.0,
+        -50.0,
+        0.0,
+        50.0,
+        100.0,
+        500.0,
+        1000.0,
+        5000.0,
+        10000.0,
+    ]
+    ticks = [value for value in candidates if min_margin <= value <= max_margin]
+    for value in (min_margin, max_margin):
+        if all(abs(value - tick) > 1 for tick in ticks):
+            ticks.append(value)
+    return sorted(ticks)
+
+
+def build_prefetch_margin_dot_plot(rows: list[dict[str, Any]], scale: str = "linear") -> str:
     if not rows:
         return "<p>No matched prefetch attempts were available for the global margin plot.</p>"
+    if scale not in {"linear", "symlog"}:
+        raise ValueError(f"unsupported margin plot scale: {scale}")
     width = 1480
     height = 520
     left = 86
@@ -756,6 +893,14 @@ def build_prefetch_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
     pad = max(50.0, (max_margin - min_margin) * 0.08)
     y_min = min(min_margin - pad, -50.0)
     y_max = max(max_margin + pad, 50.0)
+    if scale == "symlog":
+        y_min = min(y_min, -50.0)
+        y_max = max(y_max, 50.0)
+        scaled_min = symlog_value(y_min)
+        scaled_max = symlog_value(y_max)
+    else:
+        scaled_min = y_min
+        scaled_max = y_max
 
     def x_pos(index: int) -> float:
         if len(rows) <= 1:
@@ -763,21 +908,24 @@ def build_prefetch_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
         return left + index * plot_w / (len(rows) - 1)
 
     def y_pos(value: float) -> float:
-        return top + (y_max - value) * plot_h / (y_max - y_min)
+        scaled = symlog_value(value) if scale == "symlog" else value
+        return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
 
     zero_y = y_pos(0.0)
+    scale_label = "symlog" if scale == "symlog" else "linear"
+    axis_label = "prefetch margin ms (symlog)" if scale == "symlog" else "prefetch margin ms"
     parts = [
-        '<svg viewBox="0 0 1480 520" width="100%" role="img" aria-label="Global prefetch margin dot plot">',
+        f'<svg viewBox="0 0 1480 520" width="100%" role="img" aria-label="Global prefetch margin dot plot {scale_label} view">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
         f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
-        '<text x="18" y="265" transform="rotate(-90 18 265)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms</text>',
+        f'<text x="18" y="265" transform="rotate(-90 18 265)" text-anchor="middle" font-size="13" font-weight="700">{axis_label}</text>',
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 22}" text-anchor="middle" font-size="13" font-weight="700">live tool-gap order</text>',
         '<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before resume</text>',
         '<text x="340" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>',
     ]
 
-    tick_values = [y_min, y_min / 2, 0.0, y_max / 2, y_max]
+    tick_values = symlog_tick_values(y_min, y_max) if scale == "symlog" else [y_min, y_min / 2, 0.0, y_max / 2, y_max]
     seen_ticks: set[int] = set()
     for value in tick_values:
         rounded = int(round(value))
@@ -837,7 +985,12 @@ def global_prefetch_margin_html(gaps: list[dict[str, Any]]) -> str:
     return f"""
     <p>This chart compresses every matched live prefetch attempt into one dot. The y-axis is the prefetch margin: positive means the prefetch finished before the resume request; negative means it finished after the agent already resumed.</p>
     {table_html(summary)}
+    <h3>Linear View</h3>
+    <p>The linear view preserves the true size of large early or late margins.</p>
     <div class="setup-diagram">{build_prefetch_margin_dot_plot(rows)}</div>
+    <h3>Symlog View</h3>
+    <p>Same data as above, but compressed with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easier to see. Above zero still means early; below zero still means late.</p>
+    <div class="setup-diagram">{build_prefetch_margin_dot_plot(rows, scale="symlog")}</div>
     <h3>Margin Buckets</h3>
     {table_html(buckets)}
     <h3>First 40 Points Behind The Plot</h3>
@@ -881,6 +1034,7 @@ SECTION_THEMES = {
     "timeline-guide": "theme-guide",
     "global-prefetch": "theme-global",
     "timelines": "theme-clean",
+    "expanded-timelines": "theme-clean",
     "performance": "theme-clean-table",
     "profiled": "theme-profiled",
     "direct-kv": "theme-directkv",
@@ -1054,6 +1208,7 @@ def render_html(
         ("timeline-guide", "How To Read Timelines"),
         ("global-prefetch", "Global Prefetch Margin"),
         ("timelines", "Clean Performance Timelines"),
+        ("expanded-timelines", "Expanded Per-Gap Timelines"),
         ("performance", "Clean Performance Tables"),
         ("profiled", "Profiled Mechanism Evidence"),
         ("direct-kv", "Direct KV Load Evidence"),
@@ -1111,7 +1266,7 @@ def render_html(
   <details id="timelines" class="section-card theme-clean">
     <summary><h2>A. Clean Performance Timelines</h2></summary>
     <p class="note">Profiler is off. Use this section for live request-flow and latency claims.</p>
-    <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request.</p>
+    <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request. Green appears when that hint has attributed direct KV host-to-device movement.</p>
     <div class="timeline-stack">
       <div class="timeline-panel">
         <h3>No Prefetch</h3>
@@ -1124,8 +1279,24 @@ def render_html(
     </div>
   </details>
 
+  <details id="expanded-timelines" class="section-card theme-clean">
+    <summary><h2>A.1 Expanded Per-Gap Timelines</h2></summary>
+    <p class="note">This is the same clean-performance data, but each row has its own local clock. The black replay-due line is always <code>0 ms</code>; negative time is before the agent resumes, and positive time is after the resume boundary.</p>
+    <p>Use this view when the global timeline feels compressed. It stretches each tool gap independently so the purple prefetch window, green direct-KV movement, and black resume deadline are easier to compare.</p>
+    <div class="timeline-stack">
+      <div class="timeline-panel">
+        <h3>No Prefetch</h3>
+        {build_expanded_gap_timeline_svg(no_gaps, max_timeline_gaps, show_prefetch_legend=False)}
+      </div>
+      <div class="timeline-panel">
+        <h3>Live Prefetch Intervention</h3>
+        {build_expanded_gap_timeline_svg(pref_gaps, max_timeline_gaps)}
+      </div>
+    </div>
+  </details>
+
   <details id="performance" class="section-card theme-clean-table">
-    <summary><h2>A.1 Clean Performance Tables</h2></summary>
+    <summary><h2>A.2 Clean Performance Tables</h2></summary>
     <p>These tables provide the exact request counts, tool-gap counts, latency values, and paired aggregate numbers behind the clean timelines.</p>
     <h3>By Mode</h3>
     {table_html(mode_rows)}

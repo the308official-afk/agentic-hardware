@@ -25,6 +25,7 @@
     .theme-checkpoints { --theme: #ea580c; --theme-bg: #fff7ed; }
     .theme-observations { --theme: #0f766e; --theme-bg: #f0fdfa; }
     .theme-paired { --theme: #be123c; --theme-bg: #fff1f2; }
+    .theme-reproduce { --theme: #0891b2; --theme-bg: #ecfeff; }
     .theme-appendix { --theme: #64748b; --theme-bg: #f8fafc; }
     section[class*="theme-"], details.section-card[class*="theme-"] { border-top: 5px solid var(--theme); }
     section[class*="theme-"] > h2, details.section-card summary h2 { border-left: 8px solid var(--theme); padding-left: 10px; color: var(--theme); }
@@ -52,6 +53,8 @@
     th { text-align: left; background: #f1f5f9; color: #111827; padding: 9px 10px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
     td { padding: 9px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
     code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+    pre { white-space: pre-wrap; background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px; overflow: auto; }
+    pre code { background: transparent; color: inherit; padding: 0; }
     svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
     @media (max-width: 1000px) { .grid, .cards { grid-template-columns: 1fr; } }
     </style>
@@ -63,7 +66,7 @@
     <p>This is the live version of the paired evidence report. The request generator is real SWE-bench / Deep Agents traffic; the backend is direct SGLang; the comparison is no-prefetch versus live software prefetch intervention.</p>
     <p class="note">Important metric note: this report uses full resume request latency captured by the proxy, not streaming TTFT. It still shows whether the next real agent turn became faster or slower after the prefetch intervention.</p>
     <h2>Table of Contents</h2>
-    <p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, profiled mechanism, interpretation, and appendix.</p><div class="toc"><a class="theme-summary" href="#summary">Summary</a><a class="theme-setup" href="#setup">Experiment Setup</a><a class="theme-guide" href="#timeline-guide">How To Read Timelines</a><a class="theme-global" href="#global-prefetch">Global Prefetch Margin</a><a class="theme-clean" href="#timelines">Clean Performance Timelines</a><a class="theme-clean-table" href="#performance">Clean Performance Tables</a><a class="theme-profiled" href="#profiled">Profiled Mechanism Evidence</a><a class="theme-deductions" href="#deductions">Key Deductions</a><a class="theme-checkpoints" href="#checkpoints">Prefetch Checkpoints</a><a class="theme-observations" href="#observations">Key Observations Per Session</a><a class="theme-paired" href="#paired">Paired Session Evidence</a><a class="theme-appendix" href="#appendix">Appendix</a></div><div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button><button type="button" data-action="collapse-all">Collapse All</button></div>
+    <p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, profiled mechanism, interpretation, and appendix.</p><div class="toc"><a class="theme-summary" href="#summary">Summary</a><a class="theme-setup" href="#setup">Experiment Setup</a><a class="theme-guide" href="#timeline-guide">How To Read Timelines</a><a class="theme-global" href="#global-prefetch">Global Prefetch Margin</a><a class="theme-clean" href="#timelines">Clean Performance Timelines</a><a class="theme-clean-table" href="#performance">Clean Performance Tables</a><a class="theme-profiled" href="#profiled">Profiled Mechanism Evidence</a><a class="theme-deductions" href="#deductions">Key Deductions</a><a class="theme-checkpoints" href="#checkpoints">Prefetch Checkpoints</a><a class="theme-observations" href="#observations">Key Observations Per Session</a><a class="theme-paired" href="#paired">Paired Session Evidence</a><a class="theme-reproduce" href="#reproduce">Reproduce This Report</a><a class="theme-appendix" href="#appendix">Appendix</a></div><div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button><button type="button" data-action="collapse-all">Collapse All</button></div>
   </section>
 
   <details id="summary" class="section-card theme-summary" open>
@@ -5017,6 +5020,46 @@ Error: File &#x27;/src/lib/services/cache.go&#x27; not found
 </tbody></table></div>
   </details>
 
+  <details id="reproduce" class="section-card theme-reproduce">
+    <summary><h2>Reproduce This Report</h2></summary>
+    <p>This section gives copy-paste commands for reproducing the real SWE-bench / DeepAgents master report without overwriting the current latest report by default.</p>
+<h3>Run A New Labeled Live Experiment</h3>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_1 \
+UPDATE_LATEST=0 \
+MODEL=Qwen/Qwen2.5-Coder-7B-Instruct \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+bash scripts/run_labeled_live_master_report.sh</code></pre>
+<p>Output:</p>
+<pre><code>artifacts/results/labeled/live/manager_demo_1/master_report.html</code></pre>
+<h3>Rebuild A Labeled Report From Existing Runs</h3>
+<p>Use this when the no-prefetch and live-prefetch folders already exist and you only want to regenerate the HTML/report tables.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_1_rebuild \
+UPDATE_LATEST=0 \
+NO_PREFETCH_ROOT=artifacts/results/&lt;run&gt;/no_prefetch_live \
+PREFETCH_ROOT=artifacts/results/&lt;run&gt;/live_prefetch \
+bash scripts/build_labeled_live_master_report.sh</code></pre>
+<h3>Deliberately Refresh The Latest Master Report</h3>
+<p>Only use this when you want to replace <code>artifacts/results/latest_master_report.html</code>.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=manager_demo_latest \
+UPDATE_LATEST=1 \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+bash scripts/run_labeled_live_master_report.sh Qwen/Qwen2.5-Coder-7B-Instruct</code></pre>
+  </details>
+
   <details id="appendix" class="section-card theme-appendix">
     <summary><h2>Appendix: Detailed Evidence</h2></summary>
     <h3>Timeline Summary</h3>
@@ -5236,15 +5279,15 @@ Error: File &#x27;/src/lib/services/cache.go&#x27; not found
 </tr></thead><tbody>
 <tr>
 <td>no_prefetch</td>
-<td>sglang_direct_kv/artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/no_prefetch_live</td>
-<td>sglang_direct_kv/artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/no_prefetch_live/tool_normalizer_proxy.jsonl</td>
-<td>sglang_direct_kv/artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/no_prefetch_live/exp6_direct_sglang_task_index.csv</td>
+<td>artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/no_prefetch_live</td>
+<td>artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/no_prefetch_live/tool_normalizer_proxy.jsonl</td>
+<td>artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/no_prefetch_live/exp6_direct_sglang_task_index.csv</td>
 </tr>
 <tr>
 <td>live_prefetch</td>
-<td>sglang_direct_kv/artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/live_prefetch</td>
-<td>sglang_direct_kv/artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/live_prefetch/tool_normalizer_proxy.jsonl</td>
-<td>sglang_direct_kv/artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/live_prefetch/exp6_direct_sglang_task_index.csv</td>
+<td>artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/live_prefetch</td>
+<td>artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/live_prefetch/tool_normalizer_proxy.jsonl</td>
+<td>artifacts/results/milestone24_live_paired_qwen7b_20260816_050852/live_prefetch/exp6_direct_sglang_task_index.csv</td>
 </tr>
 </tbody></table></div>
     <h3>Live Request Details</h3>
