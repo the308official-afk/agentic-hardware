@@ -463,6 +463,7 @@ def css() -> str:
     .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 14px; color: #1e3a8a; }
     .warn { background: #fff7ed; border-left: 4px solid #f97316; padding: 12px 14px; color: #7c2d12; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .setup-diagram { margin: 12px 0 18px; }
     .toc { display: flex; flex-wrap: wrap; gap: 10px 16px; }
     .toc a { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; padding: 7px 10px; color: #0f172a; }
     .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
@@ -493,6 +494,102 @@ def metric_cards(mode_rows: list[dict[str, Any]], pair_summary_rows: list[dict[s
         f"<div class=\"card\"><div class=\"label\">{fmt(label)}</div><div class=\"value\">{fmt(value)}</div></div>"
         for label, value in cards
     ) + "</div>"
+
+
+def setup_diagram_svg() -> str:
+    boxes = [
+        (70, 40, 250, 64, "SWE-bench / AgentBench Tasks", "real coding-agent task inputs"),
+        (390, 40, 250, 64, "DeepAgents Harness", "agent loop and tool orchestration"),
+        (710, 40, 250, 64, "Tool-Calling Loop", "read_file, edit_file, ls, grep, execute"),
+        (1030, 40, 250, 64, "SGLang OpenAI Server", "direct backend, no Dynamo"),
+        (1030, 170, 250, 64, "Qwen Coder + KV Cache", "model turns and cached context"),
+        (710, 170, 250, 64, "Observed Resume Traffic", "model turns, tool gaps, resume requests"),
+        (390, 170, 250, 64, "Live Hint Path", "hint emitted after tool-call response"),
+        (70, 170, 250, 64, "Prefetch Controller", "software request sent during tool gap"),
+    ]
+    arrows = [
+        (320, 72, 390, 72),
+        (640, 72, 710, 72),
+        (960, 72, 1030, 72),
+        (1155, 104, 1155, 170),
+        (1030, 202, 960, 202),
+        (710, 202, 640, 202),
+        (390, 202, 320, 202),
+        (195, 170, 195, 104),
+        (320, 202, 390, 202),
+        (640, 202, 710, 202),
+        (960, 202, 1030, 202),
+    ]
+    parts = [
+        '<svg viewBox="0 0 1350 290" width="100%" role="img" aria-label="Experiment setup flow diagram">',
+        "<defs>",
+        '<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">',
+        '<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>',
+        "</marker>",
+        "</defs>",
+        '<rect x="20" y="15" width="1310" height="250" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>',
+    ]
+    for x1, y1, x2, y2 in arrows:
+        parts.append(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>'
+        )
+    for x, y, w, h, title, subtitle in boxes:
+        fill = "#eff6ff" if x >= 1030 else "#ffffff"
+        stroke = "#2563eb" if x >= 1030 else "#cbd5e1"
+        parts.extend(
+            [
+                f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>',
+                f'<text x="{x + w / 2}" y="{y + 27}" text-anchor="middle" font-size="15" font-weight="700">{html.escape(title)}</text>',
+                f'<text x="{x + w / 2}" y="{y + 48}" text-anchor="middle" font-size="12" fill="#475569">{html.escape(subtitle)}</text>',
+            ]
+        )
+    parts.extend(
+        [
+            '<text x="675" y="268" text-anchor="middle" font-size="13" fill="#475569">Main request path runs left-to-right on top. Hint/prefetch path is shown on the lower loop during tool gaps.</text>',
+            "</svg>",
+        ]
+    )
+    return "\n".join(parts)
+
+
+def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: list[dict[str, Any]]) -> str:
+    by_mode = {row["mode"]: row for row in mode_rows}
+    no_prefetch = by_mode.get("no_prefetch", {})
+    live_prefetch = by_mode.get("live_prefetch", {})
+    paired = pair_summary_rows[0] if pair_summary_rows else {}
+    setup_rows = [
+        {"item": "Traffic source", "description": "Real SWE-bench / AgentBench-style tasks driven through the DeepAgents harness."},
+        {"item": "Agent behavior", "description": "DeepAgents generated structured tool calls such as read_file, edit_file, ls, grep, execute, and write_file."},
+        {"item": "Backend", "description": "Requests were sent directly to an SGLang OpenAI-compatible server. Dynamo was not used in this experiment."},
+        {"item": "Model path", "description": "SGLang served the Qwen Coder model and managed the model context / KV-cache path."},
+        {"item": "Modes compared", "description": "No prefetch versus live software prefetch using hints emitted after observed tool-call responses."},
+        {"item": "Pairing method", "description": "Tool gaps were paired by SWE-bench task index and gap order inside that task."},
+    ]
+    metric_rows = [
+        {"metric": "tool gap", "meaning": "Time between a tool-call response and the next model request from the same live agent run."},
+        {"metric": "prefetch duration", "meaning": "How long the live software prefetch/controller path took to complete."},
+        {"metric": "prefetch margin", "meaning": "Whether prefetch finished before or after the real resume request boundary."},
+        {"metric": "resume request latency", "meaning": "End-to-end latency of the next model request after the tool gap."},
+        {"metric": "late prefetch count", "meaning": "How often the hint path missed the available tool-gap window."},
+    ]
+    observation_rows = [
+        {"observation": "The traffic was live agent traffic, not synthetic prompts.", "evidence": f"{no_prefetch.get('analyzed_model_requests', '')} no-prefetch requests and {live_prefetch.get('analyzed_model_requests', '')} live-prefetch requests were analyzed."},
+        {"observation": "The run produced real tool-call gaps.", "evidence": f"{no_prefetch.get('observed_tool_gaps', '')} no-prefetch gaps and {live_prefetch.get('observed_tool_gaps', '')} live-prefetch gaps were observed."},
+        {"observation": "Tool gaps were often very short.", "evidence": f"Median live-prefetch tool gap was {live_prefetch.get('median_tool_gap_ms', '')} ms."},
+        {"observation": "Software prefetch was usually too slow for those windows.", "evidence": f"{live_prefetch.get('late_prefetch_attempts', '')} late prefetch attempts; average prefetch duration was {live_prefetch.get('avg_prefetch_duration_ms', '')} ms."},
+        {"observation": "Hints alone did not guarantee a win.", "evidence": f"Paired gaps={paired.get('paired_tool_gaps', '')}; faster pairs={paired.get('prefetch_faster_pairs', '')}; slower pairs={paired.get('prefetch_slower_pairs', '')}."},
+    ]
+    return f"""
+    <div class="setup-diagram">{setup_diagram_svg()}</div>
+    <h3>How The Experiment Was Set Up</h3>
+    {table_html(setup_rows, ["item", "description"])}
+    <h3>What Was Measured</h3>
+    {table_html(metric_rows, ["metric", "meaning"])}
+    <h3>What Was Observed</h3>
+    {table_html(observation_rows, ["observation", "evidence"])}
+    <h3>Why This Supports The Hardware Proposal</h3>
+    <p>Current GPU/runtime data-movement paths can move memory, but they do not know that a transfer is urgent KV for a soon-resuming agent session. This experiment shows that when prefetch is routed through ordinary software and SGLang request paths, it can miss short live tool gaps. A hint-aware hardware/runtime path could make these movements more predictable by prioritizing urgent KV, protecting prefetched KV, and exposing telemetry for late or wasted prefetches.</p>
+    """
 
 
 def render_html(
@@ -527,6 +624,7 @@ def render_html(
     ]
     toc = [
         ("summary", "Summary"),
+        ("setup", "Experiment Setup"),
         ("manager", "Manager Summary"),
         ("deductions", "Key Deductions"),
         ("performance", "Clean Performance Summary"),
@@ -559,6 +657,12 @@ def render_html(
   <section id="summary">
     <h2>Summary</h2>
     {metric_cards(mode_rows, pair_summary_rows)}
+  </section>
+
+  <section id="setup">
+    <h2>Experiment Setup And Manager Summary</h2>
+    <p>This section is intended for slide-building: it shows the live request path, the hint/prefetch path, how the experiment was conducted, and the main evidence collected.</p>
+    {experiment_setup_html(mode_rows, pair_summary_rows)}
   </section>
 
   <section id="manager">

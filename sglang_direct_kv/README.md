@@ -105,6 +105,50 @@ latest_master_report.html              real SWE-bench / AgentBench live report
 latest_synthetic_master_report.html    controlled synthetic report
 ```
 
+### Real Live Experiment Setup
+
+The latest real master report uses this setup:
+
+```text
+SWE-bench / AgentBench tasks
+  -> DeepAgents harness
+  -> tool-calling loop
+     read_file, edit_file, ls, grep, execute, write_file
+  -> SGLang OpenAI-compatible server
+  -> Qwen Coder model + KV cache
+  -> observed model turns, tool gaps, and resume requests
+```
+
+The live prefetch path runs beside the normal request path:
+
+```text
+tool-call response observed
+  -> hint emitted: this session may resume soon
+  -> live prefetch controller
+  -> SGLang prefetch/direct-load style request
+```
+
+How the real experiment is conducted:
+
+```text
+1. Run real SWE-bench / AgentBench-style tasks through DeepAgents.
+2. Let DeepAgents generate real structured tool calls.
+3. Send model requests directly to SGLang, without Dynamo.
+4. Compare no-prefetch against live software prefetch.
+5. Pair tool gaps by SWE-bench task index and gap order.
+6. Measure tool-gap duration, prefetch duration, prefetch margin, resume request latency, and late prefetch count.
+```
+
+Manager-facing interpretation:
+
+```text
+The traffic is real live agent traffic, not synthetic prompts.
+Tool gaps can be very short.
+The software prefetch path can take much longer than the available tool gap.
+Most missed prefetches mean the runtime had the semantic hint, but the ordinary software/SGLang path did not finish in time.
+This motivates hardware/runtime support for deadline-aware KV movement, residency protection, and telemetry.
+```
+
 Most important timing insight so far:
 
 ```text
