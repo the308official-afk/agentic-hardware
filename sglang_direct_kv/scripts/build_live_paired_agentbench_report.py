@@ -612,6 +612,15 @@ def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: li
 
 
 def timeline_guide_html(profiled_available: bool) -> str:
+    step_rows = [
+        {"step": "1. Ask model what to do", "timeline color": "blue bar", "simple meaning": "model turn before the tool call"},
+        {"step": "2. Model says to call a tool", "timeline color": "end of blue bar", "simple meaning": "the model turn hands work to a tool"},
+        {"step": "3. Tool runs", "timeline color": "gray bar", "simple meaning": "read_file(), grep(), run_tests(), etc. is happening"},
+        {"step": "4. Agent waits", "timeline color": "gray bar", "simple meaning": "this wait is the prefetch opportunity"},
+        {"step": "5. Tool returns", "timeline color": "black vertical line", "simple meaning": "the next model turn is due"},
+        {"step": "6. Agent asks model again", "timeline color": "red bar", "simple meaning": "resume request after the tool result"},
+        {"step": "During steps 3/4, if prefetch is enabled", "timeline color": "purple bar", "simple meaning": "our software prefetch attempt runs during the wait"},
+    ]
     rows = [
         {"color": "blue", "meaning": "Initial model turn", "where_used": "Clean performance timelines"},
         {"color": "gray", "meaning": "Tool wait / prefetch opportunity", "where_used": "Clean and profiled timelines"},
@@ -628,6 +637,10 @@ def timeline_guide_html(profiled_available: bool) -> str:
     )
     return f"""
     <p class="note">{html.escape(note)}</p>
+    <h3>One Row In Plain English</h3>
+    <p>Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>
+    {table_html(step_rows, ["step", "timeline color", "simple meaning"])}
+    <h3>Color Legend</h3>
     {table_html(rows, ["color", "meaning", "where_used"])}
     """
 

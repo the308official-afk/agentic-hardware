@@ -1520,6 +1520,15 @@ document.addEventListener("DOMContentLoaded", function () {
 
 
 def synthetic_timeline_guide_html() -> str:
+    step_rows = [
+        {"step": "1. Ask model what to do", "timeline color": "blue bar", "simple meaning": "model turn before the tool call"},
+        {"step": "2. Model says to call a tool", "timeline color": "end of blue bar", "simple meaning": "the model turn hands work to a tool"},
+        {"step": "3. Tool runs", "timeline color": "gray bar", "simple meaning": "the synthetic tool wait is happening"},
+        {"step": "4. Agent waits", "timeline color": "gray bar", "simple meaning": "this wait is the prefetch opportunity"},
+        {"step": "5. Tool returns", "timeline color": "black vertical line", "simple meaning": "the next model turn is due"},
+        {"step": "6. Agent asks model again", "timeline color": "red bar", "simple meaning": "resume request after the tool result"},
+        {"step": "During steps 3/4, if prefetch is enabled", "timeline color": "purple bar", "simple meaning": "our prefetch/direct-load attempt runs during the wait"},
+    ]
     rows = [
         {"color": "blue", "meaning": "Initial request", "where_used": "Clean performance timelines"},
         {"color": "gray", "meaning": "Tool wait / prefetch opportunity", "where_used": "Clean and profiled timelines"},
@@ -1533,6 +1542,12 @@ def synthetic_timeline_guide_html() -> str:
         [
             '<div class="panel theme-guide" id="timeline-guide"><h2>How To Read The Timelines</h2>',
             '<p class="caption">The timelines are the main visual evidence. Read the clean timelines first for performance, then the profiled mechanism timeline for KV/copy attribution.</p>',
+            "<h3>One Row In Plain English</h3>",
+            '<p class="caption">Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>',
+            '<div class="table-wrap">',
+            html_table(step_rows),
+            "</div>",
+            "<h3>Color Legend</h3>",
             '<div class="table-wrap">',
             html_table(rows),
             "</div></div>",
