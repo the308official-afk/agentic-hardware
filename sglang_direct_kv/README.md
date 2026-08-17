@@ -78,6 +78,26 @@ Under overlapping agent traffic, hints can complete too late, or complete early 
 The measured KV load calls are short compared with end-to-end hint completion, which suggests the issue is not only raw memory copy speed.
 The stronger argument is that current runtime/GPU memory paths lack deadline-aware, priority-aware, and residency-aware enforcement for agentic KV prefetch.
 
+Open this report first:
+
+```text
+artifacts/results/latest_master_report.html
+```
+
+Use the milestone-specific latest reports only for debugging:
+
+```text
+latest_m22_live_tool_gap_report.html    observe-only live tool gaps
+latest_m23_live_prefetch_report.html    live prefetch intervention only
+latest_m24_live_paired_report.html      paired live no-prefetch vs prefetch
+```
+
+Older `latest_live_*` report names may still exist as compatibility aliases, but the canonical master report is:
+
+```text
+latest_master_report.html
+```
+
 Most important timing insight so far:
 
 ```text
@@ -4256,9 +4276,9 @@ artifacts/results/<run>/tool_normalizer_proxy.jsonl
 artifacts/results/<run>/live_agentbench_tool_gap_report/live_agentbench_tool_gap_report.html
 artifacts/results/<run>/live_agentbench_tool_gap_report/live_tool_gaps.csv
 artifacts/results/<run>/live_agentbench_tool_gap_report/live_requests.csv
-artifacts/results/latest_live_agentbench_tool_gap_report.html
-artifacts/results/latest_live_agentbench_tool_gaps.csv
-artifacts/results/latest_live_agentbench_requests.csv
+artifacts/results/latest_m22_live_tool_gap_report.html
+artifacts/results/latest_m22_live_tool_gaps.csv
+artifacts/results/latest_m22_live_requests.csv
 ```
 
 Simple interpretation:
@@ -4365,8 +4385,9 @@ artifacts/results/<run>/live_hint_events.jsonl
 artifacts/results/<run>/live_hint_payloads/
 artifacts/results/<run>/live_prefetch_controller.jsonl
 artifacts/results/<run>/live_agentbench_prefetch_report/live_agentbench_tool_gap_report.html
-artifacts/results/latest_live_agentbench_prefetch_report.html
-artifacts/results/latest_live_agentbench_tool_gaps.csv
+artifacts/results/latest_m23_live_prefetch_report.html
+artifacts/results/latest_m23_live_tool_gaps.csv
+artifacts/results/latest_m23_live_requests.csv
 ```
 
 Simple interpretation:
@@ -4499,10 +4520,13 @@ artifacts/results/<run>/no_prefetch_live/
 artifacts/results/<run>/live_prefetch/
 artifacts/results/<run>/live_paired_report/live_paired_agentbench_report.html
 artifacts/results/<run>/live_paired_report/live_paired_session_evidence.csv
-artifacts/results/latest_live_paired_agentbench_report.html
-artifacts/results/latest_live_paired_agentbench_report.json
-artifacts/results/latest_live_paired_agentbench_session_evidence.csv
-artifacts/results/latest_agentbench_sglang_direct_report.html
+artifacts/results/latest_master_report.html
+artifacts/results/latest_master_report.json
+artifacts/results/latest_master_session_evidence.csv
+artifacts/results/latest_master_mode_summary.csv
+artifacts/results/latest_m24_live_paired_report.html
+artifacts/results/latest_m24_live_paired_report.json
+artifacts/results/latest_m24_live_paired_session_evidence.csv
 ```
 
 Simple interpretation:

@@ -704,14 +704,24 @@ def main() -> None:
     if args.latest_root:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         latest_pairs = [
+            (html_path, "latest_master_report.html"),
+            (md_path, "latest_master_report.md"),
+            (json_path, "latest_master_report.json"),
+            (html_path, "latest_m24_live_paired_report.html"),
+            (md_path, "latest_m24_live_paired_report.md"),
+            (json_path, "latest_m24_live_paired_report.json"),
             (html_path, "latest_live_paired_agentbench_report.html"),
             (md_path, "latest_live_paired_agentbench_report.md"),
             (json_path, "latest_live_paired_agentbench_report.json"),
             (html_path, "latest_agentbench_sglang_direct_report.html"),
             (md_path, "latest_agentbench_sglang_direct_report.md"),
             (json_path, "latest_agentbench_sglang_direct_report.json"),
+            (args.out_dir / "live_paired_session_evidence.csv", "latest_master_session_evidence.csv"),
+            (args.out_dir / "live_paired_mode_summary.csv", "latest_master_mode_summary.csv"),
             (args.out_dir / "live_paired_session_evidence.csv", "latest_live_paired_agentbench_session_evidence.csv"),
             (args.out_dir / "live_paired_mode_summary.csv", "latest_live_paired_agentbench_mode_summary.csv"),
+            (args.out_dir / "live_paired_session_evidence.csv", "latest_m24_live_paired_session_evidence.csv"),
+            (args.out_dir / "live_paired_mode_summary.csv", "latest_m24_live_paired_mode_summary.csv"),
         ]
         for source, name in latest_pairs:
             if source.exists():

@@ -110,5 +110,5 @@ echo "Milestone 24C: building paired live report."
 echo
 echo "Milestone 24 finished."
 echo "Report: ${REPORT_ROOT}/live_paired_agentbench_report.html"
-echo "Latest paired live report: ${LATEST_REPORT_ROOT}/latest_live_paired_agentbench_report.html"
-echo "Latest direct AgentBench report alias: ${LATEST_REPORT_ROOT}/latest_agentbench_sglang_direct_report.html"
+echo "Latest master report: ${LATEST_REPORT_ROOT}/latest_master_report.html"
+echo "Latest Milestone 24 report: ${LATEST_REPORT_ROOT}/latest_m24_live_paired_report.html"

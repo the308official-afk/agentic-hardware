@@ -773,6 +773,11 @@ def main() -> None:
     if args.latest_root:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         latest_pairs = [
+            (html_path, "latest_m22_live_tool_gap_report.html"),
+            (md_path, "latest_m22_live_tool_gap_report.md"),
+            (args.out_dir / "live_agentbench_tool_gap_report.json", "latest_m22_live_tool_gap_report.json"),
+            (args.out_dir / "live_tool_gaps.csv", "latest_m22_live_tool_gaps.csv"),
+            (args.out_dir / "live_requests.csv", "latest_m22_live_requests.csv"),
             (html_path, "latest_live_agentbench_tool_gap_report.html"),
             (md_path, "latest_live_agentbench_tool_gap_report.md"),
             (args.out_dir / "live_agentbench_tool_gap_report.json", "latest_live_agentbench_tool_gap_report.json"),
@@ -783,6 +788,14 @@ def main() -> None:
         if hint_rows or controller_rows:
             latest_pairs.extend(
                 [
+                    (html_path, "latest_m23_live_prefetch_report.html"),
+                    (md_path, "latest_m23_live_prefetch_report.md"),
+                    (
+                        args.out_dir / "live_agentbench_tool_gap_report.json",
+                        "latest_m23_live_prefetch_report.json",
+                    ),
+                    (args.out_dir / "live_tool_gaps.csv", "latest_m23_live_tool_gaps.csv"),
+                    (args.out_dir / "live_requests.csv", "latest_m23_live_requests.csv"),
                     (html_path, "latest_live_agentbench_prefetch_report.html"),
                     (md_path, "latest_live_agentbench_prefetch_report.md"),
                     (
