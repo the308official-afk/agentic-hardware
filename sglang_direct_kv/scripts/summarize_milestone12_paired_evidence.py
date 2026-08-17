@@ -1756,7 +1756,7 @@ def main() -> None:
     attribution_root = Path(args.attribution_root)
     out_root = Path(args.out_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    modes = [mode for mode in args.modes.split() if mode]
+    modes = [mode for mode in args.modes.replace(",", " ").split() if mode]
 
     clean_rows = load_clean_rows(clean_root, modes)
     clean_timelines = load_clean_timelines(clean_root, modes, clean_rows)
