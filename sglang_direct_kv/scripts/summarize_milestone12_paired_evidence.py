@@ -1447,6 +1447,7 @@ SECTION_THEMES = {
     "executive": "theme-summary",
     "setup": "theme-setup",
     "timeline-guide": "theme-guide",
+    "global-prefetch": "theme-global",
     "clean-timelines": "theme-clean",
     "clean-tables": "theme-clean-table",
     "profiled-timelines": "theme-profiled",
@@ -1555,6 +1556,183 @@ def synthetic_timeline_guide_html() -> str:
     )
 
 
+def synthetic_margin_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        margin = to_float(row.get("prefetch_margin_ms"))
+        if margin is None:
+            continue
+        duration = to_float(row.get("hint_total_duration_ms"))
+        if margin >= 50:
+            verdict = "early"
+        elif margin >= 0:
+            verdict = "barely early"
+        elif margin > -50:
+            verdict = "near miss"
+        else:
+            verdict = "late"
+        out.append(
+            {
+                "session_id": row.get("session_id", ""),
+                "priority": row.get("priority", ""),
+                "prompt_tokens": row.get("prompt_tokens", ""),
+                "tool_wait_ms": row.get("tool_wait_ms", ""),
+                "hint_total_duration_ms": duration,
+                "prefetch_margin_ms": margin,
+                "checkpoint_result": row.get("checkpoint_result", ""),
+                "verdict": verdict,
+            }
+        )
+    return out
+
+
+def synthetic_margin_summary(rows: list[dict[str, Any]], total_sessions: int) -> list[dict[str, Any]]:
+    margins = [float(row["prefetch_margin_ms"]) for row in rows]
+    durations = [
+        float(row["hint_total_duration_ms"])
+        for row in rows
+        if row.get("hint_total_duration_ms") is not None
+    ]
+    early = [value for value in margins if value >= 0]
+    late = [value for value in margins if value < 0]
+    return [
+        {
+            "profiled_sessions": total_sessions,
+            "sessions_with_measured_margin": len(rows),
+            "sessions_without_measured_margin": max(0, total_sessions - len(rows)),
+            "finished_before_replay": len(early),
+            "late": len(late),
+            "late_pct": round(len(late) * 100.0 / len(rows), 2) if rows else "",
+            "median_margin_ms": round(median(margins), 3) if margins else "",
+            "worst_lateness_ms": round(abs(min(late)), 3) if late else "",
+            "best_early_margin_ms": round(max(early), 3) if early else "",
+            "avg_hint_duration_ms": round(mean(durations), 3) if durations else "",
+        }
+    ]
+
+
+def synthetic_margin_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets = [
+        ("> +500 ms early", lambda value: value > 500),
+        ("+100 to +500 ms early", lambda value: 100 < value <= 500),
+        ("0 to +100 ms early", lambda value: 0 <= value <= 100),
+        ("0 to -100 ms late", lambda value: -100 <= value < 0),
+        ("-100 to -500 ms late", lambda value: -500 <= value < -100),
+        ("< -500 ms late", lambda value: value < -500),
+    ]
+    total = len(rows)
+    output: list[dict[str, Any]] = []
+    for label, predicate in buckets:
+        count = sum(1 for row in rows if predicate(float(row["prefetch_margin_ms"])))
+        output.append(
+            {
+                "bucket": label,
+                "sessions": count,
+                "pct": round(count * 100.0 / total, 2) if total else "",
+            }
+        )
+    return output
+
+
+def synthetic_margin_dot_plot(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return '<p class="caption">No synthetic prefetch margin rows were available.</p>'
+    width = 1480
+    height = 500
+    left = 86
+    right = 34
+    top = 56
+    bottom = 82
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    margins = [float(row["prefetch_margin_ms"]) for row in rows]
+    min_margin = min(margins)
+    max_margin = max(margins)
+    pad = max(50.0, (max_margin - min_margin) * 0.08)
+    y_min = min(min_margin - pad, -50.0)
+    y_max = max(max_margin + pad, 50.0)
+
+    def x_pos(index: int) -> float:
+        if len(rows) <= 1:
+            return left + plot_w / 2
+        return left + index * plot_w / (len(rows) - 1)
+
+    def y_pos(value: float) -> float:
+        return top + (y_max - value) * plot_h / (y_max - y_min)
+
+    zero_y = y_pos(0.0)
+    svg = [
+        '<svg viewBox="0 0 1480 500" width="100%" role="img" aria-label="Synthetic global prefetch margin dot plot">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
+        '<text x="18" y="250" transform="rotate(-90 18 250)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 22}" text-anchor="middle" font-size="13" font-weight="700">synthetic session order</text>',
+        '<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before replay</text>',
+        '<text x="350" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>',
+    ]
+    tick_values = [y_min, y_min / 2, 0.0, y_max / 2, y_max]
+    seen_ticks: set[int] = set()
+    for value in tick_values:
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        svg.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+    for index, row in enumerate(rows):
+        x = x_pos(index)
+        margin = float(row["prefetch_margin_ms"])
+        duration = row.get("hint_total_duration_ms")
+        color = "#16a34a" if margin >= 50 else "#84cc16" if margin >= 0 else "#f97316" if margin > -50 else "#dc2626"
+        radius = 7
+        if isinstance(duration, (int, float)):
+            radius = max(5, min(10, 5 + float(duration) / 250.0))
+        y = y_pos(margin)
+        title = (
+            f"{row.get('session_id')} | margin={margin:.3f} ms | "
+            f"hint_duration={duration if duration is not None else 'n/a'} ms | "
+            f"tool_wait={row.get('tool_wait_ms')} ms | prompt_tokens={row.get('prompt_tokens')}"
+        )
+        svg.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="{color}" opacity="0.88" stroke="#ffffff" stroke-width="1.4">'
+            f'<title>{html.escape(title)}</title></circle>'
+        )
+        svg.append(f'<text x="{x:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="10">{html.escape(str(row.get("session_id")))}</text>')
+    legend = [
+        ("early", "#16a34a"),
+        ("barely early", "#84cc16"),
+        ("near miss", "#f97316"),
+        ("late", "#dc2626"),
+    ]
+    lx = left
+    ly = height - 50
+    for label, color in legend:
+        svg.append(f'<circle cx="{lx}" cy="{ly}" r="6" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 12}" y="{ly + 4}" font-size="12">{html.escape(label)}</text>')
+        lx += 145
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
+def synthetic_global_prefetch_margin_html(attribution_rows: list[dict[str, Any]]) -> str:
+    rows = synthetic_margin_rows(attribution_rows)
+    return (
+        '<div class="panel theme-global" id="global-prefetch"><h2>Global Prefetch Margin</h2>'
+        '<p class="caption">This is the high-level view across profiled synthetic sessions with measured prefetch margins. Positive margin means prefetch finished before replay; negative margin means replay was already due before prefetch finished. Sessions without visible copy/margin attribution are counted in the summary table but are not plotted as dots.</p>'
+        '<div class="table-wrap">'
+        + html_table(synthetic_margin_summary(rows, len(attribution_rows)))
+        + "</div>"
+        + synthetic_margin_dot_plot(rows)
+        + '<h3>Margin Buckets</h3><div class="table-wrap">'
+        + html_table(synthetic_margin_bucket_rows(rows))
+        + '</div><h3>Points Behind The Plot</h3><div class="table-wrap">'
+        + html_table(rows)
+        + "</div></div>"
+    )
+
+
 def write_html(
     path: Path,
     sections: dict[str, list[dict[str, Any]]],
@@ -1570,6 +1748,7 @@ def write_html(
         ("executive", "Executive Summary"),
         ("setup", "Experiment Setup"),
         ("timeline-guide", "How To Read Timelines"),
+        ("global-prefetch", "Global Prefetch Margin"),
         ("clean-timelines", "Clean Performance Timelines"),
         ("clean-tables", "Clean Performance Tables"),
         ("profiled-timelines", "Profiled Mechanism Timelines"),
@@ -1598,6 +1777,7 @@ def write_html(
         ".theme-summary{--theme:#1e3a8a;--theme-bg:#eff6ff}",
         ".theme-setup{--theme:#2563eb;--theme-bg:#eff6ff}",
         ".theme-guide{--theme:#475569;--theme-bg:#f1f5f9}",
+        ".theme-global{--theme:#dc2626;--theme-bg:#fef2f2}",
         ".theme-clean{--theme:#15803d;--theme-bg:#f0fdf4}",
         ".theme-clean-table{--theme:#65a30d;--theme-bg:#f7fee7}",
         ".theme-profiled{--theme:#7e22ce;--theme-bg:#faf5ff}",
@@ -1652,6 +1832,7 @@ def write_html(
         "</div></div>",
         synthetic_setup_html(sections).replace('<div class="panel"><h2>', '<div class="panel theme-setup" id="setup"><h2>', 1),
         synthetic_timeline_guide_html(),
+        synthetic_global_prefetch_margin_html(attribution_rows),
         '<div class="panel theme-guide"><h2>How To Read This Report</h2>',
         '<p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>',
         '<p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>',
