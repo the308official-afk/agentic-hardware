@@ -93,5 +93,5 @@ fi
 echo
 echo "Milestone 22 finished."
 echo "Report: ${OUT_DIR}/live_agentbench_tool_gap_report.html"
-echo "Latest Milestone 22 report: ${LATEST_REPORT_ROOT}/latest_m22_live_tool_gap_report.html"
-echo "Latest Milestone 22 CSV: ${LATEST_REPORT_ROOT}/latest_m22_live_tool_gaps.csv"
+echo "Latest Milestone 22 report: ${LATEST_REPORT_ROOT}/latest_real/m22_live_tool_gap_report.html"
+echo "Latest Milestone 22 CSV: ${LATEST_REPORT_ROOT}/latest_real/m22_live_tool_gaps.csv"

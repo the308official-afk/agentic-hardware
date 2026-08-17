@@ -108,6 +108,6 @@ cleanup_controller
 echo
 echo "Milestone 23 finished."
 echo "Report: ${OUT_DIR}/live_agentbench_tool_gap_report.html"
-echo "Latest Milestone 23 report: ${LATEST_REPORT_ROOT}/latest_m23_live_prefetch_report.html"
+echo "Latest Milestone 23 report: ${LATEST_REPORT_ROOT}/latest_real/m23_live_prefetch_report.html"
 echo "Hint log: ${LIVE_HINT_LOG}"
 echo "Controller log: ${CONTROLLER_LOG}"

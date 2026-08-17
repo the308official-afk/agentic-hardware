@@ -592,6 +592,27 @@ def experiment_setup_html(mode_rows: list[dict[str, Any]], pair_summary_rows: li
     """
 
 
+def timeline_guide_html(profiled_available: bool) -> str:
+    rows = [
+        {"color": "blue", "meaning": "Initial model turn", "where_used": "Clean performance timelines"},
+        {"color": "gray", "meaning": "Tool wait / prefetch opportunity", "where_used": "Clean and profiled timelines"},
+        {"color": "purple", "meaning": "Software hint or prefetch request", "where_used": "Prefetch timelines"},
+        {"color": "black", "meaning": "Replay due / resume boundary", "where_used": "Clean and profiled timelines"},
+        {"color": "red", "meaning": "Replay request after the tool returns", "where_used": "Clean and profiled timelines"},
+        {"color": "yellow", "meaning": "First token marker", "where_used": "Synthetic clean timelines"},
+        {"color": "green", "meaning": "KV/copy activity; dark green means CUDA HtoD profiler evidence", "where_used": "Profiled mechanism timelines"},
+    ]
+    note = (
+        "This live master report currently has clean live request timing only. CUDA HtoD / dark-green bars will appear after we add the live profiled attribution run."
+        if not profiled_available
+        else "This report includes profiled KV/DMA attribution."
+    )
+    return f"""
+    <p class="note">{html.escape(note)}</p>
+    {table_html(rows, ["color", "meaning", "where_used"])}
+    """
+
+
 def render_html(
     no_run: dict[str, Any],
     pref_run: dict[str, Any],
@@ -625,18 +646,15 @@ def render_html(
     toc = [
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
-        ("manager", "Manager Summary"),
-        ("deductions", "Key Deductions"),
-        ("performance", "Clean Performance Summary"),
+        ("timeline-guide", "How To Read Timelines"),
         ("timelines", "Clean Performance Timelines"),
-        ("timeline-summary", "Timeline Summary"),
-        ("timeline", "Timeline"),
-        ("layers", "Timeline Layers"),
+        ("performance", "Clean Performance Tables"),
+        ("profiled", "Profiled Mechanism Evidence"),
+        ("deductions", "Key Deductions"),
         ("checkpoints", "Prefetch Checkpoints"),
-        ("checkpoint-results", "Checkpoint Results Per Session"),
         ("observations", "Key Observations Per Session"),
-        ("details", "Session Details"),
         ("paired", "Paired Session Evidence"),
+        ("appendix", "Appendix"),
     ]
     return f"""<!doctype html>
 <html>
@@ -651,11 +669,13 @@ def render_html(
     <h1>Live Paired AgentBench Report</h1>
     <p>This is the live version of the paired evidence report. The request generator is real SWE-bench / Deep Agents traffic; the backend is direct SGLang; the comparison is no-prefetch versus live software prefetch intervention.</p>
     <p class="note">Important metric note: this report uses full resume request latency captured by the proxy, not streaming TTFT. It still shows whether the next real agent turn became faster or slower after the prefetch intervention.</p>
+    <h2>Table of Contents</h2>
     <div class="toc">{''.join(f'<a href="#{anchor}">{label}</a>' for anchor, label in toc)}</div>
   </section>
 
   <section id="summary">
     <h2>Summary</h2>
+    <p>This report uses real SWE-bench / DeepAgents traffic. It answers whether the live software hint path finishes before the next real agent turn resumes.</p>
     {metric_cards(mode_rows, pair_summary_rows)}
   </section>
 
@@ -665,28 +685,15 @@ def render_html(
     {experiment_setup_html(mode_rows, pair_summary_rows)}
   </section>
 
-  <section id="manager">
-    <h2>Manager Summary</h2>
-    <p>This experiment keeps the old paired-report question but replaces synthetic traffic with live Deep Agents traffic. In the prefetch run, the proxy emits a hint after a real tool-call response and a controller sends a marked prefetch-style request to SGLang during the real tool gap.</p>
-    <p>The main thing to inspect is whether the purple prefetch path finishes before the real red resume request. When it is late, the runtime had the agent hint but still could not act quickly enough through the ordinary software/SGLang path.</p>
-    <p class="warn">Live runs can diverge because the model may choose different tools or phases. Pairing is therefore by SWE-bench task index plus gap order, and aggregate trends are more reliable than any single row.</p>
-  </section>
-
-  <section id="deductions">
-    <h2>Key Deductions</h2>
-    {table_html(deductions, ["finding", "evidence", "why_it_matters"])}
-  </section>
-
-  <section id="performance">
-    <h2>Clean Performance Summary</h2>
-    <h3>By Mode</h3>
-    {table_html(mode_rows)}
-    <h3>Paired Aggregate</h3>
-    {table_html(pair_summary_rows)}
+  <section id="timeline-guide">
+    <h2>How To Read The Timelines</h2>
+    <p>The timelines are the primary visual evidence. Tables below each timeline provide the exact numbers behind the picture.</p>
+    {timeline_guide_html(profiled_available=False)}
   </section>
 
   <section id="timelines">
-    <h2>Clean Performance Timelines</h2>
+    <h2>A. Clean Performance Timelines</h2>
+    <p class="note">Profiler is off. Use this section for live request-flow and latency claims.</p>
     <p>Blue is a live model turn that emitted tool calls. Gray is the observed tool/harness gap. Red is the next live model turn. Purple appears only in the live-prefetch run and shows the software prefetch request.</p>
     <div class="grid">
       <div>
@@ -700,26 +707,24 @@ def render_html(
     </div>
   </section>
 
-  <section id="timeline-summary">
-    <h2>Timeline Summary</h2>
-    {table_html(timeline_rows)}
+  <section id="performance">
+    <h2>A.1 Clean Performance Tables</h2>
+    <p>These tables provide the exact request counts, tool-gap counts, latency values, and paired aggregate numbers behind the clean timelines.</p>
+    <h3>By Mode</h3>
+    {table_html(mode_rows)}
+    <h3>Paired Aggregate</h3>
+    {table_html(pair_summary_rows)}
   </section>
 
-  <section id="timeline">
-    <h2>Timeline</h2>
-    <p>Focused on the live-prefetch run. Purple ending after the black resume boundary means the software prefetch path was late for that real tool gap.</p>
-    {build_timeline_svg(pref_gaps, max_timeline_gaps)}
+  <section id="profiled">
+    <h2>B. Profiled Mechanism Evidence</h2>
+    <p class="warn">Not available yet for the real SWE-bench / DeepAgents master report. This report currently shows clean live request timing and live hint-controller timing, but it does not yet include torch-profiler CUDA HtoD attribution for live SWE-bench traffic.</p>
+    <p>After we add the live profiled attribution run, this section will show dark-green CUDA HtoD copy bars, KV/copy telemetry, replay reload evidence, and checkpoint tables for the real traffic path.</p>
   </section>
 
-  <section id="layers">
-    <h2>Timeline Layers</h2>
-    {table_html([
-        {"layer": "blue model turn", "meaning": "real Deep Agents request sent to SGLang that emitted structured tool calls", "why_it_matters": "this starts a possible prefetch opportunity"},
-        {"layer": "gray tool gap", "meaning": "observed wait between tool-call response and the next request in the same run", "why_it_matters": "this is the available time window for prefetch"},
-        {"layer": "purple prefetch request", "meaning": "live controller request sent from the hint path", "why_it_matters": "this emulates a future runtime/hardware prefetch command"},
-        {"layer": "black resume boundary", "meaning": "the next real agent request starts", "why_it_matters": "prefetch should be complete before this point"},
-        {"layer": "red resume request", "meaning": "next real model turn after tool execution", "why_it_matters": "this is where post-tool latency is observed"},
-    ])}
+  <section id="deductions">
+    <h2>Key Deductions</h2>
+    {table_html(deductions, ["finding", "evidence", "why_it_matters"])}
   </section>
 
   <section id="checkpoints">
@@ -728,27 +733,24 @@ def render_html(
     {table_html(checkpoint[:max_timeline_gaps])}
   </section>
 
-  <section id="checkpoint-results">
-    <h2>Checkpoint Results Per Session</h2>
-    {table_html(timeline_rows)}
-  </section>
-
   <section id="observations">
     <h2>Key Observations Per Session</h2>
     {table_html(observations, ["session_id", "status", "what_happened", "deduction_and_evidence"])}
   </section>
 
-  <section id="details">
-    <h2>Session Details</h2>
+  <section id="paired">
+    <h2>Paired Session Evidence</h2>
+    {table_html(pair_rows)}
+  </section>
+
+  <section id="appendix">
+    <h2>Appendix: Detailed Evidence</h2>
+    <h3>Timeline Summary</h3>
+    {table_html(timeline_rows)}
     <h3>Input Runs</h3>
     {table_html(detail_rows)}
     <h3>Live Request Details</h3>
     {table_html(request_details(pref_run, 80))}
-  </section>
-
-  <section id="paired">
-    <h2>Paired Session Evidence</h2>
-    {table_html(pair_rows)}
   </section>
 </main>
 </body>
@@ -807,29 +809,32 @@ def main() -> None:
 
     if args.latest_root:
         args.latest_root.mkdir(parents=True, exist_ok=True)
+        latest_real = args.latest_root / "latest_real"
+        latest_real.mkdir(parents=True, exist_ok=True)
         latest_pairs = [
             (html_path, "latest_master_report.html"),
-            (md_path, "latest_master_report.md"),
-            (json_path, "latest_master_report.json"),
-            (html_path, "latest_m24_live_paired_report.html"),
-            (md_path, "latest_m24_live_paired_report.md"),
-            (json_path, "latest_m24_live_paired_report.json"),
-            (html_path, "latest_live_paired_agentbench_report.html"),
-            (md_path, "latest_live_paired_agentbench_report.md"),
-            (json_path, "latest_live_paired_agentbench_report.json"),
-            (html_path, "latest_agentbench_sglang_direct_report.html"),
-            (md_path, "latest_agentbench_sglang_direct_report.md"),
-            (json_path, "latest_agentbench_sglang_direct_report.json"),
-            (args.out_dir / "live_paired_session_evidence.csv", "latest_master_session_evidence.csv"),
-            (args.out_dir / "live_paired_mode_summary.csv", "latest_master_mode_summary.csv"),
-            (args.out_dir / "live_paired_session_evidence.csv", "latest_live_paired_agentbench_session_evidence.csv"),
-            (args.out_dir / "live_paired_mode_summary.csv", "latest_live_paired_agentbench_mode_summary.csv"),
-            (args.out_dir / "live_paired_session_evidence.csv", "latest_m24_live_paired_session_evidence.csv"),
-            (args.out_dir / "live_paired_mode_summary.csv", "latest_m24_live_paired_mode_summary.csv"),
         ]
         for source, name in latest_pairs:
             if source.exists():
                 shutil.copyfile(source, args.latest_root / name)
+        detail_pairs = [
+            (html_path, "master_report.html"),
+            (md_path, "master_report.md"),
+            (json_path, "master_report.json"),
+            (html_path, "m24_live_paired_report.html"),
+            (md_path, "m24_live_paired_report.md"),
+            (json_path, "m24_live_paired_report.json"),
+            (args.out_dir / "live_paired_session_evidence.csv", "session_evidence.csv"),
+            (args.out_dir / "live_paired_mode_summary.csv", "mode_summary.csv"),
+            (args.out_dir / "live_paired_summary.csv", "paired_summary.csv"),
+            (args.out_dir / "live_paired_key_deductions.csv", "key_deductions.csv"),
+            (args.out_dir / "live_prefetch_checkpoint_results.csv", "prefetch_checkpoint_results.csv"),
+            (args.out_dir / "live_prefetch_timeline_summary.csv", "prefetch_timeline_summary.csv"),
+            (args.out_dir / "live_prefetch_session_observations.csv", "prefetch_session_observations.csv"),
+        ]
+        for source, name in detail_pairs:
+            if source.exists():
+                shutil.copyfile(source, latest_real / name)
 
     print(f"Wrote live paired AgentBench report: {html_path}")
     print(f"No-prefetch gaps: {len(no_run['gaps'])}")

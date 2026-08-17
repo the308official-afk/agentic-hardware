@@ -772,41 +772,31 @@ def main() -> None:
 
     if args.latest_root:
         args.latest_root.mkdir(parents=True, exist_ok=True)
+        latest_real = args.latest_root / "latest_real"
+        latest_real.mkdir(parents=True, exist_ok=True)
         latest_pairs = [
-            (html_path, "latest_m22_live_tool_gap_report.html"),
-            (md_path, "latest_m22_live_tool_gap_report.md"),
-            (args.out_dir / "live_agentbench_tool_gap_report.json", "latest_m22_live_tool_gap_report.json"),
-            (args.out_dir / "live_tool_gaps.csv", "latest_m22_live_tool_gaps.csv"),
-            (args.out_dir / "live_requests.csv", "latest_m22_live_requests.csv"),
-            (html_path, "latest_live_agentbench_tool_gap_report.html"),
-            (md_path, "latest_live_agentbench_tool_gap_report.md"),
-            (args.out_dir / "live_agentbench_tool_gap_report.json", "latest_live_agentbench_tool_gap_report.json"),
-            (args.out_dir / "live_tool_gaps.csv", "latest_live_agentbench_tool_gaps.csv"),
-            (args.out_dir / "live_requests.csv", "latest_live_agentbench_requests.csv"),
-            (html_path, "latest_agentbench_live_tool_gap_report.html"),
+            (html_path, "m22_live_tool_gap_report.html"),
+            (md_path, "m22_live_tool_gap_report.md"),
+            (args.out_dir / "live_agentbench_tool_gap_report.json", "m22_live_tool_gap_report.json"),
+            (args.out_dir / "live_tool_gaps.csv", "m22_live_tool_gaps.csv"),
+            (args.out_dir / "live_requests.csv", "m22_live_requests.csv"),
         ]
         if hint_rows or controller_rows:
             latest_pairs.extend(
                 [
-                    (html_path, "latest_m23_live_prefetch_report.html"),
-                    (md_path, "latest_m23_live_prefetch_report.md"),
+                    (html_path, "m23_live_prefetch_report.html"),
+                    (md_path, "m23_live_prefetch_report.md"),
                     (
                         args.out_dir / "live_agentbench_tool_gap_report.json",
-                        "latest_m23_live_prefetch_report.json",
+                        "m23_live_prefetch_report.json",
                     ),
-                    (args.out_dir / "live_tool_gaps.csv", "latest_m23_live_tool_gaps.csv"),
-                    (args.out_dir / "live_requests.csv", "latest_m23_live_requests.csv"),
-                    (html_path, "latest_live_agentbench_prefetch_report.html"),
-                    (md_path, "latest_live_agentbench_prefetch_report.md"),
-                    (
-                        args.out_dir / "live_agentbench_tool_gap_report.json",
-                        "latest_live_agentbench_prefetch_report.json",
-                    ),
+                    (args.out_dir / "live_tool_gaps.csv", "m23_live_tool_gaps.csv"),
+                    (args.out_dir / "live_requests.csv", "m23_live_requests.csv"),
                 ]
             )
         for source, name in latest_pairs:
             if source.exists():
-                shutil.copyfile(source, args.latest_root / name)
+                shutil.copyfile(source, latest_real / name)
 
     print(f"Wrote live AgentBench tool-gap report: {html_path}")
     print(f"Live model requests: {len(requests)}")

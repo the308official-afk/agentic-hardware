@@ -111,4 +111,4 @@ echo
 echo "Milestone 24 finished."
 echo "Report: ${REPORT_ROOT}/live_paired_agentbench_report.html"
 echo "Latest master report: ${LATEST_REPORT_ROOT}/latest_master_report.html"
-echo "Latest Milestone 24 report: ${LATEST_REPORT_ROOT}/latest_m24_live_paired_report.html"
+echo "Latest Milestone 24 report: ${LATEST_REPORT_ROOT}/latest_real/m24_live_paired_report.html"

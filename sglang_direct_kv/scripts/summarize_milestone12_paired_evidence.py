@@ -1444,6 +1444,34 @@ def synthetic_setup_html(sections: dict[str, list[dict[str, Any]]]) -> str:
     )
 
 
+def html_toc(items: list[tuple[str, str]]) -> str:
+    links = "".join(
+        f'<a href="#{html.escape(anchor)}">{html.escape(label)}</a>' for anchor, label in items
+    )
+    return f'<div class="panel"><h2>Table of Contents</h2><div class="toc">{links}</div></div>'
+
+
+def synthetic_timeline_guide_html() -> str:
+    rows = [
+        {"color": "blue", "meaning": "Initial request", "where_used": "Clean performance timelines"},
+        {"color": "gray", "meaning": "Tool wait / prefetch opportunity", "where_used": "Clean and profiled timelines"},
+        {"color": "purple", "meaning": "Hint or direct-load request", "where_used": "Prefetch modes"},
+        {"color": "black", "meaning": "Replay due / resume boundary", "where_used": "Clean and profiled timelines"},
+        {"color": "red", "meaning": "Replay request", "where_used": "Clean and profiled timelines"},
+        {"color": "yellow", "meaning": "First token marker", "where_used": "Clean performance timelines"},
+        {"color": "green", "meaning": "KV/copy activity; dark green is CUDA HtoD profiler evidence", "where_used": "Profiled mechanism timelines"},
+    ]
+    return "\n".join(
+        [
+            '<div class="panel" id="timeline-guide"><h2>How To Read The Timelines</h2>',
+            '<p class="caption">The timelines are the main visual evidence. Read the clean timelines first for performance, then the profiled mechanism timeline for KV/copy attribution.</p>',
+            '<div class="table-wrap">',
+            html_table(rows),
+            "</div></div>",
+        ]
+    )
+
+
 def write_html(
     path: Path,
     sections: dict[str, list[dict[str, Any]]],
@@ -1455,6 +1483,18 @@ def write_html(
 ) -> None:
     cards = summary_cards(sections)
     timeline_svg, selected_timeline_rows = build_timeline_svg(attribution_rows, timeline, max_timeline_sessions)
+    toc = [
+        ("executive", "Executive Summary"),
+        ("setup", "Experiment Setup"),
+        ("timeline-guide", "How To Read Timelines"),
+        ("clean-timelines", "Clean Performance Timelines"),
+        ("clean-tables", "Clean Performance Tables"),
+        ("profiled-timelines", "Profiled Mechanism Timelines"),
+        ("profiled-tables", "Profiled Mechanism Tables"),
+        ("observations", "Session Observations"),
+        ("paired", "Paired Evidence"),
+        ("appendix", "Appendix"),
+    ]
     lines = [
         "<!doctype html>",
         '<html lang="en">',
@@ -1471,6 +1511,8 @@ def write_html(
         ".card{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fbfdff}",
         ".card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}",
         ".card .value{font-size:24px;font-weight:700;margin-top:6px}",
+        ".toc{display:flex;flex-wrap:wrap;gap:10px 12px;margin-top:14px}",
+        ".toc a{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:7px 10px;color:#0f172a;text-decoration:none}",
         ".table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}",
         "table{border-collapse:collapse;width:100%;font-size:13px;background:white}",
         "th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}",
@@ -1490,7 +1532,8 @@ def write_html(
         "<body>",
         "<h1>Milestone 12 Paired Evidence Report</h1>",
         '<p class="subtle">Clean runs answer performance questions. Profiled runs answer mechanism questions. This keeps the TTFT story separate from profiler overhead.</p>',
-        '<div class="panel"><h2>Manager Summary</h2>',
+        html_toc(toc),
+        '<div class="panel" id="executive"><h2>Executive Summary</h2>',
         '<p class="caption">This report is designed to answer two different questions without mixing them together.</p>',
         "<ul>",
         *[f"<li>{html.escape(line)}</li>" for line in manager_summary_lines(sections)],
@@ -1501,7 +1544,8 @@ def write_html(
             for card in cards
         ],
         "</div></div>",
-        synthetic_setup_html(sections),
+        synthetic_setup_html(sections).replace('<div class="panel"><h2>', '<div class="panel" id="setup"><h2>', 1),
+        synthetic_timeline_guide_html(),
         '<div class="panel"><h2>How To Read This Report</h2>',
         '<p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>',
         '<p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>',
@@ -1510,73 +1554,77 @@ def write_html(
         '<div class="panel"><h2>Key Deductions</h2><ul>',
         *[f"<li>{html.escape(line)}</li>" for line in key_deduction_lines(sections)],
         "</ul></div>",
-        '<div class="panel"><h2>Metadata</h2><pre>',
-        html.escape(json.dumps(metadata, indent=2, sort_keys=True)),
-        "</pre></div>",
     ]
-    for title in ("Clean Performance Summary", "Profiled Attribution Summary"):
-        rows = sections.get(title, [])
-        lines.append(f'<div class="panel"><h2>{html.escape(title)}</h2>')
-        lines.append(f'<p class="caption">{html.escape(section_caption(title))}</p>')
-        lines.append('<div class="table-wrap">')
-        lines.append(html_table(rows))
-        lines.append("</div></div>")
-        if title == "Clean Performance Summary" and clean_timelines:
-            lines.append('<div class="panel"><h2>Clean Performance Timelines</h2>')
-            lines.append(
-                '<p class="caption">These timelines come from clean runs with torch.profiler off. Use them for manager-facing request-flow and TTFT behavior. They intentionally do not show CUDA HtoD bars; the profiled mechanism timeline below is the place for DMA/KV attribution.</p>'
+
+    lines.append('<div class="panel" id="clean-timelines"><h2>A. Clean Performance Timelines</h2>')
+    lines.append(
+        '<p class="caption"><span class="pill">Profiler OFF</span> Use these timelines for request-flow, replay timing, and TTFT/performance claims. They intentionally do not show CUDA HtoD bars.</p>'
+    )
+    if clean_timelines:
+        for mode, data in clean_timelines.items():
+            clean_svg, selected_clean_rows = build_clean_timeline_svg(
+                mode,
+                data.get("rows", []),
+                data.get("timeline", []),
+                max_timeline_sessions,
             )
-            for mode, data in clean_timelines.items():
-                clean_svg, selected_clean_rows = build_clean_timeline_svg(
-                    mode,
-                    data.get("rows", []),
-                    data.get("timeline", []),
-                    max_timeline_sessions,
-                )
-                lines.append(f'<h3>{html.escape(mode)}</h3>')
-                lines.append(
-                    '<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, red is replay admission/execution, and yellow is first token. No-prefetch can start replay exactly on time but still pay TTFT inside the red replay bar. Long replay bars are clipped so the chart focuses on the resume boundary.</p>'
-                )
-                lines.append(clean_svg)
-                lines.append('<div class="table-wrap">')
-                lines.append(html_table(selected_clean_rows))
-                lines.append("</div>")
+            lines.append(f'<h3>{html.escape(mode)}</h3>')
+            lines.append(
+                '<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, red is replay admission/execution, and yellow is first token. Long replay bars are clipped so the chart focuses on the resume boundary.</p>'
+            )
+            lines.append(clean_svg)
+            lines.append('<div class="table-wrap">')
+            lines.append(html_table(selected_clean_rows))
             lines.append("</div>")
+    else:
+        lines.append('<p class="caption">No clean performance timeline data was found for this run.</p>')
+    lines.append("</div>")
+
+    lines.append('<div class="panel" id="clean-tables"><h2>A.1 Clean Performance Tables</h2>')
+    lines.append(f'<p class="caption">{html.escape(section_caption("Clean Performance Summary"))}</p>')
+    lines.append('<div class="table-wrap">')
+    lines.append(html_table(sections.get("Clean Performance Summary", [])))
+    lines.append("</div></div>")
+
     if attribution_rows and timeline:
-        lines.append('<div class="panel"><h2>Timeline Summary</h2>')
-        lines.append('<p class="caption">This is the profiled mechanism view. It shows what happened inside the hinted path, not clean TTFT performance.</p>')
-        lines.append('<div class="table-wrap">')
-        lines.append(html_table(timeline_summary_rows(attribution_rows)))
-        lines.append("</div></div>")
-        lines.append('<div class="panel"><h2>Timeline</h2>')
+        lines.append('<div class="panel" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2>')
         lines.append(
-            '<p class="caption">How to read this: this focused view zooms into the prefetch/replay boundary. Bars may overlap intentionally. Gray is the tool-wait window. Purple is the software hint request. Red is the replay request; long replay bars are clipped and marked as continuing. If purple overlaps red, the hint was still running when replay arrived. Only hint start/end are labeled directly to keep the chart readable. Green is the one visible KV copy-activity bar: dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback. Green bars may be widened for visibility; thin dark ticks mark the exact copy start and end.</p>'
+            '<p class="caption"><span class="pill">Profiler / telemetry view</span> Use this for KV-copy and DMA-style attribution, not clean TTFT claims. Dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback.</p>'
         )
         lines.append(timeline_svg)
         lines.append("</div>")
+
+        lines.append('<div class="panel" id="profiled-tables"><h2>B.1 Profiled Mechanism Tables</h2>')
+        lines.append(f'<p class="caption">{html.escape(section_caption("Profiled Attribution Summary"))}</p>')
+        lines.append('<div class="table-wrap">')
+        lines.append(html_table(sections.get("Profiled Attribution Summary", [])))
+        lines.append("</div>")
+        lines.append("<h3>Timeline Summary</h3>")
+        lines.append('<div class="table-wrap">')
+        lines.append(html_table(timeline_summary_rows(attribution_rows)))
+        lines.append("</div>")
         sanity_rows = timeline_sanity_rows(selected_timeline_rows)
         if sanity_rows:
-            lines.append('<div class="panel"><h2>Timeline Sanity Checks</h2>')
-            lines.append('<p class="caption">This table makes the visual invariants explicit. For hint-side KV movement, green copy windows should usually be inside the purple hint request. If hint overlaps replay, the software prefetch path was still running when the real agent turn arrived.</p>')
+            lines.append("<h3>Timeline Sanity Checks</h3>")
             lines.append(html_table(sanity_rows))
-            lines.append("</div>")
         copy_rows = visible_copy_rows(selected_timeline_rows)
         if copy_rows:
-            lines.append('<div class="panel"><h2>Visible KV Copy Telemetry</h2>')
+            lines.append("<h3>Visible KV Copy Telemetry</h3>")
             lines.append(
                 '<p class="caption">These are the selected sessions represented by green copy bars in the timeline. `sglang_lightweight_h2d_telemetry` is the scalable source for larger runs; `torch_profiler_h2d` is the heavier CUDA-validation source for smaller runs.</p>'
             )
             lines.append('<div class="table-wrap">')
             lines.append(html_table(copy_rows))
-            lines.append("</div></div>")
+            lines.append("</div>")
+        lines.append("<h3>Timeline Layers</h3>")
+        lines.append(html_table(timeline_layers_rows()))
+        lines.append("<h3>Prefetch Checkpoints</h3>")
+        lines.append(html_table(prefetch_checkpoint_rows()))
+        lines.append("<h3>Checkpoint Results Per Session</h3>")
+        lines.append(html_table(checkpoint_result_rows(selected_timeline_rows)))
+        lines.append("</div>")
+
         timeline_sections = [
-            ("Timeline Layers", timeline_layers_rows(), "These rows explain what each visual layer in the timeline means."),
-            ("Prefetch Checkpoints", prefetch_checkpoint_rows(), "These checkpoints separate copy readiness, full hint completion, and replay reuse."),
-            (
-                "Checkpoint Results Per Session",
-                checkpoint_result_rows(selected_timeline_rows),
-                "This table shows whether each selected session passed or failed each checkpoint.",
-            ),
             (
                 "Key Observations Per Session",
                 key_observation_rows(selected_timeline_rows),
@@ -1589,20 +1637,24 @@ def write_html(
             ),
         ]
         for title, rows, caption in timeline_sections:
-            lines.append(f'<div class="panel"><h2>{html.escape(title)}</h2>')
+            section_id = "observations" if title == "Key Observations Per Session" else "appendix"
+            lines.append(f'<div class="panel" id="{section_id}"><h2>{html.escape(title)}</h2>')
             lines.append(f'<p class="caption">{html.escape(caption)}</p>')
             lines.append('<div class="table-wrap wide">')
             lines.append(html_table(rows))
             lines.append("</div></div>")
     else:
         lines.append(
-            '<div class="panel"><h2>Timeline</h2><p class="caption">No profiled timeline JSON was found for this report. Run the profiled attribution step to populate the visual timeline sections.</p></div>'
+            '<div class="panel" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2><p class="caption">No profiled timeline JSON was found for this report. Run the profiled attribution step to populate the visual timeline sections.</p></div>'
         )
-    lines.append('<div class="panel"><h2>Paired Session Evidence</h2>')
+    lines.append('<div class="panel" id="paired"><h2>Paired Session Evidence</h2>')
     lines.append(f'<p class="caption">{html.escape(section_caption("Paired Session Evidence"))}</p>')
     lines.append('<div class="table-wrap">')
     lines.append(html_table(sections.get("Paired Session Evidence", [])))
     lines.append("</div></div>")
+    lines.append('<div class="panel" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>')
+    lines.append(html.escape(json.dumps(metadata, indent=2, sort_keys=True)))
+    lines.append("</pre></div>")
     lines.extend(["</body>", "</html>"])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1710,34 +1762,28 @@ def section_caption(title: str) -> str:
 
 def copy_latest_reports(out_root: Path, latest_root: Path) -> None:
     latest_root.mkdir(parents=True, exist_ok=True)
+    latest_synthetic = latest_root / "latest_synthetic"
+    latest_synthetic.mkdir(parents=True, exist_ok=True)
+    master = out_root / "paired_report.html"
+    if master.exists():
+        shutil.copyfile(master, latest_root / "latest_synthetic_master_report.html")
     copies = [
-        ("paired_report.html", "latest_synthetic_master_report.html"),
-        ("paired_report.md", "latest_synthetic_master_report.md"),
-        ("paired_report.json", "latest_synthetic_master_report.json"),
-        ("paired_clean_summary.csv", "latest_synthetic_master_clean_summary.csv"),
-        ("paired_attribution_summary.csv", "latest_synthetic_master_attribution_summary.csv"),
-        ("paired_session_evidence.csv", "latest_synthetic_master_session_evidence.csv"),
-        ("paired_timeline_summary.csv", "latest_synthetic_master_timeline_summary.csv"),
-        ("paired_timeline_sanity_checks.csv", "latest_synthetic_master_timeline_sanity_checks.csv"),
-        ("paired_checkpoint_results.csv", "latest_synthetic_master_checkpoint_results.csv"),
-        ("paired_key_observations.csv", "latest_synthetic_master_key_observations.csv"),
-        ("paired_session_details.csv", "latest_synthetic_master_session_details.csv"),
-        ("paired_report.html", "latest_paired_report.html"),
-        ("paired_report.md", "latest_paired_report.md"),
-        ("paired_report.json", "latest_paired_report.json"),
-        ("paired_clean_summary.csv", "latest_paired_clean_summary.csv"),
-        ("paired_attribution_summary.csv", "latest_paired_attribution_summary.csv"),
-        ("paired_session_evidence.csv", "latest_paired_session_evidence.csv"),
-        ("paired_timeline_summary.csv", "latest_paired_timeline_summary.csv"),
-        ("paired_timeline_sanity_checks.csv", "latest_paired_timeline_sanity_checks.csv"),
-        ("paired_checkpoint_results.csv", "latest_paired_checkpoint_results.csv"),
-        ("paired_key_observations.csv", "latest_paired_key_observations.csv"),
-        ("paired_session_details.csv", "latest_paired_session_details.csv"),
+        ("paired_report.html", "master_report.html"),
+        ("paired_report.md", "master_report.md"),
+        ("paired_report.json", "master_report.json"),
+        ("paired_clean_summary.csv", "clean_summary.csv"),
+        ("paired_attribution_summary.csv", "attribution_summary.csv"),
+        ("paired_session_evidence.csv", "session_evidence.csv"),
+        ("paired_timeline_summary.csv", "timeline_summary.csv"),
+        ("paired_timeline_sanity_checks.csv", "timeline_sanity_checks.csv"),
+        ("paired_checkpoint_results.csv", "checkpoint_results.csv"),
+        ("paired_key_observations.csv", "key_observations.csv"),
+        ("paired_session_details.csv", "session_details.csv"),
     ]
     for src_name, dst_name in copies:
         src = out_root / src_name
         if src.exists():
-            shutil.copyfile(src, latest_root / dst_name)
+            shutil.copyfile(src, latest_synthetic / dst_name)
 
 
 def main() -> None:

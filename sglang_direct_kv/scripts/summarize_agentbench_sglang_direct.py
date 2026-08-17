@@ -254,7 +254,7 @@ def copy_summary(copy_path: Path | None) -> list[dict[str, Any]]:
 def load_replay_workload(out_root: Path) -> list[dict[str, Any]]:
     candidates = [
         out_root.parent / "agentbench_replay_workload.jsonl",
-        out_root.parent.parent / "latest_agentbench_replay_workload.jsonl",
+        out_root.parent.parent / "latest_real" / "agentbench_replay_workload.jsonl",
     ]
     for path in candidates:
         rows = read_jsonl(path)
@@ -793,7 +793,7 @@ def write_outputs(
         '<div class="panel"><h2>Important Interpretation</h2>',
         '<div class="callout"><strong>What we can claim:</strong> real AgentBench/DeepAgents traffic reached SGLang directly, SGLang served the model turns, and KV/copy telemetry was captured with agent/session context.</div>',
         '<div class="callout warn"><strong>What we should not claim from this report alone:</strong> this live report does not isolate the performance value of prefetching. DeepAgents controls the live tool-loop timing, so controlled mode comparison belongs in the AgentBench replay-mode report.</div>',
-        '<p class="caption">Use this report as the realism bridge. Use <code>latest_agentbench_replay_mode_summary.html</code> for the controlled no-prefetch/request-warm/direct-load/oracle-direct-load comparison using these real prompts.</p>',
+        '<p class="caption">Use this report as the realism bridge. Use <code>latest_real/agentbench_replay_mode_summary.html</code> for the controlled no-prefetch/request-warm/direct-load/oracle-direct-load comparison using these real prompts.</p>',
         "</div>",
         "</body></html>",
     ]
@@ -872,21 +872,23 @@ def write_outputs(
     )
     if latest_root is not None:
         latest_root.mkdir(parents=True, exist_ok=True)
+        latest_real = latest_root / "latest_real"
+        latest_real.mkdir(parents=True, exist_ok=True)
         for src, name in [
-            (html_path, "latest_agentbench_sglang_direct_report.html"),
-            (md_path, "latest_agentbench_sglang_direct_report.md"),
-            (out_root / "agentbench_sglang_direct_report.json", "latest_agentbench_sglang_direct_report.json"),
-            (out_root / "agentbench_sglang_runs.csv", "latest_agentbench_sglang_runs.csv"),
-            (out_root / "agentbench_sglang_phase_turns.csv", "latest_agentbench_sglang_phase_turns.csv"),
-            (out_root / "agentbench_sglang_kv_summary.csv", "latest_agentbench_sglang_kv_summary.csv"),
-            (out_root / "agentbench_sglang_copy_summary.csv", "latest_agentbench_sglang_copy_summary.csv"),
-            (out_root / "agentbench_sglang_high_level_summary.csv", "latest_agentbench_sglang_high_level_summary.csv"),
-            (out_root / "agentbench_sglang_timeline_layers.csv", "latest_agentbench_sglang_timeline_layers.csv"),
-            (out_root / "agentbench_sglang_key_observations.csv", "latest_agentbench_sglang_key_observations.csv"),
-            (out_root / "agentbench_sglang_replay_sessions.csv", "latest_agentbench_sglang_replay_sessions.csv"),
+            (html_path, "agentbench_sglang_direct_report.html"),
+            (md_path, "agentbench_sglang_direct_report.md"),
+            (out_root / "agentbench_sglang_direct_report.json", "agentbench_sglang_direct_report.json"),
+            (out_root / "agentbench_sglang_runs.csv", "agentbench_sglang_runs.csv"),
+            (out_root / "agentbench_sglang_phase_turns.csv", "agentbench_sglang_phase_turns.csv"),
+            (out_root / "agentbench_sglang_kv_summary.csv", "agentbench_sglang_kv_summary.csv"),
+            (out_root / "agentbench_sglang_copy_summary.csv", "agentbench_sglang_copy_summary.csv"),
+            (out_root / "agentbench_sglang_high_level_summary.csv", "agentbench_sglang_high_level_summary.csv"),
+            (out_root / "agentbench_sglang_timeline_layers.csv", "agentbench_sglang_timeline_layers.csv"),
+            (out_root / "agentbench_sglang_key_observations.csv", "agentbench_sglang_key_observations.csv"),
+            (out_root / "agentbench_sglang_replay_sessions.csv", "agentbench_sglang_replay_sessions.csv"),
         ]:
             if src.exists():
-                shutil.copyfile(src, latest_root / name)
+                shutil.copyfile(src, latest_real / name)
 
 
 def main() -> None:

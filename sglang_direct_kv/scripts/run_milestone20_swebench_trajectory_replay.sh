@@ -45,7 +45,7 @@ else
   exit 1
 fi
 
-mkdir -p "${RESULT_ROOT}" "${LATEST_REPORT_ROOT}"
+mkdir -p "${RESULT_ROOT}" "${LATEST_REPORT_ROOT}" "${LATEST_REPORT_ROOT}/latest_synthetic"
 
 echo "Milestone 20: SWE-bench trajectory prompt replay"
 echo "MODEL=${MODEL}"
@@ -74,8 +74,8 @@ echo "Step 1/2: converting trajectory prompt catalog into replay workload"
   --seed "${RANDOM_SEED}" \
   --max-prompt-chars "${MAX_PROMPT_CHARS}"
 
-cp -f "${WORKLOAD_JSONL}" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_replay_workload.jsonl"
-cp -f "${WORKLOAD_CSV}" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_replay_workload.csv"
+cp -f "${WORKLOAD_JSONL}" "${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_replay_workload.jsonl"
+cp -f "${WORKLOAD_CSV}" "${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_replay_workload.csv"
 
 echo
 echo "Step 2/2: running paired clean + attribution evidence with real trajectory prompts"
@@ -100,19 +100,19 @@ TIMELINE_MAX_SESSIONS="${TIMELINE_MAX_SESSIONS}" \
 bash scripts/run_milestone12_paired_evidence.sh "${MODEL}"
 
 if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html" ]]; then
-  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.html"
+  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html" "${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_paired_report.html"
 fi
-if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.md" ]]; then
-  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.md" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.md"
+if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic/master_report.md" ]]; then
+  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic/master_report.md" "${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_paired_report.md"
 fi
-if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.json" ]]; then
-  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic_master_report.json" "${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.json"
+if [[ -f "${LATEST_REPORT_ROOT}/latest_synthetic/master_report.json" ]]; then
+  cp -f "${LATEST_REPORT_ROOT}/latest_synthetic/master_report.json" "${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_paired_report.json"
 fi
 
 echo
 echo "Milestone 20 outputs written under ${RESULT_ROOT}"
 echo "Workload JSONL: ${WORKLOAD_JSONL}"
-echo "Latest workload JSONL: ${LATEST_REPORT_ROOT}/latest_swebench_trajectory_replay_workload.jsonl"
+echo "Latest workload JSONL: ${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_replay_workload.jsonl"
 echo "Paired report HTML: ${RESULT_ROOT}/paired_report/paired_report.html"
 echo "Latest synthetic master report HTML: ${LATEST_REPORT_ROOT}/latest_synthetic_master_report.html"
-echo "Latest SWE-bench trajectory paired report HTML: ${LATEST_REPORT_ROOT}/latest_swebench_trajectory_paired_report.html"
+echo "Latest SWE-bench trajectory paired report: ${LATEST_REPORT_ROOT}/latest_synthetic/swebench_trajectory_paired_report.html"

@@ -259,13 +259,14 @@ echo "Extracting real AgentBench prompts into replay workload..." | tee -a "${DR
   --min-gap-ms "${AGENTBENCH_REPLAY_MIN_GAP_MS:-0}" \
   2>&1 | tee -a "${DRIVER_LOG}"
 
-cp -f "${WORKLOAD_JSONL}" "${LATEST_REPORT_ROOT}/latest_agentbench_replay_workload.jsonl"
-cp -f "${WORKLOAD_CSV}" "${LATEST_REPORT_ROOT}/latest_agentbench_replay_workload.csv"
+mkdir -p "${LATEST_REPORT_ROOT}/latest_real"
+cp -f "${WORKLOAD_JSONL}" "${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_workload.jsonl"
+cp -f "${WORKLOAD_CSV}" "${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_workload.csv"
 
 echo
 echo "Milestone 16 outputs:"
 echo "  Live report: ${REPORT_ROOT}/agentbench_sglang_direct_report.html"
-echo "  Latest live report: ${LATEST_REPORT_ROOT}/latest_agentbench_sglang_direct_report.html"
+echo "  Latest live report: ${LATEST_REPORT_ROOT}/latest_real/agentbench_sglang_direct_report.html"
 echo "  Replay workload: ${WORKLOAD_JSONL}"
-echo "  Latest replay workload: ${LATEST_REPORT_ROOT}/latest_agentbench_replay_workload.jsonl"
+echo "  Latest replay workload: ${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_workload.jsonl"
 echo "  SGLang trace: ${TRACE}"

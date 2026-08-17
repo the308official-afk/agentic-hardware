@@ -90,15 +90,15 @@ Use this for controlled synthetic experiments:
 artifacts/results/latest_synthetic_master_report.html
 ```
 
-Use the milestone-specific latest reports only for debugging:
+Milestone-specific latest files now live inside detail folders:
 
 ```text
-latest_m22_live_tool_gap_report.html    observe-only live tool gaps
-latest_m23_live_prefetch_report.html    live prefetch intervention only
-latest_m24_live_paired_report.html      paired live no-prefetch vs prefetch
+artifacts/results/latest_real/          real live experiment details
+artifacts/results/latest_synthetic/     synthetic experiment details
 ```
 
-Older `latest_live_*` and `latest_paired_report.*` names may still exist as compatibility aliases, but the canonical report names are:
+The results-folder root is intentionally kept simple. The only top-level latest
+HTML reports should be:
 
 ```text
 latest_master_report.html              real SWE-bench / AgentBench live report
@@ -2798,11 +2798,11 @@ artifacts/results/milestone12_paired_evidence/paired_report/paired_session_evide
 
 Stable latest report copies:
 artifacts/results/latest_synthetic_master_report.html
-artifacts/results/latest_synthetic_master_report.md
-artifacts/results/latest_synthetic_master_report.json
-artifacts/results/latest_synthetic_master_checkpoint_results.csv
-artifacts/results/latest_synthetic_master_key_observations.csv
-artifacts/results/latest_synthetic_master_session_details.csv
+artifacts/results/latest_synthetic/master_report.md
+artifacts/results/latest_synthetic/master_report.json
+artifacts/results/latest_synthetic/checkpoint_results.csv
+artifacts/results/latest_synthetic/key_observations.csv
+artifacts/results/latest_synthetic/session_details.csv
 ```
 
 The run-specific report stays in the milestone folder.
@@ -3610,8 +3610,8 @@ Outputs:
 
 ```text
 artifacts/results/milestone16_agentbench_sglang_direct/report/agentbench_sglang_direct_report.html
-artifacts/results/latest_agentbench_sglang_direct_report.html
-artifacts/results/latest_agentbench_replay_workload.jsonl
+artifacts/results/latest_real/agentbench_sglang_direct_report.html
+artifacts/results/latest_real/agentbench_replay_workload.jsonl
 ```
 
 What this milestone does not prove yet:
@@ -3702,7 +3702,7 @@ Run it:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-WORKLOAD_JSONL=artifacts/results/latest_agentbench_replay_workload.jsonl \
+WORKLOAD_JSONL=artifacts/results/latest_real/agentbench_replay_workload.jsonl \
 MODES="no_prefetch request_warm direct_load oracle_direct_load" \
 ORACLE_LEAD_MS=500 \
 TRAFFIC_CONCURRENCY=4 \
@@ -3723,8 +3723,8 @@ Outputs:
 
 ```text
 artifacts/results/milestone18_agentbench_trace_replay_modes/traffic_summary.html
-artifacts/results/latest_agentbench_replay_mode_summary.html
-artifacts/results/latest_agentbench_replay_mode_summary.csv
+artifacts/results/latest_real/agentbench_replay_mode_summary.html
+artifacts/results/latest_real/agentbench_replay_mode_summary.csv
 ```
 
 Latest validation:
@@ -3774,9 +3774,9 @@ This lets us tell the full story:
 Current report files:
 
 ```text
-artifacts/results/latest_agentbench_sglang_direct_report.html
-artifacts/results/latest_agentbench_replay_mode_summary.html
-artifacts/results/latest_agentbench_replay_workload.csv
+artifacts/results/latest_real/agentbench_sglang_direct_report.html
+artifacts/results/latest_real/agentbench_replay_mode_summary.html
+artifacts/results/latest_real/agentbench_replay_workload.csv
 ```
 
 Simple interpretation:
@@ -3855,16 +3855,16 @@ Important events to observe:
 The converter writes a real-prompt workload JSONL.
 Milestone 12 runs using WORKLOAD_JSONL instead of synthetic prompts.
 latest_synthetic_master_report.html is regenerated with the same paired-report format.
-latest_swebench_trajectory_paired_report.html is also written as a stable alias.
+latest_synthetic/swebench_trajectory_paired_report.html is also written as a stable detail copy.
 ```
 
 Outputs:
 
 ```text
 artifacts/results/milestone20_swebench_trajectory_replay/swebench_trajectory_replay_workload.jsonl
-artifacts/results/latest_swebench_trajectory_replay_workload.jsonl
+artifacts/results/latest_synthetic/swebench_trajectory_replay_workload.jsonl
 artifacts/results/latest_synthetic_master_report.html
-artifacts/results/latest_swebench_trajectory_paired_report.html
+artifacts/results/latest_synthetic/swebench_trajectory_paired_report.html
 ```
 
 Simple interpretation:
@@ -4344,9 +4344,9 @@ artifacts/results/<run>/tool_normalizer_proxy.jsonl
 artifacts/results/<run>/live_agentbench_tool_gap_report/live_agentbench_tool_gap_report.html
 artifacts/results/<run>/live_agentbench_tool_gap_report/live_tool_gaps.csv
 artifacts/results/<run>/live_agentbench_tool_gap_report/live_requests.csv
-artifacts/results/latest_m22_live_tool_gap_report.html
-artifacts/results/latest_m22_live_tool_gaps.csv
-artifacts/results/latest_m22_live_requests.csv
+artifacts/results/latest_real/m22_live_tool_gap_report.html
+artifacts/results/latest_real/m22_live_tool_gaps.csv
+artifacts/results/latest_real/m22_live_requests.csv
 ```
 
 Simple interpretation:
@@ -4453,9 +4453,9 @@ artifacts/results/<run>/live_hint_events.jsonl
 artifacts/results/<run>/live_hint_payloads/
 artifacts/results/<run>/live_prefetch_controller.jsonl
 artifacts/results/<run>/live_agentbench_prefetch_report/live_agentbench_tool_gap_report.html
-artifacts/results/latest_m23_live_prefetch_report.html
-artifacts/results/latest_m23_live_tool_gaps.csv
-artifacts/results/latest_m23_live_requests.csv
+artifacts/results/latest_real/m23_live_prefetch_report.html
+artifacts/results/latest_real/m23_live_tool_gaps.csv
+artifacts/results/latest_real/m23_live_requests.csv
 ```
 
 Simple interpretation:
@@ -4589,12 +4589,11 @@ artifacts/results/<run>/live_prefetch/
 artifacts/results/<run>/live_paired_report/live_paired_agentbench_report.html
 artifacts/results/<run>/live_paired_report/live_paired_session_evidence.csv
 artifacts/results/latest_master_report.html
-artifacts/results/latest_master_report.json
-artifacts/results/latest_master_session_evidence.csv
-artifacts/results/latest_master_mode_summary.csv
-artifacts/results/latest_m24_live_paired_report.html
-artifacts/results/latest_m24_live_paired_report.json
-artifacts/results/latest_m24_live_paired_session_evidence.csv
+artifacts/results/latest_real/master_report.json
+artifacts/results/latest_real/session_evidence.csv
+artifacts/results/latest_real/m24_live_paired_report.html
+artifacts/results/latest_real/m24_live_paired_report.json
+artifacts/results/latest_real/m24_live_paired_report.md
 ```
 
 Simple interpretation:

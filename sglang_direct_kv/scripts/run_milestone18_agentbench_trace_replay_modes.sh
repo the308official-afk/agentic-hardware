@@ -5,7 +5,7 @@ MODEL="${1:-Qwen/Qwen2.5-1.5B-Instruct}"
 HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone18_agentbench_trace_replay_modes}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
-WORKLOAD_JSONL="${WORKLOAD_JSONL:-${LATEST_REPORT_ROOT}/latest_agentbench_replay_workload.jsonl}"
+WORKLOAD_JSONL="${WORKLOAD_JSONL:-${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_workload.jsonl}"
 MODES="${MODES:-no_prefetch request_warm direct_load oracle_direct_load}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-16384}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-120}"
@@ -15,7 +15,7 @@ MAX_TOKENS="${MAX_TOKENS:-8}"
 PREFETCH_MAX_TOKENS="${PREFETCH_MAX_TOKENS:-1}"
 BASE_EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:-}"
 
-mkdir -p "${RESULT_ROOT}" "${LATEST_REPORT_ROOT}"
+mkdir -p "${RESULT_ROOT}" "${LATEST_REPORT_ROOT}" "${LATEST_REPORT_ROOT}/latest_real"
 
 if [[ ! -f "${WORKLOAD_JSONL}" ]]; then
   echo "Replay workload not found: ${WORKLOAD_JSONL}" >&2
@@ -142,13 +142,13 @@ python scripts/summarize_agentic_traffic_results.py \
 
 cp -f "${WORKLOAD_JSONL}" "${RESULT_ROOT}/agentbench_replay_workload_used.jsonl"
 if [[ -f "${RESULT_ROOT}/traffic_summary.csv" ]]; then
-  cp -f "${RESULT_ROOT}/traffic_summary.csv" "${LATEST_REPORT_ROOT}/latest_agentbench_replay_mode_summary.csv"
+  cp -f "${RESULT_ROOT}/traffic_summary.csv" "${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_mode_summary.csv"
 fi
 if [[ -f "${RESULT_ROOT}/traffic_summary.html" ]]; then
-  cp -f "${RESULT_ROOT}/traffic_summary.html" "${LATEST_REPORT_ROOT}/latest_agentbench_replay_mode_summary.html"
+  cp -f "${RESULT_ROOT}/traffic_summary.html" "${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_mode_summary.html"
 fi
 if [[ -f "${RESULT_ROOT}/traffic_summary.md" ]]; then
-  cp -f "${RESULT_ROOT}/traffic_summary.md" "${LATEST_REPORT_ROOT}/latest_agentbench_replay_mode_summary.md"
+  cp -f "${RESULT_ROOT}/traffic_summary.md" "${LATEST_REPORT_ROOT}/latest_real/agentbench_replay_mode_summary.md"
 fi
 
 echo
