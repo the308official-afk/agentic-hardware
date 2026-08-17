@@ -489,14 +489,6 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
                 f'<rect x="{prefetch_x1:.1f}" y="{y + 23}" width="{max(3, prefetch_x2 - prefetch_x1):.1f}" height="16" rx="3" fill="#a855f7" opacity="0.78">'
                 f'<title>live controller prefetch attempt; status={fmt(row.get("prefetch_status"))}</title></rect>'
             )
-            if prefetch_x2 - prefetch_x1 > 50:
-                svg.append(
-                    f'<text x="{(prefetch_x1 + prefetch_x2) / 2:.1f}" y="{y + 35}" fill="white" font-size="10" text-anchor="middle" font-weight="700">prefetch</text>'
-                )
-        if current_x2 - current_x1 > 75:
-            svg.append(f'<text x="{(current_x1 + current_x2) / 2:.1f}" y="{y + 17}" fill="white" font-size="11" text-anchor="middle" font-weight="700">tool turn</text>')
-        if replay_x2 - replay_x1 > 75:
-            svg.append(f'<text x="{(replay_x1 + replay_x2) / 2:.1f}" y="{y + 53}" fill="white" font-size="11" text-anchor="middle" font-weight="700">resume</text>')
     legend_y = height - 28
     legend = [
         ("model turn with tool call", "#2563eb"),
