@@ -788,7 +788,7 @@ def render_html(
     <div class="timeline-stack">
       <div class="timeline-panel">
         <h3>No Prefetch</h3>
-        {build_timeline_svg(no_gaps, max_timeline_gaps)}
+        {build_timeline_svg(no_gaps, max_timeline_gaps, show_prefetch_legend=False)}
       </div>
       <div class="timeline-panel">
         <h3>Live Prefetch Intervention</h3>

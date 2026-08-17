@@ -405,7 +405,7 @@ def table_html(rows: list[dict[str, Any]], columns: list[str] | None = None, lim
     return "\n".join(out)
 
 
-def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
+def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_legend: bool = True) -> str:
     rows = gaps[:max_rows]
     if not rows:
         return "<p>No live tool-gap timeline available.</p>"
@@ -501,10 +501,11 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int) -> str:
     legend = [
         ("model turn with tool call", "#2563eb"),
         ("observed tool gap", "#d1d5db"),
-        ("live prefetch attempt", "#a855f7"),
         ("resume model turn", "#ef4444"),
         ("resume start boundary", "#111827"),
     ]
+    if show_prefetch_legend:
+        legend.insert(2, ("live prefetch attempt", "#a855f7"))
     lx = left
     for label, color in legend:
         svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
