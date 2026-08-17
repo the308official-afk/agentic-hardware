@@ -4972,6 +4972,37 @@ artifacts/results/<run>/controlled_replay_report/controlled_replay_gaps.csv
 artifacts/results/latest_controlled_replay_report.html
 ```
 
+Reproduce or archive the master report:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+# Rebuild HTML from an existing Milestone 27 run.
+python scripts/build_milestone27_controlled_replay_report.py \
+  --root artifacts/results/<run> \
+  --out-dir artifacts/results/<run>/controlled_replay_report \
+  --latest-root artifacts/results \
+  --max-timeline-gaps 18
+
+# Run a new labeled experiment without overwriting the normal latest report.
+export REPORT_LABEL=manager_demo_1
+export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
+export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
+
+WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
+MAX_PAIRS=8 \
+MODES="no_prefetch direct_prefetch oracle_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 32" \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 Simple interpretation:
 
 ```text

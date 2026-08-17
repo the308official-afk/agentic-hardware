@@ -355,6 +355,103 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
     ) + "</div>"
 
 
+def code_block(text: str) -> str:
+    return f"<pre><code>{html.escape(text.strip())}</code></pre>"
+
+
+def reproduce_controlled_replay_html(result_root: Path) -> str:
+    current_root = str(result_root)
+    rebuild_current = f"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/build_milestone27_controlled_replay_report.py \\
+  --root {current_root} \\
+  --out-dir {current_root}/controlled_replay_report \\
+  --latest-root artifacts/results \\
+  --max-timeline-gaps 18
+"""
+    run_labeled = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+export REPORT_LABEL=manager_demo_1
+export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
+export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
+
+WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
+MAX_PAIRS=8 \
+MODES="no_prefetch direct_prefetch oracle_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 32" \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+"""
+    run_from_trace_index = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+export REPORT_LABEL=trace_index_demo_1
+export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
+export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
+
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+MAX_PAIRS=8 \
+MODES="no_prefetch direct_prefetch oracle_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 32" \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+"""
+    refresh_latest = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
+MAX_PAIRS=8 \
+MODES="no_prefetch direct_prefetch oracle_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 32" \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+"""
+    return "\n".join(
+        [
+            "<p>This section gives copy-paste commands for reproducing the direct-KV controlled replay master report. Labeled runs write to their own folder and do not overwrite the normal latest report.</p>",
+            "<h3>Rebuild This Exact Report</h3>",
+            "<p>Use this when the run folders already exist and you only want to regenerate the HTML, tables, and timelines.</p>",
+            code_block(rebuild_current),
+            "<p>Output:</p>",
+            code_block(f"{current_root}/controlled_replay_report/controlled_replay_report.html\nartifacts/results/latest_master_report.html"),
+            "<h3>Run A New Labeled Controlled Replay Experiment</h3>",
+            "<p>Use this for a new manager-demo run from an existing real prompt-pair workload. This keeps the output under a label-specific folder.</p>",
+            code_block(run_labeled),
+            "<p>Output:</p>",
+            code_block("artifacts/results/labeled/controlled_replay/manager_demo_1/controlled_replay_report/controlled_replay_report.html\nartifacts/results/labeled/controlled_replay/manager_demo_1/latest/latest_master_report.html"),
+            "<h3>Build Prompt Pairs From An AgentBench Trace Index</h3>",
+            "<p>Use this when you have an AgentBench trace index and want the script to extract real Turn A / Turn B prompt pairs first.</p>",
+            code_block(run_from_trace_index),
+            "<h3>Deliberately Refresh The Latest Master Report</h3>",
+            "<p>Only use this when you want to replace <code>artifacts/results/latest_master_report.html</code>.</p>",
+            code_block(refresh_latest),
+        ]
+    )
+
+
 def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps: int) -> str:
     mode_rows = mode_summary_rows(gaps)
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
@@ -371,11 +468,6 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
         "direct_kv_h2d_events",
         "replay_kv_h2d_events",
     ]
-    run_cmd = (
-        "RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) "
-        "WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl "
-        "bash scripts/run_milestone27_real_prompt_controlled_replay.sh Qwen/Qwen2.5-Coder-7B-Instruct"
-    )
     toc = [
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
@@ -454,8 +546,7 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
 
   <details id="reproduce" class="section-card theme-reproduce">
     <summary><h2>Reproduce This Report</h2></summary>
-    <pre><code>{html.escape(run_cmd)}</code></pre>
-    <p>Result root: <code>{html.escape(str(result_root))}</code></p>
+    {reproduce_controlled_replay_html(result_root)}
   </details>
 </main>
 {report_script()}
