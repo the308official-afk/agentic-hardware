@@ -319,6 +319,89 @@ def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def observation_status(row: dict[str, Any]) -> tuple[str, str]:
+    mode = str(row.get("mode") or "")
+    margin = as_float(row.get("prefetch_margin_ms"))
+    hint_h2d = has_events(row.get("direct_kv_h2d_events"))
+    replay_h2d = has_events(row.get("replay_kv_h2d_events"))
+    if mode == "no_prefetch":
+        if replay_h2d:
+            return "No prefetch; replay loaded KV", "#b45309"
+        return "No prefetch; no visible H2D", "#64748b"
+    if margin is None:
+        if replay_h2d:
+            return "No completed prefetch; replay loaded KV", "#b45309"
+        return "No completed prefetch", "#64748b"
+    if margin < 0:
+        if replay_h2d:
+            return "Late prefetch; replay loaded KV", "#b91c1c"
+        return "Late prefetch", "#b91c1c"
+    if hint_h2d and replay_h2d:
+        return "Prefetch ready, but replay also loaded KV", "#b45309"
+    if hint_h2d:
+        return "Useful direct KV prefetch", "#166534"
+    if replay_h2d:
+        return "Prefetch finished, replay loaded KV", "#b45309"
+    return "Prefetch finished; no visible H2D", "#166534"
+
+
+def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        mode = str(row.get("mode") or "")
+        margin = as_float(row.get("prefetch_margin_ms"))
+        gap_ms = as_float(row.get("tool_gap_ms"))
+        ttft_ms = as_float(row.get("resume_ttft_ms"))
+        hint_h2d = has_events(row.get("direct_kv_h2d_events"))
+        replay_h2d = has_events(row.get("replay_kv_h2d_events"))
+        status, _ = observation_status(row)
+
+        if mode == "no_prefetch":
+            if replay_h2d:
+                what = "No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement."
+                why = "This is the baseline: the real request path had to handle KV movement at resume time."
+            else:
+                what = "No hint was issued, and this row did not show replay-side HtoD movement."
+                why = "The KV may already have been resident/reusable, or this row did not trigger observable host-to-device movement."
+        elif margin is None:
+            what = "A prefetch mode was selected, but the trace did not show a completed prefetch window for this row."
+            why = "This is useful as a control/coverage warning, but it is weaker evidence than rows with measured margins."
+        elif margin < 0:
+            what = f"The prefetch attempt finished {abs(margin):.0f} ms after the resume request was already due."
+            if replay_h2d:
+                what += " The resume request also showed replay-side KV HtoD movement."
+                why = "This is the failure case: the normal request path had to move KV because the hint path did not finish in time."
+            else:
+                why = "The hint path was late, so software prefetch did not meet the agent resume deadline."
+        else:
+            what = f"The prefetch attempt finished {margin:.0f} ms before the resume request was due."
+            if hint_h2d and not replay_h2d:
+                what += " Direct KV HtoD movement was visible on the hint side, with no replay-side HtoD in this row."
+                why = "This is the clean success case: the hint appears to have prepared KV before the agent resumed."
+            elif hint_h2d and replay_h2d:
+                what += " But replay-side KV HtoD was also visible later."
+                why = "This is an important hardware argument: moving KV early is not enough unless residency and reuse are also protected."
+            elif replay_h2d:
+                what += " Replay-side KV HtoD was still visible."
+                why = "The software hint completed early, but the resume path still had to move KV, so reuse was not fully predictable."
+            else:
+                why = "The hint completed before replay, but this row did not show visible HtoD movement."
+
+        output.append(
+            {
+                "row": label,
+                "mode": mode,
+                "status": status,
+                "what happened": what,
+                "why it matters": why,
+                "tool_wait_ms": round(gap_ms, 3) if gap_ms is not None else "",
+                "resume_ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else "",
+            }
+        )
+    return output
+
+
 def manager_setup_html() -> str:
     setup_rows = [
         {"part": "1. Real prompt pair", "simple meaning": "Use two adjacent model turns from real AgentBench/DeepAgents traces."},
@@ -474,6 +557,7 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
         ("global-prefetch", "Global Prefetch Margin"),
         ("timeline-guide", "How To Read Timelines"),
         ("timelines", "Controlled Replay Timeline"),
+        ("observations", "Key Observations"),
         ("performance", "Mode Tables"),
         ("direct-kv", "Direct KV Evidence"),
         ("appendix", "Gap Details"),
@@ -525,6 +609,12 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
     <h3>Timeline Row Map</h3>
     <p>This table maps the compact row names in the chart back to the full experiment details.</p>
     {table_html(timeline_mapping_rows(interesting))}
+  </details>
+
+  <details id="observations" class="section-card theme-observations">
+    <summary><h2>Key Observations Per Gap/Session</h2></summary>
+    <p>This section translates the timeline rows into plain English. It uses the same compact row names as the chart, so <code>G00</code> here means the same <code>G00</code> in the timeline.</p>
+    {table_html(key_observation_rows(interesting), ["row", "mode", "status", "what happened", "why it matters", "tool_wait_ms", "resume_ttft_ms"])}
   </details>
 
   <details id="performance" class="section-card theme-clean-table">
