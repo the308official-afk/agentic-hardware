@@ -99,10 +99,17 @@ def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, A
     task_index_csv = root / "exp6_direct_sglang_task_index.csv"
     hint_log = root / "live_hint_events.jsonl"
     controller_log = root / "live_prefetch_controller.jsonl"
+    direct_kv_report_dir = root / "live_direct_kv_load_report"
+    direct_kv_summary_csv = direct_kv_report_dir / "live_direct_kv_load_summary.csv"
+    direct_kv_evidence_csv = direct_kv_report_dir / "live_direct_kv_load_evidence.csv"
+    direct_kv_events_csv = direct_kv_report_dir / "live_direct_kv_load_events.csv"
 
     raw_rows = read_jsonl(proxy_jsonl)
     hint_rows = read_jsonl(hint_log)
     controller_rows = read_jsonl(controller_log)
+    direct_kv_summary = read_csv(direct_kv_summary_csv)
+    direct_kv_evidence = read_csv(direct_kv_evidence_csv)
+    direct_kv_events = read_csv(direct_kv_events_csv)
     task_rows = read_csv(task_index_csv)
     all_requests = normalize_requests(raw_rows)
     if include_preflight:
@@ -124,6 +131,12 @@ def load_live_run(root: Path, mode: str, include_preflight: bool) -> dict[str, A
         "task_index_csv": str(task_index_csv),
         "hint_log": str(hint_log) if hint_log.exists() else "",
         "controller_log": str(controller_log) if controller_log.exists() else "",
+        "direct_kv_summary": direct_kv_summary,
+        "direct_kv_evidence": direct_kv_evidence,
+        "direct_kv_events": direct_kv_events,
+        "direct_kv_report_html": str(direct_kv_report_dir / "live_direct_kv_load_report.html")
+        if (direct_kv_report_dir / "live_direct_kv_load_report.html").exists()
+        else "",
         "raw_request_count": len(raw_rows),
         "captured_model_requests": len(all_requests),
         "excluded_preflight_requests": excluded_preflight,
@@ -469,6 +482,7 @@ def css() -> str:
     .theme-clean { --theme: #15803d; --theme-bg: #f0fdf4; }
     .theme-clean-table { --theme: #65a30d; --theme-bg: #f7fee7; }
     .theme-profiled { --theme: #7e22ce; --theme-bg: #faf5ff; }
+    .theme-directkv { --theme: #0e7490; --theme-bg: #ecfeff; }
     .theme-deductions { --theme: #b45309; --theme-bg: #fffbeb; }
     .theme-checkpoints { --theme: #ea580c; --theme-bg: #fff7ed; }
     .theme-observations { --theme: #0f766e; --theme-bg: #f0fdfa; }
@@ -869,6 +883,7 @@ SECTION_THEMES = {
     "timelines": "theme-clean",
     "performance": "theme-clean-table",
     "profiled": "theme-profiled",
+    "direct-kv": "theme-directkv",
     "deductions": "theme-deductions",
     "checkpoints": "theme-checkpoints",
     "observations": "theme-observations",
@@ -977,6 +992,32 @@ bash scripts/run_labeled_live_master_report.sh Qwen/Qwen2.5-Coder-7B-Instruct
     )
 
 
+def direct_kv_evidence_html(pref_run: dict[str, Any]) -> str:
+    summary = pref_run.get("direct_kv_summary") or []
+    evidence = pref_run.get("direct_kv_evidence") or []
+    events = pref_run.get("direct_kv_events") or []
+    report_html = pref_run.get("direct_kv_report_html") or ""
+    if not summary and not evidence:
+        return "\n".join(
+            [
+                '<p class="warn">No Milestone 26 direct-KV evidence files were found for this prefetch run.</p>',
+                "<p>Run <code>scripts/run_milestone26_live_direct_kv_load_intervention.sh</code> or <code>scripts/run_milestone26_live_paired_direct_kv_report.sh</code> to enable SGLang KV trace hooks and generate this section.</p>",
+            ]
+        )
+    return "\n".join(
+        [
+            "<p>This section checks whether the live tool-call hint triggered SGLang's real direct KV load-back path. It looks for <code>hiradix.init_load_back</code>, <code>hiradix.load_back</code>, <code>hicache.load</code>, and host-to-device copy telemetry attributed to each live hint.</p>",
+            f"<p>Detailed report: <code>{fmt(report_html)}</code></p>" if report_html else "",
+            "<h3>Direct KV Load Summary</h3>",
+            table_html(summary),
+            "<h3>Per-Hint Direct KV Evidence</h3>",
+            table_html(evidence, limit=80),
+            "<h3>Matched KV/Copy Events</h3>",
+            table_html(events, limit=80),
+        ]
+    )
+
+
 def render_html(
     no_run: dict[str, Any],
     pref_run: dict[str, Any],
@@ -1015,6 +1056,7 @@ def render_html(
         ("timelines", "Clean Performance Timelines"),
         ("performance", "Clean Performance Tables"),
         ("profiled", "Profiled Mechanism Evidence"),
+        ("direct-kv", "Direct KV Load Evidence"),
         ("deductions", "Key Deductions"),
         ("checkpoints", "Prefetch Checkpoints"),
         ("observations", "Key Observations Per Session"),
@@ -1097,6 +1139,11 @@ def render_html(
     <p>After we add the live profiled attribution run, this section will show dark-green CUDA HtoD copy bars, KV/copy telemetry, replay reload evidence, and checkpoint tables for the real traffic path.</p>
   </details>
 
+  <details id="direct-kv" class="section-card theme-directkv">
+    <summary><h2>B.1 Direct KV Load Evidence</h2></summary>
+    {direct_kv_evidence_html(pref_run)}
+  </details>
+
   <details id="deductions" class="section-card theme-deductions">
     <summary><h2>Key Deductions</h2></summary>
     {table_html(deductions, ["finding", "evidence", "why_it_matters"])}
@@ -1167,6 +1214,9 @@ def main() -> None:
     write_csv(args.out_dir / "live_prefetch_request_details.csv", request_details(pref_run, 10_000))
     write_csv(args.out_dir / "live_no_prefetch_tool_gaps.csv", no_run["gaps"])
     write_csv(args.out_dir / "live_prefetch_tool_gaps.csv", pref_run["gaps"])
+    write_csv(args.out_dir / "live_direct_kv_load_summary.csv", pref_run.get("direct_kv_summary", []))
+    write_csv(args.out_dir / "live_direct_kv_load_evidence.csv", pref_run.get("direct_kv_evidence", []))
+    write_csv(args.out_dir / "live_direct_kv_load_events.csv", pref_run.get("direct_kv_events", []))
 
     report = {
         "no_prefetch": {key: value for key, value in no_run.items() if key not in {"requests", "gaps"}},
@@ -1212,6 +1262,9 @@ def main() -> None:
             (args.out_dir / "live_prefetch_checkpoint_results.csv", "prefetch_checkpoint_results.csv"),
             (args.out_dir / "live_prefetch_timeline_summary.csv", "prefetch_timeline_summary.csv"),
             (args.out_dir / "live_prefetch_session_observations.csv", "prefetch_session_observations.csv"),
+            (args.out_dir / "live_direct_kv_load_summary.csv", "direct_kv_load_summary.csv"),
+            (args.out_dir / "live_direct_kv_load_evidence.csv", "direct_kv_load_evidence.csv"),
+            (args.out_dir / "live_direct_kv_load_events.csv", "direct_kv_load_events.csv"),
         ]
         for source, name in detail_pairs:
             if source.exists():

@@ -50,24 +50,26 @@ def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def append_marker_to_payload(payload: dict[str, Any], hint: dict[str, Any], max_tokens: int) -> dict[str, Any]:
+def append_marker_to_payload(payload: dict[str, Any], hint: dict[str, Any], max_tokens: int, action: str) -> dict[str, Any]:
     out = json.loads(json.dumps(payload))
     source_session = str(hint.get("source_agent_session_id") or hint.get("source_request_id") or hint.get("hint_id"))
-    marker = (
-        f"\n\n{DIRECT_LOAD_TRIGGER} "
-        f"hint_id={hint.get('hint_id')} "
-        f"session_id={source_session} "
-        f"source_proxy_ordinal={hint.get('source_proxy_ordinal')}"
-    )
-    messages = out.get("messages")
-    if isinstance(messages, list) and messages:
-        last = messages[-1]
-        if isinstance(last, dict) and isinstance(last.get("content"), str):
-            last["content"] = last["content"] + marker
+    direct_load = action == "direct_load"
+    if direct_load:
+        marker = (
+            f"\n\n{DIRECT_LOAD_TRIGGER} "
+            f"hint_id={hint.get('hint_id')} "
+            f"session_id={source_session} "
+            f"source_proxy_ordinal={hint.get('source_proxy_ordinal')}"
+        )
+        messages = out.get("messages")
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, dict) and isinstance(last.get("content"), str):
+                last["content"] = last["content"] + marker
+            else:
+                messages.append({"role": "user", "content": marker.strip()})
         else:
-            messages.append({"role": "user", "content": marker.strip()})
-    else:
-        out["messages"] = [{"role": "user", "content": marker.strip()}]
+            out["messages"] = [{"role": "user", "content": marker.strip()}]
 
     out["stream"] = False
     out["temperature"] = 0
@@ -102,13 +104,13 @@ def append_marker_to_payload(payload: dict[str, Any], hint: dict[str, Any], max_
             "source_session_id": source_session,
             "phase": "live_hint_prefetch",
             "label": f"{parent_run_id}:live_hint_prefetch",
-            "mode": "live_direct_load",
+            "mode": "live_direct_load" if direct_load else "live_request_warm",
             "priority": hint.get("hint_priority") or agentic_kv.get("priority") or "high",
             "task_id": task_instance_id,
             "parent_run_id": parent_run_id,
             "hint_id": hint.get("hint_id"),
             "source_proxy_ordinal": hint.get("source_proxy_ordinal"),
-            "trigger_marker": DIRECT_LOAD_TRIGGER,
+            "trigger_marker": DIRECT_LOAD_TRIGGER if direct_load else "",
         }
     )
     agent_hints.update(
@@ -117,7 +119,7 @@ def append_marker_to_payload(payload: dict[str, Any], hint: dict[str, Any], max_
             "reuse_likelihood": hint.get("reuse_likelihood") or agent_hints.get("reuse_likelihood") or 1.0,
             "hint_id": hint.get("hint_id"),
             "hint_source": "live_prefetch_controller",
-            "intended_action": "direct_host_to_gpu_kv_load",
+            "intended_action": "direct_host_to_gpu_kv_load" if direct_load else "request_level_prefix_warm",
         }
     )
     out["custom_params"] = {
@@ -155,6 +157,7 @@ def handle_hint(args: argparse.Namespace, hint: dict[str, Any], seen: set[str]) 
         args.controller_log,
         {
             "event": "live_prefetch.start",
+            "prefetch_action": args.action,
             "hint_id": hint_id,
             "source_proxy_ordinal": hint.get("source_proxy_ordinal"),
             "source_request_id": hint.get("source_request_id") or "",
@@ -178,13 +181,15 @@ def handle_hint(args: argparse.Namespace, hint: dict[str, Any], seen: set[str]) 
         )
         return
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    prefetch_payload = append_marker_to_payload(payload, hint, args.max_tokens)
+    prefetch_payload = append_marker_to_payload(payload, hint, args.max_tokens, args.action)
     status, response_preview, error = post_prefetch(args.target_base, prefetch_payload, args.request_timeout_s)
     end_ts = time.time()
     write_jsonl(
         args.controller_log,
         {
             "event": "live_prefetch.end" if not error and status < 400 else "live_prefetch.error",
+            "prefetch_action": args.action,
+            "direct_load_trigger_injected": args.action == "direct_load",
             "hint_id": hint_id,
             "source_proxy_ordinal": hint.get("source_proxy_ordinal"),
             "source_request_id": hint.get("source_request_id") or "",
@@ -210,6 +215,12 @@ def main() -> None:
     parser.add_argument("--target-base", default="http://127.0.0.1:30000")
     parser.add_argument("--poll-ms", type=int, default=25)
     parser.add_argument("--max-tokens", type=int, default=1)
+    parser.add_argument(
+        "--action",
+        choices=("request_warm", "direct_load"),
+        default="direct_load",
+        help="request_warm sends the saved prefix payload; direct_load also injects the marker that exercises SGLang's load-back path.",
+    )
     parser.add_argument("--request-timeout-s", type=float, default=600.0)
     parser.add_argument("--idle-exit-ms", type=int, default=0, help="Exit after this much idle time. 0 means run until signaled.")
     args = parser.parse_args()
@@ -223,6 +234,7 @@ def main() -> None:
             "hint_log": str(args.hint_log),
             "target_base": args.target_base,
             "max_tokens": args.max_tokens,
+            "prefetch_action": args.action,
         },
     )
     offset = 0

@@ -43,6 +43,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 23: Live Prefetch Intervention | Ready | [Milestone 23](#milestone-23-live-prefetch-intervention) |
 | Milestone 24: Live Paired AgentBench Report | Ready | [Milestone 24](#milestone-24-live-paired-agentbench-report) |
 | Milestone 25: Labeled Reproducible Master Reports | Ready | [Milestone 25](#milestone-25-labeled-reproducible-master-reports) |
+| Milestone 26: Live Direct KV Load Intervention | Ready | [Milestone 26](#milestone-26-live-direct-kv-load-intervention) |
 
 ## What We Are Testing
 
@@ -4729,6 +4730,124 @@ The labeled folder contains:
 
 The generated HTML reports also include a "Reproduce This Report" section
 with these same copy-paste commands.
+```
+
+### Milestone 26: Live Direct KV Load Intervention
+
+Status: ready.
+
+Why this milestone is needed:
+
+```text
+Milestone 24 used real DeepAgents/SWE-bench traffic, but the live prefetch
+path was mostly a request-level prewarm signal.
+
+Milestone 26 makes the live path more realistic:
+
+real tool call
+  -> live hint
+  -> marked direct-load request
+  -> SGLang's own HiRadix/HiCache load-back path
+  -> trace evidence for init_load_back, load_back, hicache.load, or HtoD copy telemetry
+```
+
+Important nuance:
+
+```text
+The controller is outside the SGLang worker process.
+So it cannot directly call a Python cache object inside SGLang.
+
+Instead, it sends a marked direct-load request that exercises the same
+SGLang load-back path we instrumented earlier.
+
+The report then checks whether the real SGLang hooks observed:
+  hiradix.init_load_back
+  hiradix.load_back
+  hicache.load
+  hostpool.load_to_device_per_layer
+  lightweight host-to-device copy telemetry
+```
+
+Run one live direct-KV intervention:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone26_direct_kv_qwen7b_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=15 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+SERVER_MODE=hicache \
+HICACHE_SIZE_GB=8 \
+LIVE_PREFETCH_ACTION=direct_load \
+bash scripts/run_milestone26_live_direct_kv_load_intervention.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Run a paired no-prefetch versus live direct-KV report:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone26_paired_direct_kv_qwen7b_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=15 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+SERVER_MODE=hicache \
+HICACHE_SIZE_GB=8 \
+bash scripts/run_milestone26_live_paired_direct_kv_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important events to observe:
+
+```text
+live_hint.submitted
+  The proxy saw a real model turn produce structured tool calls.
+
+live_prefetch.start / live_prefetch.end
+  The controller sent a direct-load hint request during the tool wait.
+
+hiradix.init_load_back / hiradix.load_back
+  SGLang's prefix/radix cache entered the load-back path.
+
+hicache.load / hostpool.load_to_device_per_layer
+  SGLang attempted host-to-device KV movement.
+
+kv_telemetry.copy.*
+  Lightweight copy telemetry saw host-to-device copy activity.
+```
+
+Key output files:
+
+```text
+artifacts/results/<run>/live_direct_kv_trace.jsonl
+artifacts/results/<run>/live_direct_kv_copy_telemetry.jsonl
+artifacts/results/<run>/live_direct_kv_load_report/live_direct_kv_load_report.html
+artifacts/results/<run>/live_direct_kv_load_report/live_direct_kv_load_evidence.csv
+artifacts/results/latest_real/m26_live_direct_kv_load_report.html
+artifacts/results/latest_master_report.html
+```
+
+Simple interpretation:
+
+```text
+If the direct-KV report shows load-back/copy events:
+  The live tool-call hint reached the real SGLang KV movement path.
+
+If hints are still late:
+  We have stronger evidence that the ordinary software/SGLang path can be
+  too slow even when it knows the right session.
+
+If there is no matching load-back/copy:
+  Either the KV was still resident in GPU memory, the prefix was not in host
+  cache, or attribution did not connect that hint to the internal copy event.
 ```
 
 ## Directory Layout
