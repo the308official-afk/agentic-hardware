@@ -139,10 +139,10 @@ run_case() {
   export AGENTIC_KV_TRACE_PATH="${trace}"
   export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
   export AGENTIC_KV_COPY_TELEMETRY_PATH="${telemetry}"
-  export MAX_TOTAL_TOKENS
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
-  export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
+  local base_extra_args="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
+  export EXTRA_SERVER_ARGS="${base_extra_args} --max-total-tokens ${MAX_TOTAL_TOKENS}"
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
   server_pid="$!"
