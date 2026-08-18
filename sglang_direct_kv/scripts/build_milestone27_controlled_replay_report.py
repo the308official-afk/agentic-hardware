@@ -456,6 +456,7 @@ source .venv/bin/activate
 
 EXPERIMENT_KIND=both \
 REPORT_LABEL=manager_demo_1 \
+PRESSURE_PROFILE=high \
 UPDATE_LATEST=1 \
 START_INDEX=0 \
 END_INDEX=15 \
@@ -499,6 +500,7 @@ bash scripts/run_master_report.sh \
 """
     knob_rows = [
         {"knob": "EXPERIMENT_KIND", "meaning": "controlled, live, or both"},
+        {"knob": "PRESSURE_PROFILE", "meaning": "custom, low, medium, high, or extreme"},
         {"knob": "REPORT_LABEL", "meaning": "folder name for this run under artifacts/results/reports/"},
         {"knob": "UPDATE_LATEST", "meaning": "1 replaces artifacts/results/latest_master_report.html"},
         {"knob": "BUILD_ONLY", "meaning": "1 rebuilds HTML from existing run folders"},
@@ -506,6 +508,13 @@ bash scripts/run_master_report.sh \
         {"knob": "MAX_TIMELINE_GAPS", "meaning": "number of rows shown in each timeline"},
         {"knob": "START_INDEX / END_INDEX", "meaning": "AgentBench task range for live runs"},
         {"knob": "WORKLOAD_JSONL / TRACE_INDEX_CSV", "meaning": "real prompt-pair source for controlled replay"},
+    ]
+    pressure_rows = [
+        {"profile": "low", "controlled pressure": "4 prompt pairs, fillers 8/16, concurrency 2", "live pressure": "tasks 0-3, max steps 6"},
+        {"profile": "medium", "controlled pressure": "8 prompt pairs, fillers 16/32, concurrency 4", "live pressure": "tasks 0-15, max steps 10"},
+        {"profile": "high", "controlled pressure": "16 prompt pairs, fillers 32/64/128, concurrency 8", "live pressure": "tasks 0-31, max steps 10"},
+        {"profile": "extreme", "controlled pressure": "24 prompt pairs, fillers 64/128/192, concurrency 12", "live pressure": "tasks 0-63, max steps 15"},
+        {"profile": "custom", "controlled pressure": "use only the knobs you explicitly set", "live pressure": "use only the knobs you explicitly set"},
     ]
     return "\n".join(
         [
@@ -521,6 +530,9 @@ bash scripts/run_master_report.sh \
             code_block(dry_run),
             "<h3>Important Knobs</h3>",
             table_html(knob_rows, ["knob", "meaning"]),
+            "<h3>Pressure Profiles</h3>",
+            "<p>Use <code>PRESSURE_PROFILE</code> when you want to deliberately increase cache pressure and request pressure. Manual environment variables still override the profile defaults.</p>",
+            table_html(pressure_rows, ["profile", "controlled pressure", "live pressure"]),
         ]
     )
 

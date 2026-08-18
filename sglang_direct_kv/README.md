@@ -5079,6 +5079,7 @@ source .venv/bin/activate
 
 EXPERIMENT_KIND=both \
 REPORT_LABEL=manager_demo_1 \
+PRESSURE_PROFILE=high \
 UPDATE_LATEST=1 \
 START_INDEX=0 \
 END_INDEX=15 \
@@ -5133,6 +5134,10 @@ Important knobs:
 EXPERIMENT_KIND
   controlled, live, or both.
 
+PRESSURE_PROFILE
+  custom, low, medium, high, or extreme.
+  This sets pressure defaults unless you override them manually.
+
 REPORT_LABEL
   folder name for this run under artifacts/results/reports/.
 
@@ -5157,6 +5162,42 @@ START_INDEX / END_INDEX
 
 WORKLOAD_JSONL / TRACE_INDEX_CSV
   real prompt-pair source for controlled replay.
+```
+
+Pressure profiles:
+
+| Profile | Controlled Replay Defaults | Live AgentBench Defaults | Use Case |
+| --- | --- | --- | --- |
+| `low` | `MAX_PAIRS=4`, `FILLER_LIST="8 16"`, `REQUEST_CONCURRENCY=2` | `START_INDEX=0`, `END_INDEX=3`, `MAX_STEPS=6` | Fast smoke run. |
+| `medium` | `MAX_PAIRS=8`, `FILLER_LIST="16 32"`, `REQUEST_CONCURRENCY=4` | `START_INDEX=0`, `END_INDEX=15`, `MAX_STEPS=10` | Default manager-report run. |
+| `high` | `MAX_PAIRS=16`, `FILLER_LIST="32 64 128"`, `REQUEST_CONCURRENCY=8` | `START_INDEX=0`, `END_INDEX=31`, `MAX_STEPS=10` | Stronger cache/request pressure. |
+| `extreme` | `MAX_PAIRS=24`, `FILLER_LIST="64 128 192"`, `REQUEST_CONCURRENCY=12` | `START_INDEX=0`, `END_INDEX=63`, `MAX_STEPS=15` | Stress run; use only after high is stable. |
+| `custom` | Only uses knobs you explicitly set. | Only uses knobs you explicitly set. | Manual tuning. |
+
+Pressure knobs that matter most:
+
+```text
+FILLER_LIST
+  Adds unrelated sessions that compete for KV space.
+
+REQUEST_CONCURRENCY
+  Sends more requests at once, increasing scheduling and memory pressure.
+
+MAX_PAIRS
+  More controlled replay prompt pairs.
+
+START_INDEX / END_INDEX
+  More live AgentBench tasks.
+
+MAX_TOTAL_TOKENS
+  Smaller values make the GPU-side KV pool tighter.
+
+MEM_FRACTION_STATIC
+  Higher values reserve more GPU memory for static/model memory,
+  leaving less room for KV cache.
+
+HICACHE_SIZE_GB
+  Host-side HiCache capacity. Keep it large enough to hold useful offloaded KV.
 ```
 
 Report output must include:

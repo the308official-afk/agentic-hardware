@@ -10,6 +10,7 @@ BUILD_ONLY="${BUILD_ONLY:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 CLEAN_TOPLEVEL="${CLEAN_TOPLEVEL:-1}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-18}"
+PRESSURE_PROFILE="${PRESSURE_PROFILE:-medium}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +28,90 @@ case "${EXPERIMENT_KIND}" in
     exit 2
     ;;
 esac
+
+case "${PRESSURE_PROFILE}" in
+  custom|low|medium|high|extreme) ;;
+  *)
+    echo "ERROR: PRESSURE_PROFILE must be one of: custom, low, medium, high, extreme" >&2
+    exit 2
+    ;;
+esac
+
+set_default() {
+  local name="$1"
+  local value="$2"
+  if [[ -z "${!name+x}" ]]; then
+    printf -v "${name}" '%s' "${value}"
+    export "${name}"
+  fi
+}
+
+apply_pressure_profile() {
+  case "${PRESSURE_PROFILE}" in
+    custom)
+      ;;
+    low)
+      set_default MAX_PAIRS "4"
+      set_default FILLER_LIST "8 16"
+      set_default REQUEST_CONCURRENCY "2"
+      set_default FILLER_PROMPT_TOKENS "768"
+      set_default TOOL_WAIT_LIST_MS "250 500 1000"
+      set_default START_INDEX "0"
+      set_default END_INDEX "3"
+      set_default AGENTBENCH_EXECUTION_LOOP_MAX_STEPS "${MAX_STEPS:-6}"
+      set_default AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS "512"
+      set_default MAX_TOTAL_TOKENS "16384"
+      set_default HICACHE_SIZE_GB "8"
+      set_default MEM_FRACTION_STATIC "0.65"
+      ;;
+    medium)
+      set_default MAX_PAIRS "8"
+      set_default FILLER_LIST "16 32"
+      set_default REQUEST_CONCURRENCY "4"
+      set_default FILLER_PROMPT_TOKENS "1024"
+      set_default TOOL_WAIT_LIST_MS "100 250 500 1000"
+      set_default START_INDEX "0"
+      set_default END_INDEX "15"
+      set_default AGENTBENCH_EXECUTION_LOOP_MAX_STEPS "${MAX_STEPS:-10}"
+      set_default AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS "512"
+      set_default MAX_TOTAL_TOKENS "16384"
+      set_default HICACHE_SIZE_GB "8"
+      set_default MEM_FRACTION_STATIC "0.72"
+      ;;
+    high)
+      set_default MAX_PAIRS "16"
+      set_default FILLER_LIST "32 64 128"
+      set_default REQUEST_CONCURRENCY "8"
+      set_default FILLER_PROMPT_TOKENS "1536"
+      set_default TOOL_WAIT_LIST_MS "100 250 500 1000"
+      set_default START_INDEX "0"
+      set_default END_INDEX "31"
+      set_default AGENTBENCH_EXECUTION_LOOP_MAX_STEPS "${MAX_STEPS:-10}"
+      set_default AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS "512"
+      set_default MAX_TOTAL_TOKENS "12288"
+      set_default HICACHE_SIZE_GB "8"
+      set_default MEM_FRACTION_STATIC "0.75"
+      ;;
+    extreme)
+      set_default MAX_PAIRS "24"
+      set_default FILLER_LIST "64 128 192"
+      set_default REQUEST_CONCURRENCY "12"
+      set_default FILLER_PROMPT_TOKENS "2048"
+      set_default TOOL_WAIT_LIST_MS "50 100 250 500"
+      set_default START_INDEX "0"
+      set_default END_INDEX "63"
+      set_default AGENTBENCH_EXECUTION_LOOP_MAX_STEPS "${MAX_STEPS:-15}"
+      set_default AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS "512"
+      set_default MAX_TOTAL_TOKENS "8192"
+      set_default HICACHE_SIZE_GB "8"
+      set_default MEM_FRACTION_STATIC "0.80"
+      ;;
+  esac
+
+  set_default MODES "no_prefetch direct_prefetch"
+}
+
+apply_pressure_profile
 
 RESULTS_ROOT="$(mkdir -p "${RESULTS_ROOT}" && cd "${RESULTS_ROOT}" && pwd)"
 REPORTS_ROOT="${RESULTS_ROOT}/reports"
@@ -147,6 +232,19 @@ write_manifest() {
   LATEST_REPORT_VALUE="${latest_report}" \
   ARCHIVED_REPORT_VALUE="${archived_report}" \
   SCRIPT_VALUE="scripts/run_master_report.sh" \
+  PRESSURE_PROFILE_VALUE="${PRESSURE_PROFILE}" \
+  MAX_PAIRS_VALUE="${MAX_PAIRS:-}" \
+  FILLER_LIST_VALUE="${FILLER_LIST:-}" \
+  REQUEST_CONCURRENCY_VALUE="${REQUEST_CONCURRENCY:-}" \
+  FILLER_PROMPT_TOKENS_VALUE="${FILLER_PROMPT_TOKENS:-}" \
+  TOOL_WAIT_LIST_MS_VALUE="${TOOL_WAIT_LIST_MS:-}" \
+  START_INDEX_VALUE="${START_INDEX:-}" \
+  END_INDEX_VALUE="${END_INDEX:-}" \
+  AGENTBENCH_EXECUTION_LOOP_MAX_STEPS_VALUE="${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}" \
+  AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS_VALUE="${AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS:-}" \
+  MAX_TOTAL_TOKENS_VALUE="${MAX_TOTAL_TOKENS:-}" \
+  HICACHE_SIZE_GB_VALUE="${HICACHE_SIZE_GB:-}" \
+  MEM_FRACTION_STATIC_VALUE="${MEM_FRACTION_STATIC:-}" \
   UPDATE_LATEST="${UPDATE_LATEST}" \
   MANIFEST_PATH="${manifest_path}" \
   LATEST_MANIFEST_PATH="${latest_manifest_path}" \
@@ -166,6 +264,21 @@ manifest = {
     "archived_report": os.environ.get("ARCHIVED_REPORT_VALUE", ""),
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "script": os.environ["SCRIPT_VALUE"],
+    "pressure_profile": os.environ.get("PRESSURE_PROFILE_VALUE", ""),
+    "pressure_knobs": {
+        "max_pairs": os.environ.get("MAX_PAIRS_VALUE", ""),
+        "filler_list": os.environ.get("FILLER_LIST_VALUE", ""),
+        "request_concurrency": os.environ.get("REQUEST_CONCURRENCY_VALUE", ""),
+        "filler_prompt_tokens": os.environ.get("FILLER_PROMPT_TOKENS_VALUE", ""),
+        "tool_wait_list_ms": os.environ.get("TOOL_WAIT_LIST_MS_VALUE", ""),
+        "start_index": os.environ.get("START_INDEX_VALUE", ""),
+        "end_index": os.environ.get("END_INDEX_VALUE", ""),
+        "agentbench_execution_loop_max_steps": os.environ.get("AGENTBENCH_EXECUTION_LOOP_MAX_STEPS_VALUE", ""),
+        "agentbench_direct_sglang_max_tokens": os.environ.get("AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS_VALUE", ""),
+        "max_total_tokens": os.environ.get("MAX_TOTAL_TOKENS_VALUE", ""),
+        "hicache_size_gb": os.environ.get("HICACHE_SIZE_GB_VALUE", ""),
+        "mem_fraction_static": os.environ.get("MEM_FRACTION_STATIC_VALUE", ""),
+    },
 }
 
 manifest_path = Path(os.environ["MANIFEST_PATH"])
@@ -193,6 +306,17 @@ BUILD_ONLY=${BUILD_ONLY}
 DRY_RUN=${DRY_RUN}
 CLEAN_TOPLEVEL=${CLEAN_TOPLEVEL}
 MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}
+PRESSURE_PROFILE=${PRESSURE_PROFILE}
+MAX_PAIRS=${MAX_PAIRS:-}
+FILLER_LIST=${FILLER_LIST:-}
+REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}
+FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}
+TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}
+START_INDEX=${START_INDEX:-}
+END_INDEX=${END_INDEX:-}
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}
+MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}
+MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}
 EOF
 }
 
@@ -205,10 +329,18 @@ run_controlled() {
 
   echo
   echo "Running controlled replay experiment."
-  RESULT_ROOT="${CONTROLLED_RUN_ROOT}" \
-  LATEST_REPORT_ROOT="${CONTROLLED_RUN_ROOT}/_latest_scratch" \
-  MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS}" \
-  bash scripts/run_milestone27_real_prompt_controlled_replay.sh "${MODEL}"
+  local env_args=(
+    "RESULT_ROOT=${CONTROLLED_RUN_ROOT}"
+    "LATEST_REPORT_ROOT=${CONTROLLED_RUN_ROOT}/_latest_scratch"
+    "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
+  )
+  local knob
+  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
+    if [[ -n "${!knob+x}" ]]; then
+      env_args+=("${knob}=${!knob}")
+    fi
+  done
+  env "${env_args[@]}" bash scripts/run_milestone27_real_prompt_controlled_replay.sh "${MODEL}"
 }
 
 run_live() {
@@ -220,11 +352,19 @@ run_live() {
 
   echo
   echo "Running live AgentBench direct-prefetch experiment."
-  RESULT_ROOT="${LIVE_DIRECT_RUN_ROOT}" \
-  LATEST_REPORT_ROOT="${LIVE_DIRECT_RUN_ROOT}/_latest_scratch" \
-  LIVE_PREFETCH_ACTION="${LIVE_PREFETCH_ACTION:-direct_load}" \
-  MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS}" \
-  bash scripts/run_milestone26_live_direct_kv_load_intervention.sh "${MODEL}"
+  local env_args=(
+    "RESULT_ROOT=${LIVE_DIRECT_RUN_ROOT}"
+    "LATEST_REPORT_ROOT=${LIVE_DIRECT_RUN_ROOT}/_latest_scratch"
+    "LIVE_PREFETCH_ACTION=${LIVE_PREFETCH_ACTION:-direct_load}"
+    "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
+  )
+  local knob
+  for knob in START_INDEX END_INDEX AGENTBENCH_EXECUTION_LOOP_MAX_STEPS AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
+    if [[ -n "${!knob+x}" ]]; then
+      env_args+=("${knob}=${!knob}")
+    fi
+  done
+  env "${env_args[@]}" bash scripts/run_milestone26_live_direct_kv_load_intervention.sh "${MODEL}"
 }
 
 build_report() {
@@ -310,6 +450,19 @@ build_report() {
     echo "UPDATE_LATEST=${UPDATE_LATEST}"
     echo "BUILD_ONLY=${BUILD_ONLY}"
     echo "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
+    echo "PRESSURE_PROFILE=${PRESSURE_PROFILE}"
+    echo "MAX_PAIRS=${MAX_PAIRS:-}"
+    echo "FILLER_LIST=${FILLER_LIST:-}"
+    echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}"
+    echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}"
+    echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}"
+    echo "START_INDEX=${START_INDEX:-}"
+    echo "END_INDEX=${END_INDEX:-}"
+    echo "AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}"
+    echo "AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=${AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS:-}"
+    echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
+    echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}"
+    echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
   } > "${REPORT_DIR}/run_config.env"
 
   write_manifest "${RESULTS_ROOT}/latest_master_report.html" "${REPORT_DIR}/master_report.html" "${CONTROLLED_RUN_ROOT}" "${LIVE_DIRECT_RUN_ROOT}"
