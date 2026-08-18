@@ -1087,6 +1087,7 @@ def timeline_guide_html(profiled_available: bool) -> str:
         {"step": "4. Agent waits", "timeline color": "gray bar", "simple meaning": "this wait is the prefetch opportunity"},
         {"step": "5. Tool returns", "timeline color": "black vertical line", "simple meaning": "the next model turn is due"},
         {"step": "6. Agent asks model again", "timeline color": "red bar", "simple meaning": "resume request after the tool result"},
+        {"step": "Before the replay produces its first token", "timeline color": "orange bar", "simple meaning": "time-before-first-token window; this can include queueing, prefix work, recompute/prefill, and cache work"},
         {"step": "During steps 3/4, if prefetch is enabled", "timeline color": "purple bar", "simple meaning": "our software prefetch attempt runs during the wait"},
         {"step": "Inside the purple window, if KV moved", "timeline color": "green bar", "simple meaning": "direct SGLang KV host-to-device movement was observed for that hint"},
         {"step": "Inside the red replay request, if KV moved", "timeline color": "cyan bar", "simple meaning": "the real replay request itself performed host-to-device KV movement"},
@@ -1128,12 +1129,12 @@ def timeline_guide_html(profiled_available: bool) -> str:
             "simple description": "The agent asks the model to continue after the tool result. This is the request we want to speed up by having the right KV ready before it arrives.",
         },
         {
-            "color": "yellow",
-            "meaning": "First token marker",
-            "simple description": "Synthetic reports may show this as the point where the replay request starts producing output. It helps separate request arrival from first-token latency.",
+            "color": "orange",
+            "meaning": "Replay prefill / TTFT window",
+            "simple description": "Synthetic/controlled reports may show this inside the red replay bar. It is inferred from TTFT and means the replay request had arrived but had not produced its first token yet. It can include queueing, prefix matching, recompute/prefill, and cache movement.",
         },
     ]
-    note = "Purple means the prefetch attempt ran. Green means that attempt had attributed direct KV host-to-device movement. Purple without green means the hint ran, but no matching HtoD load was observed for that displayed gap."
+    note = "Purple means the prefetch attempt ran. Green means that attempt had attributed direct KV host-to-device movement. Orange is not a DMA bar; it is the replay's time-before-first-token window. Purple without green means the hint ran, but no matching HtoD load was observed for that displayed gap."
     return f"""
     <p class="note">{html.escape(note)}</p>
     <p class="note">The timeline uses a symlog full-replay view. It compresses very long replay requests so red bars can extend to their true end while the important activity around <code>0 ms</code> remains visible.</p>
@@ -1406,6 +1407,9 @@ SECTION_THEMES = {
     "setup": "theme-setup",
     "timeline-guide": "theme-guide",
     "global-prefetch": "theme-global",
+    "replay-attribution": "theme-directkv",
+    "late-prefetch": "theme-profiled",
+    "early-prefetch": "theme-directkv",
     "timelines": "theme-clean",
     "live-direct": "theme-profiled",
     "performance": "theme-clean-table",

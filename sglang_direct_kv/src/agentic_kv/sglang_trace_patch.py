@@ -687,6 +687,122 @@ def _copy_telemetry_event(
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}
 
 
+def _count_from_index_summary(value: Any) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("index_count", "numel", "count"):
+        raw = value.get(key)
+        try:
+            if raw not in (None, ""):
+                return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _count_from_request_index(request: dict[str, Any], key: str) -> int | None:
+    return _count_from_index_summary(request.get(key))
+
+
+def _count_from_result_index(result: Any) -> int | None:
+    try:
+        return _count_from_index_summary(_index_context(result))
+    except Exception:
+        return None
+
+
+def _match_prefix_result_counts(result: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    try:
+        if len(result) > 0:
+            prefix_count = _count_from_result_index(result[0])
+            if prefix_count is not None:
+                out["cached_prefix_tokens"] = prefix_count
+        if len(result) > 3 and result[3] is not None:
+            out["host_hit_tokens"] = int(result[3])
+    except Exception:
+        pass
+    return out
+
+
+def _cache_path_telemetry_event(
+    *,
+    call_id: str,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+    result: Any = None,
+    duration_ms: float | None = None,
+) -> dict[str, Any] | None:
+    category_by_method = {
+        "match_prefix": "match_prefix",
+        "ready_to_load_host_cache": "ready_to_load_host_cache",
+        "init_load_back": "init_load_back",
+        "load_back": "load_back",
+        "load": "hicache_load",
+        "cache_finished_req": "cache_finished_req",
+        "cache_unfinished_req": "cache_unfinished_req",
+    }
+    category = category_by_method.get(method_name)
+    if category is None:
+        return None
+
+    req = context.get("request") if isinstance(context.get("request"), dict) else {}
+    input_tokens = _count_from_request_index(req, "origin_input_ids") or _count_from_request_index(req, "fill_ids")
+    cached_prefix_tokens = _count_from_request_index(req, "prefix_indices")
+    host_hit_tokens = req.get("host_hit_length")
+    if host_hit_tokens not in (None, ""):
+        try:
+            host_hit_tokens = int(host_hit_tokens)
+        except (TypeError, ValueError):
+            host_hit_tokens = None
+    else:
+        host_hit_tokens = None
+
+    if method_name == "match_prefix":
+        counts = _match_prefix_result_counts(result)
+        cached_prefix_tokens = max(cached_prefix_tokens or 0, counts.get("cached_prefix_tokens") or 0)
+        host_hit_tokens = max(host_hit_tokens or 0, counts.get("host_hit_tokens") or 0)
+
+    host_load_tokens = _count_from_index_summary(context.get("host_indices"))
+    device_load_tokens = _count_from_index_summary(context.get("device_indices"))
+    result_device_tokens = _count_from_result_index(result)
+    if result_device_tokens is not None:
+        device_load_tokens = result_device_tokens
+
+    new_prefill_tokens = None
+    if input_tokens is not None and cached_prefix_tokens is not None:
+        new_prefill_tokens = max(0, input_tokens - cached_prefix_tokens)
+
+    event: dict[str, Any] = {
+        "event": "kv_telemetry.cache.end",
+        "call_id": call_id,
+        "source_event": f"{event_name}.end",
+        "class": class_name,
+        "method": method_name,
+        "category": category,
+        "direction": context.get("direction", ""),
+        "input_tokens": input_tokens,
+        "cached_prefix_tokens": cached_prefix_tokens,
+        "new_prefill_tokens_est": new_prefill_tokens,
+        "host_hit_tokens": host_hit_tokens,
+        "host_load_tokens": host_load_tokens,
+        "device_load_tokens": device_load_tokens,
+        "cache_protected_tokens": req.get("cache_protected_len", ""),
+        "kv_committed_tokens": req.get("kv_committed_len", ""),
+        "request_id": req.get("rid", ""),
+        "node_id": context.get("node_id", ""),
+    }
+    event.update(_copy_agent_context(context))
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list) and sessions:
+        event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
 def _write_copy_telemetry(event: dict[str, Any] | None) -> None:
     if not event:
         return
@@ -826,6 +942,17 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                     duration_ms=duration_ms,
                 )
             )
+            cache_event = _cache_path_telemetry_event(
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=end_context,
+                result=result,
+                duration_ms=duration_ms,
+            )
+            if cache_event:
+                _write_event(cache_event)
             record_torch_profiler_event(nvtx_name)
             return result
         finally:
@@ -916,6 +1043,19 @@ def install_sglang_kv_trace() -> None:
             {
                 "load_to_device_per_layer": "hostpool.load_to_device_per_layer",
                 "backup_from_device_all_layer": "hostpool.backup_from_device_all_layer",
+            },
+        )
+
+    if os.environ.get("AGENTIC_KV_TRACE_SCHEDULER", "0") == "1":
+        _try_patch(
+            lambda: __import__("sglang.srt.managers.scheduler", fromlist=["Scheduler"]),
+            "Scheduler",
+            {
+                "run_batch": "scheduler.run_batch",
+                "process_input_requests": "scheduler.process_input_requests",
+                "get_next_batch_to_run": "scheduler.get_next_batch_to_run",
+                "event_loop_overlap": "scheduler.event_loop_overlap",
+                "event_loop_normal": "scheduler.event_loop_normal",
             },
         )
 

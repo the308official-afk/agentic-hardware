@@ -46,6 +46,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 26: Live Direct KV Load Intervention | Ready | [Milestone 26](#milestone-26-live-direct-kv-load-intervention) |
 | Milestone 27: Real-Prompt Controlled Replay | Ready | [Milestone 27](#milestone-27-real-prompt-controlled-replay) |
 | Milestone 28: Hardened Master Report Workflow | Ready | [Milestone 28](#milestone-28-hardened-master-report-workflow) |
+| Milestone 29: Replay Path Instrumentation Ledger | Ready | [Milestone 29](#milestone-29-replay-path-instrumentation-ledger) |
 
 ## What We Are Testing
 
@@ -5198,6 +5199,151 @@ MEM_FRACTION_STATIC
 
 HICACHE_SIZE_GB
   Host-side HiCache capacity. Keep it large enough to hold useful offloaded KV.
+```
+
+### Milestone 29: Replay Path Instrumentation Ledger
+
+Status: ready.
+
+Why this milestone is needed:
+
+```text
+The timeline shows when requests, prefetch attempts, and KV movements happen.
+But for each row, we also need a plain answer:
+  did replay reuse KV?
+  did replay load KV from host to GPU?
+  did replay recompute/prefill missing tokens?
+  did replay mostly wait in the scheduler/request path?
+
+Milestone 29 turns each timeline row into an evidence-backed replay-path row.
+```
+
+What it does:
+
+```text
+For every controlled replay gap, the report now builds a replay-path ledger.
+
+Each row includes:
+  final_path
+  bottleneck_label
+  confidence
+  prefetch_outcome
+  input_tokens
+  matched_prefix_tokens
+  unmatched_tokens
+  host_load_tokens
+  recomputed_tokens_est
+  scheduler_wait_ms
+  kv_prepare_ms
+  hardware counterfactual fields
+```
+
+Simple meaning:
+
+```text
+Instead of only saying:
+  G04 had a long orange TTFT bar.
+
+The report can now say:
+  G04 likely reused logical/GPU-resident KV, but waited in the scheduler path.
+
+Or:
+  G07 replay loaded KV from host to GPU.
+
+Or:
+  G12 had a prefix miss and likely recomputed/prefilled missing tokens.
+```
+
+New report sections:
+
+```text
+Replay Path Proof Table
+  one evidence-backed row per timeline gap
+
+Bottleneck Breakdown
+  groups rows by scheduler dominated, host-load dominated, recompute dominated, etc.
+
+Confidence Summary
+  high, medium, or low confidence for each classification
+
+Counterfactual Hardware Opportunity
+  estimates whether a deadline-aware hardware path might plausibly have met the tool-gap deadline
+
+Instrumentation Coverage
+  shows which evidence sources were present
+```
+
+New output files:
+
+```text
+artifacts/results/<report_label>/replay_path_ledger.csv
+artifacts/results/<report_label>/hardware_counterfactual.csv
+artifacts/results/<report_label>/instrumentation_coverage.csv
+
+artifacts/results/<report_label>/report/replay_path_ledger.csv
+artifacts/results/<report_label>/report/hardware_counterfactual.csv
+artifacts/results/<report_label>/report/instrumentation_coverage.csv
+```
+
+Validate the classifier without running SGLang:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/validate_replay_path_classifier.py
+```
+
+Expected output:
+
+```text
+Validated 5 replay-path classifier cases.
+Wrote artifacts/results/replay_path_classifier_validation.json
+```
+
+Rebuild the latest master report from an existing run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+BUILD_ONLY=1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=replay_path_ledger_rebuild \
+UPDATE_LATEST=1 \
+CONTROLLED_ROOT=artifacts/results/runs/controlled/strong_replay_attribution_1 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Optional deep scheduler trace:
+
+```bash
+export AGENTIC_KV_TRACE_SCHEDULER=1
+```
+
+Simple meaning:
+
+```text
+This asks the SGLang monkeypatch tracer to also log selected scheduler methods.
+Use it only for focused debug runs because scheduler events can be noisy.
+```
+
+Important interpretation:
+
+```text
+High confidence:
+  direct SGLang counters plus HtoD movement evidence.
+
+Medium confidence:
+  direct SGLang prefix/cache counters, but no matching low-level HtoD event.
+
+Low confidence:
+  mostly inferred from TTFT and timeline shape.
+
+The report should be read as an evidence ladder.
+Strong rows support strong claims.
+Low-confidence rows tell us where deeper SGLang block-level hooks are still needed.
 ```
 
 Report output must include:

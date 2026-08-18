@@ -6,19 +6,22 @@ import csv
 import html
 import json
 import shutil
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
 
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
+    build_replay_execution_timeline_svg,
     read_jsonl,
     table_html,
     write_csv,
 )
 from build_live_paired_agentbench_report import (
+    agent_session_from_context,
     css as master_css,
+    context_from_trace_event,
     global_prefetch_margin_html,
     load_live_run as load_live_agentbench_run,
     mode_summary as live_mode_summary,
@@ -27,6 +30,14 @@ from build_live_paired_agentbench_report import (
     setup_diagram_svg,
     timeline_guide_html,
     toc_html,
+)
+from replay_path_classifier import (
+    attach_replay_path_fields,
+    bottleneck_summary_rows,
+    build_replay_path_ledger,
+    confidence_summary_rows,
+    counterfactual_summary_rows,
+    instrumentation_coverage_rows,
 )
 
 
@@ -51,6 +62,10 @@ def has_events(value: Any) -> bool:
         return int(value or 0) > 0
     except (TypeError, ValueError):
         return False
+
+
+def replay_path(row: dict[str, Any]) -> str:
+    return replay_path_from_evidence(row)
 
 
 def summarize_movement(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -84,6 +99,269 @@ def summarize_movement(events: list[dict[str, Any]]) -> dict[str, Any]:
         "events": str(len(events)),
         "categories": ", ".join(f"{key}:{value}" for key, value in sorted(categories.items())),
     }
+
+
+def index_count(value: Any) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("index_count", "numel", "count"):
+        parsed = as_float(value.get(key))
+        if parsed is not None:
+            return int(parsed)
+    return None
+
+
+def nested_request(context: dict[str, Any]) -> dict[str, Any]:
+    request = context.get("request")
+    return request if isinstance(request, dict) else {}
+
+
+def request_token_count(request: dict[str, Any]) -> int | None:
+    for key in ("origin_input_ids", "fill_ids"):
+        count = index_count(request.get(key))
+        if count is not None:
+            return count
+    return None
+
+
+def result_prefix_tokens(row: dict[str, Any]) -> int | None:
+    result = row.get("result")
+    if isinstance(result, list) and result:
+        count = index_count(result[0])
+        if count is not None:
+            return count
+    return None
+
+
+def result_host_hit_tokens(row: dict[str, Any]) -> int | None:
+    result = row.get("result")
+    if isinstance(result, list) and len(result) > 3:
+        value = as_float(result[3])
+        if value is not None:
+            return int(value)
+    return None
+
+
+def cache_events_by_session(trace_rows: list[dict[str, Any]], base_ts: float) -> dict[str, list[dict[str, Any]]]:
+    cache_events = {
+        "kv_telemetry.cache.end": "cache_telemetry",
+        "hiradix.match_prefix.end": "match_prefix",
+        "hiradix.ready_to_load_host_cache.end": "ready_to_load_host_cache",
+        "hiradix.init_load_back.end": "init_load_back",
+        "hiradix.load_back.end": "load_back",
+        "hicache.load.end": "hicache_load",
+        "hiradix.cache_finished_req.end": "cache_finished_req",
+        "hiradix.cache_unfinished_req.end": "cache_unfinished_req",
+    }
+    by_session: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        event = str(row.get("event") or "")
+        category = cache_events.get(event)
+        if not category:
+            continue
+        context = context_from_trace_event(row)
+        session_id = agent_session_from_context(context)
+        if not session_id or "::live_prefetch::" in session_id:
+            continue
+        if event == "kv_telemetry.cache.end":
+            item = {
+                "source": "kv_cache_telemetry",
+                "event": event,
+                "category": str(row.get("category") or "cache_telemetry"),
+                "agent_session_id": session_id,
+                "agent_phase": row.get("agent_phase", ""),
+                "duration_ms": row.get("duration_ms", ""),
+                "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
+                "input_tokens": row.get("input_tokens", ""),
+                "cached_prefix_tokens": row.get("cached_prefix_tokens", ""),
+                "host_hit_tokens": row.get("host_hit_tokens", ""),
+                "host_load_tokens": row.get("host_load_tokens", ""),
+                "device_load_tokens": row.get("device_load_tokens", ""),
+                "cache_protected_tokens": row.get("cache_protected_tokens", ""),
+                "kv_committed_tokens": row.get("kv_committed_tokens", ""),
+                "request_id": row.get("request_id", ""),
+            }
+            by_session[session_id].append(item)
+            continue
+        request = nested_request(context)
+        input_tokens = request_token_count(request)
+        prefix_tokens = index_count(request.get("prefix_indices"))
+        result_prefix = result_prefix_tokens(row)
+        if result_prefix is not None:
+            prefix_tokens = max(prefix_tokens or 0, result_prefix)
+        host_hit = as_float(request.get("host_hit_length"))
+        result_host_hit = result_host_hit_tokens(row)
+        if result_host_hit is not None:
+            host_hit = max(int(host_hit or 0), result_host_hit)
+        host_indices = context.get("host_indices")
+        device_indices = context.get("device_indices")
+        item = {
+            "source": "sglang_trace",
+            "event": event,
+            "category": category,
+            "agent_session_id": session_id,
+            "agent_phase": context.get("agent_phase") or request.get("agent_phase", ""),
+            "duration_ms": row.get("duration_ms", ""),
+            "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
+            "input_tokens": input_tokens if input_tokens is not None else "",
+            "cached_prefix_tokens": prefix_tokens if prefix_tokens is not None else "",
+            "host_hit_tokens": int(host_hit) if host_hit is not None else "",
+            "host_load_tokens": index_count(host_indices) or "",
+            "device_load_tokens": index_count(device_indices) or "",
+            "cache_protected_tokens": request.get("cache_protected_len", ""),
+            "kv_committed_tokens": request.get("kv_committed_len", ""),
+            "request_id": request.get("rid", ""),
+        }
+        by_session[session_id].append(item)
+    return by_session
+
+
+def max_numeric(events: list[dict[str, Any]], key: str) -> int | None:
+    values: list[int] = []
+    for event in events:
+        value = as_float(event.get(key))
+        if value is not None:
+            values.append(int(value))
+    return max(values) if values else None
+
+
+def sum_duration(events: list[dict[str, Any]], category: str) -> float:
+    total = 0.0
+    for event in events:
+        if event.get("category") != category:
+            continue
+        duration = as_float(event.get("duration_ms"))
+        if duration is not None:
+            total += duration
+    return round(total, 3)
+
+
+def count_category(events: list[dict[str, Any]], category: str) -> int:
+    return sum(1 for event in events if event.get("category") == category)
+
+
+def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = "", ttft_ms: Any = "") -> dict[str, Any]:
+    if not events:
+        return {
+            "cache_event_count": 0,
+            "input_tokens": "",
+            "cached_prefix_tokens": "",
+            "new_prefill_tokens_est": "",
+            "cache_hit_ratio_pct": "",
+            "host_hit_tokens": "",
+            "host_load_tokens": "",
+            "cache_write_events": 0,
+            "match_prefix_events": 0,
+            "init_load_back_events": 0,
+            "load_back_events": 0,
+            "hicache_load_events": 0,
+            "first_cache_event_delay_ms": "",
+            "cache_work_end_to_first_token_ms": "",
+            "cache_path_summary": "no SGLang cache events attributed",
+        }
+    compact_events = [event for event in events if event.get("source") == "kv_cache_telemetry"]
+    events = compact_events or events
+    input_tokens = max_numeric(events, "input_tokens")
+    cached_prefix = max_numeric(events, "cached_prefix_tokens")
+    host_hit = max_numeric(events, "host_hit_tokens")
+    host_loads = [int(as_float(event.get("host_load_tokens")) or 0) for event in events if as_float(event.get("host_load_tokens")) is not None]
+    host_load_tokens = max(host_loads) if host_loads else None
+    new_prefill = ""
+    hit_ratio = ""
+    if input_tokens is not None and cached_prefix is not None:
+        new_prefill = max(0, input_tokens - cached_prefix)
+        hit_ratio = round(cached_prefix * 100.0 / input_tokens, 2) if input_tokens else 0.0
+    event_times = [as_float(event.get("start_or_end_ms")) for event in events]
+    event_times = [value for value in event_times if value is not None]
+    first_delay = ""
+    end_to_first = ""
+    window_start = as_float(window_start_ms)
+    first_token_at = None
+    ttft = as_float(ttft_ms)
+    if window_start is not None and event_times:
+        first_delay = round(min(event_times) - window_start, 3)
+        if ttft is not None:
+            first_token_at = window_start + ttft
+            before_first = [value for value in event_times if value <= first_token_at]
+            if before_first:
+                end_to_first = round(first_token_at - max(before_first), 3)
+    load_tokens_text = f"host_load_tokens={host_load_tokens}" if host_load_tokens is not None else "host_load_tokens=0"
+    prefix_text = f"cached_prefix={cached_prefix}/{input_tokens}" if input_tokens is not None and cached_prefix is not None else "cached_prefix=unknown"
+    host_text = f"host_hit={host_hit}" if host_hit is not None else "host_hit=unknown"
+    return {
+        "cache_event_count": len(events),
+        "input_tokens": input_tokens if input_tokens is not None else "",
+        "cached_prefix_tokens": cached_prefix if cached_prefix is not None else "",
+        "new_prefill_tokens_est": new_prefill,
+        "cache_hit_ratio_pct": hit_ratio,
+        "host_hit_tokens": host_hit if host_hit is not None else "",
+        "host_load_tokens": host_load_tokens if host_load_tokens is not None else "",
+        "cache_write_events": count_category(events, "cache_finished_req") + count_category(events, "cache_unfinished_req"),
+        "match_prefix_events": count_category(events, "match_prefix"),
+        "ready_to_load_host_cache_events": count_category(events, "ready_to_load_host_cache"),
+        "init_load_back_events": count_category(events, "init_load_back"),
+        "load_back_events": count_category(events, "load_back"),
+        "hicache_load_events": count_category(events, "hicache_load"),
+        "match_prefix_total_ms": sum_duration(events, "match_prefix"),
+        "init_load_back_total_ms": sum_duration(events, "init_load_back"),
+        "hicache_load_total_ms": sum_duration(events, "hicache_load"),
+        "first_cache_event_delay_ms": first_delay,
+        "cache_work_end_to_first_token_ms": end_to_first,
+        "cache_path_summary": f"{prefix_text}; {host_text}; {load_tokens_text}",
+    }
+
+
+def replay_path_from_evidence(row: dict[str, Any]) -> str:
+    if has_events(row.get("replay_kv_h2d_events")):
+        return "replay loaded KV"
+    new_prefill = as_float(row.get("replay_new_prefill_tokens_est"))
+    hit_ratio = as_float(row.get("replay_cache_hit_ratio_pct"))
+    ttft = as_float(row.get("resume_ttft_ms"))
+    if new_prefill is not None and new_prefill >= 128 and ttft is not None and ttft >= 1000:
+        return "replay recompute/prefill suspected"
+    if hit_ratio is not None and hit_ratio >= 90:
+        return "mostly cache hit/resident"
+    if ttft is not None and ttft >= 1000:
+        return "scheduler/cache wait suspected"
+    if ttft is None:
+        return "unclear"
+    return "likely cache hit/resident"
+
+
+def per_gap_verdict(row: dict[str, Any]) -> str:
+    mode = str(row.get("mode") or "")
+    margin = as_float(row.get("prefetch_margin_ms"))
+    replay_loaded = has_events(row.get("replay_kv_h2d_events"))
+    hint_loaded = has_events(row.get("direct_kv_h2d_events"))
+    replay_path_value = str(row.get("replay_path") or replay_path_from_evidence(row))
+    hint_host_hit = as_float(row.get("hint_host_hit_tokens"))
+    if mode == "no_prefetch":
+        if replay_loaded:
+            return "no_prefetch_replay_loaded_kv"
+        if replay_path_value == "replay recompute/prefill suspected":
+            return "no_prefetch_replay_recomputed"
+        return "no_prefetch_cache_reused_or_scheduler_wait"
+    if margin is None:
+        return "prefetch_missing_or_unfinished"
+    if margin < 0 and replay_loaded:
+        return "prefetch_late_replay_loaded_kv"
+    if margin < 0 and replay_path_value == "replay recompute/prefill suspected":
+        return "prefetch_late_replay_recomputed"
+    if margin < 0:
+        return "prefetch_late_no_replay_h2d"
+    if replay_loaded:
+        return "prefetch_ready_but_replay_loaded_kv"
+    if hint_loaded and replay_path_value in {"mostly cache hit/resident", "likely cache hit/resident"}:
+        return "prefetch_success_cache_reused"
+    if replay_path_value == "replay recompute/prefill suspected":
+        return "prefetch_ready_but_replay_recomputed"
+    if replay_path_value in {"mostly cache hit/resident", "likely cache hit/resident"}:
+        if not hint_loaded and hint_host_hit == 0:
+            return "prefetch_no_host_load_replay_cache_hit"
+        return "prefetch_ready_replay_cache_hit"
+    if not hint_loaded and hint_host_hit == 0:
+        return "prefetch_ran_but_no_host_kv"
+    return "prefetch_ready_no_replay_h2d"
 
 
 def trace_request_windows(trace_rows: list[dict[str, Any]], base_ts: float) -> dict[tuple[str, str], dict[str, Any]]:
@@ -170,10 +448,12 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
     session_meta = first_event_by_session(trace_rows, "m27.session.start", base_ts)
     tool_starts = first_event_by_session(trace_rows, "m27.tool_wait.start", base_ts)
     replay_due = first_event_by_session(trace_rows, "m27.replay.due", base_ts)
+    pre_replay = first_event_by_session(trace_rows, "m27.pre_replay.checkpoint", base_ts)
     hint_submitted = first_event_by_session(trace_rows, "m27.hint.submitted", base_ts)
     prefetch_starts = first_event_by_session(trace_rows, "m27.prefetch.start", base_ts)
     prefetch_ends = latest_event_by_session(trace_rows, "m27.prefetch.end", base_ts)
     movement_by_session = movement_events_by_session(trace_rows, telemetry_rows, base_ts)
+    cache_by_session = cache_events_by_session(trace_rows, base_ts)
     sessions = sorted(session_meta)
     gaps: list[dict[str, Any]] = []
     for idx, session in enumerate(sessions):
@@ -182,6 +462,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         replay = requests.get((session, "replay"), {})
         tool = tool_starts.get(session, {})
         due = replay_due.get(session, {})
+        checkpoint = pre_replay.get(session, {})
         hint = hint_submitted.get(session, {})
         p_start = prefetch_starts.get(session, {})
         p_end = prefetch_ends.get(session, {})
@@ -191,11 +472,21 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         prefetch_end_ms = p_end.get("ms", "")
         hint_events = events_in_window(movement_by_session, session, prefetch_start_ms, prefetch_end_ms)
         replay_events = events_in_window(movement_by_session, session, replay.get("start_ms"), replay.get("end_ms"))
+        hint_cache_events = events_in_window(cache_by_session, session, prefetch_start_ms, prefetch_end_ms)
+        replay_cache_events = events_in_window(cache_by_session, session, replay.get("start_ms"), replay.get("end_ms"))
         hint_summary = summarize_movement(hint_events)
         replay_summary = summarize_movement(replay_events)
+        hint_cache_summary = summarize_cache_path(hint_cache_events, prefetch_start_ms)
+        replay_cache_summary = summarize_cache_path(replay_cache_events, replay.get("start_ms"), replay.get("ttft_ms", ""))
+        replay_prefill_end_ms = ""
+        replay_ttft_ms = as_float(replay.get("ttft_ms", ""))
+        replay_start_ms = as_float(replay.get("start_ms", ""))
+        if replay_start_ms is not None and replay_ttft_ms is not None:
+            replay_prefill_end_ms = round(replay_start_ms + replay_ttft_ms, 3)
         margin = ""
-        if prefetch_end_ms not in ("", None) and replay.get("start_ms") not in ("", None):
-            margin = round(float(replay["start_ms"]) - float(prefetch_end_ms), 3)
+        due_ms = due.get("ms", "")
+        if prefetch_end_ms not in ("", None) and due_ms not in ("", None):
+            margin = round(float(due_ms) - float(prefetch_end_ms), 3)
         gap = {
             "session_id": session,
             "mode": mode,
@@ -208,7 +499,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "current_end_ms": current.get("end_ms", ""),
             "current_latency_ms": current.get("total_latency_ms", ""),
             "tool_gap_start_ms": tool.get("ms", ""),
-            "tool_gap_end_ms": replay.get("start_ms", ""),
+            "tool_gap_end_ms": due_ms,
             "hint_submitted_ms": hint.get("ms", ""),
             "prefetch_start_ms": prefetch_start_ms,
             "prefetch_end_ms": prefetch_end_ms,
@@ -224,16 +515,56 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "resume_end_ms": replay.get("end_ms", ""),
             "resume_latency_ms": replay.get("total_latency_ms", ""),
             "resume_ttft_ms": replay.get("ttft_ms", ""),
+            "replay_prefill_start_ms": replay.get("start_ms", ""),
+            "replay_prefill_end_ms": replay_prefill_end_ms,
+            "replay_prefill_duration_ms": replay.get("ttft_ms", ""),
             "direct_kv_h2d_start_ms": hint_summary["start_ms"],
             "direct_kv_h2d_end_ms": hint_summary["end_ms"],
             "direct_kv_h2d_duration_ms": hint_summary["duration_ms"],
             "direct_kv_h2d_events": hint_summary["events"],
             "direct_kv_h2d_categories": hint_summary["categories"],
+            "hint_cache_event_count": hint_cache_summary["cache_event_count"],
+            "hint_input_tokens": hint_cache_summary["input_tokens"],
+            "hint_cached_prefix_tokens": hint_cache_summary["cached_prefix_tokens"],
+            "hint_new_prefill_tokens_est": hint_cache_summary["new_prefill_tokens_est"],
+            "hint_cache_hit_ratio_pct": hint_cache_summary["cache_hit_ratio_pct"],
+            "hint_host_hit_tokens": hint_cache_summary["host_hit_tokens"],
+            "hint_host_load_tokens": hint_cache_summary["host_load_tokens"],
+            "hint_match_prefix_events": hint_cache_summary["match_prefix_events"],
+            "hint_init_load_back_events": hint_cache_summary["init_load_back_events"],
+            "hint_load_back_events": hint_cache_summary["load_back_events"],
+            "hint_hicache_load_events": hint_cache_summary["hicache_load_events"],
+            "hint_cache_path_summary": hint_cache_summary["cache_path_summary"],
             "replay_kv_h2d_start_ms": replay_summary["start_ms"],
             "replay_kv_h2d_end_ms": replay_summary["end_ms"],
             "replay_kv_h2d_duration_ms": replay_summary["duration_ms"],
             "replay_kv_h2d_events": replay_summary["events"],
             "replay_kv_h2d_categories": replay_summary["categories"],
+            "replay_cache_event_count": replay_cache_summary["cache_event_count"],
+            "replay_input_tokens": replay_cache_summary["input_tokens"],
+            "replay_cached_prefix_tokens": replay_cache_summary["cached_prefix_tokens"],
+            "replay_new_prefill_tokens_est": replay_cache_summary["new_prefill_tokens_est"],
+            "replay_cache_hit_ratio_pct": replay_cache_summary["cache_hit_ratio_pct"],
+            "replay_host_hit_tokens": replay_cache_summary["host_hit_tokens"],
+            "replay_host_load_tokens": replay_cache_summary["host_load_tokens"],
+            "replay_cache_write_events": replay_cache_summary["cache_write_events"],
+            "replay_match_prefix_events": replay_cache_summary["match_prefix_events"],
+            "replay_ready_to_load_host_cache_events": replay_cache_summary["ready_to_load_host_cache_events"],
+            "replay_init_load_back_events": replay_cache_summary["init_load_back_events"],
+            "replay_load_back_events": replay_cache_summary["load_back_events"],
+            "replay_hicache_load_events": replay_cache_summary["hicache_load_events"],
+            "replay_match_prefix_total_ms": replay_cache_summary["match_prefix_total_ms"],
+            "replay_init_load_back_total_ms": replay_cache_summary["init_load_back_total_ms"],
+            "replay_hicache_load_total_ms": replay_cache_summary["hicache_load_total_ms"],
+            "replay_first_cache_event_delay_ms": replay_cache_summary["first_cache_event_delay_ms"],
+            "replay_cache_work_end_to_first_token_ms": replay_cache_summary["cache_work_end_to_first_token_ms"],
+            "replay_cache_path_summary": replay_cache_summary["cache_path_summary"],
+            "pre_replay_checkpoint_ms": checkpoint.get("ms", ""),
+            "pre_replay_expected_reuse": checkpoint.get("expected_reuse", ""),
+            "pre_replay_gpu_resident_tokens": checkpoint.get("gpu_resident_tokens", ""),
+            "pre_replay_host_resident_tokens": checkpoint.get("host_resident_tokens", ""),
+            "pre_replay_missing_tokens": checkpoint.get("missing_tokens", ""),
+            "pre_replay_protected_tokens": checkpoint.get("protected_tokens", ""),
         }
         if has_events(gap["direct_kv_h2d_events"]) and has_events(gap["replay_kv_h2d_events"]):
             gap["movement_class"] = "hint and replay both moved KV"
@@ -243,6 +574,9 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             gap["movement_class"] = "replay loaded KV"
         else:
             gap["movement_class"] = "no visible HtoD"
+        gap["replay_path"] = replay_path_from_evidence(gap)
+        gap["per_gap_verdict"] = per_gap_verdict(gap)
+        attach_replay_path_fields(gap)
         gaps.append(gap)
     return gaps, trace_rows
 
@@ -255,6 +589,8 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for mode, items in sorted(by_mode.items()):
         margins = [float(row["prefetch_margin_ms"]) for row in items if row.get("prefetch_margin_ms") not in ("", None)]
         replay_ttfts = [float(row["resume_ttft_ms"]) for row in items if row.get("resume_ttft_ms") not in ("", None)]
+        replay_paths = [str(row.get("replay_path") or replay_path_from_evidence(row)) for row in items]
+        verdicts = [str(row.get("per_gap_verdict") or per_gap_verdict(row)) for row in items]
         rows.append(
             {
                 "mode": mode,
@@ -265,26 +601,59 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "avg_resume_ttft_ms": round(mean(replay_ttfts), 3) if replay_ttfts else "",
                 "hint_h2d_gaps": sum(1 for row in items if has_events(row.get("direct_kv_h2d_events"))),
                 "replay_h2d_gaps": sum(1 for row in items if has_events(row.get("replay_kv_h2d_events"))),
+                "replay_recompute_or_wait_suspected_gaps": sum(
+                    1 for value in replay_paths if value in {"replay recompute/prefill suspected", "scheduler/cache wait suspected"}
+                ),
+                "likely_cache_hit_or_resident_gaps": replay_paths.count("likely cache hit/resident"),
+                "mostly_cache_hit_or_resident_gaps": replay_paths.count("mostly cache hit/resident"),
+                "verdicts": ", ".join(f"{name}:{count}" for name, count in sorted(Counter(verdicts).items())),
             }
         )
     return rows
 
 
 def selected_timeline_gaps(gaps: list[dict[str, Any]], max_rows: int) -> list[dict[str, Any]]:
-    interesting = [
+    visible = [row for row in gaps if has_visible_kv_movement(row)]
+    if len(visible) >= max_rows:
+        return visible[:max_rows]
+    visible_ids = {id(row) for row in visible}
+    fallback = [row for row in gaps if id(row) not in visible_ids]
+    return (visible + fallback)[:max_rows]
+
+
+def has_visible_kv_movement(row: dict[str, Any]) -> bool:
+    return has_events(row.get("direct_kv_h2d_events")) or has_events(row.get("replay_kv_h2d_events"))
+
+
+def prefetch_attempt_gaps(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
         row
         for row in gaps
-        if has_events(row.get("direct_kv_h2d_events")) or has_events(row.get("replay_kv_h2d_events"))
+        if str(row.get("mode") or "") == "direct_prefetch"
+        and as_float(row.get("prefetch_margin_ms")) is not None
     ]
-    if len(interesting) >= max_rows:
-        return interesting[:max_rows]
-    seen = {id(row) for row in interesting}
-    for row in gaps:
-        if id(row) not in seen:
-            interesting.append(row)
-        if len(interesting) >= max_rows:
-            break
-    return interesting
+
+
+def focused_prefetch_gaps(
+    gaps: list[dict[str, Any]], ready: bool, max_rows: int
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    attempts = prefetch_attempt_gaps(gaps)
+    matching = [
+        row
+        for row in attempts
+        if bool(as_float(row.get("prefetch_margin_ms")) is not None and as_float(row.get("prefetch_margin_ms")) >= 0)
+        == ready
+    ]
+    selected = [row for row in matching if has_visible_kv_movement(row)]
+    if ready:
+        matching.sort(key=lambda row: as_float(row.get("prefetch_margin_ms")) or 0.0, reverse=True)
+        selected.sort(key=lambda row: as_float(row.get("prefetch_margin_ms")) or 0.0, reverse=True)
+    else:
+        matching.sort(key=lambda row: as_float(row.get("prefetch_margin_ms")) or 0.0)
+        selected.sort(key=lambda row: as_float(row.get("prefetch_margin_ms")) or 0.0)
+    selected_ids = {id(row) for row in selected}
+    fallback = [row for row in matching if id(row) not in selected_ids]
+    return (selected + fallback)[:max_rows], len(selected), len(matching), len(attempts)
 
 
 def timeline_rows_with_labels(rows: list[dict[str, Any]], prefix: str = "G") -> list[dict[str, Any]]:
@@ -315,10 +684,113 @@ def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "gap": row.get("gap_order_in_task", ""),
                 "tool_wait_ms": row.get("tool_gap_ms", ""),
                 "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "replay_path": row.get("replay_path", replay_path_from_evidence(row)),
+                "final_path": row.get("final_path", ""),
+                "bottleneck_label": row.get("bottleneck_label", ""),
+                "path_confidence": row.get("path_confidence", ""),
+                "replay_cache_hit_pct": row.get("replay_cache_hit_ratio_pct", ""),
+                "replay_new_prefill_tokens_est": row.get("replay_new_prefill_tokens_est", ""),
+                "verdict": row.get("per_gap_verdict", ""),
                 "movement": row.get("movement_class", ""),
             }
         )
     return output
+
+
+def replay_attribution_rows(rows: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
+    selected = rows[:limit] if limit is not None else rows
+    output: list[dict[str, Any]] = []
+    for idx, row in enumerate(selected):
+        output.append(
+            {
+                "row": row.get("timeline_label") or f"G{idx:02d}",
+                "mode": row.get("mode", ""),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "input_tokens": row.get("replay_input_tokens", ""),
+                "cached_prefix_tokens": row.get("replay_cached_prefix_tokens", ""),
+                "cache_hit_pct": row.get("replay_cache_hit_ratio_pct", ""),
+                "new_prefill_tokens_est": row.get("replay_new_prefill_tokens_est", ""),
+                "host_hit_tokens": row.get("replay_host_hit_tokens", ""),
+                "host_load_tokens": row.get("replay_host_load_tokens", ""),
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "cache_events": row.get("replay_cache_event_count", ""),
+                "first_cache_event_delay_ms": row.get("replay_first_cache_event_delay_ms", ""),
+                "replay_path": row.get("replay_path", ""),
+                "final_path": row.get("final_path", ""),
+                "bottleneck_label": row.get("bottleneck_label", ""),
+                "path_confidence": row.get("path_confidence", ""),
+                "verdict": row.get("per_gap_verdict", ""),
+            }
+        )
+    return output
+
+
+def verdict_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_mode: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    totals: Counter[str] = Counter()
+    for row in gaps:
+        mode = str(row.get("mode") or "")
+        verdict = str(row.get("per_gap_verdict") or per_gap_verdict(row))
+        by_mode[mode][verdict] += 1
+        totals[mode] += 1
+    output: list[dict[str, Any]] = []
+    for mode, verdicts in sorted(by_mode.items()):
+        total = totals[mode]
+        for verdict, count in sorted(verdicts.items()):
+            output.append(
+                {
+                    "mode": mode,
+                    "verdict": verdict,
+                    "gaps": count,
+                    "pct": round(count * 100.0 / total, 2) if total else 0.0,
+                }
+            )
+    return output
+
+
+def replay_path_proof_rows(ledger: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
+    selected = ledger[:limit] if limit is not None else ledger
+    columns = [
+        "row",
+        "mode",
+        "tool_gap_ms",
+        "resume_ttft_ms",
+        "final_path",
+        "bottleneck_label",
+        "confidence",
+        "prefetch_outcome",
+        "input_tokens",
+        "matched_prefix_tokens",
+        "unmatched_tokens",
+        "host_load_tokens",
+        "recomputed_tokens_est",
+        "scheduler_wait_ms",
+        "kv_prepare_ms",
+        "direct_h2d_events",
+        "replay_h2d_events",
+        "evidence_summary",
+    ]
+    return [{column: row.get(column, "") for column in columns} for row in selected]
+
+
+def hardware_counterfactual_rows(ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    columns = [
+        "row",
+        "mode",
+        "tool_gap_ms",
+        "prefetch_margin_ms",
+        "observed_software_prefetch_duration_ms",
+        "observed_copy_ms",
+        "available_tool_gap_ms",
+        "deadline_miss_ms",
+        "counterfactual_verdict",
+        "counterfactual_reason",
+    ]
+    return [{column: row.get(column, "") for column in columns} for row in ledger]
 
 
 def observation_status(row: dict[str, Any]) -> tuple[str, str]:
@@ -357,27 +829,40 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ttft_ms = as_float(row.get("resume_ttft_ms"))
         hint_h2d = has_events(row.get("direct_kv_h2d_events"))
         replay_h2d = has_events(row.get("replay_kv_h2d_events"))
+        path = row.get("replay_path") or replay_path_from_evidence(row)
+        verdict = row.get("per_gap_verdict") or per_gap_verdict(row)
+        cache_summary = row.get("replay_cache_path_summary") or ""
         status, _ = observation_status(row)
+        orange_note = (
+            f" Replay waited {ttft_ms:.0f} ms before first token."
+            if ttft_ms is not None
+            else ""
+        )
 
         if mode == "no_prefetch":
             if replay_h2d:
-                what = "No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement."
+                what = "No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement." + orange_note
                 why = "This is the baseline: the real request path had to handle KV movement at resume time."
             else:
-                what = "No hint was issued, and this row did not show replay-side HtoD movement."
-                why = "The KV may already have been resident/reusable, or this row did not trigger observable host-to-device movement."
+                what = "No hint was issued, and this row did not show replay-side HtoD movement." + orange_note
+                if path == "recompute/scheduler wait suspected":
+                    why = "The orange TTFT window is long even without cyan HtoD, so replay-side recompute, prefill, or scheduler waiting is suspected."
+                else:
+                    why = "The KV may already have been resident/reusable, or this row did not trigger observable host-to-device movement."
         elif margin is None:
             what = "A prefetch mode was selected, but the trace did not show a completed prefetch window for this row."
             why = "This is useful as a control/coverage warning, but it is weaker evidence than rows with measured margins."
         elif margin < 0:
-            what = f"The prefetch attempt finished {abs(margin):.0f} ms after the resume request was already due."
+            what = f"The prefetch attempt finished {abs(margin):.0f} ms after the resume request was already due." + orange_note
             if replay_h2d:
                 what += " The resume request also showed replay-side KV HtoD movement."
                 why = "This is the failure case: the normal request path had to move KV because the hint path did not finish in time."
+            elif path == "recompute/scheduler wait suspected":
+                why = "The hint path was late and the orange TTFT window is long, so replay-side recompute, prefill, or scheduler waiting is suspected."
             else:
                 why = "The hint path was late, so software prefetch did not meet the agent resume deadline."
         else:
-            what = f"The prefetch attempt finished {margin:.0f} ms before the resume request was due."
+            what = f"The prefetch attempt finished {margin:.0f} ms before the resume request was due." + orange_note
             if hint_h2d and not replay_h2d:
                 what += " Direct KV HtoD movement was visible on the hint side, with no replay-side HtoD in this row."
                 why = "This is the clean success case: the hint appears to have prepared KV before the agent resumed."
@@ -396,9 +881,11 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "mode": mode,
                 "status": status,
                 "what happened": what,
-                "why it matters": why,
+                "why it matters": f"{why} Evidence: {cache_summary}" if cache_summary else why,
                 "tool_wait_ms": round(gap_ms, 3) if gap_ms is not None else "",
                 "resume_ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else "",
+                "replay_path": path,
+                "verdict": verdict,
             }
         )
     return output
@@ -429,6 +916,8 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
         ("direct-prefetch avg TTFT", f"{direct.get('avg_resume_ttft_ms', '')} ms"),
         ("direct late prefetches", direct.get("late_prefetches", "")),
         ("direct H2D gaps", direct.get("hint_h2d_gaps", "")),
+        ("suspected replay wait/recompute", sum(int(row.get("replay_recompute_or_wait_suspected_gaps") or 0) for row in mode_rows)),
+        ("likely cache hit/resident", sum(int(row.get("likely_cache_hit_or_resident_gaps") or 0) for row in mode_rows)),
     ]
     if "oracle_prefetch" in by_mode:
         oracle = by_mode["oracle_prefetch"]
@@ -454,24 +943,19 @@ def reproduce_controlled_replay_html(result_root: Path) -> str:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-EXPERIMENT_KIND=both \
-REPORT_LABEL=manager_demo_1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=controlled_demo_1 \
 PRESSURE_PROFILE=high \
 UPDATE_LATEST=1 \
-START_INDEX=0 \
-END_INDEX=15 \
-MAX_STEPS=10 \
 MAX_TIMELINE_GAPS=18 \
-AGENTBENCH_ROOT=~/kv_cache_offloading \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
-MAX_PAIRS=8 \
 MODES="no_prefetch direct_prefetch" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
-FILLER_LIST="16 32" \
-REQUEST_CONCURRENCY=4 \
-MAX_TOTAL_TOKENS=8192 \
+FILLER_LIST="32 64 128" \
+REQUEST_CONCURRENCY=8 \
+MAX_TOTAL_TOKENS=12288 \
 HICACHE_SIZE_GB=8 \
-MEM_FRACTION_STATIC=0.72 \
+MEM_FRACTION_STATIC=0.75 \
 bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
@@ -480,11 +964,10 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 BUILD_ONLY=1 \
-EXPERIMENT_KIND=both \
-REPORT_LABEL=manager_demo_1_rebuild \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=controlled_demo_1_rebuild \
 UPDATE_LATEST=0 \
-CONTROLLED_ROOT=artifacts/results/runs/controlled/manager_demo_1 \
-LIVE_DIRECT_ROOT=artifacts/results/runs/live/manager_demo_1 \
+CONTROLLED_ROOT=artifacts/results/runs/controlled/controlled_demo_1 \
 bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
@@ -493,8 +976,8 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 DRY_RUN=1 \
-EXPERIMENT_KIND=both \
-REPORT_LABEL=manager_demo_1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=controlled_demo_1 \
 bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
@@ -522,7 +1005,7 @@ bash scripts/run_master_report.sh \
             "<h3>Run The Full Master Report</h3>",
             code_block(run_master),
             "<p>Output:</p>",
-            code_block("artifacts/results/latest_master_report.html\nartifacts/results/reports/manager_demo_1/master_report.html\nartifacts/results/latest_manifest.json"),
+            code_block("artifacts/results/latest_master_report.html\nartifacts/results/reports/controlled_demo_1/master_report.html\nartifacts/results/latest_manifest.json"),
             "<h3>Rebuild From Existing Runs</h3>",
             "<p>Use this when experiments already ran and you only want to regenerate the HTML, tables, timelines, and global prefetch-margin dot charts.</p>",
             code_block(build_only),
@@ -623,6 +1106,7 @@ def render_html(
     live_run: dict[str, Any] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
+    ledger = build_replay_path_ledger(gaps)
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     gap_columns = [
         "session_id",
@@ -633,6 +1117,22 @@ def render_html(
         "prefetch_duration_ms",
         "prefetch_margin_ms",
         "resume_ttft_ms",
+        "replay_path",
+        "per_gap_verdict",
+        "final_path",
+        "bottleneck_label",
+        "path_confidence",
+        "prefetch_outcome",
+        "scheduler_wait_ms",
+        "kv_prepare_ms",
+        "host_load_ms",
+        "prefill_compute_ms_est",
+        "recomputed_tokens_est",
+        "gpu_resident_hit_tokens",
+        "replay_input_tokens",
+        "replay_cached_prefix_tokens",
+        "replay_cache_hit_ratio_pct",
+        "replay_new_prefill_tokens_est",
         "movement_class",
         "direct_kv_h2d_events",
         "replay_kv_h2d_events",
@@ -642,14 +1142,21 @@ def render_html(
         ("setup", "Experiment Setup"),
         ("global-prefetch", "Global Prefetch Margin"),
         ("timeline-guide", "How To Read Timelines"),
-        ("timelines", "Controlled Replay Timeline"),
-        ("live-direct", "Live Direct Prefetch"),
+        ("replay-proof", "Replay Path Proof"),
+        ("bottlenecks", "Bottleneck Breakdown"),
+        ("counterfactual", "Hardware Opportunity"),
+        ("replay-attribution", "Replay Path Attribution"),
+        ("timelines", "Mixed Timeline Sample"),
+        ("replay-execution-timeline", "Replay Execution Timeline"),
         ("observations", "Key Observations"),
         ("performance", "Mode Tables"),
         ("direct-kv", "Direct KV Evidence"),
         ("appendix", "Gap Details"),
         ("reproduce", "Reproduce This Report"),
     ]
+    if live_run:
+        toc.insert(7, ("live-direct", "Live Direct Prefetch"))
+    live_section = live_direct_prefetch_html(live_run, max_timeline_gaps) if live_run else ""
     return f"""<!doctype html>
 <html>
 <head>
@@ -669,7 +1176,7 @@ def render_html(
 
   <details id="summary" class="section-card theme-summary" open>
     <summary><h2>Summary</h2></summary>
-    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. Oracle prefetch remains supported for optional sensitivity studies, but it is intentionally excluded from the default report to keep the main story simple.</p>
+    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. Orange replay-prefill windows are inferred from TTFT: they show how long the replay waited before first token, which can include queueing, prefix work, recompute/prefill, and cache work.</p>
     {metric_cards_html(mode_rows)}
   </details>
 
@@ -689,21 +1196,66 @@ def render_html(
     {timeline_guide_html(profiled_available=True)}
   </details>
 
-  <details id="timelines" class="section-card theme-clean">
-    <summary><h2>Controlled Replay Timeline</h2></summary>
-    <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence. Cyan is replay-side HtoD evidence.</p>
+  <details id="replay-proof" class="section-card theme-directkv" open>
+    <summary><h2>Replay Path Proof Table</h2></summary>
+    <p>This is the main evidence ledger. Each row explains what happened when the replay request resumed: whether it reused cache, loaded KV from host to GPU, recomputed missing tokens, or mostly waited in the scheduler/request path.</p>
+    <p class="note">Confidence matters. High confidence means the row has direct SGLang evidence plus HtoD movement evidence. Medium confidence means SGLang counters support the label. Low confidence means the label still depends mostly on TTFT and timeline shape.</p>
+    {table_html(replay_path_proof_rows(ledger), limit=250)}
+  </details>
+
+  <details id="bottlenecks" class="section-card theme-observations" open>
+    <summary><h2>Bottleneck Breakdown</h2></summary>
+    <p>This section groups the replay rows by the bottleneck label used in the proof table.</p>
+    <h3>Bottleneck Summary</h3>
+    {table_html(bottleneck_summary_rows(ledger))}
+    <h3>Confidence Summary</h3>
+    {table_html(confidence_summary_rows(ledger))}
+    <h3>Instrumentation Coverage</h3>
+    {table_html(instrumentation_coverage_rows(gaps, ledger))}
+  </details>
+
+  <details id="counterfactual" class="section-card theme-deductions">
+    <summary><h2>Counterfactual Hardware Opportunity</h2></summary>
+    <p>This section asks a narrow question: when software prefetch was late, was the measured copy work small enough that a deadline-aware, priority-aware hardware path might plausibly have finished it inside the tool gap?</p>
+    <h3>Counterfactual Summary</h3>
+    {table_html(counterfactual_summary_rows(ledger))}
+    <h3>Per-Row Counterfactual</h3>
+    {table_html(hardware_counterfactual_rows(ledger), limit=250)}
+  </details>
+
+  <details id="replay-attribution" class="section-card theme-directkv" open>
+    <summary><h2>Replay Path Attribution</h2></summary>
+    <p>This section turns the orange TTFT window into stronger evidence. For each replay, it reports SGLang prefix/cache counters observed inside the replay window: prompt tokens, cached prefix tokens, estimated new prefill tokens, host-hit tokens, host-load tokens, and replay-side HtoD events.</p>
+    <p class="note">The verdict is evidence-backed but still conservative. A long orange TTFT window plus low cache reuse suggests replay recompute/prefill or scheduler/cache waiting. A cyan bar plus host-load tokens is stronger proof that replay loaded KV from host to GPU.</p>
+    <h3>Verdict Summary</h3>
+    {table_html(verdict_summary_rows(gaps))}
+    <h3>Replay Attribution Rows</h3>
+    {table_html(replay_attribution_rows(gaps), limit=200)}
+  </details>
+
+  <details id="timelines" class="section-card theme-clean" open>
+    <summary><h2>Mixed Timeline Sample</h2></summary>
+    <p class="note">This is the deadline view. The black line is when replay was due. This view is best for seeing whether the purple prefetch attempt finished before the deadline.</p>
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
     <h3>Timeline Row Map</h3>
     <p>This table maps the compact row names in the chart back to the full experiment details.</p>
     {table_html(timeline_mapping_rows(interesting))}
   </details>
 
-  {live_direct_prefetch_html(live_run, max_timeline_gaps)}
+  <details id="replay-execution-timeline" class="section-card theme-clean">
+    <summary><h2>Replay Execution Timeline</h2></summary>
+    <p class="note">This is the replay view. Each row is aligned at the actual resume request start, so the orange TTFT bar is drawn at its real visual length. Use this view to judge how long the replay waited before first token.</p>
+    {build_replay_execution_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
+    <h3>Replay Timeline Row Map</h3>
+    {table_html(timeline_mapping_rows(interesting))}
+  </details>
+
+  {live_section}
 
   <details id="observations" class="section-card theme-observations">
     <summary><h2>Key Observations Per Gap/Session</h2></summary>
     <p>This section translates the timeline rows into plain English. It uses the same compact row names as the chart, so <code>G00</code> here means the same <code>G00</code> in the timeline.</p>
-    {table_html(key_observation_rows(interesting), ["row", "mode", "status", "what happened", "why it matters", "tool_wait_ms", "resume_ttft_ms"])}
+    {table_html(key_observation_rows(interesting), ["row", "mode", "status", "what happened", "why it matters", "tool_wait_ms", "resume_ttft_ms", "replay_path", "verdict"])}
   </details>
 
   <details id="performance" class="section-card theme-clean-table">
@@ -715,7 +1267,7 @@ def render_html(
   <details id="direct-kv" class="section-card theme-directkv">
     <summary><h2>Direct KV Load Evidence</h2></summary>
     <p>Green bars and <code>direct_kv_h2d_*</code> columns come from SGLang-level KV movement hooks and lightweight copy telemetry during the prefetch attempt. Cyan/replay columns show KV movement performed by the real resume request.</p>
-    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms"])}
+    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms"])}
   </details>
 
   <details id="appendix" class="section-card theme-appendix">
@@ -768,8 +1320,23 @@ def main() -> None:
         all_gaps.extend(gaps)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    ledger = build_replay_path_ledger(all_gaps)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
-    write_json(args.out_dir / "controlled_replay_report.json", {"gaps": all_gaps, "summary": mode_summary_rows(all_gaps)})
+    write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
+    write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
+    write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
+    write_json(
+        args.out_dir / "controlled_replay_report.json",
+        {
+            "gaps": all_gaps,
+            "summary": mode_summary_rows(all_gaps),
+            "replay_path_ledger": ledger,
+            "bottleneck_summary": bottleneck_summary_rows(ledger),
+            "confidence_summary": confidence_summary_rows(ledger),
+            "counterfactual_summary": counterfactual_summary_rows(ledger),
+            "instrumentation_coverage": instrumentation_coverage_rows(all_gaps, ledger),
+        },
+    )
     live_run = None
     if args.live_direct_root:
         live_run = load_live_agentbench_run(args.live_direct_root, "live_direct_prefetch", include_preflight=False)

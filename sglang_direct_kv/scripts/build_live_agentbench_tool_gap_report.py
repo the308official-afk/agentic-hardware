@@ -563,7 +563,7 @@ def build_expanded_gap_timeline_svg(
 
     rel_values: list[float] = []
     for row in rows:
-        due = maybe_float(row.get("resume_start_ms")) or maybe_float(row.get("tool_gap_end_ms"))
+        due = maybe_float(row.get("tool_gap_end_ms")) or maybe_float(row.get("resume_start_ms"))
         if due is None:
             continue
         for key in (
@@ -577,6 +577,8 @@ def build_expanded_gap_timeline_svg(
             "direct_kv_h2d_end_ms",
             "replay_kv_h2d_start_ms",
             "replay_kv_h2d_end_ms",
+            "replay_prefill_start_ms",
+            "replay_prefill_end_ms",
         ):
             value = maybe_float(row.get(key))
             if value is not None:
@@ -596,10 +598,10 @@ def build_expanded_gap_timeline_svg(
     start = min(start - 60.0, -120.0)
     end = max(end + 80.0, 220.0)
     width = 1580
-    left = 160
+    left = 178
     right = 70
     top = 86
-    row_h = 92
+    row_h = 118
     plot_w = width - left - right
     plot_bottom = top + len(rows) * row_h + 10
     legend_y = plot_bottom + 48
@@ -652,6 +654,15 @@ def build_expanded_gap_timeline_svg(
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due, {scale_label} view">',
         f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
     ]
+    for idx in range(len(rows)):
+        y = top + idx * row_h
+        band_fill = "#ffffff" if idx % 2 == 0 else "#eef2f7"
+        svg.append(
+            f'<rect x="0" y="{y:.1f}" width="{width}" height="{row_h:.1f}" '
+            f'fill="{band_fill}" opacity="0.92"/>'
+        )
+        svg.append(f'<line x1="0" y1="{y:.1f}" x2="{width}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+    svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#e5e7eb"/>')
 
     if scale == "symlog":
         tick_candidates = [
@@ -703,7 +714,7 @@ def build_expanded_gap_timeline_svg(
 
     for idx, row in enumerate(rows):
         y = top + idx * row_h
-        due = maybe_float(row.get("resume_start_ms")) or maybe_float(row.get("tool_gap_end_ms"))
+        due = maybe_float(row.get("tool_gap_end_ms")) or maybe_float(row.get("resume_start_ms"))
         if due is None:
             continue
         label = str(row.get("timeline_label") or f"G{idx:02d}")
@@ -715,16 +726,21 @@ def build_expanded_gap_timeline_svg(
         else:
             status = "NO PREFETCH"
             status_color = "#64748b"
-        svg.append(f'<text x="10" y="{y + 22}" font-size="15" font-weight="700">{fmt(label)}</text>')
-        svg.append(f'<text x="10" y="{y + 43}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
-        svg.append(f'<text x="10" y="{y + 62}" font-size="11" fill="#64748b">wait {gap_ms:.0f} ms</text>')
-        svg.append(f'<line x1="{left}" y1="{y + 5}" x2="{left + plot_w}" y2="{y + 5}" stroke="#f1f5f9"/>')
+        svg.append(f'<line x1="{left}" y1="{y + 39:.1f}" x2="{left + plot_w}" y2="{y + 39:.1f}" stroke="#f1f5f9"/>')
+        svg.append(f'<line x1="{left}" y1="{y + 74:.1f}" x2="{left + plot_w}" y2="{y + 74:.1f}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="10" y="{y + 27}" font-size="15" font-weight="700">{fmt(label)}</text>')
+        svg.append(f'<text x="10" y="{y + 49}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
+        svg.append(f'<text x="10" y="{y + 69}" font-size="11" fill="#64748b">wait {gap_ms:.0f} ms</text>')
+        svg.append(f'<text x="{left - 52}" y="{y + 25}" font-size="10" fill="#64748b" text-anchor="end">turn</text>')
+        if show_prefetch_legend:
+            svg.append(f'<text x="{left - 52}" y="{y + 58}" font-size="10" fill="#64748b" text-anchor="end">prefetch</text>')
+        svg.append(f'<text x="{left - 52}" y="{y + 94}" font-size="10" fill="#64748b" text-anchor="end">replay</text>')
 
         upper_y = y + 12
-        mid_y = y + 38
-        lower_y = y + 64
-        bar_h = 18
-        overlay_h = 12
+        mid_y = y + 45
+        lower_y = y + 82
+        bar_h = 20
+        overlay_h = 13
 
         current_start = rel(row, "current_start_ms", due)
         current_end = rel(row, "current_end_ms", due)
@@ -736,6 +752,8 @@ def build_expanded_gap_timeline_svg(
         h2d_end = rel(row, "direct_kv_h2d_end_ms", due)
         replay_h2d_start = rel(row, "replay_kv_h2d_start_ms", due)
         replay_h2d_end = rel(row, "replay_kv_h2d_end_ms", due)
+        replay_prefill_start = rel(row, "replay_prefill_start_ms", due)
+        replay_prefill_end = rel(row, "replay_prefill_end_ms", due)
         replay_start = rel(row, "resume_start_ms", due)
         replay_end = rel(row, "resume_end_ms", due)
 
@@ -808,12 +826,29 @@ def build_expanded_gap_timeline_svg(
                 0.68,
                 12,
             )
+        if replay_prefill_start is not None and replay_prefill_end is not None:
+            rect(
+                svg,
+                x_pos(replay_prefill_start),
+                x_pos(replay_prefill_end),
+                lower_y + 3,
+                overlay_h,
+                "#f59e0b",
+                f"replay prefill / time before first token; duration_ms={row.get('replay_prefill_duration_ms', '')}",
+                0.88,
+                14,
+            )
+            if replay_prefill_end - replay_prefill_start >= 12:
+                svg.append(
+                    f'<text x="{max(left + 2, x_pos(replay_prefill_start) + 3):.1f}" y="{lower_y + 13:.1f}" '
+                    f'font-size="9" fill="#78350f" font-weight="700">TTFT</text>'
+                )
         if show_prefetch_legend and replay_h2d_start is not None and replay_h2d_end is not None:
             rect(
                 svg,
                 x_pos(replay_h2d_start),
                 x_pos(replay_h2d_end),
-                lower_y + 3,
+                lower_y + 4,
                 overlay_h,
                 "#06b6d4",
                 f"replay-side KV HtoD movement; events={row.get('replay_kv_h2d_events', '')}; duration_ms={row.get('replay_kv_h2d_duration_ms', '')}",
@@ -821,7 +856,7 @@ def build_expanded_gap_timeline_svg(
                 14,
             )
         if margin is not None and prefetch_end is not None:
-            y_margin = lower_y + bar_h + 11
+            y_margin = lower_y + bar_h + 9
             x_done = x_pos(prefetch_end)
             color = "#16a34a" if margin >= 0 else "#dc2626"
             svg.append(
@@ -836,6 +871,7 @@ def build_expanded_gap_timeline_svg(
         ("tool wait", "#d1d5db"),
         ("replay due", "#111827"),
         ("resume request", "#ef4444"),
+        ("replay prefill / TTFT", "#f59e0b"),
     ]
     if show_prefetch_legend:
         legend.insert(2, ("prefetch attempt", "#a855f7"))
@@ -849,6 +885,174 @@ def build_expanded_gap_timeline_svg(
             svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
         svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
         lx += 185
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
+def build_replay_execution_timeline_svg(
+    gaps: list[dict[str, Any]],
+    max_rows: int,
+    show_prefetch_legend: bool = True,
+) -> str:
+    rows = gaps[:max_rows]
+    if not rows:
+        return "<p>No replay execution timeline available.</p>"
+
+    rel_values: list[float] = [0.0]
+    for row in rows:
+        replay_start = maybe_float(row.get("resume_start_ms"))
+        if replay_start is None:
+            continue
+        for key in (
+            "resume_end_ms",
+            "replay_prefill_end_ms",
+            "replay_kv_h2d_start_ms",
+            "replay_kv_h2d_end_ms",
+        ):
+            value = maybe_float(row.get(key))
+            if value is not None:
+                rel_values.append(max(0.0, value - replay_start))
+
+    end = max(max(rel_values or [1000.0]) + 250.0, 1000.0)
+    width = 1580
+    left = 178
+    right = 70
+    top = 86
+    row_h = 78
+    plot_w = width - left - right
+    plot_bottom = top + len(rows) * row_h + 10
+    legend_y = plot_bottom + 48
+    axis_label_y = legend_y + 42
+    height = axis_label_y + 28
+
+    def x_pos(relative_ms: float) -> float:
+        return left + relative_ms / end * plot_w
+
+    def rect(
+        svg: list[str],
+        x1: float,
+        x2: float,
+        y: float,
+        h: float,
+        color: str,
+        title: str,
+        opacity: float = 0.88,
+        min_w: float = 3.0,
+    ) -> None:
+        width_px = max(min_w, x2 - x1)
+        svg.append(
+            f'<rect x="{x1:.1f}" y="{y:.1f}" width="{width_px:.1f}" height="{h:.1f}" rx="3" '
+            f'fill="{color}" opacity="{opacity}"><title>{fmt(title)}</title></rect>'
+        )
+
+    svg = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Replay execution timeline aligned at actual resume start">',
+        f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
+    ]
+    for idx in range(len(rows)):
+        y = top + idx * row_h
+        band_fill = "#ffffff" if idx % 2 == 0 else "#eef2f7"
+        svg.append(f'<rect x="0" y="{y:.1f}" width="{width}" height="{row_h:.1f}" fill="{band_fill}" opacity="0.92"/>')
+        svg.append(f'<line x1="0" y1="{y:.1f}" x2="{width}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+    svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#e5e7eb"/>')
+
+    tick_count = 6
+    for tick in range(tick_count + 1):
+        value = end * tick / tick_count
+        x = x_pos(value)
+        svg.append(f'<line x1="{x:.1f}" y1="{top - 30}" x2="{x:.1f}" y2="{plot_bottom:.1f}" stroke="#e5e7eb"/>')
+        svg.append(f'<text x="{x:.1f}" y="{top - 38}" text-anchor="middle" font-size="10">{value:.0f} ms</text>')
+    zero_x = x_pos(0.0)
+    svg.append(f'<line x1="{zero_x:.1f}" y1="{top - 40}" x2="{zero_x:.1f}" y2="{plot_bottom:.1f}" stroke="#111827" stroke-width="3"/>')
+    svg.append(f'<text x="{zero_x + 7:.1f}" y="{top - 48}" font-size="12" font-weight="700">0 ms resume starts</text>')
+    svg.append(
+        f'<text x="{left + plot_w / 2:.1f}" y="{axis_label_y:.1f}" text-anchor="middle" font-size="13" font-weight="700">time inside actual resume request: orange shows time-to-first-token, red shows full request latency</text>'
+    )
+
+    for idx, row in enumerate(rows):
+        y = top + idx * row_h
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        replay_start = maybe_float(row.get("resume_start_ms"))
+        replay_end = maybe_float(row.get("resume_end_ms"))
+        ttft = maybe_float(row.get("resume_ttft_ms"))
+        due = maybe_float(row.get("tool_gap_end_ms"))
+        start_delay = replay_start - due if replay_start is not None and due is not None else None
+        margin = maybe_float(row.get("prefetch_margin_ms"))
+        if margin is not None:
+            status = f"LATE -{abs(margin):.0f} ms" if margin < 0 else f"READY +{margin:.0f} ms"
+            status_color = "#b91c1c" if margin < 0 else "#166534"
+        else:
+            status = "NO PREFETCH"
+            status_color = "#64748b"
+        delay_text = f"start delay {start_delay:.0f} ms" if start_delay is not None else "start delay unknown"
+
+        svg.append(f'<text x="10" y="{y + 23}" font-size="15" font-weight="700">{fmt(label)}</text>')
+        svg.append(f'<text x="10" y="{y + 43}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
+        svg.append(f'<text x="10" y="{y + 62}" font-size="11" fill="#64748b">{fmt(delay_text)}</text>')
+
+        bar_y = y + 22
+        bar_h = 24
+        overlay_y = y + 27
+        overlay_h = 14
+        if replay_start is not None and replay_end is not None:
+            rect(
+                svg,
+                x_pos(0.0),
+                x_pos(max(0.0, replay_end - replay_start)),
+                bar_y,
+                bar_h,
+                "#ef4444",
+                f"resume request latency_ms={row.get('resume_latency_ms', '')}",
+                0.56,
+                16,
+            )
+        if ttft is not None:
+            rect(
+                svg,
+                x_pos(0.0),
+                x_pos(max(0.0, ttft)),
+                overlay_y,
+                overlay_h,
+                "#f59e0b",
+                f"time to first token; ttft_ms={row.get('resume_ttft_ms', '')}",
+                0.94,
+                16,
+            )
+            if x_pos(max(0.0, ttft)) - x_pos(0.0) >= 64:
+                svg.append(
+                    f'<text x="{x_pos(max(0.0, ttft)) - 6:.1f}" y="{overlay_y + 11:.1f}" '
+                    f'font-size="10" fill="#78350f" text-anchor="end" font-weight="700">TTFT {ttft:.0f} ms</text>'
+                )
+        replay_h2d_start = maybe_float(row.get("replay_kv_h2d_start_ms"))
+        replay_h2d_end = maybe_float(row.get("replay_kv_h2d_end_ms"))
+        if show_prefetch_legend and replay_start is not None and replay_h2d_start is not None and replay_h2d_end is not None:
+            rect(
+                svg,
+                x_pos(max(0.0, replay_h2d_start - replay_start)),
+                x_pos(max(0.0, replay_h2d_end - replay_start)),
+                y + 49,
+                12,
+                "#06b6d4",
+                f"replay-side KV HtoD movement; events={row.get('replay_kv_h2d_events', '')}; duration_ms={row.get('replay_kv_h2d_duration_ms', '')}",
+                0.95,
+                14,
+            )
+
+    svg.append(f'<line x1="{left}" y1="{plot_bottom + 18:.1f}" x2="{left + plot_w}" y2="{plot_bottom + 18:.1f}" stroke="#e5e7eb"/>')
+    legend = [
+        ("resume request", "#ef4444"),
+        ("replay prefill / TTFT", "#f59e0b"),
+        ("replay-side KV HtoD", "#06b6d4"),
+        ("resume start", "#111827"),
+    ]
+    lx = left
+    for label, color in legend:
+        if label == "resume start":
+            svg.append(f'<line x1="{lx}" y1="{legend_y - 12}" x2="{lx}" y2="{legend_y + 4}" stroke="{color}" stroke-width="4"/>')
+        else:
+            svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
+        lx += 220
     svg.append("</svg>")
     return "\n".join(svg)
 

@@ -418,6 +418,20 @@ async def main_async() -> None:
             await sleep_until(replay_due_ms)
             write_trace_event(
                 {
+                    "event": "m27.pre_replay.checkpoint",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "prefetch_hint_submitted": bool(hint_task is not None),
+                    "expected_reuse": "high" if args.mode != "no_prefetch" else "baseline",
+                    "gpu_resident_tokens": "unknown",
+                    "host_resident_tokens": "unknown",
+                    "missing_tokens": "unknown",
+                    "protected_tokens": "unknown",
+                }
+            )
+            write_trace_event(
+                {
                     "event": "m27.replay.due",
                     "session_id": pair.session_id,
                     "mode": args.mode,
