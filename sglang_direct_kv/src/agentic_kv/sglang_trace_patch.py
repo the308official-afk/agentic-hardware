@@ -21,6 +21,7 @@ _SESSION_RE = re.compile(r"coding agent session ([A-Za-z0-9_.:-]+)")
 _ACTIVE_AGENT_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("agentic_kv_active_agent_context", default={})
 _AGENT_BY_NODE_ID: dict[str, dict[str, Any]] = {}
 _AGENT_BY_INDEX_SIG: dict[str, dict[str, Any]] = {}
+_NODE_RESIDENCY_BY_ID: dict[str, dict[str, Any]] = {}
 
 
 def _trace_path() -> Path:
@@ -158,6 +159,13 @@ def _agent_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
     req = context.get("request")
     if isinstance(req, dict):
         return _copy_agent_context(req)
+    requests = context.get("requests")
+    if isinstance(requests, list):
+        for req in requests:
+            if isinstance(req, dict):
+                agent = _copy_agent_context(req)
+                if agent:
+                    return agent
     return {}
 
 
@@ -194,14 +202,18 @@ def _agent_for_node_or_indices(context: dict[str, Any]) -> dict[str, Any]:
 
 def _with_queue_agent_context(context: dict[str, Any]) -> None:
     ops = context.get("queued_ops")
-    if not isinstance(ops, list):
+    requests = context.get("requests")
+    candidates = ops if isinstance(ops, list) else requests if isinstance(requests, list) else None
+    if not isinstance(candidates, list):
         return
     sessions: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
-    for op in ops:
+    for op in candidates:
         if not isinstance(op, dict):
             continue
         agent = _agent_for_node_or_indices(op)
+        if not agent:
+            agent = _copy_agent_context(op)
         if not agent:
             continue
         op.update({key: value for key, value in agent.items() if op.get(key) in (None, "", [], {})})
@@ -299,6 +311,111 @@ def _cache_operation_summary(operation: Any) -> dict[str, Any]:
             except Exception:
                 pass
     return out
+
+
+def _request_like_context(req: Any) -> dict[str, Any]:
+    context = _req_context(req)
+    for attr in ("rid", "request_id", "session_id", "agent_session_id", "agent_phase", "agent_mode", "agent_label"):
+        if hasattr(req, attr) and attr not in context:
+            try:
+                context[attr] = _safe_summary(getattr(req, attr))
+            except Exception:
+                pass
+    for attr in ("input_ids", "origin_input_ids", "fill_ids", "output_ids", "prefix_indices"):
+        if hasattr(req, attr) and attr not in context:
+            try:
+                value = getattr(req, attr)
+                context[attr] = _index_context(value) if hasattr(value, "numel") else _int_list_signature(value)
+            except Exception:
+                pass
+    return {key: value for key, value in context.items() if value not in (None, "", [], {})}
+
+
+def _requests_from_value(value: Any, limit: int = 16) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [_request_like_context(item) for item in list(value)[:limit]]
+    for attr in ("reqs", "requests", "running_reqs", "waiting_queue", "chunked_req"):
+        if not hasattr(value, attr):
+            continue
+        try:
+            nested = getattr(value, attr)
+        except Exception:
+            continue
+        if isinstance(nested, (list, tuple)):
+            return [_request_like_context(item) for item in list(nested)[:limit]]
+        if nested is not None and attr == "chunked_req":
+            return [_request_like_context(nested)]
+    return []
+
+
+def _batch_context(batch: Any) -> dict[str, Any]:
+    if batch is None:
+        return {}
+    out: dict[str, Any] = {"type": type(batch).__name__}
+    for attr in ("batch_is_full", "forward_mode", "extend_num_tokens", "seq_lens_sum", "bs", "batch_size"):
+        if hasattr(batch, attr):
+            try:
+                out[attr] = _safe_summary(getattr(batch, attr))
+            except Exception:
+                pass
+    requests = _requests_from_value(batch)
+    if requests:
+        out["requests"] = requests
+        out["request_count"] = len(requests)
+    return {key: value for key, value in out.items() if value not in (None, "", [], {})}
+
+
+def _residency_snapshot_for_context(context: dict[str, Any]) -> dict[str, Any]:
+    node_ids: list[str] = []
+    node_id = context.get("node_id")
+    if node_id not in (None, "", [], {}):
+        node_ids.append(str(node_id))
+    req = context.get("request")
+    if isinstance(req, dict):
+        for key in ("last_node_id", "last_host_node_id"):
+            value = req.get(key)
+            if value not in (None, "", [], {}):
+                node_ids.append(str(value))
+    states = [_NODE_RESIDENCY_BY_ID[node_id] for node_id in node_ids if node_id in _NODE_RESIDENCY_BY_ID]
+    if not states:
+        return {}
+    counts: dict[str, int] = {}
+    for state in states:
+        location = str(state.get("state") or "unknown")
+        counts[location] = counts.get(location, 0) + int(state.get("token_count") or 0)
+    return {
+        "known_node_count": len(states),
+        "gpu_resident_tokens": counts.get("gpu_resident", 0),
+        "host_resident_tokens": counts.get("host_resident", 0),
+        "evicted_tokens": counts.get("evicted_from_gpu", 0),
+        "last_residency_event": states[-1].get("event", ""),
+    }
+
+
+def _update_residency_state(event_name: str, method_name: str, context: dict[str, Any]) -> None:
+    node_id = context.get("node_id")
+    if node_id in (None, "", [], {}):
+        return
+    token_count = _count_from_index_summary(context.get("device_indices")) or _count_from_index_summary(context.get("host_indices")) or 0
+    if method_name in {"load", "load_back", "load_to_device_per_layer", "init_load_back"}:
+        state = "gpu_resident"
+    elif method_name in {"write", "backup_from_device_all_layer"}:
+        state = "host_resident"
+    elif method_name == "evict_device":
+        state = "evicted_from_gpu"
+    elif method_name == "evict_host":
+        state = "missing"
+    else:
+        return
+    _NODE_RESIDENCY_BY_ID[str(node_id)] = {
+        "state": state,
+        "token_count": token_count,
+        "event": event_name,
+        "updated_ns": time.time_ns(),
+        **_copy_agent_context(context),
+    }
 
 
 def _req_from_params(params: Any) -> Any:
@@ -471,9 +588,52 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
     elif method_name in {"cache_finished_req", "cache_unfinished_req"}:
         context["direction"] = "cache_request"
         context["request"] = _req_context(_arg_value(args, kwargs, 0, "req"))
+    elif method_name in {
+        "handle_generate_request",
+        "_add_request_to_queue",
+        "_prefetch_kvcache",
+    }:
+        context["direction"] = "scheduler_request"
+        context["request"] = _request_like_context(_arg_value(args, kwargs, 0, "req") or _arg_value(args, kwargs, 0, "recv_req"))
+    elif method_name in {
+        "process_input_requests",
+    }:
+        context["direction"] = "scheduler_input"
+        context["requests"] = _requests_from_value(_arg_value(args, kwargs, 0, "recv_reqs"))
+    elif method_name in {
+        "get_new_batch_prefill",
+        "get_next_batch_to_run",
+        "run_batch",
+        "process_batch_result_prefill",
+        "process_batch_result_decode",
+        "process_batch_result",
+        "_run_batch_prebuilt",
+    }:
+        context["direction"] = "scheduler_batch"
+        batch = result if method_name in {"get_new_batch_prefill", "get_next_batch_to_run"} else _arg_value(args, kwargs, 0, "batch")
+        context["batch"] = _batch_context(batch)
+        requests = context["batch"].get("requests") if isinstance(context.get("batch"), dict) else None
+        if isinstance(requests, list):
+            context["requests"] = requests
+    elif method_name in {
+        "forward_batch_generation",
+        "forward_batch_split_prefill",
+        "_forward_batch_generation_dllm",
+        "forward_batch_embedding",
+    }:
+        context["direction"] = "model_forward"
+        batch = _arg_value(args, kwargs, 0, "model_worker_batch") or _arg_value(args, kwargs, 0, "batch") or _arg_value(args, kwargs, 0, "forward_batch")
+        context["batch"] = _batch_context(batch)
+        requests = context["batch"].get("requests") if isinstance(context.get("batch"), dict) else None
+        if isinstance(requests, list):
+            context["requests"] = requests
 
     context = {key: value for key, value in context.items() if value is not None}
-    return _apply_known_agent_context(context)
+    context = _apply_known_agent_context(context)
+    snapshot = _residency_snapshot_for_context(context)
+    if snapshot:
+        context["residency_snapshot"] = snapshot
+    return context
 
 
 def _safe_len(value: Any) -> int | None:
@@ -803,6 +963,122 @@ def _cache_path_telemetry_event(
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}
 
 
+def _request_count(context: dict[str, Any]) -> int | str:
+    requests = context.get("requests")
+    if isinstance(requests, list):
+        return len(requests)
+    batch = context.get("batch")
+    if isinstance(batch, dict):
+        requests = batch.get("requests")
+        if isinstance(requests, list):
+            return len(requests)
+    if isinstance(context.get("request"), dict):
+        return 1
+    return ""
+
+
+def _first_request_id(context: dict[str, Any]) -> Any:
+    req = context.get("request")
+    if isinstance(req, dict):
+        return req.get("rid") or req.get("request_id")
+    requests = context.get("requests")
+    if isinstance(requests, list):
+        for req in requests:
+            if isinstance(req, dict):
+                value = req.get("rid") or req.get("request_id")
+                if value not in (None, ""):
+                    return value
+    return ""
+
+
+def _scheduler_telemetry_event(
+    *,
+    call_id: str,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+    duration_ms: float | None = None,
+) -> dict[str, Any] | None:
+    category_by_method = {
+        "handle_generate_request": "request_received",
+        "process_input_requests": "input_batch_received",
+        "_add_request_to_queue": "entered_scheduler_queue",
+        "get_new_batch_prefill": "selected_for_prefill",
+        "get_next_batch_to_run": "selected_to_run",
+        "run_batch": "run_batch",
+        "_run_batch_prebuilt": "run_prebuilt_batch",
+        "process_batch_result_prefill": "prefill_result_processed",
+        "process_batch_result_decode": "decode_result_processed",
+        "process_batch_result": "batch_result_processed",
+        "_prefetch_kvcache": "scheduler_prefetch_kvcache",
+    }
+    category = category_by_method.get(method_name)
+    if category is None:
+        return None
+    event: dict[str, Any] = {
+        "event": "kv_telemetry.scheduler.end",
+        "call_id": call_id,
+        "source_event": f"{event_name}.end",
+        "class": class_name,
+        "method": method_name,
+        "category": category,
+        "request_count": _request_count(context),
+        "request_id": _first_request_id(context),
+    }
+    event.update(_copy_agent_context(context))
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list) and sessions:
+        event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
+    snapshot = context.get("residency_snapshot")
+    if isinstance(snapshot, dict):
+        event.update({f"residency_{key}": value for key, value in snapshot.items()})
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
+def _prefill_telemetry_event(
+    *,
+    call_id: str,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+    duration_ms: float | None = None,
+) -> dict[str, Any] | None:
+    category_by_method = {
+        "forward_batch_generation": "model_forward_generation",
+        "forward_batch_split_prefill": "model_forward_split_prefill",
+        "_forward_batch_generation_dllm": "model_forward_dllm",
+        "forward_batch_embedding": "model_forward_embedding",
+    }
+    category = category_by_method.get(method_name)
+    if category is None:
+        return None
+    batch = context.get("batch") if isinstance(context.get("batch"), dict) else {}
+    event: dict[str, Any] = {
+        "event": "kv_telemetry.prefill.end",
+        "call_id": call_id,
+        "source_event": f"{event_name}.end",
+        "class": class_name,
+        "method": method_name,
+        "category": category,
+        "request_count": _request_count(context),
+        "request_id": _first_request_id(context),
+        "forward_mode": batch.get("forward_mode", ""),
+        "extend_num_tokens": batch.get("extend_num_tokens", ""),
+        "seq_lens_sum": batch.get("seq_lens_sum", ""),
+    }
+    event.update(_copy_agent_context(context))
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list) and sessions:
+        event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
 def _write_copy_telemetry(event: dict[str, Any] | None) -> None:
     if not event:
         return
@@ -918,6 +1194,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         try:
             end_context = _kv_context(event_name, method_name, self, args, kwargs, result)
             duration_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
+            _update_residency_state(event_name, method_name, end_context)
             _write_event(
                 {
                     "event": f"{event_name}.end",
@@ -953,6 +1230,26 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             )
             if cache_event:
                 _write_event(cache_event)
+            scheduler_event = _scheduler_telemetry_event(
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=end_context,
+                duration_ms=duration_ms,
+            )
+            if scheduler_event:
+                _write_event(scheduler_event)
+            prefill_event = _prefill_telemetry_event(
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=end_context,
+                duration_ms=duration_ms,
+            )
+            if prefill_event:
+                _write_event(prefill_event)
             record_torch_profiler_event(nvtx_name)
             return result
         finally:
@@ -1051,11 +1348,29 @@ def install_sglang_kv_trace() -> None:
             lambda: __import__("sglang.srt.managers.scheduler", fromlist=["Scheduler"]),
             "Scheduler",
             {
+                "handle_generate_request": "scheduler.handle_generate_request",
+                "_add_request_to_queue": "scheduler.add_request_to_queue",
+                "_prefetch_kvcache": "scheduler.prefetch_kvcache",
+                "_run_batch_prebuilt": "scheduler.run_batch_prebuilt",
+                "process_batch_result": "scheduler.process_batch_result",
+                "process_batch_result_prefill": "scheduler.process_batch_result_prefill",
+                "process_batch_result_decode": "scheduler.process_batch_result_decode",
                 "run_batch": "scheduler.run_batch",
                 "process_input_requests": "scheduler.process_input_requests",
                 "get_next_batch_to_run": "scheduler.get_next_batch_to_run",
+                "get_new_batch_prefill": "scheduler.get_new_batch_prefill",
                 "event_loop_overlap": "scheduler.event_loop_overlap",
                 "event_loop_normal": "scheduler.event_loop_normal",
+            },
+        )
+        _try_patch(
+            lambda: __import__("sglang.srt.managers.tp_worker", fromlist=["TpModelWorker"]),
+            "TpModelWorker",
+            {
+                "forward_batch_generation": "worker.forward_batch_generation",
+                "forward_batch_split_prefill": "worker.forward_batch_split_prefill",
+                "_forward_batch_generation_dllm": "worker.forward_batch_generation_dllm",
+                "forward_batch_embedding": "worker.forward_batch_embedding",
             },
         )
 

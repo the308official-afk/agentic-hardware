@@ -216,6 +216,91 @@ def cache_events_by_session(trace_rows: list[dict[str, Any]], base_ts: float) ->
     return by_session
 
 
+def _agent_sessions_for_event(row: dict[str, Any]) -> list[str]:
+    context = context_from_trace_event(row)
+    sessions: list[str] = []
+    direct = agent_session_from_context(context)
+    if direct:
+        sessions.append(direct)
+    for key in ("agent_sessions", "requests"):
+        values = context.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            session = agent_session_from_context(item)
+            if session and session not in sessions:
+                sessions.append(session)
+    return sessions
+
+
+def telemetry_events_by_session(
+    trace_rows: list[dict[str, Any]],
+    base_ts: float,
+    event_name: str,
+) -> dict[str, list[dict[str, Any]]]:
+    by_session: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        if row.get("event") != event_name:
+            continue
+        for session_id in _agent_sessions_for_event(row):
+            if "::live_prefetch::" in session_id:
+                continue
+            by_session[session_id].append(
+                {
+                    "event": row.get("event", ""),
+                    "source_event": row.get("source_event", ""),
+                    "category": row.get("category", ""),
+                    "method": row.get("method", ""),
+                    "duration_ms": row.get("duration_ms", ""),
+                    "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
+                    "request_count": row.get("request_count", ""),
+                    "request_id": row.get("request_id", ""),
+                    "forward_mode": row.get("forward_mode", ""),
+                    "extend_num_tokens": row.get("extend_num_tokens", ""),
+                    "seq_lens_sum": row.get("seq_lens_sum", ""),
+                }
+            )
+    return by_session
+
+
+def summarize_timed_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    if not events:
+        return {
+            "event_count": 0,
+            "start_ms": "",
+            "end_ms": "",
+            "duration_ms": "",
+            "categories": "",
+        }
+    starts: list[float] = []
+    ends: list[float] = []
+    total = 0.0
+    duration_count = 0
+    categories: Counter[str] = Counter()
+    for event in events:
+        end = as_float(event.get("start_or_end_ms"))
+        duration = as_float(event.get("duration_ms"))
+        if end is None:
+            continue
+        if duration is not None:
+            starts.append(end - duration)
+            total += duration
+            duration_count += 1
+        else:
+            starts.append(end)
+        ends.append(end)
+        categories[str(event.get("category") or event.get("method") or "event")] += 1
+    return {
+        "event_count": len(events),
+        "start_ms": round(min(starts), 3) if starts else "",
+        "end_ms": round(max(ends), 3) if ends else "",
+        "duration_ms": round(total, 3) if duration_count else "",
+        "categories": ", ".join(f"{key}:{value}" for key, value in sorted(categories.items())),
+    }
+
+
 def max_numeric(events: list[dict[str, Any]], key: str) -> int | None:
     values: list[int] = []
     for event in events:
@@ -454,6 +539,8 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
     prefetch_ends = latest_event_by_session(trace_rows, "m27.prefetch.end", base_ts)
     movement_by_session = movement_events_by_session(trace_rows, telemetry_rows, base_ts)
     cache_by_session = cache_events_by_session(trace_rows, base_ts)
+    scheduler_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.scheduler.end")
+    prefill_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.prefill.end")
     sessions = sorted(session_meta)
     gaps: list[dict[str, Any]] = []
     for idx, session in enumerate(sessions):
@@ -474,10 +561,14 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         replay_events = events_in_window(movement_by_session, session, replay.get("start_ms"), replay.get("end_ms"))
         hint_cache_events = events_in_window(cache_by_session, session, prefetch_start_ms, prefetch_end_ms)
         replay_cache_events = events_in_window(cache_by_session, session, replay.get("start_ms"), replay.get("end_ms"))
+        replay_scheduler_events = events_in_window(scheduler_by_session, session, replay.get("start_ms"), replay.get("end_ms"))
+        replay_prefill_events = events_in_window(prefill_by_session, session, replay.get("start_ms"), replay.get("end_ms"))
         hint_summary = summarize_movement(hint_events)
         replay_summary = summarize_movement(replay_events)
         hint_cache_summary = summarize_cache_path(hint_cache_events, prefetch_start_ms)
         replay_cache_summary = summarize_cache_path(replay_cache_events, replay.get("start_ms"), replay.get("ttft_ms", ""))
+        replay_scheduler_summary = summarize_timed_events(replay_scheduler_events)
+        replay_prefill_summary = summarize_timed_events(replay_prefill_events)
         replay_prefill_end_ms = ""
         replay_ttft_ms = as_float(replay.get("ttft_ms", ""))
         replay_start_ms = as_float(replay.get("start_ms", ""))
@@ -559,6 +650,16 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_first_cache_event_delay_ms": replay_cache_summary["first_cache_event_delay_ms"],
             "replay_cache_work_end_to_first_token_ms": replay_cache_summary["cache_work_end_to_first_token_ms"],
             "replay_cache_path_summary": replay_cache_summary["cache_path_summary"],
+            "replay_scheduler_event_count": replay_scheduler_summary["event_count"],
+            "replay_scheduler_start_ms": replay_scheduler_summary["start_ms"],
+            "replay_scheduler_end_ms": replay_scheduler_summary["end_ms"],
+            "replay_scheduler_total_ms": replay_scheduler_summary["duration_ms"],
+            "replay_scheduler_categories": replay_scheduler_summary["categories"],
+            "replay_model_forward_event_count": replay_prefill_summary["event_count"],
+            "replay_model_forward_start_ms": replay_prefill_summary["start_ms"],
+            "replay_model_forward_end_ms": replay_prefill_summary["end_ms"],
+            "replay_model_forward_total_ms": replay_prefill_summary["duration_ms"],
+            "replay_model_forward_categories": replay_prefill_summary["categories"],
             "pre_replay_checkpoint_ms": checkpoint.get("ms", ""),
             "pre_replay_expected_reuse": checkpoint.get("expected_reuse", ""),
             "pre_replay_gpu_resident_tokens": checkpoint.get("gpu_resident_tokens", ""),
@@ -719,6 +820,10 @@ def replay_attribution_rows(rows: list[dict[str, Any]], limit: int | None = None
                 "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
                 "cache_events": row.get("replay_cache_event_count", ""),
                 "first_cache_event_delay_ms": row.get("replay_first_cache_event_delay_ms", ""),
+                "scheduler_events": row.get("replay_scheduler_event_count", ""),
+                "scheduler_total_ms": row.get("replay_scheduler_total_ms", ""),
+                "model_forward_events": row.get("replay_model_forward_event_count", ""),
+                "model_forward_total_ms": row.get("replay_model_forward_total_ms", ""),
                 "replay_path": row.get("replay_path", ""),
                 "final_path": row.get("final_path", ""),
                 "bottleneck_label": row.get("bottleneck_label", ""),
@@ -770,8 +875,13 @@ def replay_path_proof_rows(ledger: list[dict[str, Any]], limit: int | None = Non
         "recomputed_tokens_est",
         "scheduler_wait_ms",
         "kv_prepare_ms",
+        "model_forward_ms",
         "direct_h2d_events",
         "replay_h2d_events",
+        "replay_scheduler_event_count",
+        "replay_scheduler_total_ms",
+        "replay_model_forward_event_count",
+        "replay_model_forward_total_ms",
         "evidence_summary",
     ]
     return [{column: row.get(column, "") for column in columns} for row in selected]
@@ -791,6 +901,52 @@ def hardware_counterfactual_rows(ledger: list[dict[str, Any]]) -> list[dict[str,
         "counterfactual_reason",
     ]
     return [{column: row.get(column, "") for column in columns} for row in ledger]
+
+
+def request_id_coverage_rows(trace_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: defaultdict[str, dict[str, int]] = defaultdict(lambda: {"events": 0, "with_agent_session": 0, "with_request_id": 0})
+    for row in trace_rows:
+        event = str(row.get("event") or "")
+        if not event:
+            continue
+        if event.startswith("kv_telemetry.scheduler"):
+            group = "scheduler"
+        elif event.startswith("kv_telemetry.prefill") or event.startswith("worker."):
+            group = "model_forward_prefill"
+        elif event.startswith("kv_telemetry.copy") or event.startswith("hostpool."):
+            group = "copy_load_back"
+        elif event.startswith("kv_telemetry.cache") or event.startswith("hiradix.") or event.startswith("radix.") or event.startswith("hicache."):
+            group = "cache_hicache"
+        elif event.startswith("m27."):
+            group = "driver"
+        else:
+            continue
+        context = context_from_trace_event(row)
+        sessions = _agent_sessions_for_event(row)
+        request_id = row.get("request_id") or context.get("request_id")
+        req = context.get("request")
+        if not request_id and isinstance(req, dict):
+            request_id = req.get("rid") or req.get("request_id")
+        item = grouped[group]
+        item["events"] += 1
+        if sessions or row.get("session_id") or row.get("agent_session_id"):
+            item["with_agent_session"] += 1
+        if request_id:
+            item["with_request_id"] += 1
+    rows: list[dict[str, Any]] = []
+    for group, counts in sorted(grouped.items()):
+        total = counts["events"]
+        rows.append(
+            {
+                "trace_area": group,
+                "events": total,
+                "with_agent_session": counts["with_agent_session"],
+                "agent_session_coverage_pct": round(counts["with_agent_session"] * 100.0 / total, 2) if total else 0.0,
+                "with_request_id": counts["with_request_id"],
+                "request_id_coverage_pct": round(counts["with_request_id"] * 100.0 / total, 2) if total else 0.0,
+            }
+        )
+    return rows
 
 
 def observation_status(row: dict[str, Any]) -> tuple[str, str]:
@@ -1104,9 +1260,11 @@ def render_html(
     result_root: Path,
     max_timeline_gaps: int,
     live_run: dict[str, Any] | None = None,
+    request_coverage: list[dict[str, Any]] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
     ledger = build_replay_path_ledger(gaps)
+    request_coverage = request_coverage or []
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     gap_columns = [
         "session_id",
@@ -1212,6 +1370,9 @@ def render_html(
     {table_html(confidence_summary_rows(ledger))}
     <h3>Instrumentation Coverage</h3>
     {table_html(instrumentation_coverage_rows(gaps, ledger))}
+    <h3>Request-ID Plumbing Audit</h3>
+    <p>This table checks whether the agent/session identity reached each SGLang area. Higher coverage means stronger attribution.</p>
+    {table_html(request_coverage)}
   </details>
 
   <details id="counterfactual" class="section-card theme-deductions">
@@ -1267,7 +1428,7 @@ def render_html(
   <details id="direct-kv" class="section-card theme-directkv">
     <summary><h2>Direct KV Load Evidence</h2></summary>
     <p>Green bars and <code>direct_kv_h2d_*</code> columns come from SGLang-level KV movement hooks and lightweight copy telemetry during the prefetch attempt. Cyan/replay columns show KV movement performed by the real resume request.</p>
-    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms"])}
+    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms", "model_forward_ms", "replay_scheduler_event_count", "replay_scheduler_total_ms", "replay_model_forward_event_count", "replay_model_forward_total_ms"])}
   </details>
 
   <details id="appendix" class="section-card theme-appendix">
@@ -1313,18 +1474,22 @@ def main() -> None:
     args = parser.parse_args()
 
     all_gaps: list[dict[str, Any]] = []
+    all_trace_rows: list[dict[str, Any]] = []
     for mode, case_dir in discover_cases(args.root):
-        gaps, _ = build_gaps_for_case(case_dir, mode)
+        gaps, trace_rows = build_gaps_for_case(case_dir, mode)
         for gap in gaps:
             gap["case_dir"] = str(case_dir)
         all_gaps.extend(gaps)
+        all_trace_rows.extend(trace_rows)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     ledger = build_replay_path_ledger(all_gaps)
+    request_coverage = request_id_coverage_rows(all_trace_rows)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
+    write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
     write_json(
         args.out_dir / "controlled_replay_report.json",
         {
@@ -1335,13 +1500,20 @@ def main() -> None:
             "confidence_summary": confidence_summary_rows(ledger),
             "counterfactual_summary": counterfactual_summary_rows(ledger),
             "instrumentation_coverage": instrumentation_coverage_rows(all_gaps, ledger),
+            "request_id_coverage": request_coverage,
         },
     )
     live_run = None
     if args.live_direct_root:
         live_run = load_live_agentbench_run(args.live_direct_root, "live_direct_prefetch", include_preflight=False)
 
-    html_text = render_html(all_gaps, args.root, args.max_timeline_gaps, live_run=live_run)
+    html_text = render_html(
+        all_gaps,
+        args.root,
+        args.max_timeline_gaps,
+        live_run=live_run,
+        request_coverage=request_coverage,
+    )
     report_path = args.out_dir / "controlled_replay_report.html"
     report_path.write_text(html_text, encoding="utf-8")
 

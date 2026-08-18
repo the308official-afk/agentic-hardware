@@ -141,6 +141,15 @@ def agent_session_from_context(context: dict[str, Any]) -> str:
                 value = item.get("agent_session_id")
                 if value not in ("", None):
                     return str(value)
+    requests = context.get("requests")
+    if isinstance(requests, list):
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            for key in ("agent_session_id", "session_id"):
+                value = item.get(key)
+                if value not in ("", None):
+                    return str(value)
     return ""
 
 

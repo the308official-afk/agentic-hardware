@@ -54,6 +54,10 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
     new_prefill = as_int(row.get("replay_new_prefill_tokens_est"))
     ttft_ms = as_float(row.get("resume_ttft_ms"))
     first_cache_delay = as_float(row.get("replay_first_cache_event_delay_ms"))
+    scheduler_total = as_float(row.get("replay_scheduler_total_ms"))
+    scheduler_events = as_int(row.get("replay_scheduler_event_count")) or 0
+    model_forward_total = as_float(row.get("replay_model_forward_total_ms"))
+    model_forward_events = as_int(row.get("replay_model_forward_event_count")) or 0
     cache_to_first = as_float(row.get("replay_cache_work_end_to_first_token_ms"))
     prefetch_margin = as_float(row.get("prefetch_margin_ms"))
     hint_host_load = as_int(row.get("hint_host_load_tokens")) or 0
@@ -86,13 +90,17 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
     )
 
     scheduler_wait_ms: float | str = ""
-    if first_cache_delay is not None and first_cache_delay > 0:
+    if scheduler_total is not None and scheduler_events > 0:
+        scheduler_wait_ms = round(scheduler_total, 3)
+    elif first_cache_delay is not None and first_cache_delay > 0:
         scheduler_wait_ms = round(first_cache_delay, 3)
 
     prefill_compute_ms: float | str = ""
     if ttft_ms is not None:
         known = kv_prepare_ms if isinstance(kv_prepare_ms, (int, float)) else 0.0
-        if cache_to_first is not None:
+        if model_forward_total is not None and model_forward_events > 0:
+            prefill_compute_ms = round(model_forward_total, 3)
+        elif cache_to_first is not None:
             prefill_compute_ms = round(max(0.0, ttft_ms - known - max(0.0, first_cache_delay or 0.0)), 3)
         elif new_prefill is not None and new_prefill > 0:
             prefill_compute_ms = round(max(0.0, ttft_ms - known - max(0.0, first_cache_delay or 0.0)), 3)
@@ -102,7 +110,7 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
     recompute = bool(new_prefill is not None and new_prefill >= 128)
     full_or_near_hit = bool(input_tokens and cached_prefix is not None and cached_prefix >= int(0.9 * input_tokens))
     long_ttft = bool(ttft_ms is not None and ttft_ms >= 1000)
-    scheduler_delay = bool(first_cache_delay is not None and first_cache_delay >= 50)
+    scheduler_delay = bool((scheduler_total is not None and scheduler_total >= 50) or (first_cache_delay is not None and first_cache_delay >= 50))
 
     if replay_loaded and replay_h2d_events:
         final_path = "host_to_device_kv_load"
@@ -119,7 +127,7 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
     elif full_or_near_hit and scheduler_delay:
         final_path = "gpu_resident_or_logical_cache_hit_waited"
         bottleneck = "scheduler dominated"
-        confidence = "medium"
+        confidence = "medium" if scheduler_events else "low"
     elif full_or_near_hit:
         final_path = "gpu_resident_or_logical_cache_hit"
         bottleneck = "GPU-resident cache hit"
@@ -155,6 +163,10 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
         evidence_bits.append(f"new_prefill={new_prefill}")
     evidence_bits.append(f"host_load_tokens={host_load}")
     evidence_bits.append(f"replay_h2d_events={replay_h2d_events}")
+    if scheduler_events:
+        evidence_bits.append(f"scheduler_events={scheduler_events}")
+    if model_forward_events:
+        evidence_bits.append(f"model_forward_events={model_forward_events}")
     if ttft_ms is not None:
         evidence_bits.append(f"TTFT={ttft_ms:.1f} ms")
     if first_cache_delay is not None:
@@ -173,6 +185,7 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
         "kv_prepare_ms": kv_prepare_ms,
         "host_load_ms": host_load_ms,
         "prefill_compute_ms_est": prefill_compute_ms,
+        "model_forward_ms": model_forward_total if model_forward_total is not None else "",
         "final_path": final_path,
         "bottleneck_label": bottleneck,
         "confidence": confidence,
@@ -247,6 +260,7 @@ def build_replay_path_ledger(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "kv_prepare_ms": path["kv_prepare_ms"],
                 "host_load_ms": path["host_load_ms"],
                 "prefill_compute_ms_est": path["prefill_compute_ms_est"],
+                "model_forward_ms": path["model_forward_ms"],
                 "direct_h2d_events": row.get("direct_kv_h2d_events", ""),
                 "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
                 "pre_replay_expected_reuse": row.get("pre_replay_expected_reuse", ""),
@@ -277,6 +291,7 @@ def attach_replay_path_fields(row: dict[str, Any]) -> None:
             "kv_prepare_ms": path["kv_prepare_ms"],
             "host_load_ms": path["host_load_ms"],
             "prefill_compute_ms_est": path["prefill_compute_ms_est"],
+            "model_forward_ms": path["model_forward_ms"],
             "path_evidence_summary": path["evidence_summary"],
             **counterfactual,
         }

@@ -5279,10 +5279,12 @@ New output files:
 artifacts/results/<report_label>/replay_path_ledger.csv
 artifacts/results/<report_label>/hardware_counterfactual.csv
 artifacts/results/<report_label>/instrumentation_coverage.csv
+artifacts/results/<report_label>/request_id_coverage_report.csv
 
 artifacts/results/<report_label>/report/replay_path_ledger.csv
 artifacts/results/<report_label>/report/hardware_counterfactual.csv
 artifacts/results/<report_label>/report/instrumentation_coverage.csv
+artifacts/results/<report_label>/report/request_id_coverage_report.csv
 ```
 
 Validate the classifier without running SGLang:
@@ -5316,6 +5318,19 @@ bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Run a fresh deep-instrumented controlled replay:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=milestone29_deep_run_1 \
+PRESSURE_PROFILE=medium \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+bash scripts/run_milestone29_deep_replay_path.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 Optional deep scheduler trace:
 
 ```bash
@@ -5327,6 +5342,29 @@ Simple meaning:
 ```text
 This asks the SGLang monkeypatch tracer to also log selected scheduler methods.
 Use it only for focused debug runs because scheduler events can be noisy.
+```
+
+Important events to observe:
+
+```text
+kv_telemetry.scheduler.end
+  Scheduler/request-path events such as request received, queue insertion,
+  selected for prefill, and batch run.
+
+kv_telemetry.prefill.end
+  Model-forward/prefill events, when the worker exposes a request/session
+  mapping for the batch.
+
+kv_telemetry.cache.end
+  Prefix/radix/HiCache evidence: input tokens, cached prefix tokens,
+  host-hit tokens, host-load tokens, and estimated new prefill tokens.
+
+kv_telemetry.copy.*
+  Host-to-device or device-to-host KV movement evidence.
+
+m27.pre_replay.checkpoint
+  A replay-deadline marker. Today it records the known deadline/session state;
+  deeper block-level residency can attach to this checkpoint later.
 ```
 
 Important interpretation:
