@@ -450,45 +450,18 @@ def code_block(text: str) -> str:
 
 
 def reproduce_controlled_replay_html(result_root: Path) -> str:
-    current_root = str(result_root)
-    rebuild_current = f"""
+    run_master = r"""
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-python scripts/build_milestone27_controlled_replay_report.py \\
-  --root {current_root} \\
-  --out-dir {current_root}/controlled_replay_report \\
-  --latest-root artifacts/results \\
-  --max-timeline-gaps 18
-"""
-    run_labeled = r"""
-cd ~/agentic_hardware/sglang_direct_kv
-source .venv/bin/activate
-
-export REPORT_LABEL=manager_demo_1
-export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
-export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
-
-WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
-MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch" \
-TOOL_WAIT_LIST_MS="100 250 500 1000" \
-FILLER_LIST="16 32" \
-REQUEST_CONCURRENCY=4 \
-MAX_TOTAL_TOKENS=8192 \
-HICACHE_SIZE_GB=8 \
-MEM_FRACTION_STATIC=0.72 \
-bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
-  Qwen/Qwen2.5-Coder-7B-Instruct
-"""
-    run_from_trace_index = r"""
-cd ~/agentic_hardware/sglang_direct_kv
-source .venv/bin/activate
-
-export REPORT_LABEL=trace_index_demo_1
-export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
-export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
-
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1 \
+UPDATE_LATEST=1 \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+MAX_TIMELINE_GAPS=18 \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=8 \
 MODES="no_prefetch direct_prefetch" \
@@ -498,93 +471,56 @@ REQUEST_CONCURRENCY=4 \
 MAX_TOTAL_TOKENS=8192 \
 HICACHE_SIZE_GB=8 \
 MEM_FRACTION_STATIC=0.72 \
-bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
-    refresh_latest = r"""
+    build_only = r"""
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) \
-LATEST_REPORT_ROOT=artifacts/results \
-WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
-MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch" \
-TOOL_WAIT_LIST_MS="100 250 500 1000" \
-FILLER_LIST="16 32" \
-REQUEST_CONCURRENCY=4 \
-MAX_TOTAL_TOKENS=8192 \
-HICACHE_SIZE_GB=8 \
-MEM_FRACTION_STATIC=0.72 \
-bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+BUILD_ONLY=1 \
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1_rebuild \
+UPDATE_LATEST=0 \
+CONTROLLED_ROOT=artifacts/results/runs/controlled/manager_demo_1 \
+LIVE_DIRECT_ROOT=artifacts/results/runs/live/manager_demo_1 \
+bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
-    run_live_direct = r"""
+    dry_run = r"""
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-# This runs the real SWE-bench / DeepAgents live path and generates
-# the live direct-prefetch timeline inside latest_master_report.html.
-RESULT_ROOT=artifacts/results/milestone26_live_direct_only_$(date +%Y%m%d_%H%M%S) \
-LATEST_REPORT_ROOT=artifacts/results \
-START_INDEX=1 \
-END_INDEX=4 \
-AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=6 \
-AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=512 \
-MAX_TOTAL_TOKENS=16384 \
-HICACHE_SIZE_GB=8 \
-MEM_FRACTION_STATIC=0.72 \
-bash scripts/run_milestone26_live_direct_kv_load_intervention.sh \
-  Qwen/Qwen2.5-Coder-7B-Instruct
-
-# Rebuild the master report so it includes the latest controlled replay
-# section plus the latest live direct-prefetch section.
-bash scripts/build_latest_master_with_live_direct.sh
-"""
-    run_live_paired = r"""
-cd ~/agentic_hardware/sglang_direct_kv
-source .venv/bin/activate
-
-# This runs both live no-prefetch and live direct-prefetch, then builds
-# the real-workload master report. It takes longer than the direct-only path.
-RESULT_ROOT=artifacts/results/milestone26_live_paired_direct_kv_$(date +%Y%m%d_%H%M%S) \
-LATEST_REPORT_ROOT=artifacts/results \
-START_INDEX=0 \
-END_INDEX=15 \
-AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
-MAX_TOTAL_TOKENS=32768 \
-HICACHE_SIZE_GB=8 \
-MEM_FRACTION_STATIC=0.45 \
-bash scripts/run_milestone26_live_paired_direct_kv_report.sh \
+DRY_RUN=1 \
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1 \
+bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
+    knob_rows = [
+        {"knob": "EXPERIMENT_KIND", "meaning": "controlled, live, or both"},
+        {"knob": "REPORT_LABEL", "meaning": "folder name for this run under artifacts/results/reports/"},
+        {"knob": "UPDATE_LATEST", "meaning": "1 replaces artifacts/results/latest_master_report.html"},
+        {"knob": "BUILD_ONLY", "meaning": "1 rebuilds HTML from existing run folders"},
+        {"knob": "DRY_RUN", "meaning": "1 prints what would run without launching SGLang"},
+        {"knob": "MAX_TIMELINE_GAPS", "meaning": "number of rows shown in each timeline"},
+        {"knob": "START_INDEX / END_INDEX", "meaning": "AgentBench task range for live runs"},
+        {"knob": "WORKLOAD_JSONL / TRACE_INDEX_CSV", "meaning": "real prompt-pair source for controlled replay"},
+    ]
     return "\n".join(
         [
-            "<p>This section gives copy-paste commands for reproducing the direct-KV controlled replay master report. The default experiment compares only <code>no_prefetch</code> and <code>direct_prefetch</code>. Labeled runs write to their own folder and do not overwrite the normal latest report.</p>",
-            "<h3>Rebuild This Exact Report</h3>",
-            "<p>Use this when the run folders already exist and you only want to regenerate the HTML, tables, and timelines.</p>",
-            code_block(rebuild_current),
+            "<p>Use one script to generate this master report. It can run the controlled replay experiment, the live AgentBench direct-prefetch experiment, or both.</p>",
+            "<h3>Run The Full Master Report</h3>",
+            code_block(run_master),
             "<p>Output:</p>",
-            code_block(f"{current_root}/controlled_replay_report/controlled_replay_report.html\nartifacts/results/latest_master_report.html"),
-            "<h3>Run A New Labeled Controlled Replay Experiment</h3>",
-            "<p>Use this for a new manager-demo run from an existing real prompt-pair workload. This keeps the output under a label-specific folder.</p>",
-            code_block(run_labeled),
-            "<p>Output:</p>",
-            code_block("artifacts/results/labeled/controlled_replay/manager_demo_1/controlled_replay_report/controlled_replay_report.html\nartifacts/results/labeled/controlled_replay/manager_demo_1/latest/latest_master_report.html"),
-            "<h3>Generate The Live Direct-Prefetch Timeline</h3>",
-            "<p>Use this when you want the real SWE-bench / DeepAgents live timeline in <code>latest_master_report.html</code>. This is the current preferred live path: real tool calls create live gaps, and the controller tries direct SGLang KV load-back during those gaps.</p>",
-            code_block(run_live_direct),
-            "<p>Output:</p>",
-            code_block("artifacts/results/latest_master_report.html"),
-            "<h3>Run A Full Live Paired Experiment</h3>",
-            "<p>Use this when you want both live no-prefetch and live direct-prefetch runs. This is heavier, but it gives a fuller real-workload comparison.</p>",
-            code_block(run_live_paired),
-            "<h3>Build Prompt Pairs From An AgentBench Trace Index</h3>",
-            "<p>Use this when you have an AgentBench trace index and want the script to extract real Turn A / Turn B prompt pairs first.</p>",
-            code_block(run_from_trace_index),
-            "<h3>Deliberately Refresh The Latest Master Report</h3>",
-            "<p>Only use this when you want to replace <code>artifacts/results/latest_master_report.html</code>.</p>",
-            code_block(refresh_latest),
+            code_block("artifacts/results/latest_master_report.html\nartifacts/results/reports/manager_demo_1/master_report.html\nartifacts/results/latest_manifest.json"),
+            "<h3>Rebuild From Existing Runs</h3>",
+            "<p>Use this when experiments already ran and you only want to regenerate the HTML, tables, timelines, and global prefetch-margin dot charts.</p>",
+            code_block(build_only),
+            "<h3>Preview Before Running</h3>",
+            code_block(dry_run),
+            "<h3>Important Knobs</h3>",
+            table_html(knob_rows, ["knob", "meaning"]),
         ]
     )
 
@@ -645,7 +581,7 @@ def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps
         "replay_kv_h2d_events",
     ]
     return f"""
-  <details id="live-direct" class="section-card theme-profiled" open>
+  <details id="live-direct" class="section-card theme-profiled">
     <summary><h2>Live AgentBench Direct Prefetch</h2></summary>
     <p class="note">This section is the real live workload check. It uses only direct prefetch mode: real AgentBench/DeepAgents tool calls create live gaps, and the controller tries to trigger direct SGLang KV load-back during those gaps.</p>
     <h3>Live Summary</h3>

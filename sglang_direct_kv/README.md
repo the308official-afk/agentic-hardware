@@ -45,6 +45,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 25: Labeled Reproducible Master Reports | Ready | [Milestone 25](#milestone-25-labeled-reproducible-master-reports) |
 | Milestone 26: Live Direct KV Load Intervention | Ready | [Milestone 26](#milestone-26-live-direct-kv-load-intervention) |
 | Milestone 27: Real-Prompt Controlled Replay | Ready | [Milestone 27](#milestone-27-real-prompt-controlled-replay) |
+| Milestone 28: Hardened Master Report Workflow | Ready | [Milestone 28](#milestone-28-hardened-master-report-workflow) |
 
 ## What We Are Testing
 
@@ -5015,35 +5016,16 @@ AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS:
   Leave it unset when you want the full natural model budget.
 ```
 
-Reproduce or archive the master report:
+Preferred master-report workflow:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-# Rebuild HTML from the latest controlled and live direct-prefetch runs.
-bash scripts/build_latest_master_with_live_direct.sh
-
-# Or rebuild HTML from specific runs.
-CONTROLLED_ROOT=artifacts/results/<milestone27_run> \
-LIVE_DIRECT_ROOT=artifacts/results/<milestone26_live_direct_kv_run> \
-bash scripts/build_latest_master_with_live_direct.sh
-
-# Run a new labeled experiment without overwriting the normal latest report.
-export REPORT_LABEL=manager_demo_1
-export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
-export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
-
-WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
-MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch" \
-TOOL_WAIT_LIST_MS="100 250 500 1000" \
-FILLER_LIST="16 32" \
-REQUEST_CONCURRENCY=4 \
-MAX_TOTAL_TOKENS=8192 \
-HICACHE_SIZE_GB=8 \
-MEM_FRACTION_STATIC=0.72 \
-bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1 \
+UPDATE_LATEST=1 \
+bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
@@ -5059,6 +5041,179 @@ If cyan replay-side HtoD appears before green:
 If direct_prefetch is still late:
   the software hint existed, but actual KV movement did not happen early enough.
   This strengthens the case for deadline-aware, hint-aware KV movement support.
+```
+
+### Milestone 28: Hardened Master Report Workflow
+
+Status: ready.
+
+Why this milestone is needed:
+
+```text
+The project now has many useful experiment scripts and many generated files.
+For manager-facing work, we need one clean entrypoint and one clean report.
+
+Milestone 28 makes the workflow simple:
+  run one script
+  generate the full master report
+  keep labeled evidence archived
+  keep artifacts/results easy to scan
+```
+
+What it does:
+
+```text
+scripts/run_master_report.sh
+
+This single script can run:
+  controlled   controlled replay experiment only
+  live         real AgentBench / DeepAgents live direct-prefetch experiment only
+  both         controlled replay plus live direct-prefetch evidence
+```
+
+Run the full master report:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1 \
+UPDATE_LATEST=1 \
+START_INDEX=0 \
+END_INDEX=15 \
+MAX_STEPS=10 \
+MAX_TIMELINE_GAPS=18 \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+MAX_PAIRS=8 \
+MODES="no_prefetch direct_prefetch" \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+FILLER_LIST="16 32" \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Build only from existing run folders:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+BUILD_ONLY=1 \
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1_rebuild \
+UPDATE_LATEST=0 \
+CONTROLLED_ROOT=artifacts/results/runs/controlled/manager_demo_1 \
+LIVE_DIRECT_ROOT=artifacts/results/runs/live/manager_demo_1 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Preview without running:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+DRY_RUN=1 \
+EXPERIMENT_KIND=both \
+REPORT_LABEL=manager_demo_1 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important knobs:
+
+```text
+EXPERIMENT_KIND
+  controlled, live, or both.
+
+REPORT_LABEL
+  folder name for this run under artifacts/results/reports/.
+
+UPDATE_LATEST
+  1 replaces artifacts/results/latest_master_report.html.
+  0 keeps the labeled report only.
+
+BUILD_ONLY
+  1 rebuilds HTML from existing run folders.
+
+DRY_RUN
+  1 prints what would run without launching SGLang.
+
+CLEAN_TOPLEVEL
+  1 archives loose top-level result files.
+
+MAX_TIMELINE_GAPS
+  number of rows shown in each timeline.
+
+START_INDEX / END_INDEX
+  AgentBench task range for live runs.
+
+WORKLOAD_JSONL / TRACE_INDEX_CSV
+  real prompt-pair source for controlled replay.
+```
+
+Report output must include:
+
+```text
+Summary
+Experiment Setup
+Global Prefetch Margin dot chart
+How To Read Timelines
+Controlled Replay Timeline, if controlled/both
+Live AgentBench Direct Prefetch Timeline, if live/both
+Key Observations
+Mode Tables
+Direct KV Evidence
+Gap Details
+Reproduce This Report
+```
+
+Important output files:
+
+```text
+artifacts/results/latest_master_report.html
+artifacts/results/latest_synthetic_master_report.html
+artifacts/results/latest_manifest.json
+artifacts/results/reports/<REPORT_LABEL>/master_report.html
+artifacts/results/reports/<REPORT_LABEL>/manifest.json
+artifacts/results/runs/controlled/<REPORT_LABEL>/
+artifacts/results/runs/live/<REPORT_LABEL>/
+```
+
+Top-level cleanup:
+
+```text
+With CLEAN_TOPLEVEL=1, loose top-level result files are moved to:
+  artifacts/results/archive/toplevel_cleanup_<timestamp>/
+
+The top level should only show:
+  latest_master_report.html
+  latest_synthetic_master_report.html
+  latest_manifest.json
+
+plus result subfolders such as:
+  reports/
+  runs/
+  latest_real/
+  latest_synthetic/
+  archive/
+```
+
+Simple interpretation:
+
+```text
+This milestone does not change the core experiment.
+It makes the workflow reproducible and clean.
+
+The timeline charts and global prefetch-margin dot charts remain the key
+manager-facing evidence.
 ```
 
 ## Directory Layout
