@@ -1407,6 +1407,7 @@ SECTION_THEMES = {
     "timeline-guide": "theme-guide",
     "global-prefetch": "theme-global",
     "timelines": "theme-clean",
+    "live-direct": "theme-profiled",
     "performance": "theme-clean-table",
     "profiled": "theme-profiled",
     "direct-kv": "theme-directkv",

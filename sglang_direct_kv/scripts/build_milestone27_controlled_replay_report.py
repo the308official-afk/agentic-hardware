@@ -20,6 +20,8 @@ from build_live_agentbench_tool_gap_report import (
 from build_live_paired_agentbench_report import (
     css as master_css,
     global_prefetch_margin_html,
+    load_live_run as load_live_agentbench_run,
+    mode_summary as live_mode_summary,
     movement_events_by_session,
     report_script,
     setup_diagram_svg,
@@ -285,11 +287,11 @@ def selected_timeline_gaps(gaps: list[dict[str, Any]], max_rows: int) -> list[di
     return interesting
 
 
-def timeline_rows_with_labels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def timeline_rows_with_labels(rows: list[dict[str, Any]], prefix: str = "G") -> list[dict[str, Any]]:
     labeled: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
         copied = dict(row)
-        copied["timeline_label"] = f"G{idx:02d}"
+        copied["timeline_label"] = f"{prefix}{idx:02d}"
         labeled.append(copied)
     return labeled
 
@@ -540,7 +542,91 @@ bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
     )
 
 
-def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps: int) -> str:
+def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps: int) -> str:
+    if not live_run:
+        return """
+  <details id="live-direct" class="section-card theme-profiled">
+    <summary><h2>Live AgentBench Direct Prefetch</h2></summary>
+    <p>No live direct-prefetch run was attached to this report.</p>
+  </details>
+"""
+    gaps = live_run.get("gaps", [])
+    mode_rows = [live_mode_summary(live_run)]
+    interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps), prefix="L")
+    summary = mode_rows[0] if mode_rows else {}
+    live_cards = [
+        ("live analyzed requests", summary.get("analyzed_model_requests", "")),
+        ("live tool calls", summary.get("total_tool_calls", "")),
+        ("live tool gaps", summary.get("observed_tool_gaps", "")),
+        ("late live prefetches", summary.get("late_prefetch_attempts", "")),
+        ("avg live prefetch duration", f"{summary.get('avg_prefetch_duration_ms', '')} ms"),
+        ("hint H2D gaps", sum(1 for row in gaps if has_events(row.get("direct_kv_h2d_events")))),
+        ("replay H2D gaps", sum(1 for row in gaps if has_events(row.get("replay_kv_h2d_events")))),
+    ]
+    cards_html = "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+        for label, value in live_cards
+    ) + "</div>"
+    live_setup_rows = [
+        {
+            "part": "Request source",
+            "simple meaning": "Real SWE-bench / DeepAgents task execution creates live model turns and real tool calls.",
+        },
+        {
+            "part": "Hint trigger",
+            "simple meaning": "When the live proxy sees a model turn produce tool calls, it emits a hint for that session.",
+        },
+        {
+            "part": "Direct prefetch attempt",
+            "simple meaning": "The controller sends a marked direct-load request so SGLang can exercise its KV load-back path.",
+        },
+        {
+            "part": "Resume",
+            "simple meaning": "The real agent continues after the tool work; the report checks whether prefetch finished before that resume.",
+        },
+    ]
+    detail_columns = [
+        "session_id",
+        "task_index",
+        "gap_order_in_task",
+        "tool_names",
+        "tool_gap_ms",
+        "prefetch_duration_ms",
+        "prefetch_margin_ms",
+        "resume_latency_ms",
+        "direct_kv_h2d_events",
+        "replay_kv_h2d_events",
+    ]
+    return f"""
+  <details id="live-direct" class="section-card theme-profiled" open>
+    <summary><h2>Live AgentBench Direct Prefetch</h2></summary>
+    <p class="note">This section is the real live workload check. It uses only direct prefetch mode: real AgentBench/DeepAgents tool calls create live gaps, and the controller tries to trigger direct SGLang KV load-back during those gaps.</p>
+    <h3>Live Summary</h3>
+    {cards_html}
+    <h3>How This Live Run Works</h3>
+    {table_html(live_setup_rows, ["part", "simple meaning"])}
+    <h3>Global Live Prefetch Margin</h3>
+    <p>Positive margin means the live direct-prefetch path finished before the real agent resumed. Negative margin means the agent resumed first.</p>
+    {global_prefetch_margin_html(gaps)}
+    <h3>Live Direct-Prefetch Timeline</h3>
+    <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence; cyan is replay-side HtoD evidence from the real resume request.</p>
+    {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
+    <h3>Live Row Map</h3>
+    {table_html(timeline_mapping_rows(interesting))}
+    <h3>Live Key Observations</h3>
+    {table_html(key_observation_rows(interesting), ["row", "mode", "status", "what happened", "why it matters", "tool_wait_ms", "resume_ttft_ms"])}
+    <h3>Live Direct KV Evidence</h3>
+    {table_html(gaps, detail_columns, limit=200)}
+  </details>
+"""
+
+
+def render_html(
+    gaps: list[dict[str, Any]],
+    result_root: Path,
+    max_timeline_gaps: int,
+    live_run: dict[str, Any] | None = None,
+) -> str:
     mode_rows = mode_summary_rows(gaps)
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     gap_columns = [
@@ -562,6 +648,7 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
         ("global-prefetch", "Global Prefetch Margin"),
         ("timeline-guide", "How To Read Timelines"),
         ("timelines", "Controlled Replay Timeline"),
+        ("live-direct", "Live Direct Prefetch"),
         ("observations", "Key Observations"),
         ("performance", "Mode Tables"),
         ("direct-kv", "Direct KV Evidence"),
@@ -615,6 +702,8 @@ def render_html(gaps: list[dict[str, Any]], result_root: Path, max_timeline_gaps
     <p>This table maps the compact row names in the chart back to the full experiment details.</p>
     {table_html(timeline_mapping_rows(interesting))}
   </details>
+
+  {live_direct_prefetch_html(live_run, max_timeline_gaps)}
 
   <details id="observations" class="section-card theme-observations">
     <summary><h2>Key Observations Per Gap/Session</h2></summary>
@@ -672,6 +761,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--latest-root", type=Path)
+    parser.add_argument("--live-direct-root", type=Path)
     parser.add_argument("--max-timeline-gaps", type=int, default=18)
     args = parser.parse_args()
 
@@ -685,7 +775,11 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_json(args.out_dir / "controlled_replay_report.json", {"gaps": all_gaps, "summary": mode_summary_rows(all_gaps)})
-    html_text = render_html(all_gaps, args.root, args.max_timeline_gaps)
+    live_run = None
+    if args.live_direct_root:
+        live_run = load_live_agentbench_run(args.live_direct_root, "live_direct_prefetch", include_preflight=False)
+
+    html_text = render_html(all_gaps, args.root, args.max_timeline_gaps, live_run=live_run)
     report_path = args.out_dir / "controlled_replay_report.html"
     report_path.write_text(html_text, encoding="utf-8")
 

@@ -293,6 +293,9 @@ def install_sglang_chat_model_patch(agentbench_root: Path) -> None:
         request_context: dict[str, Any] | None = None,
         max_tokens: int = 2048,
     ) -> ChatOpenAI:
+        max_tokens_cap = os.environ.get("AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS", "").strip()
+        if max_tokens_cap:
+            max_tokens = min(max_tokens, int(max_tokens_cap))
         full_hint_payload = hint_payload or {}
         hints = supported_agent_hints(full_hint_payload)
         context = request_context or {}

@@ -4781,6 +4781,7 @@ AGENTBENCH_ROOT=~/kv_cache_offloading \
 START_INDEX=0 \
 END_INDEX=15 \
 AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=512 \
 SERVER_MODE=hicache \
 HICACHE_SIZE_GB=8 \
 LIVE_PREFETCH_ACTION=direct_load \
@@ -4969,6 +4970,49 @@ artifacts/results/<run>/<case>/m27_metrics.jsonl
 artifacts/results/<run>/controlled_replay_report/controlled_replay_report.html
 artifacts/results/<run>/controlled_replay_report/controlled_replay_gaps.csv
 artifacts/results/latest_controlled_replay_report.html
+artifacts/results/latest_master_report.html
+```
+
+Attach a real live AgentBench direct-prefetch run to the same master report:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+# First run the live direct-prefetch experiment.
+RESULT_ROOT=artifacts/results/milestone26_live_direct_kv_load_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+AGENTBENCH_ROOT=~/kv_cache_offloading \
+START_INDEX=0 \
+END_INDEX=15 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+SERVER_MODE=hicache \
+HICACHE_SIZE_GB=8 \
+LIVE_PREFETCH_ACTION=direct_load \
+bash scripts/run_milestone26_live_direct_kv_load_intervention.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+
+# Then rebuild the latest master report with:
+#   1. the latest controlled replay run
+#   2. the latest live direct-prefetch run
+bash scripts/build_latest_master_with_live_direct.sh
+```
+
+Simple meaning:
+
+```text
+Controlled replay section:
+  compares no_prefetch against direct_prefetch under controlled timing and pressure.
+
+Live AgentBench section:
+  shows one real DeepAgents/SWE-bench direct-prefetch run.
+  This section is not trying to compare modes.
+  It shows whether live tool gaps produce direct KV hints, late hints, and real KV HtoD evidence.
+
+AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS:
+  optional safety cap for live report refreshes.
+  It prevents one real agent turn from generating for many minutes.
+  Leave it unset when you want the full natural model budget.
 ```
 
 Reproduce or archive the master report:
@@ -4977,12 +5021,13 @@ Reproduce or archive the master report:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-# Rebuild HTML from an existing Milestone 27 run.
-python scripts/build_milestone27_controlled_replay_report.py \
-  --root artifacts/results/<run> \
-  --out-dir artifacts/results/<run>/controlled_replay_report \
-  --latest-root artifacts/results \
-  --max-timeline-gaps 18
+# Rebuild HTML from the latest controlled and live direct-prefetch runs.
+bash scripts/build_latest_master_with_live_direct.sh
+
+# Or rebuild HTML from specific runs.
+CONTROLLED_ROOT=artifacts/results/<milestone27_run> \
+LIVE_DIRECT_ROOT=artifacts/results/<milestone26_live_direct_kv_run> \
+bash scripts/build_latest_master_with_live_direct.sh
 
 # Run a new labeled experiment without overwriting the normal latest report.
 export REPORT_LABEL=manager_demo_1
