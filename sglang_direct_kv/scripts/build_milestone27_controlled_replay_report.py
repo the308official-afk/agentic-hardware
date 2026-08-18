@@ -519,6 +519,45 @@ MEM_FRACTION_STATIC=0.72 \
 bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 """
+    run_live_direct = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+# This runs the real SWE-bench / DeepAgents live path and generates
+# the live direct-prefetch timeline inside latest_master_report.html.
+RESULT_ROOT=artifacts/results/milestone26_live_direct_only_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+START_INDEX=1 \
+END_INDEX=4 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=6 \
+AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=512 \
+MAX_TOTAL_TOKENS=16384 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone26_live_direct_kv_load_intervention.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+
+# Rebuild the master report so it includes the latest controlled replay
+# section plus the latest live direct-prefetch section.
+bash scripts/build_latest_master_with_live_direct.sh
+"""
+    run_live_paired = r"""
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+# This runs both live no-prefetch and live direct-prefetch, then builds
+# the real-workload master report. It takes longer than the direct-only path.
+RESULT_ROOT=artifacts/results/milestone26_live_paired_direct_kv_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+START_INDEX=0 \
+END_INDEX=15 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+MAX_TOTAL_TOKENS=32768 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.45 \
+bash scripts/run_milestone26_live_paired_direct_kv_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+"""
     return "\n".join(
         [
             "<p>This section gives copy-paste commands for reproducing the direct-KV controlled replay master report. The default experiment compares only <code>no_prefetch</code> and <code>direct_prefetch</code>. Labeled runs write to their own folder and do not overwrite the normal latest report.</p>",
@@ -532,6 +571,14 @@ bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
             code_block(run_labeled),
             "<p>Output:</p>",
             code_block("artifacts/results/labeled/controlled_replay/manager_demo_1/controlled_replay_report/controlled_replay_report.html\nartifacts/results/labeled/controlled_replay/manager_demo_1/latest/latest_master_report.html"),
+            "<h3>Generate The Live Direct-Prefetch Timeline</h3>",
+            "<p>Use this when you want the real SWE-bench / DeepAgents live timeline in <code>latest_master_report.html</code>. This is the current preferred live path: real tool calls create live gaps, and the controller tries direct SGLang KV load-back during those gaps.</p>",
+            code_block(run_live_direct),
+            "<p>Output:</p>",
+            code_block("artifacts/results/latest_master_report.html"),
+            "<h3>Run A Full Live Paired Experiment</h3>",
+            "<p>Use this when you want both live no-prefetch and live direct-prefetch runs. This is heavier, but it gives a fuller real-workload comparison.</p>",
+            code_block(run_live_paired),
             "<h3>Build Prompt Pairs From An AgentBench Trace Index</h3>",
             "<p>Use this when you have an AgentBench trace index and want the script to extract real Turn A / Turn B prompt pairs first.</p>",
             code_block(run_from_trace_index),
