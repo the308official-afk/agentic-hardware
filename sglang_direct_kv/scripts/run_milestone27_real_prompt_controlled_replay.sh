@@ -12,6 +12,8 @@ MODES="${MODES:-no_prefetch direct_prefetch}"
 TOOL_WAIT_LIST_MS="${TOOL_WAIT_LIST_MS:-100 250 500 1000}"
 FILLER_LIST="${FILLER_LIST:-16 64}"
 FILLER_PROMPT_TOKENS="${FILLER_PROMPT_TOKENS:-1024}"
+TARGET_PROMPT_TOKENS="${TARGET_PROMPT_TOKENS:-0}"
+FILLER_DIVERGE_EARLY="${FILLER_DIVERGE_EARLY:-1}"
 PREFETCH_TIMING="${PREFETCH_TIMING:-near_resume}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-20}"
 ORACLE_LEAD_MS="${ORACLE_LEAD_MS:-250}"
@@ -112,6 +114,9 @@ echo "RESULT_ROOT=${RESULT_ROOT}"
 echo "WORKLOAD_JSONL=${WORKLOAD_JSONL:-fallback}"
 echo "MODES=${MODES}"
 echo "FILLER_LIST=${FILLER_LIST}"
+echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS}"
+echo "TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS}"
+echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
 echo "MAX_PAIRS=${MAX_PAIRS}"
 echo "Total cases: ${total_cases}"
@@ -157,6 +162,7 @@ run_case() {
     --tool-wait-list-ms "${TOOL_WAIT_LIST_MS}"
     --filler-sessions "${fillers}"
     --filler-prompt-tokens "${FILLER_PROMPT_TOKENS}"
+    --target-prompt-tokens "${TARGET_PROMPT_TOKENS}"
     --prefetch-timing "${PREFETCH_TIMING}"
     --hint-delay-ms "${HINT_DELAY_MS}"
     --oracle-lead-ms "${ORACLE_LEAD_MS}"
@@ -167,6 +173,11 @@ run_case() {
   )
   if [[ -n "${WORKLOAD_JSONL}" && -s "${WORKLOAD_JSONL}" ]]; then
     driver_args+=(--workload-jsonl "${WORKLOAD_JSONL}")
+  fi
+  if [[ "${FILLER_DIVERGE_EARLY}" == "1" ]]; then
+    driver_args+=(--filler-diverge-early)
+  else
+    driver_args+=(--no-filler-diverge-early)
   fi
 
   "${PYTHON_BIN}" "${driver_args[@]}" | tee "${case_root}/driver.log"

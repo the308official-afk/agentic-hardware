@@ -47,6 +47,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 27: Real-Prompt Controlled Replay | Ready | [Milestone 27](#milestone-27-real-prompt-controlled-replay) |
 | Milestone 28: Hardened Master Report Workflow | Ready | [Milestone 28](#milestone-28-hardened-master-report-workflow) |
 | Milestone 29: Replay Path Instrumentation Ledger | Ready | [Milestone 29](#milestone-29-replay-path-instrumentation-ledger) |
+| Milestone 29B: Forced Eviction Sanity Probe | Ready | [Milestone 29B](#milestone-29b-forced-eviction-sanity-probe) |
 
 ## What We Are Testing
 
@@ -5382,6 +5383,137 @@ Low confidence:
 The report should be read as an evidence ladder.
 Strong rows support strong claims.
 Low-confidence rows tell us where deeper SGLang block-level hooks are still needed.
+```
+
+### Milestone 29B: Forced Eviction Sanity Probe
+
+Status: ready.
+
+Why this milestone is needed:
+
+```text
+In earlier no-prefetch pressure runs, replay TTFT was high, but we saw very little
+host-to-device KV movement.
+
+That can mean one of several things:
+  the target KV was still resident in GPU memory
+  SGLang reused cached prefix blocks without needing a host load
+  SGLang recomputed/prefilled missing tokens instead of loading from host
+  our instrumentation missed the movement
+
+This milestone creates a smaller but harsher sanity test so those cases are easier
+to separate.
+```
+
+What it does:
+
+```text
+Runs one controlled replay pair.
+Uses no_prefetch only.
+Uses one short tool wait: 100 ms.
+Pads the target first/replay prompts with a large shared prefix.
+Creates many large filler requests that diverge early from the target prefix.
+Shrinks the GPU KV budget so cache pressure is more likely.
+Keeps HiCache enabled so host-side KV has somewhere to live.
+```
+
+Recommended run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=forced_eviction_sanity_1 \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+bash scripts/run_forced_eviction_sanity.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Equivalent master-runner form:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=forced_eviction_sanity_1 \
+PRESSURE_PROFILE=eviction_sanity \
+UPDATE_LATEST=1 \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Default knobs used by `PRESSURE_PROFILE=eviction_sanity`:
+
+```text
+MAX_PAIRS=1
+MODES=no_prefetch
+TOOL_WAIT_LIST_MS=100
+FILLER_LIST=256
+REQUEST_CONCURRENCY=2
+TARGET_PROMPT_TOKENS=6144
+FILLER_PROMPT_TOKENS=4096
+FILLER_DIVERGE_EARLY=1
+MAX_TOTAL_TOKENS=8192
+HICACHE_SIZE_GB=8
+MEM_FRACTION_STATIC=0.70
+```
+
+Why the target prompt padding matters:
+
+```text
+The earlier real prompts had useful cached prefixes, but many were only a few
+thousand tokens. That may not be large enough to force SGLang to prefer host-KV
+loading over recompute or normal cache reuse.
+
+This run adds a large shared prefix to the target first turn and replay turn.
+That gives SGLang a bigger KV object to either keep in GPU memory, offload/load
+through HiCache, or recompute.
+```
+
+Why the filler padding matters:
+
+```text
+The filler requests begin with unique text.
+That makes them diverge early from the target prompt.
+
+Simple meaning:
+  target prompt creates useful KV for Agent A
+  fillers create unrelated KV for other sessions
+  those fillers should pressure the GPU KV pool instead of sharing Agent A's prefix
+```
+
+How to interpret the result:
+
+| Observation | Meaning |
+| --- | --- |
+| Replay-side HtoD/cyan bar appears | The replay really loaded KV from host to GPU. The instrumentation saw host/device movement. |
+| No HtoD, but prefix-cache counters show high GPU/cache hits | Pressure was still not enough to evict the target KV, or SGLang retained useful prefix blocks. |
+| No HtoD, but replay TTFT/prefill counters are high | SGLang may have recomputed/prefilled instead of loading host KV. |
+| No HtoD, no useful cache counters, and no recompute evidence | Treat as an instrumentation gap and inspect SGLang internals more deeply. |
+
+Important events to observe:
+
+```text
+m27.session.start
+  Confirms one target replay pair and its padded prompt size.
+
+m27.request.start / m27.request.end
+  Shows the first model turn, filler pressure requests, and replay request.
+
+hiradix.match_prefix.*
+  Shows whether SGLang found reusable prefix/cache blocks.
+
+hicache.load.*
+  Shows whether SGLang loaded host-side KV back toward the GPU path.
+
+kv_telemetry.copy.*
+  Shows observed KV copy activity when the lightweight telemetry hook sees it.
+
+replay_path_ledger.csv
+  Gives the final per-gap classification.
 ```
 
 Report output must include:

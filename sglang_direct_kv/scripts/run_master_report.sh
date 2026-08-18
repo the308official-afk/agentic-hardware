@@ -30,9 +30,9 @@ case "${EXPERIMENT_KIND}" in
 esac
 
 case "${PRESSURE_PROFILE}" in
-  custom|low|medium|high|extreme) ;;
+  custom|low|medium|high|extreme|eviction_sanity) ;;
   *)
-    echo "ERROR: PRESSURE_PROFILE must be one of: custom, low, medium, high, extreme" >&2
+    echo "ERROR: PRESSURE_PROFILE must be one of: custom, low, medium, high, extreme, eviction_sanity" >&2
     exit 2
     ;;
 esac
@@ -105,6 +105,23 @@ apply_pressure_profile() {
       set_default MAX_TOTAL_TOKENS "8192"
       set_default HICACHE_SIZE_GB "8"
       set_default MEM_FRACTION_STATIC "0.80"
+      ;;
+    eviction_sanity)
+      set_default MAX_PAIRS "1"
+      set_default MODES "no_prefetch"
+      set_default TOOL_WAIT_LIST_MS "100"
+      set_default FILLER_LIST "256"
+      set_default REQUEST_CONCURRENCY "2"
+      set_default FILLER_PROMPT_TOKENS "4096"
+      set_default TARGET_PROMPT_TOKENS "6144"
+      set_default FILLER_DIVERGE_EARLY "1"
+      set_default START_INDEX "0"
+      set_default END_INDEX "0"
+      set_default AGENTBENCH_EXECUTION_LOOP_MAX_STEPS "${MAX_STEPS:-6}"
+      set_default AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS "512"
+      set_default MAX_TOTAL_TOKENS "8192"
+      set_default HICACHE_SIZE_GB "8"
+      set_default MEM_FRACTION_STATIC "0.70"
       ;;
   esac
 
@@ -237,6 +254,8 @@ write_manifest() {
   FILLER_LIST_VALUE="${FILLER_LIST:-}" \
   REQUEST_CONCURRENCY_VALUE="${REQUEST_CONCURRENCY:-}" \
   FILLER_PROMPT_TOKENS_VALUE="${FILLER_PROMPT_TOKENS:-}" \
+  TARGET_PROMPT_TOKENS_VALUE="${TARGET_PROMPT_TOKENS:-}" \
+  FILLER_DIVERGE_EARLY_VALUE="${FILLER_DIVERGE_EARLY:-}" \
   TOOL_WAIT_LIST_MS_VALUE="${TOOL_WAIT_LIST_MS:-}" \
   START_INDEX_VALUE="${START_INDEX:-}" \
   END_INDEX_VALUE="${END_INDEX:-}" \
@@ -270,6 +289,8 @@ manifest = {
         "filler_list": os.environ.get("FILLER_LIST_VALUE", ""),
         "request_concurrency": os.environ.get("REQUEST_CONCURRENCY_VALUE", ""),
         "filler_prompt_tokens": os.environ.get("FILLER_PROMPT_TOKENS_VALUE", ""),
+        "target_prompt_tokens": os.environ.get("TARGET_PROMPT_TOKENS_VALUE", ""),
+        "filler_diverge_early": os.environ.get("FILLER_DIVERGE_EARLY_VALUE", ""),
         "tool_wait_list_ms": os.environ.get("TOOL_WAIT_LIST_MS_VALUE", ""),
         "start_index": os.environ.get("START_INDEX_VALUE", ""),
         "end_index": os.environ.get("END_INDEX_VALUE", ""),
@@ -311,11 +332,14 @@ MAX_PAIRS=${MAX_PAIRS:-}
 FILLER_LIST=${FILLER_LIST:-}
 REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}
 FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}
+TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS:-}
+FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY:-}
 TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}
 START_INDEX=${START_INDEX:-}
 END_INDEX=${END_INDEX:-}
 AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}
 MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}
+HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}
 MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}
 EOF
 }
@@ -335,7 +359,7 @@ run_controlled() {
     "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
   )
   local knob
-  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
+  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS FILLER_DIVERGE_EARLY REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
     if [[ -n "${!knob+x}" ]]; then
       env_args+=("${knob}=${!knob}")
     fi
@@ -455,6 +479,8 @@ build_report() {
     echo "FILLER_LIST=${FILLER_LIST:-}"
     echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}"
     echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}"
+    echo "TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS:-}"
+    echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY:-}"
     echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}"
     echo "START_INDEX=${START_INDEX:-}"
     echo "END_INDEX=${END_INDEX:-}"

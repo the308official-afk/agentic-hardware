@@ -78,6 +78,86 @@ def make_fallback_prompt(session_id: str, target_tokens: int, *, replay: bool = 
     return header + chunk * max(1, target_tokens // 22)
 
 
+def make_shared_prefix(session_id: str, target_tokens: int) -> str:
+    if target_tokens <= 0:
+        return ""
+    lines = [
+        f"SHARED_AGENT_CONTEXT_BEGIN session={session_id}",
+        "This block is intentionally shared by the first turn and replay turn.",
+        "It creates a large common prefix so SGLang has meaningful KV to reuse, load, or recompute.",
+    ]
+    estimated_words = sum(len(line.split()) for line in lines)
+    idx = 0
+    while max(1, int(round(estimated_words * 1.35))) < target_tokens:
+        words = [
+            "sharedcontext",
+            session_id,
+            f"block{idx:05d}",
+            f"module{idx % 97}",
+            f"symbol{idx % 211}",
+            f"test{idx % 163}",
+            "repository",
+            "history",
+            "patch",
+            "failure",
+            "context",
+        ]
+        lines.append(" ".join(words))
+        estimated_words += len(words)
+        idx += 1
+    lines.append("SHARED_AGENT_CONTEXT_END")
+    return "\n".join(lines)
+
+
+def make_pressure_filler_prompt(session_id: str, target_tokens: int) -> str:
+    lines = [
+        f"PRESSURE_FILLER_UNIQUE_BEGIN session={session_id}",
+        "This pressure request intentionally diverges immediately from target agent prompts.",
+    ]
+    estimated_words = sum(len(line.split()) for line in lines)
+    idx = 0
+    while max(1, int(round(estimated_words * 1.35))) < target_tokens:
+        digest = hashlib.sha256(f"{session_id}:{idx}".encode("utf-8")).hexdigest()[:12]
+        words = [
+            "uniquepressure",
+            digest,
+            f"repo{idx % 53}",
+            f"path{idx}",
+            f"symbol{idx % 997}",
+            "cache",
+            "pressure",
+            "unshared",
+            "prefix",
+        ]
+        lines.append(" ".join(words))
+        estimated_words += len(words)
+        idx += 1
+    lines.append("PRESSURE_FILLER_UNIQUE_END")
+    return "\n".join(lines)
+
+
+def pad_pair_with_shared_prefix(pair: ReplayPair, target_prompt_tokens: int) -> ReplayPair:
+    if target_prompt_tokens <= 0:
+        return pair
+    current_min_tokens = min(estimate_tokens(pair.prompt), estimate_tokens(pair.replay_prompt))
+    missing_tokens = max(0, target_prompt_tokens - current_min_tokens)
+    if missing_tokens <= 0:
+        return pair
+    shared_prefix = make_shared_prefix(pair.session_id, missing_tokens)
+    prompt = f"{shared_prefix}\n\n{pair.prompt}"
+    replay_prompt = f"{shared_prefix}\n\n{pair.replay_prompt}"
+    return ReplayPair(
+        session_id=pair.session_id,
+        prompt=prompt,
+        replay_prompt=replay_prompt,
+        source=f"{pair.source}+shared_prefix",
+        task_index=pair.task_index,
+        tool_names=pair.tool_names,
+        priority=pair.priority,
+        prompt_tokens=estimate_tokens(prompt),
+    )
+
+
 def load_workload_jsonl(path: Path, max_pairs: int) -> list[ReplayPair]:
     pairs: list[ReplayPair] = []
     if not path.exists() or path.stat().st_size == 0:
@@ -220,6 +300,8 @@ async def main_async() -> None:
     parser.add_argument("--oracle-lead-ms", type=int, default=250)
     parser.add_argument("--filler-sessions", type=int, default=32)
     parser.add_argument("--filler-prompt-tokens", type=int, default=1024)
+    parser.add_argument("--target-prompt-tokens", type=int, default=0)
+    parser.add_argument("--filler-diverge-early", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--filler-max-tokens", type=int, default=2)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
@@ -231,6 +313,8 @@ async def main_async() -> None:
     pairs = load_workload_jsonl(args.workload_jsonl, args.max_pairs) if args.workload_jsonl else []
     if not pairs:
         pairs = build_fallback_pairs(args.max_pairs, args.filler_prompt_tokens)
+    if args.target_prompt_tokens > 0:
+        pairs = [pad_pair_with_shared_prefix(pair, args.target_prompt_tokens) for pair in pairs]
     tool_wait_values = parse_int_list(args.tool_wait_list_ms)
     rng = random.Random(args.seed)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -247,6 +331,9 @@ async def main_async() -> None:
             "workload_jsonl": str(args.workload_jsonl or ""),
             "tool_wait_list_ms": tool_wait_values,
             "filler_sessions": args.filler_sessions,
+            "filler_prompt_tokens": args.filler_prompt_tokens,
+            "target_prompt_tokens": args.target_prompt_tokens,
+            "filler_diverge_early": args.filler_diverge_early,
             "prefetch_timing": args.prefetch_timing,
             "oracle_lead_ms": args.oracle_lead_ms,
         }
@@ -310,7 +397,11 @@ async def main_async() -> None:
                 return row
 
         async def run_filler(pair: ReplayPair, idx: int) -> None:
-            prompt = make_fallback_prompt(f"{pair.session_id}_pressure_{idx}", args.filler_prompt_tokens)
+            filler_session_id = f"{pair.session_id}_pressure_{idx}"
+            if args.filler_diverge_early:
+                prompt = make_pressure_filler_prompt(filler_session_id, args.filler_prompt_tokens)
+            else:
+                prompt = make_fallback_prompt(filler_session_id, args.filler_prompt_tokens)
             filler = ReplayPair(
                 session_id=f"{pair.session_id}_pressure_{idx:03d}",
                 prompt=prompt,
