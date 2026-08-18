@@ -11,6 +11,7 @@ DRY_RUN="${DRY_RUN:-0}"
 CLEAN_TOPLEVEL="${CLEAN_TOPLEVEL:-1}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-18}"
 PRESSURE_PROFILE="${PRESSURE_PROFILE:-medium}"
+WORKLOAD_SOURCE="${WORKLOAD_SOURCE:-real}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +34,14 @@ case "${PRESSURE_PROFILE}" in
   custom|low|medium|high|extreme|eviction_sanity) ;;
   *)
     echo "ERROR: PRESSURE_PROFILE must be one of: custom, low, medium, high, extreme, eviction_sanity" >&2
+    exit 2
+    ;;
+esac
+
+case "${WORKLOAD_SOURCE}" in
+  real|synthetic|fallback) ;;
+  *)
+    echo "ERROR: WORKLOAD_SOURCE must be one of: real, synthetic, fallback" >&2
     exit 2
     ;;
 esac
@@ -244,6 +253,7 @@ write_manifest() {
   REPORT_LABEL="${REPORT_LABEL}" \
   EXPERIMENT_KIND="${EXPERIMENT_KIND}" \
   MODEL="${MODEL}" \
+  WORKLOAD_SOURCE_VALUE="${WORKLOAD_SOURCE}" \
   CONTROLLED_ROOT_VALUE="${controlled_root}" \
   LIVE_ROOT_VALUE="${live_root}" \
   LATEST_REPORT_VALUE="${latest_report}" \
@@ -255,6 +265,8 @@ write_manifest() {
   REQUEST_CONCURRENCY_VALUE="${REQUEST_CONCURRENCY:-}" \
   FILLER_PROMPT_TOKENS_VALUE="${FILLER_PROMPT_TOKENS:-}" \
   TARGET_PROMPT_TOKENS_VALUE="${TARGET_PROMPT_TOKENS:-}" \
+  SYNTHETIC_PROMPT_TOKENS_VALUE="${SYNTHETIC_PROMPT_TOKENS:-}" \
+  SYNTHETIC_REPLAY_SUFFIX_TOKENS_VALUE="${SYNTHETIC_REPLAY_SUFFIX_TOKENS:-}" \
   FILLER_DIVERGE_EARLY_VALUE="${FILLER_DIVERGE_EARLY:-}" \
   TOOL_WAIT_LIST_MS_VALUE="${TOOL_WAIT_LIST_MS:-}" \
   START_INDEX_VALUE="${START_INDEX:-}" \
@@ -277,6 +289,7 @@ manifest = {
     "report_label": os.environ["REPORT_LABEL"],
     "experiment_kind": os.environ["EXPERIMENT_KIND"],
     "model": os.environ["MODEL"],
+    "workload_source": os.environ.get("WORKLOAD_SOURCE_VALUE", ""),
     "controlled_root": os.environ.get("CONTROLLED_ROOT_VALUE", ""),
     "live_root": os.environ.get("LIVE_ROOT_VALUE", ""),
     "latest_report": os.environ.get("LATEST_REPORT_VALUE", ""),
@@ -290,6 +303,8 @@ manifest = {
         "request_concurrency": os.environ.get("REQUEST_CONCURRENCY_VALUE", ""),
         "filler_prompt_tokens": os.environ.get("FILLER_PROMPT_TOKENS_VALUE", ""),
         "target_prompt_tokens": os.environ.get("TARGET_PROMPT_TOKENS_VALUE", ""),
+        "synthetic_prompt_tokens": os.environ.get("SYNTHETIC_PROMPT_TOKENS_VALUE", ""),
+        "synthetic_replay_suffix_tokens": os.environ.get("SYNTHETIC_REPLAY_SUFFIX_TOKENS_VALUE", ""),
         "filler_diverge_early": os.environ.get("FILLER_DIVERGE_EARLY_VALUE", ""),
         "tool_wait_list_ms": os.environ.get("TOOL_WAIT_LIST_MS_VALUE", ""),
         "start_index": os.environ.get("START_INDEX_VALUE", ""),
@@ -317,6 +332,7 @@ print_config() {
 Master report run
 MODEL=${MODEL}
 EXPERIMENT_KIND=${EXPERIMENT_KIND}
+WORKLOAD_SOURCE=${WORKLOAD_SOURCE}
 REPORT_LABEL=${REPORT_LABEL}
 RESULTS_ROOT=${RESULTS_ROOT}
 REPORT_DIR=${REPORT_DIR}
@@ -333,6 +349,8 @@ FILLER_LIST=${FILLER_LIST:-}
 REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}
 FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}
 TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS:-}
+SYNTHETIC_PROMPT_TOKENS=${SYNTHETIC_PROMPT_TOKENS:-}
+SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS:-}
 FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY:-}
 TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}
 START_INDEX=${START_INDEX:-}
@@ -357,9 +375,10 @@ run_controlled() {
     "RESULT_ROOT=${CONTROLLED_RUN_ROOT}"
     "LATEST_REPORT_ROOT=${CONTROLLED_RUN_ROOT}/_latest_scratch"
     "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
+    "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
   )
   local knob
-  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS FILLER_DIVERGE_EARLY REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
+  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS SYNTHETIC_PROMPT_TOKENS SYNTHETIC_REPLAY_SUFFIX_TOKENS FILLER_DIVERGE_EARLY REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
     if [[ -n "${!knob+x}" ]]; then
       env_args+=("${knob}=${!knob}")
     fi
@@ -467,6 +486,7 @@ build_report() {
     echo "REPORT_LABEL=${REPORT_LABEL}"
     echo "MODEL=${MODEL}"
     echo "EXPERIMENT_KIND=${EXPERIMENT_KIND}"
+    echo "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
     echo "RESULTS_ROOT=${RESULTS_ROOT}"
     echo "REPORT_DIR=${REPORT_DIR}"
     echo "CONTROLLED_ROOT=${CONTROLLED_RUN_ROOT}"
@@ -480,6 +500,8 @@ build_report() {
     echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}"
     echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}"
     echo "TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS:-}"
+    echo "SYNTHETIC_PROMPT_TOKENS=${SYNTHETIC_PROMPT_TOKENS:-}"
+    echo "SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS:-}"
     echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY:-}"
     echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}"
     echo "START_INDEX=${START_INDEX:-}"

@@ -6,6 +6,7 @@ HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S)}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 WORKLOAD_JSONL="${WORKLOAD_JSONL:-}"
+WORKLOAD_SOURCE="${WORKLOAD_SOURCE:-real}"
 TRACE_INDEX_CSV="${TRACE_INDEX_CSV:-}"
 MAX_PAIRS="${MAX_PAIRS:-12}"
 MODES="${MODES:-no_prefetch direct_prefetch}"
@@ -13,6 +14,8 @@ TOOL_WAIT_LIST_MS="${TOOL_WAIT_LIST_MS:-100 250 500 1000}"
 FILLER_LIST="${FILLER_LIST:-16 64}"
 FILLER_PROMPT_TOKENS="${FILLER_PROMPT_TOKENS:-1024}"
 TARGET_PROMPT_TOKENS="${TARGET_PROMPT_TOKENS:-0}"
+SYNTHETIC_PROMPT_TOKENS="${SYNTHETIC_PROMPT_TOKENS:-4096}"
+SYNTHETIC_REPLAY_SUFFIX_TOKENS="${SYNTHETIC_REPLAY_SUFFIX_TOKENS:-256}"
 FILLER_DIVERGE_EARLY="${FILLER_DIVERGE_EARLY:-1}"
 PREFETCH_TIMING="${PREFETCH_TIMING:-near_resume}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-20}"
@@ -88,7 +91,24 @@ wait_for_server() {
   fi
 }
 
-if [[ -z "${WORKLOAD_JSONL}" && -n "${TRACE_INDEX_CSV}" && -s "${TRACE_INDEX_CSV}" ]]; then
+case "${WORKLOAD_SOURCE}" in
+  real|synthetic|fallback) ;;
+  *)
+    echo "ERROR: WORKLOAD_SOURCE must be one of: real, synthetic, fallback" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "${WORKLOAD_SOURCE}" == "synthetic" && -z "${WORKLOAD_JSONL}" ]]; then
+  WORKLOAD_JSONL="${RESULT_ROOT}/synthetic_prompt_pairs.jsonl"
+  "${PYTHON_BIN}" scripts/generate_synthetic_replay_workload.py \
+    --model "${MODEL}" \
+    --out-jsonl "${WORKLOAD_JSONL}" \
+    --out-csv "${RESULT_ROOT}/synthetic_prompt_pairs.csv" \
+    --pairs "${MAX_PAIRS}" \
+    --prompt-tokens "${SYNTHETIC_PROMPT_TOKENS}" \
+    --replay-suffix-tokens "${SYNTHETIC_REPLAY_SUFFIX_TOKENS}"
+elif [[ -z "${WORKLOAD_JSONL}" && "${WORKLOAD_SOURCE}" == "real" && -n "${TRACE_INDEX_CSV}" && -s "${TRACE_INDEX_CSV}" ]]; then
   WORKLOAD_JSONL="${RESULT_ROOT}/real_prompt_pairs.jsonl"
   "${PYTHON_BIN}" scripts/extract_agentbench_trace_replay_workload.py \
     --index-csv "${TRACE_INDEX_CSV}" \
@@ -100,7 +120,7 @@ fi
 
 if [[ -z "${WORKLOAD_JSONL}" || ! -s "${WORKLOAD_JSONL}" ]]; then
   echo "WARNING: WORKLOAD_JSONL was not provided or is empty."
-  echo "The driver will use fallback realistic prompts. For a manager-grade run, pass WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl."
+  echo "The driver will use fallback realistic prompts. For real prompts, pass WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl. For synthetic prompts, set WORKLOAD_SOURCE=synthetic."
 fi
 
 if curl -fsS "${HOST_URL}/model_info" >/dev/null 2>&1; then
@@ -111,11 +131,14 @@ fi
 echo "Milestone 27: Real-Prompt Controlled Replay"
 echo "MODEL=${MODEL}"
 echo "RESULT_ROOT=${RESULT_ROOT}"
+echo "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
 echo "WORKLOAD_JSONL=${WORKLOAD_JSONL:-fallback}"
 echo "MODES=${MODES}"
 echo "FILLER_LIST=${FILLER_LIST}"
 echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS}"
 echo "TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS}"
+echo "SYNTHETIC_PROMPT_TOKENS=${SYNTHETIC_PROMPT_TOKENS}"
+echo "SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS}"
 echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
 echo "MAX_PAIRS=${MAX_PAIRS}"

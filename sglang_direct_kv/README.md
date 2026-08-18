@@ -4962,6 +4962,43 @@ bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Run with synthetic first/replay prompt pairs:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+WORKLOAD_SOURCE=synthetic \
+RESULT_ROOT=artifacts/results/milestone27_synthetic_large_prefix_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+MAX_PAIRS=1 \
+SYNTHETIC_PROMPT_TOKENS=4096 \
+SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
+MODES="no_prefetch direct_prefetch" \
+TOOL_WAIT_LIST_MS="100" \
+FILLER_LIST="0 64 128" \
+FILLER_PROMPT_TOKENS=2048 \
+FILLER_DIVERGE_EARLY=1 \
+REQUEST_CONCURRENCY=8 \
+MAX_TOTAL_TOKENS=24576 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.70 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Simple meaning:
+
+```text
+The first request and replay request contain the same large prefix.
+The replay adds only a small synthetic tool-result suffix.
+
+This lets us test:
+  low/no pressure    -> does KV stay resident in GPU?
+  medium pressure    -> does SGLang reload KV from host?
+  high pressure      -> does SGLang recompute/prefill instead?
+```
+
 Important events to observe:
 
 ```text
@@ -5187,6 +5224,16 @@ START_INDEX / END_INDEX
 
 WORKLOAD_JSONL / TRACE_INDEX_CSV
   real prompt-pair source for controlled replay.
+
+WORKLOAD_SOURCE
+  real, synthetic, or fallback.
+  synthetic creates controlled first/replay prompt pairs with a known shared prefix.
+
+SYNTHETIC_PROMPT_TOKENS
+  target size of the shared synthetic first-turn prompt.
+
+SYNTHETIC_REPLAY_SUFFIX_TOKENS
+  target size of the small replay-only suffix.
 ```
 
 Pressure profiles:
