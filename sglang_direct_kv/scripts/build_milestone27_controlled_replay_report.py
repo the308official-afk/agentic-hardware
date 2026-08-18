@@ -117,7 +117,21 @@ def nested_request(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def request_token_count(request: dict[str, Any]) -> int | None:
-    for key in ("origin_input_ids", "fill_ids"):
+    raw_ingest = as_float(request.get("ingest_input_tokens"))
+    if raw_ingest is not None:
+        return int(raw_ingest)
+    for key in ("ingest_input_ids", "ingest_origin_input_ids", "input_ids", "origin_input_ids", "fill_ids"):
+        count = index_count(request.get(key))
+        if count is not None:
+            return count
+    return None
+
+
+def active_request_token_count(request: dict[str, Any]) -> int | None:
+    raw_active = as_float(request.get("active_input_tokens"))
+    if raw_active is not None:
+        return int(raw_active)
+    for key in ("origin_input_ids", "fill_ids", "input_ids"):
         count = index_count(request.get(key))
         if count is not None:
             return count
@@ -173,6 +187,9 @@ def cache_events_by_session(trace_rows: list[dict[str, Any]], base_ts: float) ->
                 "duration_ms": row.get("duration_ms", ""),
                 "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
                 "input_tokens": row.get("input_tokens", ""),
+                "active_input_tokens": row.get("active_input_tokens", ""),
+                "ingest_input_tokens": row.get("ingest_input_tokens", ""),
+                "scheduler_trimmed_tokens": row.get("scheduler_trimmed_tokens", ""),
                 "cached_prefix_tokens": row.get("cached_prefix_tokens", ""),
                 "host_hit_tokens": row.get("host_hit_tokens", ""),
                 "host_load_tokens": row.get("host_load_tokens", ""),
@@ -185,10 +202,16 @@ def cache_events_by_session(trace_rows: list[dict[str, Any]], base_ts: float) ->
             continue
         request = nested_request(context)
         input_tokens = request_token_count(request)
+        active_input_tokens = active_request_token_count(request)
         prefix_tokens = index_count(request.get("prefix_indices"))
         result_prefix = result_prefix_tokens(row)
         if result_prefix is not None:
             prefix_tokens = max(prefix_tokens or 0, result_prefix)
+        scheduler_trimmed = as_float(request.get("scheduler_trimmed_tokens"))
+        if scheduler_trimmed is None and input_tokens is not None and active_input_tokens is not None and input_tokens > active_input_tokens:
+            scheduler_trimmed = input_tokens - active_input_tokens
+        if scheduler_trimmed is not None:
+            prefix_tokens = max(prefix_tokens or 0, int(scheduler_trimmed))
         host_hit = as_float(request.get("host_hit_length"))
         result_host_hit = result_host_hit_tokens(row)
         if result_host_hit is not None:
@@ -204,6 +227,9 @@ def cache_events_by_session(trace_rows: list[dict[str, Any]], base_ts: float) ->
             "duration_ms": row.get("duration_ms", ""),
             "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
             "input_tokens": input_tokens if input_tokens is not None else "",
+            "active_input_tokens": active_input_tokens if active_input_tokens is not None else "",
+            "ingest_input_tokens": request.get("ingest_input_tokens", ""),
+            "scheduler_trimmed_tokens": int(scheduler_trimmed) if scheduler_trimmed is not None else "",
             "cached_prefix_tokens": prefix_tokens if prefix_tokens is not None else "",
             "host_hit_tokens": int(host_hit) if host_hit is not None else "",
             "host_load_tokens": index_count(host_indices) or "",
@@ -330,6 +356,8 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
         return {
             "cache_event_count": 0,
             "input_tokens": "",
+            "active_input_tokens": "",
+            "scheduler_trimmed_tokens": "",
             "cached_prefix_tokens": "",
             "new_prefill_tokens_est": "",
             "cache_hit_ratio_pct": "",
@@ -347,7 +375,11 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
     compact_events = [event for event in events if event.get("source") == "kv_cache_telemetry"]
     events = compact_events or events
     input_tokens = max_numeric(events, "input_tokens")
+    active_input_tokens = max_numeric(events, "active_input_tokens")
+    scheduler_trimmed_tokens = max_numeric(events, "scheduler_trimmed_tokens")
     cached_prefix = max_numeric(events, "cached_prefix_tokens")
+    if scheduler_trimmed_tokens is not None:
+        cached_prefix = max(cached_prefix or 0, scheduler_trimmed_tokens)
     host_hit = max_numeric(events, "host_hit_tokens")
     host_loads = [int(as_float(event.get("host_load_tokens")) or 0) for event in events if as_float(event.get("host_load_tokens")) is not None]
     host_load_tokens = max(host_loads) if host_loads else None
@@ -376,6 +408,8 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
     return {
         "cache_event_count": len(events),
         "input_tokens": input_tokens if input_tokens is not None else "",
+        "active_input_tokens": active_input_tokens if active_input_tokens is not None else "",
+        "scheduler_trimmed_tokens": scheduler_trimmed_tokens if scheduler_trimmed_tokens is not None else "",
         "cached_prefix_tokens": cached_prefix if cached_prefix is not None else "",
         "new_prefill_tokens_est": new_prefill,
         "cache_hit_ratio_pct": hit_ratio,
@@ -616,6 +650,8 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "direct_kv_h2d_categories": hint_summary["categories"],
             "hint_cache_event_count": hint_cache_summary["cache_event_count"],
             "hint_input_tokens": hint_cache_summary["input_tokens"],
+            "hint_active_input_tokens": hint_cache_summary["active_input_tokens"],
+            "hint_scheduler_trimmed_tokens": hint_cache_summary["scheduler_trimmed_tokens"],
             "hint_cached_prefix_tokens": hint_cache_summary["cached_prefix_tokens"],
             "hint_new_prefill_tokens_est": hint_cache_summary["new_prefill_tokens_est"],
             "hint_cache_hit_ratio_pct": hint_cache_summary["cache_hit_ratio_pct"],
@@ -633,6 +669,8 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_kv_h2d_categories": replay_summary["categories"],
             "replay_cache_event_count": replay_cache_summary["cache_event_count"],
             "replay_input_tokens": replay_cache_summary["input_tokens"],
+            "replay_active_input_tokens": replay_cache_summary["active_input_tokens"],
+            "replay_scheduler_trimmed_tokens": replay_cache_summary["scheduler_trimmed_tokens"],
             "replay_cached_prefix_tokens": replay_cache_summary["cached_prefix_tokens"],
             "replay_new_prefill_tokens_est": replay_cache_summary["new_prefill_tokens_est"],
             "replay_cache_hit_ratio_pct": replay_cache_summary["cache_hit_ratio_pct"],
@@ -812,6 +850,8 @@ def replay_attribution_rows(rows: list[dict[str, Any]], limit: int | None = None
                 "tool_wait_ms": row.get("tool_gap_ms", ""),
                 "resume_ttft_ms": row.get("resume_ttft_ms", ""),
                 "input_tokens": row.get("replay_input_tokens", ""),
+                "active_input_tokens": row.get("replay_active_input_tokens", ""),
+                "scheduler_trimmed_tokens": row.get("replay_scheduler_trimmed_tokens", ""),
                 "cached_prefix_tokens": row.get("replay_cached_prefix_tokens", ""),
                 "cache_hit_pct": row.get("replay_cache_hit_ratio_pct", ""),
                 "new_prefill_tokens_est": row.get("replay_new_prefill_tokens_est", ""),
@@ -869,6 +909,8 @@ def replay_path_proof_rows(ledger: list[dict[str, Any]], limit: int | None = Non
         "confidence",
         "prefetch_outcome",
         "input_tokens",
+        "active_input_tokens",
+        "scheduler_trimmed_tokens",
         "matched_prefix_tokens",
         "unmatched_tokens",
         "host_load_tokens",
@@ -1288,6 +1330,8 @@ def render_html(
         "recomputed_tokens_est",
         "gpu_resident_hit_tokens",
         "replay_input_tokens",
+        "replay_active_input_tokens",
+        "replay_scheduler_trimmed_tokens",
         "replay_cached_prefix_tokens",
         "replay_cache_hit_ratio_pct",
         "replay_new_prefill_tokens_est",
@@ -1428,7 +1472,7 @@ def render_html(
   <details id="direct-kv" class="section-card theme-directkv">
     <summary><h2>Direct KV Load Evidence</h2></summary>
     <p>Green bars and <code>direct_kv_h2d_*</code> columns come from SGLang-level KV movement hooks and lightweight copy telemetry during the prefetch attempt. Cyan/replay columns show KV movement performed by the real resume request.</p>
-    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms", "model_forward_ms", "replay_scheduler_event_count", "replay_scheduler_total_ms", "replay_model_forward_event_count", "replay_model_forward_total_ms"])}
+    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_active_input_tokens", "replay_scheduler_trimmed_tokens", "replay_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms", "model_forward_ms", "replay_scheduler_event_count", "replay_scheduler_total_ms", "replay_model_forward_event_count", "replay_model_forward_total_ms"])}
   </details>
 
   <details id="appendix" class="section-card theme-appendix">

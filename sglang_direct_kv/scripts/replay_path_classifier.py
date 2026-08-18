@@ -46,6 +46,8 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
     """Classify one replay gap using the strongest evidence currently available."""
 
     input_tokens = as_int(row.get("replay_input_tokens"))
+    active_input_tokens = as_int(row.get("replay_active_input_tokens"))
+    scheduler_trimmed_tokens = as_int(row.get("replay_scheduler_trimmed_tokens"))
     cached_prefix = as_int(row.get("replay_cached_prefix_tokens"))
     host_hit = as_int(row.get("replay_host_hit_tokens")) or 0
     host_load = as_int(row.get("replay_host_load_tokens")) or 0
@@ -159,6 +161,9 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
         evidence_bits.append(f"input={input_tokens}")
     if cached_prefix is not None:
         evidence_bits.append(f"matched={cached_prefix}")
+    if active_input_tokens is not None and scheduler_trimmed_tokens is not None:
+        evidence_bits.append(f"active={active_input_tokens}")
+        evidence_bits.append(f"trimmed_before_later_hook={scheduler_trimmed_tokens}")
     if new_prefill is not None:
         evidence_bits.append(f"new_prefill={new_prefill}")
     evidence_bits.append(f"host_load_tokens={host_load}")
@@ -174,6 +179,8 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "input_tokens": input_tokens if input_tokens is not None else "",
+        "active_input_tokens": active_input_tokens if active_input_tokens is not None else "",
+        "scheduler_trimmed_tokens": scheduler_trimmed_tokens if scheduler_trimmed_tokens is not None else "",
         "matched_prefix_tokens": cached_prefix if cached_prefix is not None else "",
         "unmatched_tokens": unmatched_tokens if unmatched_tokens is not None else "",
         "cache_hit_ratio_pct": _ratio(cached_prefix, input_tokens),
@@ -249,6 +256,8 @@ def build_replay_path_ledger(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "confidence": path["confidence"],
                 "prefetch_outcome": path["prefetch_outcome"],
                 "input_tokens": path["input_tokens"],
+                "active_input_tokens": path["active_input_tokens"],
+                "scheduler_trimmed_tokens": path["scheduler_trimmed_tokens"],
                 "matched_prefix_tokens": path["matched_prefix_tokens"],
                 "unmatched_tokens": path["unmatched_tokens"],
                 "cache_hit_ratio_pct": path["cache_hit_ratio_pct"],
@@ -284,6 +293,8 @@ def attach_replay_path_fields(row: dict[str, Any]) -> None:
             "bottleneck_label": path["bottleneck_label"],
             "path_confidence": path["confidence"],
             "prefetch_outcome": path["prefetch_outcome"],
+            "replay_active_input_tokens": path["active_input_tokens"],
+            "replay_scheduler_trimmed_tokens": path["scheduler_trimmed_tokens"],
             "replay_unmatched_tokens": path["unmatched_tokens"],
             "gpu_resident_hit_tokens": path["gpu_resident_hit_tokens"],
             "recomputed_tokens_est": path["recomputed_tokens_est"],

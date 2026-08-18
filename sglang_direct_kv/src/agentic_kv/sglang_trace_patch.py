@@ -22,6 +22,7 @@ _ACTIVE_AGENT_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("agentic_kv_activ
 _AGENT_BY_NODE_ID: dict[str, dict[str, Any]] = {}
 _AGENT_BY_INDEX_SIG: dict[str, dict[str, Any]] = {}
 _NODE_RESIDENCY_BY_ID: dict[str, dict[str, Any]] = {}
+_REQUEST_INTAKE_BY_RID: dict[str, dict[str, Any]] = {}
 
 
 def _trace_path() -> Path:
@@ -169,6 +170,98 @@ def _agent_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _request_id_from_request(request: dict[str, Any]) -> str:
+    value = request.get("rid") or request.get("request_id")
+    return str(value) if value not in (None, "", [], {}) else ""
+
+
+def _request_index_count(request: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = request.get(key)
+        if isinstance(value, dict):
+            for count_key in ("index_count", "numel", "count"):
+                raw = value.get(count_key)
+                try:
+                    if raw not in (None, ""):
+                        return int(raw)
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
+def _remember_request_intake(context: dict[str, Any]) -> None:
+    candidates: list[dict[str, Any]] = []
+    req = context.get("request")
+    if isinstance(req, dict):
+        candidates.append(req)
+    requests = context.get("requests")
+    if isinstance(requests, list):
+        candidates.extend(item for item in requests if isinstance(item, dict))
+    batch = context.get("batch")
+    if isinstance(batch, dict):
+        batch_requests = batch.get("requests")
+        if isinstance(batch_requests, list):
+            candidates.extend(item for item in batch_requests if isinstance(item, dict))
+
+    for request in candidates:
+        rid = _request_id_from_request(request)
+        if not rid:
+            continue
+        full_count = _request_index_count(request, "input_ids", "origin_input_ids", "fill_ids")
+        if full_count is None:
+            continue
+        existing = _REQUEST_INTAKE_BY_RID.get(rid, {})
+        existing_count = _request_index_count(existing, "input_ids", "origin_input_ids", "fill_ids")
+        if existing_count is not None and existing_count >= full_count:
+            continue
+        snapshot = dict(request)
+        snapshot["full_input_tokens"] = full_count
+        snapshot["intake_seen_ns"] = time.time_ns()
+        _REQUEST_INTAKE_BY_RID[rid] = snapshot
+
+    max_entries = int(os.environ.get("AGENTIC_KV_REQUEST_INTAKE_REGISTRY_MAX", "20000"))
+    while len(_REQUEST_INTAKE_BY_RID) > max_entries:
+        try:
+            oldest = next(iter(_REQUEST_INTAKE_BY_RID))
+        except StopIteration:
+            break
+        _REQUEST_INTAKE_BY_RID.pop(oldest, None)
+
+
+def _apply_request_intake_context(context: dict[str, Any]) -> None:
+    candidates: list[dict[str, Any]] = []
+    req = context.get("request")
+    if isinstance(req, dict):
+        candidates.append(req)
+    requests = context.get("requests")
+    if isinstance(requests, list):
+        candidates.extend(item for item in requests if isinstance(item, dict))
+    batch = context.get("batch")
+    if isinstance(batch, dict):
+        batch_requests = batch.get("requests")
+        if isinstance(batch_requests, list):
+            candidates.extend(item for item in batch_requests if isinstance(item, dict))
+
+    for request in candidates:
+        rid = _request_id_from_request(request)
+        intake = _REQUEST_INTAKE_BY_RID.get(rid, {}) if rid else {}
+        if not intake:
+            continue
+        intake_tokens = _request_index_count(intake, "input_ids", "origin_input_ids", "fill_ids")
+        active_tokens = _request_index_count(request, "origin_input_ids", "fill_ids", "input_ids")
+        if intake_tokens is not None:
+            request.setdefault("ingest_input_tokens", intake_tokens)
+            if active_tokens is not None and active_tokens < intake_tokens:
+                request.setdefault("active_input_tokens", active_tokens)
+                request.setdefault("scheduler_trimmed_tokens", intake_tokens - active_tokens)
+        for key in ("input_ids", "origin_input_ids", "fill_ids"):
+            if isinstance(intake.get(key), dict) and f"ingest_{key}" not in request:
+                request[f"ingest_{key}"] = intake[key]
+        for key, value in _copy_agent_context(intake).items():
+            request.setdefault(key, value)
+            context.setdefault(key, value)
+
+
 def _propagated_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
     agent = _agent_context_from_context(context)
     if agent:
@@ -267,6 +360,8 @@ def _remember_agent_context(context: dict[str, Any]) -> None:
 
 
 def _apply_known_agent_context(context: dict[str, Any]) -> dict[str, Any]:
+    _remember_request_intake(context)
+    _apply_request_intake_context(context)
     _with_queue_agent_context(context)
     if _agent_context_from_context(context):
         _remember_agent_context(context)
@@ -909,7 +1004,17 @@ def _cache_path_telemetry_event(
         return None
 
     req = context.get("request") if isinstance(context.get("request"), dict) else {}
-    input_tokens = _count_from_request_index(req, "origin_input_ids") or _count_from_request_index(req, "fill_ids")
+    active_input_tokens = (
+        _count_from_request_index(req, "origin_input_ids")
+        or _count_from_request_index(req, "fill_ids")
+        or _count_from_request_index(req, "input_ids")
+    )
+    ingest_input_tokens = req.get("ingest_input_tokens")
+    try:
+        ingest_input_tokens = int(ingest_input_tokens) if ingest_input_tokens not in (None, "") else None
+    except (TypeError, ValueError):
+        ingest_input_tokens = None
+    input_tokens = ingest_input_tokens or active_input_tokens
     cached_prefix_tokens = _count_from_request_index(req, "prefix_indices")
     host_hit_tokens = req.get("host_hit_length")
     if host_hit_tokens not in (None, ""):
@@ -924,6 +1029,11 @@ def _cache_path_telemetry_event(
         counts = _match_prefix_result_counts(result)
         cached_prefix_tokens = max(cached_prefix_tokens or 0, counts.get("cached_prefix_tokens") or 0)
         host_hit_tokens = max(host_hit_tokens or 0, counts.get("host_hit_tokens") or 0)
+
+    scheduler_trimmed_tokens = None
+    if input_tokens is not None and active_input_tokens is not None and input_tokens > active_input_tokens:
+        scheduler_trimmed_tokens = input_tokens - active_input_tokens
+        cached_prefix_tokens = max(cached_prefix_tokens or 0, scheduler_trimmed_tokens)
 
     host_load_tokens = _count_from_index_summary(context.get("host_indices"))
     device_load_tokens = _count_from_index_summary(context.get("device_indices"))
@@ -944,6 +1054,9 @@ def _cache_path_telemetry_event(
         "category": category,
         "direction": context.get("direction", ""),
         "input_tokens": input_tokens,
+        "active_input_tokens": active_input_tokens,
+        "ingest_input_tokens": ingest_input_tokens,
+        "scheduler_trimmed_tokens": scheduler_trimmed_tokens,
         "cached_prefix_tokens": cached_prefix_tokens,
         "new_prefill_tokens_est": new_prefill_tokens,
         "host_hit_tokens": host_hit_tokens,
