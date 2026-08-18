@@ -20,7 +20,52 @@ if [[ -z "${CONTROLLED_ROOT}" ]]; then
 fi
 
 if [[ -z "${LIVE_DIRECT_ROOT}" ]]; then
-  LIVE_DIRECT_ROOT="$(ls -td artifacts/results/milestone26_live_direct_only_* artifacts/results/milestone26_live_direct_kv_load_* artifacts/results/milestone26_direct_kv_* artifacts/results/milestone26_paired_direct_kv_*/live_direct_kv_load 2>/dev/null | head -1 || true)"
+  LIVE_DIRECT_ROOT="$("${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+import csv
+
+base = Path("artifacts/results")
+patterns = [
+    "milestone26_live_direct_only_*",
+    "milestone26_live_direct_kv_load_*",
+    "milestone26_direct_kv_*",
+    "milestone26_paired_direct_kv_*/live_direct_kv_load",
+]
+
+def count_gaps(root: Path) -> int:
+    candidates = [
+        root / "live_agentbench_prefetch_report" / "live_tool_gaps.csv",
+        root / "live_tool_gaps.csv",
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                with path.open(newline="", encoding="utf-8") as handle:
+                    return max(sum(1 for _ in csv.DictReader(handle)), 0)
+            except Exception:
+                return 0
+    return 0
+
+roots = []
+for pattern in patterns:
+    roots.extend(path for path in base.glob(pattern) if path.is_dir())
+
+if not roots:
+    raise SystemExit(0)
+
+# Prefer runs with more analyzed live gaps. This avoids accidentally picking
+# tiny debug/report-only runs when several result folders have similar mtimes.
+best = max(
+    roots,
+    key=lambda path: (
+        count_gaps(path),
+        path.stat().st_mtime,
+        str(path),
+    ),
+)
+print(best)
+PY
+)"
 fi
 
 if [[ -z "${CONTROLLED_ROOT}" || ! -d "${CONTROLLED_ROOT}" ]]; then
