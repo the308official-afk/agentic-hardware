@@ -1,0 +1,4948 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Real-Prompt Controlled Replay Master Report</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+    main { max-width: 1760px; margin: 0 auto; padding: 24px; }
+    section, details.section-card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px 24px; margin: 18px 0; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+    h1 { font-size: 34px; margin: 0 0 8px; }
+    h2 { font-size: 26px; margin: 0 0 12px; }
+    h3 { font-size: 18px; margin: 18px 0 8px; }
+    p { color: #334155; line-height: 1.45; }
+    a { color: #2563eb; text-decoration: none; }
+    .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 14px; color: #1e3a8a; }
+    .warn { background: #fff7ed; border-left: 4px solid #f97316; padding: 12px 14px; color: #7c2d12; }
+    .theme-summary { --theme: #1e3a8a; --theme-bg: #eff6ff; }
+    .theme-setup { --theme: #2563eb; --theme-bg: #eff6ff; }
+    .theme-guide { --theme: #475569; --theme-bg: #f1f5f9; }
+    .theme-global { --theme: #dc2626; --theme-bg: #fef2f2; }
+    .theme-clean { --theme: #15803d; --theme-bg: #f0fdf4; }
+    .theme-clean-table { --theme: #65a30d; --theme-bg: #f7fee7; }
+    .theme-profiled { --theme: #7e22ce; --theme-bg: #faf5ff; }
+    .theme-directkv { --theme: #0e7490; --theme-bg: #ecfeff; }
+    .theme-deductions { --theme: #b45309; --theme-bg: #fffbeb; }
+    .theme-checkpoints { --theme: #ea580c; --theme-bg: #fff7ed; }
+    .theme-observations { --theme: #0f766e; --theme-bg: #f0fdfa; }
+    .theme-paired { --theme: #be123c; --theme-bg: #fff1f2; }
+    .theme-reproduce { --theme: #0891b2; --theme-bg: #ecfeff; }
+    .theme-appendix { --theme: #64748b; --theme-bg: #f8fafc; }
+    section[class*="theme-"], details.section-card[class*="theme-"] { border-top: 5px solid var(--theme); }
+    section[class*="theme-"] > h2, details.section-card summary h2 { border-left: 8px solid var(--theme); padding-left: 10px; color: var(--theme); }
+    details.section-card summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+    details.section-card summary::-webkit-details-marker { display: none; }
+    details.section-card summary h2 { margin: 0; }
+    details.section-card summary h2::before { content: "▶"; display: inline-block; color: var(--theme); font-size: 18px; margin-right: 8px; transform: translateY(-1px); }
+    details.section-card[open] summary h2::before { content: "▼"; }
+    .section-color-legend { color: #475569; font-size: 14px; margin: 8px 0 12px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .timeline-stack { display: grid; grid-template-columns: 1fr; gap: 26px; }
+    .timeline-panel { min-width: 0; }
+    .setup-diagram { margin: 12px 0 18px; }
+    .toc { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+    .toc a { background: var(--theme-bg, #f1f5f9); border: 1px solid #e2e8f0; border-left: 7px solid var(--theme, #64748b); border-radius: 6px; padding: 7px 10px; color: #0f172a; font-weight: 650; }
+    .toc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .toc-actions button { border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
+    .toc-actions button:hover { background: #f8fafc; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #f8fafc; }
+    .card .label { color: #64748b; font-size: 13px; }
+    .card .value { font-size: 24px; font-weight: 700; margin-top: 4px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; background: #f1f5f9; color: #111827; padding: 9px 10px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+    td { padding: 9px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+    pre { white-space: pre-wrap; background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px; overflow: auto; }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+    @media (max-width: 1000px) { .grid, .cards { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<main>
+  <section>
+    <h1>Real-Prompt Controlled Replay Master Report</h1>
+    <p>This is the controlled real-prompt version of the master report. The prompts come from real SWE-bench / DeepAgents traces, while the experiment controls tool-wait time, cache pressure, and direct KV prefetch timing.</p>
+    <p class="note">Use this report for the clean hardware-story experiment: real prompt content, known resume deadlines, known pressure levels, direct SGLang KV-hook attempts, and replay-side KV movement evidence.</p>
+    <h2>Table of Contents</h2>
+    <p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, profiled mechanism, interpretation, and appendix.</p><div class="toc"><a class="theme-summary" href="#summary">Summary</a><a class="theme-setup" href="#setup">Experiment Setup</a><a class="theme-global" href="#global-prefetch">Global Prefetch Margin</a><a class="theme-guide" href="#timeline-guide">How To Read Timelines</a><a class="theme-clean" href="#timelines">Controlled Replay Timeline</a><a class="theme-profiled" href="#live-direct">Live Direct Prefetch</a><a class="theme-observations" href="#observations">Key Observations</a><a class="theme-clean-table" href="#performance">Mode Tables</a><a class="theme-directkv" href="#direct-kv">Direct KV Evidence</a><a class="theme-appendix" href="#appendix">Gap Details</a><a class="theme-reproduce" href="#reproduce">Reproduce This Report</a></div><div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button><button type="button" data-action="collapse-all">Collapse All</button></div>
+  </section>
+
+  <details id="summary" class="section-card theme-summary" open>
+    <summary><h2>Summary</h2></summary>
+    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. Oracle prefetch remains supported for optional sensitivity studies, but it is intentionally excluded from the default report to keep the main story simple.</p>
+    <div class="cards"><div class="card"><div class="label">controlled gaps</div><div class="value">32</div></div>
+<div class="card"><div class="label">no-prefetch avg TTFT</div><div class="value">977.723 ms</div></div>
+<div class="card"><div class="label">direct-prefetch avg TTFT</div><div class="value">1028.348 ms</div></div>
+<div class="card"><div class="label">direct late prefetches</div><div class="value">11</div></div>
+<div class="card"><div class="label">direct H2D gaps</div><div class="value">13</div></div></div>
+  </details>
+
+  <details id="setup" class="section-card theme-setup">
+    <summary><h2>Experiment Setup And Manager Summary</h2></summary>
+    
+    <div class="setup-diagram"><svg viewBox="0 0 1440 210" width="100%" role="img" aria-label="Simple experiment setup flow diagram">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+</marker>
+</defs>
+<rect x="20" y="25" width="1400" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>
+<line x1="240" y1="102" x2="280" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="470" y1="102" x2="510" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="700" y1="102" x2="740" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="930" y1="102" x2="970" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1160" y1="102" x2="1200" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="50" y="65" width="190" height="74" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="145.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Agent Task</text>
+<text x="145.0" y="113" text-anchor="middle" font-size="12" fill="#475569">SWE-bench / DeepAgents</text>
+<rect x="280" y="65" width="190" height="74" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="375.0" y="92" text-anchor="middle" font-size="15" font-weight="700">First Turn</text>
+<text x="375.0" y="113" text-anchor="middle" font-size="12" fill="#475569">model builds KV</text>
+<rect x="510" y="65" width="190" height="74" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="605.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Tool Call</text>
+<text x="605.0" y="113" text-anchor="middle" font-size="12" fill="#475569">read_file / run_tests</text>
+<rect x="740" y="65" width="190" height="74" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+<text x="835.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Tool Wait Gap</text>
+<text x="835.0" y="113" text-anchor="middle" font-size="12" fill="#475569">prefetch opportunity</text>
+<rect x="970" y="65" width="190" height="74" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+<text x="1065.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Hint / Prefetch</text>
+<text x="1065.0" y="113" text-anchor="middle" font-size="12" fill="#475569">try to prepare KV</text>
+<rect x="1200" y="65" width="190" height="74" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="1295.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Resume Turn</text>
+<text x="1295.0" y="113" text-anchor="middle" font-size="12" fill="#475569">measure latency</text>
+<text x="720" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>
+</svg></div>
+    <p>This milestone keeps real SWE-bench/DeepAgents prompt content, but controls the timing. That gives us a cleaner hardware-style experiment: same kind of agent text, known wait windows, known cache pressure, and direct SGLang KV-hook attempts.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>part</th>
+<th>simple meaning</th>
+</tr></thead><tbody>
+<tr>
+<td>1. Real prompt pair</td>
+<td>Use two adjacent model turns from real AgentBench/DeepAgents traces.</td>
+</tr>
+<tr>
+<td>2. Controlled wait</td>
+<td>Replay Turn A, then impose a chosen tool-wait window such as 100 ms or 500 ms.</td>
+</tr>
+<tr>
+<td>3. Cache pressure</td>
+<td>Send filler requests during the wait to make KV residency harder.</td>
+</tr>
+<tr>
+<td>4. Direct KV hint</td>
+<td>In prefetch modes, issue the marked direct-load request during the wait.</td>
+</tr>
+<tr>
+<td>5. Resume</td>
+<td>Send Turn B at the scheduled resume time, even if the hint is still running.</td>
+</tr>
+</tbody></table></div>
+    
+  </details>
+
+  <details id="global-prefetch" class="section-card theme-global">
+    <summary><h2>Global Prefetch Margin</h2></summary>
+    <p>Positive margin means the hint path finished before replay. Negative margin means replay arrived first.</p>
+    
+    <p>This chart compresses every matched live prefetch attempt into one dot. The y-axis is the prefetch margin: positive means the prefetch finished before the resume request; negative means it finished after the agent already resumed.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>prefetch_attempts</th>
+<th>finished_before_resume</th>
+<th>late</th>
+<th>late_pct</th>
+<th>median_margin_ms</th>
+<th>worst_lateness_ms</th>
+<th>best_early_margin_ms</th>
+<th>avg_prefetch_duration_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>16</td>
+<td>5</td>
+<td>11</td>
+<td>68.75</td>
+<td>-307.019</td>
+<td>1614.759</td>
+<td>10022.452</td>
+<td>41156.394</td>
+</tr>
+</tbody></table></div>
+    <h3>Symlog View</h3>
+    <p>This view compresses the y-axis with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easy to see. Above zero means early; below zero means late.</p>
+    <div class="setup-diagram"><svg viewBox="0 0 1480 520" width="100%" role="img" aria-label="Global prefetch margin dot plot symlog view">
+<rect x="86" y="56" width="1360" height="382" fill="#ffffff" stroke="#e5e7eb"/>
+<line x1="86" y1="276.5" x2="1446" y2="276.5" stroke="#111827" stroke-width="2"/>
+<text x="1438" y="268.5" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>
+<text x="18" y="265" transform="rotate(-90 18 265)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms (symlog)</text>
+<text x="766.0" y="498" text-anchor="middle" font-size="13" font-weight="700">live tool-gap order</text>
+<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before resume</text>
+<text x="340" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>
+<line x1="80" y1="438.0" x2="1446" y2="438.0" stroke="#e5e7eb"/>
+<text x="74" y="442.0" text-anchor="end" font-size="11">-2546 ms</text>
+<line x1="80" y1="401.0" x2="1446" y2="401.0" stroke="#e5e7eb"/>
+<text x="74" y="405.0" text-anchor="end" font-size="11">-1000 ms</text>
+<line x1="80" y1="374.6" x2="1446" y2="374.6" stroke="#e5e7eb"/>
+<text x="74" y="378.6" text-anchor="end" font-size="11">-500 ms</text>
+<line x1="80" y1="321.4" x2="1446" y2="321.4" stroke="#e5e7eb"/>
+<text x="74" y="325.4" text-anchor="end" font-size="11">-100 ms</text>
+<line x1="80" y1="304.9" x2="1446" y2="304.9" stroke="#e5e7eb"/>
+<text x="74" y="308.9" text-anchor="end" font-size="11">-50 ms</text>
+<line x1="80" y1="276.5" x2="1446" y2="276.5" stroke="#e5e7eb"/>
+<text x="74" y="280.5" text-anchor="end" font-size="11">0 ms</text>
+<line x1="80" y1="248.2" x2="1446" y2="248.2" stroke="#e5e7eb"/>
+<text x="74" y="252.2" text-anchor="end" font-size="11">50 ms</text>
+<line x1="80" y1="231.6" x2="1446" y2="231.6" stroke="#e5e7eb"/>
+<text x="74" y="235.6" text-anchor="end" font-size="11">100 ms</text>
+<line x1="80" y1="178.5" x2="1446" y2="178.5" stroke="#e5e7eb"/>
+<text x="74" y="182.5" text-anchor="end" font-size="11">500 ms</text>
+<line x1="80" y1="152.1" x2="1446" y2="152.1" stroke="#e5e7eb"/>
+<text x="74" y="156.1" text-anchor="end" font-size="11">1000 ms</text>
+<line x1="80" y1="87.8" x2="1446" y2="87.8" stroke="#e5e7eb"/>
+<text x="74" y="91.8" text-anchor="end" font-size="11">5000 ms</text>
+<line x1="80" y1="59.7" x2="1446" y2="59.7" stroke="#e5e7eb"/>
+<text x="74" y="63.7" text-anchor="end" font-size="11">10000 ms</text>
+<line x1="80" y1="56.0" x2="1446" y2="56.0" stroke="#e5e7eb"/>
+<text x="74" y="60.0" text-anchor="end" font-size="11">10953 ms</text>
+<line x1="86.0" y1="438" x2="86.0" y2="444" stroke="#94a3b8"/>
+<text x="86.0" y="460" text-anchor="middle" font-size="10">0</text>
+<line x1="176.7" y1="438" x2="176.7" y2="444" stroke="#94a3b8"/>
+<text x="176.7" y="460" text-anchor="middle" font-size="10">1</text>
+<line x1="267.3" y1="438" x2="267.3" y2="444" stroke="#94a3b8"/>
+<text x="267.3" y="460" text-anchor="middle" font-size="10">2</text>
+<line x1="358.0" y1="438" x2="358.0" y2="444" stroke="#94a3b8"/>
+<text x="358.0" y="460" text-anchor="middle" font-size="10">3</text>
+<line x1="448.7" y1="438" x2="448.7" y2="444" stroke="#94a3b8"/>
+<text x="448.7" y="460" text-anchor="middle" font-size="10">4</text>
+<line x1="539.3" y1="438" x2="539.3" y2="444" stroke="#94a3b8"/>
+<text x="539.3" y="460" text-anchor="middle" font-size="10">5</text>
+<line x1="630.0" y1="438" x2="630.0" y2="444" stroke="#94a3b8"/>
+<text x="630.0" y="460" text-anchor="middle" font-size="10">6</text>
+<line x1="720.7" y1="438" x2="720.7" y2="444" stroke="#94a3b8"/>
+<text x="720.7" y="460" text-anchor="middle" font-size="10">7</text>
+<line x1="811.3" y1="438" x2="811.3" y2="444" stroke="#94a3b8"/>
+<text x="811.3" y="460" text-anchor="middle" font-size="10">8</text>
+<line x1="902.0" y1="438" x2="902.0" y2="444" stroke="#94a3b8"/>
+<text x="902.0" y="460" text-anchor="middle" font-size="10">9</text>
+<line x1="992.7" y1="438" x2="992.7" y2="444" stroke="#94a3b8"/>
+<text x="992.7" y="460" text-anchor="middle" font-size="10">10</text>
+<line x1="1083.3" y1="438" x2="1083.3" y2="444" stroke="#94a3b8"/>
+<text x="1083.3" y="460" text-anchor="middle" font-size="10">11</text>
+<line x1="1174.0" y1="438" x2="1174.0" y2="444" stroke="#94a3b8"/>
+<text x="1174.0" y="460" text-anchor="middle" font-size="10">12</text>
+<line x1="1264.7" y1="438" x2="1264.7" y2="444" stroke="#94a3b8"/>
+<text x="1264.7" y="460" text-anchor="middle" font-size="10">13</text>
+<line x1="1355.3" y1="438" x2="1355.3" y2="444" stroke="#94a3b8"/>
+<text x="1355.3" y="460" text-anchor="middle" font-size="10">14</text>
+<line x1="1446.0" y1="438" x2="1446.0" y2="444" stroke="#94a3b8"/>
+<text x="1446.0" y="460" text-anchor="middle" font-size="10">15</text>
+<circle cx="86.0" cy="59.9" r="9.0" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution | task=0 gap=0 | margin=9962.762 ms | duration=8612.54 ms | tool_gap=100.0 ms | tools=</title></circle>
+<circle cx="176.7" cy="88.7" r="9.0" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution | task=0 gap=1 | margin=4893.561 ms | duration=13681.129 ms | tool_gap=250.0 ms | tools=</title></circle>
+<circle cx="267.3" cy="368.1" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution | task=0 gap=2 | margin=-419.873 ms | duration=18746.089 ms | tool_gap=500.0 ms | tools=</title></circle>
+<circle cx="358.0" cy="361.6" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution | task=0 gap=3 | margin=-350.933 ms | duration=32494.139 ms | tool_gap=1000.0 ms | tools=</title></circle>
+<circle cx="448.7" cy="87.5" r="9.0" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution | task=0 gap=4 | margin=5037.496 ms | duration=27607.339 ms | tool_gap=100.0 ms | tools=</title></circle>
+<circle cx="539.3" cy="349.3" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution | task=0 gap=5 | margin=-246.529 ms | duration=32891.118 ms | tool_gap=250.0 ms | tools=</title></circle>
+<circle cx="630.0" cy="353.6" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution | task=0 gap=6 | margin=-279.443 ms | duration=40141.439 ms | tool_gap=500.0 ms | tools=</title></circle>
+<circle cx="720.7" cy="417.6" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution | task=0 gap=7 | margin=-1527.881 ms | duration=40889.203 ms | tool_gap=1000.0 ms | tools=</title></circle>
+<circle cx="811.3" cy="340.1" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution | task=0 gap=0 | margin=-186.748 ms | duration=33390.324 ms | tool_gap=100.0 ms | tools=</title></circle>
+<circle cx="902.0" cy="60.0" r="9.0" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution | task=0 gap=1 | margin=9926.543 ms | duration=23278.574 ms | tool_gap=250.0 ms | tools=</title></circle>
+<circle cx="992.7" cy="364.4" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution | task=0 gap=2 | margin=-379.340 ms | duration=33522.466 ms | tool_gap=500.0 ms | tools=</title></circle>
+<circle cx="1083.3" cy="375.0" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution | task=0 gap=3 | margin=-505.350 ms | duration=65066.396 ms | tool_gap=1000.0 ms | tools=</title></circle>
+<circle cx="1174.0" cy="59.6" r="9.0" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution | task=0 gap=4 | margin=10022.452 ms | duration=53975.71 ms | tool_gap=100.0 ms | tools=</title></circle>
+<circle cx="1264.7" cy="411.6" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution | task=0 gap=5 | margin=-1310.156 ms | duration=65307.964 ms | tool_gap=250.0 ms | tools=</title></circle>
+<circle cx="1355.3" cy="359.9" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution | task=0 gap=6 | margin=-334.595 ms | duration=84058.216 ms | tool_gap=500.0 ms | tools=</title></circle>
+<circle cx="1446.0" cy="419.8" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution | task=0 gap=7 | margin=-1614.759 ms | duration=84839.665 ms | tool_gap=1000.0 ms | tools=</title></circle>
+<circle cx="86" cy="470" r="6" fill="#16a34a"/>
+<text x="98" y="474" font-size="12">early</text>
+<circle cx="231" cy="470" r="6" fill="#84cc16"/>
+<text x="243" y="474" font-size="12">barely early</text>
+<circle cx="376" cy="470" r="6" fill="#f97316"/>
+<text x="388" y="474" font-size="12">near miss</text>
+<circle cx="521" cy="470" r="6" fill="#dc2626"/>
+<text x="533" y="474" font-size="12">late</text>
+</svg></div>
+    <h3>Margin Buckets</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>bucket</th>
+<th>sessions</th>
+<th>pct</th>
+</tr></thead><tbody>
+<tr>
+<td>&gt; +500 ms early</td>
+<td>5</td>
+<td>31.25</td>
+</tr>
+<tr>
+<td>+100 to +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to +100 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to -100 ms late</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>-100 to -500 ms late</td>
+<td>7</td>
+<td>43.75</td>
+</tr>
+<tr>
+<td>&lt; -500 ms late</td>
+<td>4</td>
+<td>25.0</td>
+</tr>
+</tbody></table></div>
+    <h3>First 40 Points Behind The Plot</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>session_id</th>
+<th>task_index</th>
+<th>gap_order_in_task</th>
+<th>tools</th>
+<th>tool_gap_ms</th>
+<th>prefetch_duration_ms</th>
+<th>prefetch_margin_ms</th>
+<th>verdict</th>
+</tr></thead><tbody>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td>100.0</td>
+<td>8612.54</td>
+<td>9962.762</td>
+<td>early</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>1</td>
+<td></td>
+<td>250.0</td>
+<td>13681.129</td>
+<td>4893.561</td>
+<td>early</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>2</td>
+<td></td>
+<td>500.0</td>
+<td>18746.089</td>
+<td>-419.873</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>3</td>
+<td></td>
+<td>1000.0</td>
+<td>32494.139</td>
+<td>-350.933</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>4</td>
+<td></td>
+<td>100.0</td>
+<td>27607.339</td>
+<td>5037.496</td>
+<td>early</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>5</td>
+<td></td>
+<td>250.0</td>
+<td>32891.118</td>
+<td>-246.529</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>6</td>
+<td></td>
+<td>500.0</td>
+<td>40141.439</td>
+<td>-279.443</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>7</td>
+<td></td>
+<td>1000.0</td>
+<td>40889.203</td>
+<td>-1527.881</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td>100.0</td>
+<td>33390.324</td>
+<td>-186.748</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>1</td>
+<td></td>
+<td>250.0</td>
+<td>23278.574</td>
+<td>9926.543</td>
+<td>early</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>2</td>
+<td></td>
+<td>500.0</td>
+<td>33522.466</td>
+<td>-379.34</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>3</td>
+<td></td>
+<td>1000.0</td>
+<td>65066.396</td>
+<td>-505.35</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>4</td>
+<td></td>
+<td>100.0</td>
+<td>53975.71</td>
+<td>10022.452</td>
+<td>early</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>5</td>
+<td></td>
+<td>250.0</td>
+<td>65307.964</td>
+<td>-1310.156</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>6</td>
+<td></td>
+<td>500.0</td>
+<td>84058.216</td>
+<td>-334.595</td>
+<td>late</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>0</td>
+<td>7</td>
+<td></td>
+<td>1000.0</td>
+<td>84839.665</td>
+<td>-1614.759</td>
+<td>late</td>
+</tr>
+</tbody></table></div>
+    
+  </details>
+
+  <details id="timeline-guide" class="section-card theme-guide">
+    <summary><h2>How To Read The Timelines</h2></summary>
+    
+    <p class="note">Purple means the prefetch attempt ran. Green means that attempt had attributed direct KV host-to-device movement. Purple without green means the hint ran, but no matching HtoD load was observed for that displayed gap.</p>
+    <p class="note">The timeline uses a symlog full-replay view. It compresses very long replay requests so red bars can extend to their true end while the important activity around <code>0 ms</code> remains visible.</p>
+    <h3>One Row In Plain English</h3>
+    <p>Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>step</th>
+<th>timeline color</th>
+<th>simple meaning</th>
+</tr></thead><tbody>
+<tr>
+<td>1. Ask model what to do</td>
+<td>blue bar</td>
+<td>model turn before the tool call</td>
+</tr>
+<tr>
+<td>2. Model says to call a tool</td>
+<td>end of blue bar</td>
+<td>the model turn hands work to a tool</td>
+</tr>
+<tr>
+<td>3. Tool runs</td>
+<td>gray bar</td>
+<td>read_file(), grep(), run_tests(), etc. is happening</td>
+</tr>
+<tr>
+<td>4. Agent waits</td>
+<td>gray bar</td>
+<td>this wait is the prefetch opportunity</td>
+</tr>
+<tr>
+<td>5. Tool returns</td>
+<td>black vertical line</td>
+<td>the next model turn is due</td>
+</tr>
+<tr>
+<td>6. Agent asks model again</td>
+<td>red bar</td>
+<td>resume request after the tool result</td>
+</tr>
+<tr>
+<td>During steps 3/4, if prefetch is enabled</td>
+<td>purple bar</td>
+<td>our software prefetch attempt runs during the wait</td>
+</tr>
+<tr>
+<td>Inside the purple window, if KV moved</td>
+<td>green bar</td>
+<td>direct SGLang KV host-to-device movement was observed for that hint</td>
+</tr>
+<tr>
+<td>Inside the red replay request, if KV moved</td>
+<td>cyan bar</td>
+<td>the real replay request itself performed host-to-device KV movement</td>
+</tr>
+</tbody></table></div>
+    <h3>Color Legend</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>color</th>
+<th>meaning</th>
+<th>simple description</th>
+</tr></thead><tbody>
+<tr>
+<td>blue</td>
+<td>Initial model turn</td>
+<td>The agent asks the model what to do next. This request may produce a tool call such as read_file(), grep(), edit_file(), or execute().</td>
+</tr>
+<tr>
+<td>gray</td>
+<td>Tool wait window</td>
+<td>The tool or harness is running, so the model is idle for this session. This pause is the opportunity to prepare that session&#x27;s KV before the agent resumes.</td>
+</tr>
+<tr>
+<td>purple</td>
+<td>Prefetch attempt window</td>
+<td>This includes detecting that the tool call finished, creating a hint for that agent/session, calling our direct SGLang KV hook, letting SGLang check whether host-side KV exists, and if needed, asking SGLang to move KV back to GPU memory.</td>
+</tr>
+<tr>
+<td>green</td>
+<td>Direct KV host-to-device movement</td>
+<td>This is evidence that KV load/copy work was observed for the hint. In simple words: this is the closest timeline bar to &#x27;KV pages were brought back toward GPU memory&#x27;.</td>
+</tr>
+<tr>
+<td>cyan</td>
+<td>Replay-side KV host-to-device movement</td>
+<td>This is evidence from the normal replay request path. It means the resumed request itself had to move KV from host-side memory toward GPU memory while serving the real agent turn.</td>
+</tr>
+<tr>
+<td>black</td>
+<td>Replay due boundary</td>
+<td>This is when the tool result is ready and the next model turn should be able to start. If purple or green finishes after this line, the prefetch path was late for that resume.</td>
+</tr>
+<tr>
+<td>red</td>
+<td>Replay request</td>
+<td>The agent asks the model to continue after the tool result. This is the request we want to speed up by having the right KV ready before it arrives.</td>
+</tr>
+<tr>
+<td>yellow</td>
+<td>First token marker</td>
+<td>Synthetic reports may show this as the point where the replay request starts producing output. It helps separate request arrival from first-token latency.</td>
+</tr>
+</tbody></table></div>
+    
+  </details>
+
+  <details id="timelines" class="section-card theme-clean">
+    <summary><h2>Controlled Replay Timeline</h2></summary>
+    <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence. Cyan is replay-side HtoD evidence.</p>
+    <svg viewBox="0 0 1580 1870" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due, symlog full replay view">
+<line x1="160" y1="62" x2="1510" y2="62" stroke="#111827"/>
+<line x1="160.0" y1="56" x2="160.0" y2="1752.0" stroke="#e5e7eb"/>
+<text x="160.0" y="48" text-anchor="middle" font-size="10">-90069 ms</text>
+<line x1="225.7" y1="56" x2="225.7" y2="1752.0" stroke="#e5e7eb"/>
+<text x="225.7" y="48" text-anchor="middle" font-size="10">-50000 ms</text>
+<line x1="405.2" y1="56" x2="405.2" y2="1752.0" stroke="#e5e7eb"/>
+<text x="405.2" y="48" text-anchor="middle" font-size="10">-10000 ms</text>
+<line x1="482.1" y1="56" x2="482.1" y2="1752.0" stroke="#e5e7eb"/>
+<text x="482.1" y="48" text-anchor="middle" font-size="10">-5000 ms</text>
+<line x1="657.6" y1="56" x2="657.6" y2="1752.0" stroke="#e5e7eb"/>
+<text x="657.6" y="48" text-anchor="middle" font-size="10">-1000 ms</text>
+<line x1="729.9" y1="56" x2="729.9" y2="1752.0" stroke="#e5e7eb"/>
+<text x="729.9" y="48" text-anchor="middle" font-size="10">-500 ms</text>
+<line x1="875.1" y1="56" x2="875.1" y2="1752.0" stroke="#e5e7eb"/>
+<text x="875.1" y="48" text-anchor="middle" font-size="10">-100 ms</text>
+<line x1="920.4" y1="56" x2="920.4" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="977.5" y1="56" x2="977.5" y2="1752.0" stroke="#e5e7eb"/>
+<text x="977.5" y="48" text-anchor="middle" font-size="10">-10 ms</text>
+<line x1="997.9" y1="56" x2="997.9" y2="1752.0" stroke="#e5e7eb"/>
+<text x="997.9" y="48" text-anchor="middle" font-size="10">0 ms</text>
+<line x1="1018.2" y1="56" x2="1018.2" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="1075.3" y1="56" x2="1075.3" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1075.3" y="48" text-anchor="middle" font-size="10">50 ms</text>
+<line x1="1120.7" y1="56" x2="1120.7" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="1265.9" y1="56" x2="1265.9" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1265.9" y="48" text-anchor="middle" font-size="10">500 ms</text>
+<line x1="1338.1" y1="56" x2="1338.1" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1338.1" y="48" text-anchor="middle" font-size="10">1000 ms</text>
+<line x1="1510.0" y1="56" x2="1510.0" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1510.0" y="48" text-anchor="middle" font-size="10">4837 ms</text>
+<line x1="997.9" y1="46" x2="997.9" y2="1752.0" stroke="#111827" stroke-width="3"/>
+<text x="1004.9" y="38" font-size="12" font-weight="700">0 ms replay due</text>
+<text x="835.0" y="1842.0" text-anchor="middle" font-size="13" font-weight="700">local time around each gap (symlog full replay): negative = before replay due, positive = after replay due</text>
+<text x="10" y="108" font-size="15" font-weight="700">G00</text>
+<text x="10" y="129" font-size="12" fill="#166534" font-weight="700">READY +9963 ms</text>
+<text x="10" y="148" font-size="11" fill="#64748b">wait 100 ms</text>
+<line x1="160" y1="91" x2="1510" y2="91" stroke="#f1f5f9"/>
+<rect x="336.2" y="98.0" width="661.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 100.000 ms</title></rect>
+<rect x="323.1" y="98.0" width="13.1" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="336.2" y="124.0" width="69.4" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=8612.54</title></rect>
+<rect x="403.9" y="124.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=259.33</title></rect>
+<rect x="997.9" y="150.0" width="298.8" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1027.2" y="153.0" width="125.3" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=89; duration_ms=374.324</title></rect>
+<line x1="405.6" y1="179.0" x2="997.9" y2="179.0" stroke="#16a34a" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="405.6" cy="179.0" r="3.5" fill="#16a34a"/>
+<text x="10" y="200" font-size="15" font-weight="700">G01</text>
+<text x="10" y="221" font-size="12" fill="#166534" font-weight="700">READY +4894 ms</text>
+<text x="10" y="240" font-size="11" fill="#64748b">wait 250 ms</text>
+<line x1="160" y1="183" x2="1510" y2="183" stroke="#f1f5f9"/>
+<rect x="336.2" y="190.0" width="661.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 250.000 ms</title></rect>
+<rect x="323.3" y="190.0" width="12.9" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="336.2" y="216.0" width="148.2" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=13681.129</title></rect>
+<rect x="480.2" y="216.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=389.837</title></rect>
+<rect x="997.9" y="242.0" width="298.7" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1177.5" y="245.0" width="52.8" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=89; duration_ms=398.635</title></rect>
+<line x1="484.5" y1="271.0" x2="997.9" y2="271.0" stroke="#16a34a" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="484.5" cy="271.0" r="3.5" fill="#16a34a"/>
+<text x="10" y="292" font-size="15" font-weight="700">G02</text>
+<text x="10" y="313" font-size="12" fill="#b91c1c" font-weight="700">LATE -420 ms</text>
+<text x="10" y="332" font-size="11" fill="#64748b">wait 500 ms</text>
+<line x1="160" y1="275" x2="1510" y2="275" stroke="#f1f5f9"/>
+<rect x="336.2" y="282.0" width="661.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 500.000 ms</title></rect>
+<rect x="323.5" y="282.0" width="12.7" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="337.7" y="308.0" width="910.6" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=18746.089</title></rect>
+<rect x="997.9" y="334.0" width="508.6" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1296.8" y="337.0" width="21.2" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=33; duration_ms=286.853</title></rect>
+<line x1="997.9" y1="363.0" x2="1248.3" y2="363.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1248.3" cy="363.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="384" font-size="15" font-weight="700">G03</text>
+<text x="10" y="405" font-size="12" fill="#b91c1c" font-weight="700">LATE -351 ms</text>
+<text x="10" y="424" font-size="11" fill="#64748b">wait 1000 ms</text>
+<line x1="160" y1="367" x2="1510" y2="367" stroke="#f1f5f9"/>
+<rect x="272.5" y="374.0" width="725.4" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 1000.000 ms</title></rect>
+<rect x="258.7" y="374.0" width="13.8" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="275.0" y="400.0" width="955.5" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=32494.139</title></rect>
+<rect x="1048.7" y="400.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=3; duration_ms=10.763</title></rect>
+<rect x="997.9" y="426.0" width="315.7" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1048.7" y="429.0" width="214.0" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=92; duration_ms=380.578</title></rect>
+<line x1="997.9" y1="455.0" x2="1230.5" y2="455.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1230.5" cy="455.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="476" font-size="15" font-weight="700">G04</text>
+<text x="10" y="497" font-size="12" fill="#166534" font-weight="700">READY +5037 ms</text>
+<text x="10" y="516" font-size="11" fill="#64748b">wait 100 ms</text>
+<line x1="160" y1="459" x2="1510" y2="459" stroke="#f1f5f9"/>
+<rect x="273.3" y="466.0" width="724.6" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 100.000 ms</title></rect>
+<rect x="266.3" y="466.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="273.3" y="492.0" width="207.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=27607.339</title></rect>
+<rect x="476.5" y="492.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=454.757</title></rect>
+<rect x="997.9" y="518.0" width="344.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1197.9" y="521.0" width="14.0" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=2; duration_ms=4.023</title></rect>
+<line x1="481.2" y1="547.0" x2="997.9" y2="547.0" stroke="#16a34a" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="481.2" cy="547.0" r="3.5" fill="#16a34a"/>
+<text x="10" y="568" font-size="15" font-weight="700">G05</text>
+<text x="10" y="589" font-size="12" fill="#b91c1c" font-weight="700">LATE -247 ms</text>
+<text x="10" y="608" font-size="11" fill="#64748b">wait 250 ms</text>
+<line x1="160" y1="551" x2="1510" y2="551" stroke="#f1f5f9"/>
+<rect x="273.3" y="558.0" width="724.6" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 250.000 ms</title></rect>
+<rect x="266.3" y="558.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="273.3" y="584.0" width="923.5" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=32891.118</title></rect>
+<rect x="1026.0" y="584.0" width="146.4" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=489.48</title></rect>
+<rect x="997.9" y="610.0" width="344.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1026.0" y="613.0" width="241.5" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=122; duration_ms=961.127</title></rect>
+<line x1="997.9" y1="639.0" x2="1196.8" y2="639.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1196.8" cy="639.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="660" font-size="15" font-weight="700">G06</text>
+<text x="10" y="681" font-size="12" fill="#b91c1c" font-weight="700">LATE -279 ms</text>
+<text x="10" y="700" font-size="11" fill="#64748b">wait 500 ms</text>
+<line x1="160" y1="643" x2="1510" y2="643" stroke="#f1f5f9"/>
+<rect x="250.3" y="650.0" width="747.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 500.000 ms</title></rect>
+<rect x="234.7" y="650.0" width="15.6" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="251.0" y="676.0" width="957.6" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=40141.439</title></rect>
+<rect x="1027.4" y="676.0" width="158.2" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=576.978</title></rect>
+<rect x="997.9" y="702.0" width="415.5" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1027.4" y="705.0" width="158.2" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=89; duration_ms=576.978</title></rect>
+<line x1="997.9" y1="731.0" x2="1208.6" y2="731.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1208.6" cy="731.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="752" font-size="15" font-weight="700">G07</text>
+<text x="10" y="773" font-size="12" fill="#b91c1c" font-weight="700">LATE -187 ms</text>
+<text x="10" y="792" font-size="11" fill="#64748b">wait 100 ms</text>
+<line x1="160" y1="735" x2="1510" y2="735" stroke="#f1f5f9"/>
+<rect x="271.4" y="742.0" width="726.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 100.000 ms</title></rect>
+<rect x="263.9" y="742.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="271.4" y="768.0" width="900.2" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=33390.324</title></rect>
+<rect x="1023.2" y="768.0" width="118.4" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=326.252</title></rect>
+<rect x="997.9" y="794.0" width="319.2" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1023.2" y="797.0" width="238.3" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=122; duration_ms=844.6</title></rect>
+<line x1="997.9" y1="823.0" x2="1171.7" y2="823.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1171.7" cy="823.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="844" font-size="15" font-weight="700">G08</text>
+<text x="10" y="865" font-size="12" fill="#166534" font-weight="700">READY +9927 ms</text>
+<text x="10" y="884" font-size="11" fill="#64748b">wait 250 ms</text>
+<line x1="160" y1="827" x2="1510" y2="827" stroke="#f1f5f9"/>
+<rect x="271.4" y="834.0" width="726.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 250.000 ms</title></rect>
+<rect x="264.0" y="834.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="271.4" y="860.0" width="134.6" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=23278.574</title></rect>
+<rect x="403.9" y="860.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=387.54</title></rect>
+<rect x="997.9" y="886.0" width="319.2" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1188.6" y="889.0" width="14.0" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=2; duration_ms=3.835</title></rect>
+<line x1="406.0" y1="915.0" x2="997.9" y2="915.0" stroke="#16a34a" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="406.0" cy="915.0" r="3.5" fill="#16a34a"/>
+<text x="10" y="936" font-size="15" font-weight="700">G09</text>
+<text x="10" y="957" font-size="12" fill="#b91c1c" font-weight="700">LATE -379 ms</text>
+<text x="10" y="976" font-size="11" fill="#64748b">wait 500 ms</text>
+<line x1="160" y1="919" x2="1510" y2="919" stroke="#f1f5f9"/>
+<rect x="270.8" y="926.0" width="727.1" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 500.000 ms</title></rect>
+<rect x="263.5" y="926.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="271.6" y="952.0" width="966.6" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=33522.466</title></rect>
+<rect x="1035.5" y="952.0" width="21.5" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=4; duration_ms=29.926</title></rect>
+<rect x="997.9" y="978.0" width="510.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1035.5" y="981.0" width="280.8" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=37; duration_ms=369.694</title></rect>
+<line x1="997.9" y1="1007.0" x2="1238.2" y2="1007.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1238.2" cy="1007.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1028" font-size="15" font-weight="700">G10</text>
+<text x="10" y="1049" font-size="12" fill="#b91c1c" font-weight="700">LATE -505 ms</text>
+<text x="10" y="1068" font-size="11" fill="#64748b">wait 1000 ms</text>
+<line x1="160" y1="1011" x2="1510" y2="1011" stroke="#f1f5f9"/>
+<rect x="195.9" y="1018.0" width="802.0" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 1000.000 ms</title></rect>
+<rect x="188.7" y="1018.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="197.2" y="1044.0" width="1069.8" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=65066.396</title></rect>
+<rect x="1013.0" y="1044.0" width="146.4" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=433.906</title></rect>
+<rect x="997.9" y="1070.0" width="339.4" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1013.0" y="1073.0" width="282.4" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=178; duration_ms=882.464</title></rect>
+<line x1="997.9" y1="1099.0" x2="1267.0" y2="1099.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1267.0" cy="1099.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1120" font-size="15" font-weight="700">G11</text>
+<text x="10" y="1141" font-size="12" fill="#166534" font-weight="700">READY +10022 ms</text>
+<text x="10" y="1160" font-size="11" fill="#64748b">wait 100 ms</text>
+<line x1="160" y1="1103" x2="1510" y2="1103" stroke="#f1f5f9"/>
+<rect x="198.2" y="1110.0" width="799.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 100.000 ms</title></rect>
+<rect x="194.5" y="1110.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="198.2" y="1136.0" width="206.7" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=53975.71</title></rect>
+<rect x="392.5" y="1136.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=88; duration_ms=177.989</title></rect>
+<rect x="997.9" y="1162.0" width="430.4" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="404.9" y1="1191.0" x2="997.9" y2="1191.0" stroke="#16a34a" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="404.9" cy="1191.0" r="3.5" fill="#16a34a"/>
+<text x="10" y="1212" font-size="15" font-weight="700">G12</text>
+<text x="10" y="1233" font-size="12" fill="#b91c1c" font-weight="700">LATE -1310 ms</text>
+<text x="10" y="1252" font-size="11" fill="#64748b">wait 250 ms</text>
+<line x1="160" y1="1195" x2="1510" y2="1195" stroke="#f1f5f9"/>
+<rect x="198.2" y="1202.0" width="799.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 250.000 ms</title></rect>
+<rect x="194.5" y="1202.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="198.2" y="1228.0" width="1168.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=65307.964</title></rect>
+<rect x="1024.6" y="1228.0" width="84.2" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=88; duration_ms=192.322</title></rect>
+<rect x="997.9" y="1254.0" width="430.4" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1024.6" y="1257.0" width="84.2" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=88; duration_ms=192.322</title></rect>
+<line x1="997.9" y1="1283.0" x2="1367.1" y2="1283.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1367.1" cy="1283.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1304" font-size="15" font-weight="700">G13</text>
+<text x="10" y="1325" font-size="12" fill="#b91c1c" font-weight="700">LATE -335 ms</text>
+<text x="10" y="1344" font-size="11" fill="#64748b">wait 500 ms</text>
+<line x1="160" y1="1287" x2="1510" y2="1287" stroke="#f1f5f9"/>
+<rect x="167.8" y="1294.0" width="830.0" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 500.000 ms</title></rect>
+<rect x="160.1" y="1294.0" width="12.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="168.2" y="1320.0" width="1057.7" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=84058.216</title></rect>
+<rect x="1028.2" y="1320.0" width="178.4" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=89; duration_ms=740.344</title></rect>
+<rect x="997.9" y="1346.0" width="421.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1028.2" y="1349.0" width="178.4" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=89; duration_ms=740.344</title></rect>
+<line x1="997.9" y1="1375.0" x2="1225.9" y2="1375.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1225.9" cy="1375.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1396" font-size="15" font-weight="700">G14</text>
+<text x="10" y="1417" font-size="12" fill="#64748b" font-weight="700">NO PREFETCH</text>
+<text x="10" y="1436" font-size="11" fill="#64748b">wait 100 ms</text>
+<line x1="160" y1="1379" x2="1510" y2="1379" stroke="#f1f5f9"/>
+<rect x="338.4" y="1386.0" width="659.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 100.000 ms</title></rect>
+<rect x="325.0" y="1386.0" width="13.4" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="997.9" y="1438.0" width="294.6" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1027.2" y="1441.0" width="129.5" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=89; duration_ms=396.398</title></rect>
+<text x="10" y="1488" font-size="15" font-weight="700">G15</text>
+<text x="10" y="1509" font-size="12" fill="#64748b" font-weight="700">NO PREFETCH</text>
+<text x="10" y="1528" font-size="11" fill="#64748b">wait 250 ms</text>
+<line x1="160" y1="1471" x2="1510" y2="1471" stroke="#f1f5f9"/>
+<rect x="338.4" y="1478.0" width="659.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 250.000 ms</title></rect>
+<rect x="325.2" y="1478.0" width="13.2" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="997.9" y="1530.0" width="294.5" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1180.9" y="1533.0" width="48.8" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=89; duration_ms=382.593</title></rect>
+<text x="10" y="1580" font-size="15" font-weight="700">G16</text>
+<text x="10" y="1601" font-size="12" fill="#64748b" font-weight="700">NO PREFETCH</text>
+<text x="10" y="1620" font-size="11" fill="#64748b">wait 500 ms</text>
+<line x1="160" y1="1563" x2="1510" y2="1563" stroke="#f1f5f9"/>
+<rect x="338.4" y="1570.0" width="659.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 500.000 ms</title></rect>
+<rect x="325.4" y="1570.0" width="12.9" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="997.9" y="1622.0" width="508.2" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1292.6" y="1625.0" width="20.8" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=33; duration_ms=269.459</title></rect>
+<text x="10" y="1672" font-size="15" font-weight="700">G17</text>
+<text x="10" y="1693" font-size="12" fill="#64748b" font-weight="700">NO PREFETCH</text>
+<text x="10" y="1712" font-size="11" fill="#64748b">wait 1000 ms</text>
+<line x1="160" y1="1655" x2="1510" y2="1655" stroke="#f1f5f9"/>
+<rect x="275.6" y="1662.0" width="722.3" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 1000.000 ms</title></rect>
+<rect x="261.5" y="1662.0" width="14.1" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="997.9" y="1714.0" width="314.9" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1196.0" y="1717.0" width="14.0" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=3; duration_ms=10.877</title></rect>
+<line x1="160" y1="1770.0" x2="1510" y2="1770.0" stroke="#e5e7eb"/>
+<rect x="160" y="1788" width="14" height="14" fill="#2563eb"/>
+<text x="180" y="1800">initial model turn</text>
+<rect x="345" y="1788" width="14" height="14" fill="#d1d5db"/>
+<text x="365" y="1800">tool wait</text>
+<rect x="530" y="1788" width="14" height="14" fill="#a855f7"/>
+<text x="550" y="1800">prefetch attempt</text>
+<rect x="715" y="1788" width="14" height="14" fill="#16a34a"/>
+<text x="735" y="1800">direct KV HtoD</text>
+<rect x="900" y="1788" width="14" height="14" fill="#06b6d4"/>
+<text x="920" y="1800">replay-side KV HtoD</text>
+<line x1="1085" y1="1788" x2="1085" y2="1804" stroke="#111827" stroke-width="4"/>
+<text x="1105" y="1800">replay due</text>
+<rect x="1270" y="1788" width="14" height="14" fill="#ef4444"/>
+<text x="1290" y="1800">resume request</text>
+</svg>
+    <h3>Timeline Row Map</h3>
+    <p>This table maps the compact row names in the chart back to the full experiment details.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>row</th>
+<th>mode</th>
+<th>fillers</th>
+<th>task</th>
+<th>gap</th>
+<th>tool_wait_ms</th>
+<th>prefetch_margin_ms</th>
+<th>movement</th>
+</tr></thead><tbody>
+<tr>
+<td>G00</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>0</td>
+<td>100</td>
+<td>9962.762</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G01</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>1</td>
+<td>250</td>
+<td>4893.561</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G02</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>2</td>
+<td>500</td>
+<td>-419.873</td>
+<td>replay loaded KV</td>
+</tr>
+<tr>
+<td>G03</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>3</td>
+<td>1000</td>
+<td>-350.933</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G04</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>4</td>
+<td>100</td>
+<td>5037.496</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G05</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>5</td>
+<td>250</td>
+<td>-246.529</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G06</td>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>6</td>
+<td>500</td>
+<td>-279.443</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G07</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>0</td>
+<td>100</td>
+<td>-186.748</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G08</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>1</td>
+<td>250</td>
+<td>9926.543</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G09</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>2</td>
+<td>500</td>
+<td>-379.34</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G10</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>3</td>
+<td>1000</td>
+<td>-505.35</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G11</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>4</td>
+<td>100</td>
+<td>10022.452</td>
+<td>hint-side KV movement observed</td>
+</tr>
+<tr>
+<td>G12</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>5</td>
+<td>250</td>
+<td>-1310.156</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G13</td>
+<td>direct_prefetch</td>
+<td>32</td>
+<td>0</td>
+<td>6</td>
+<td>500</td>
+<td>-334.595</td>
+<td>hint and replay both moved KV</td>
+</tr>
+<tr>
+<td>G14</td>
+<td>no_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>0</td>
+<td>100</td>
+<td></td>
+<td>replay loaded KV</td>
+</tr>
+<tr>
+<td>G15</td>
+<td>no_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>1</td>
+<td>250</td>
+<td></td>
+<td>replay loaded KV</td>
+</tr>
+<tr>
+<td>G16</td>
+<td>no_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>2</td>
+<td>500</td>
+<td></td>
+<td>replay loaded KV</td>
+</tr>
+<tr>
+<td>G17</td>
+<td>no_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>3</td>
+<td>1000</td>
+<td></td>
+<td>replay loaded KV</td>
+</tr>
+</tbody></table></div>
+  </details>
+
+  
+  <details id="live-direct" class="section-card theme-profiled" open>
+    <summary><h2>Live AgentBench Direct Prefetch</h2></summary>
+    <p class="note">This section is the real live workload check. It uses only direct prefetch mode: real AgentBench/DeepAgents tool calls create live gaps, and the controller tries to trigger direct SGLang KV load-back during those gaps.</p>
+    <h3>Live Summary</h3>
+    <div class="cards"><div class="card"><div class="label">live analyzed requests</div><div class="value">265</div></div>
+<div class="card"><div class="label">live tool calls</div><div class="value">117</div></div>
+<div class="card"><div class="label">live tool gaps</div><div class="value">117</div></div>
+<div class="card"><div class="label">late live prefetches</div><div class="value">110</div></div>
+<div class="card"><div class="label">avg live prefetch duration</div><div class="value">1418.174 ms</div></div>
+<div class="card"><div class="label">hint H2D gaps</div><div class="value">42</div></div>
+<div class="card"><div class="label">replay H2D gaps</div><div class="value">5</div></div></div>
+    <h3>How This Live Run Works</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>part</th>
+<th>simple meaning</th>
+</tr></thead><tbody>
+<tr>
+<td>Request source</td>
+<td>Real SWE-bench / DeepAgents task execution creates live model turns and real tool calls.</td>
+</tr>
+<tr>
+<td>Hint trigger</td>
+<td>When the live proxy sees a model turn produce tool calls, it emits a hint for that session.</td>
+</tr>
+<tr>
+<td>Direct prefetch attempt</td>
+<td>The controller sends a marked direct-load request so SGLang can exercise its KV load-back path.</td>
+</tr>
+<tr>
+<td>Resume</td>
+<td>The real agent continues after the tool work; the report checks whether prefetch finished before that resume.</td>
+</tr>
+</tbody></table></div>
+    <h3>Global Live Prefetch Margin</h3>
+    <p>Positive margin means the live direct-prefetch path finished before the real agent resumed. Negative margin means the agent resumed first.</p>
+    
+    <p>This chart compresses every matched live prefetch attempt into one dot. The y-axis is the prefetch margin: positive means the prefetch finished before the resume request; negative means it finished after the agent already resumed.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>prefetch_attempts</th>
+<th>finished_before_resume</th>
+<th>late</th>
+<th>late_pct</th>
+<th>median_margin_ms</th>
+<th>worst_lateness_ms</th>
+<th>best_early_margin_ms</th>
+<th>avg_prefetch_duration_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>117</td>
+<td>7</td>
+<td>110</td>
+<td>94.02</td>
+<td>-639.841</td>
+<td>78873.619</td>
+<td>87.198</td>
+<td>1418.174</td>
+</tr>
+</tbody></table></div>
+    <h3>Symlog View</h3>
+    <p>This view compresses the y-axis with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easy to see. Above zero means early; below zero means late.</p>
+    <div class="setup-diagram"><svg viewBox="0 0 1480 520" width="100%" role="img" aria-label="Global prefetch margin dot plot symlog view">
+<rect x="86" y="56" width="1360" height="382" fill="#ffffff" stroke="#e5e7eb"/>
+<line x1="86" y1="206.9" x2="1446" y2="206.9" stroke="#111827" stroke-width="2"/>
+<text x="1438" y="198.9" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>
+<text x="18" y="265" transform="rotate(-90 18 265)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms (symlog)</text>
+<text x="766.0" y="498" text-anchor="middle" font-size="13" font-weight="700">live tool-gap order</text>
+<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before resume</text>
+<text x="340" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>
+<line x1="80" y1="438.0" x2="1446" y2="438.0" stroke="#e5e7eb"/>
+<text x="74" y="442.0" text-anchor="end" font-size="11">-85190 ms</text>
+<line x1="80" y1="371.6" x2="1446" y2="371.6" stroke="#e5e7eb"/>
+<text x="74" y="375.6" text-anchor="end" font-size="11">-10000 ms</text>
+<line x1="80" y1="350.2" x2="1446" y2="350.2" stroke="#e5e7eb"/>
+<text x="74" y="354.2" text-anchor="end" font-size="11">-5000 ms</text>
+<line x1="80" y1="301.5" x2="1446" y2="301.5" stroke="#e5e7eb"/>
+<text x="74" y="305.5" text-anchor="end" font-size="11">-1000 ms</text>
+<line x1="80" y1="281.4" x2="1446" y2="281.4" stroke="#e5e7eb"/>
+<text x="74" y="285.4" text-anchor="end" font-size="11">-500 ms</text>
+<line x1="80" y1="241.0" x2="1446" y2="241.0" stroke="#e5e7eb"/>
+<text x="74" y="245.0" text-anchor="end" font-size="11">-100 ms</text>
+<line x1="80" y1="228.5" x2="1446" y2="228.5" stroke="#e5e7eb"/>
+<text x="74" y="232.5" text-anchor="end" font-size="11">-50 ms</text>
+<line x1="80" y1="206.9" x2="1446" y2="206.9" stroke="#e5e7eb"/>
+<text x="74" y="210.9" text-anchor="end" font-size="11">0 ms</text>
+<line x1="80" y1="185.4" x2="1446" y2="185.4" stroke="#e5e7eb"/>
+<text x="74" y="189.4" text-anchor="end" font-size="11">50 ms</text>
+<line x1="80" y1="172.8" x2="1446" y2="172.8" stroke="#e5e7eb"/>
+<text x="74" y="176.8" text-anchor="end" font-size="11">100 ms</text>
+<line x1="80" y1="132.5" x2="1446" y2="132.5" stroke="#e5e7eb"/>
+<text x="74" y="136.5" text-anchor="end" font-size="11">500 ms</text>
+<line x1="80" y1="112.4" x2="1446" y2="112.4" stroke="#e5e7eb"/>
+<text x="74" y="116.4" text-anchor="end" font-size="11">1000 ms</text>
+<line x1="80" y1="63.6" x2="1446" y2="63.6" stroke="#e5e7eb"/>
+<text x="74" y="67.6" text-anchor="end" font-size="11">5000 ms</text>
+<line x1="80" y1="56.0" x2="1446" y2="56.0" stroke="#e5e7eb"/>
+<text x="74" y="60.0" text-anchor="end" font-size="11">6404 ms</text>
+<line x1="86.0" y1="438" x2="86.0" y2="444" stroke="#94a3b8"/>
+<text x="86.0" y="460" text-anchor="middle" font-size="10">0</text>
+<line x1="215.0" y1="438" x2="215.0" y2="444" stroke="#94a3b8"/>
+<text x="215.0" y="460" text-anchor="middle" font-size="10">11</text>
+<line x1="343.9" y1="438" x2="343.9" y2="444" stroke="#94a3b8"/>
+<text x="343.9" y="460" text-anchor="middle" font-size="10">22</text>
+<line x1="472.9" y1="438" x2="472.9" y2="444" stroke="#94a3b8"/>
+<text x="472.9" y="460" text-anchor="middle" font-size="10">33</text>
+<line x1="601.9" y1="438" x2="601.9" y2="444" stroke="#94a3b8"/>
+<text x="601.9" y="460" text-anchor="middle" font-size="10">44</text>
+<line x1="730.8" y1="438" x2="730.8" y2="444" stroke="#94a3b8"/>
+<text x="730.8" y="460" text-anchor="middle" font-size="10">55</text>
+<line x1="859.8" y1="438" x2="859.8" y2="444" stroke="#94a3b8"/>
+<text x="859.8" y="460" text-anchor="middle" font-size="10">66</text>
+<line x1="988.8" y1="438" x2="988.8" y2="444" stroke="#94a3b8"/>
+<text x="988.8" y="460" text-anchor="middle" font-size="10">77</text>
+<line x1="1117.7" y1="438" x2="1117.7" y2="444" stroke="#94a3b8"/>
+<text x="1117.7" y="460" text-anchor="middle" font-size="10">88</text>
+<line x1="1246.7" y1="438" x2="1246.7" y2="444" stroke="#94a3b8"/>
+<text x="1246.7" y="460" text-anchor="middle" font-size="10">99</text>
+<line x1="1375.7" y1="438" x2="1375.7" y2="444" stroke="#94a3b8"/>
+<text x="1375.7" y="460" text-anchor="middle" font-size="10">110</text>
+<circle cx="86.0" cy="305.0" r="7.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_000 | task=0 gap=0 | margin=-1127.250 ms | duration=1139.555 ms | tool_gap=17.843 ms | tools=ls</title></circle>
+<circle cx="97.7" cy="305.0" r="7.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_001 | task=0 gap=1 | margin=-1127.949 ms | duration=1117.312 ms | tool_gap=9.572 ms | tools=edit_file</title></circle>
+<circle cx="109.4" cy="287.8" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_002 | task=0 gap=2 | margin=-626.014 ms | duration=622.588 ms | tool_gap=10.014 ms | tools=read_file</title></circle>
+<circle cx="121.2" cy="292.2" r="6.1" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_003 | task=0 gap=3 | margin=-730.041 ms | duration=727.513 ms | tool_gap=10.367 ms | tools=edit_file</title></circle>
+<circle cx="132.9" cy="305.0" r="7.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_004 | task=0 gap=4 | margin=-1127.108 ms | duration=1120.903 ms | tool_gap=9.524 ms | tools=edit_file</title></circle>
+<circle cx="144.6" cy="287.9" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_005 | task=0 gap=5 | margin=-628.183 ms | duration=626.453 ms | tool_gap=10.483 ms | tools=read_file</title></circle>
+<circle cx="156.3" cy="299.1" r="6.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_006 | task=0 gap=6 | margin=-921.885 ms | duration=923.0 ms | tool_gap=9.317 ms | tools=edit_file</title></circle>
+<circle cx="168.1" cy="288.0" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_007 | task=0 gap=7 | margin=-631.032 ms | duration=627.695 ms | tool_gap=9.784 ms | tools=read_file</title></circle>
+<circle cx="179.8" cy="309.7" r="7.7" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_008 | task=0 gap=8 | margin=-1317.980 ms | duration=1305.372 ms | tool_gap=9.361 ms | tools=read_file</title></circle>
+<circle cx="191.5" cy="304.1" r="7.1" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_009 | task=0 gap=9 | margin=-1093.455 ms | duration=1097.486 ms | tool_gap=9.388 ms | tools=edit_file</title></circle>
+<circle cx="203.2" cy="257.8" r="4.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_010 | task=0 gap=10 | margin=-207.289 ms | duration=208.867 ms | tool_gap=9.742 ms | tools=read_file</title></circle>
+<circle cx="215.0" cy="294.0" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_011 | task=0 gap=11 | margin=-775.843 ms | duration=773.921 ms | tool_gap=10.201 ms | tools=edit_file</title></circle>
+<circle cx="226.7" cy="301.1" r="6.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_012 | task=0 gap=12 | margin=-985.876 ms | duration=980.871 ms | tool_gap=9.359 ms | tools=edit_file</title></circle>
+<circle cx="238.4" cy="290.3" r="6.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_013 | task=0 gap=13 | margin=-683.316 ms | duration=683.686 ms | tool_gap=9.914 ms | tools=read_file</title></circle>
+<circle cx="250.1" cy="302.0" r="6.9" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_014 | task=0 gap=14 | margin=-1019.463 ms | duration=1017.437 ms | tool_gap=9.158 ms | tools=edit_file</title></circle>
+<circle cx="261.9" cy="258.1" r="4.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_015 | task=0 gap=15 | margin=-209.685 ms | duration=211.467 ms | tool_gap=10.198 ms | tools=read_file</title></circle>
+<circle cx="273.6" cy="282.5" r="5.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_016 | task=0 gap=16 | margin=-519.932 ms | duration=524.17 ms | tool_gap=10.386 ms | tools=edit_file</title></circle>
+<circle cx="285.3" cy="259.5" r="4.7" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_017 | task=0 gap=17 | margin=-221.993 ms | duration=227.798 ms | tool_gap=10.816 ms | tools=read_file</title></circle>
+<circle cx="297.0" cy="317.8" r="8.9" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_018 | task=0 gap=18 | margin=-1724.892 ms | duration=1717.039 ms | tool_gap=11.908 ms | tools=edit_file</title></circle>
+<circle cx="308.8" cy="365.3" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_019 | task=0 gap=19 | margin=-8163.298 ms | duration=7525.732 ms | tool_gap=11.78 ms | tools=read_file</title></circle>
+<circle cx="320.5" cy="318.4" r="7.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_020 | task=0 gap=20 | margin=-1761.741 ms | duration=1334.604 ms | tool_gap=12.233 ms | tools=edit_file</title></circle>
+<circle cx="332.2" cy="301.4" r="6.9" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_021 | task=0 gap=21 | margin=-998.774 ms | duration=1003.008 ms | tool_gap=10.08 ms | tools=edit_file</title></circle>
+<circle cx="343.9" cy="258.2" r="4.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_022 | task=0 gap=22 | margin=-211.017 ms | duration=212.387 ms | tool_gap=9.85 ms | tools=read_file</title></circle>
+<circle cx="355.7" cy="316.9" r="8.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_023 | task=0 gap=23 | margin=-1677.466 ms | duration=1684.748 ms | tool_gap=9.829 ms | tools=read_file</title></circle>
+<circle cx="367.4" cy="435.6" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_024 | task=0 gap=24 | margin=-78873.619 ms | duration=78865.48 ms | tool_gap=9.517 ms | tools=read_file</title></circle>
+<circle cx="379.1" cy="290.8" r="6.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_025 | task=1 gap=0 | margin=-694.510 ms | duration=684.243 ms | tool_gap=11.629 ms | tools=ls</title></circle>
+<circle cx="390.8" cy="291.0" r="6.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_026 | task=1 gap=1 | margin=-700.495 ms | duration=691.398 ms | tool_gap=9.354 ms | tools=ls</title></circle>
+<circle cx="402.6" cy="287.7" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_027 | task=1 gap=2 | margin=-623.385 ms | duration=620.355 ms | tool_gap=9.406 ms | tools=ls</title></circle>
+<circle cx="414.3" cy="283.9" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_028 | task=1 gap=3 | margin=-545.726 ms | duration=553.439 ms | tool_gap=12.35 ms | tools=ls</title></circle>
+<circle cx="426.0" cy="288.4" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_029 | task=1 gap=4 | margin=-639.841 ms | duration=624.229 ms | tool_gap=9.08 ms | tools=ls</title></circle>
+<circle cx="437.7" cy="288.4" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_030 | task=1 gap=5 | margin=-638.865 ms | duration=629.675 ms | tool_gap=9.043 ms | tools=ls</title></circle>
+<circle cx="449.4" cy="284.0" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_031 | task=1 gap=6 | margin=-548.259 ms | duration=557.432 ms | tool_gap=12.287 ms | tools=ls</title></circle>
+<circle cx="461.2" cy="239.1" r="4.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_032 | task=1 gap=7 | margin=-90.695 ms | duration=102.623 ms | tool_gap=12.99 ms | tools=ls</title></circle>
+<circle cx="472.9" cy="240.2" r="4.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_033 | task=1 gap=8 | margin=-95.878 ms | duration=99.123 ms | tool_gap=9.765 ms | tools=ls</title></circle>
+<circle cx="484.6" cy="240.1" r="4.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_034 | task=1 gap=9 | margin=-95.357 ms | duration=99.195 ms | tool_gap=9.967 ms | tools=ls</title></circle>
+<circle cx="496.3" cy="306.1" r="7.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_035 | task=2 gap=0 | margin=-1168.344 ms | duration=1160.213 ms | tool_gap=14.166 ms | tools=ls</title></circle>
+<circle cx="508.1" cy="304.4" r="7.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_036 | task=2 gap=1 | margin=-1103.589 ms | duration=1107.234 ms | tool_gap=11.188 ms | tools=write_file</title></circle>
+<circle cx="519.8" cy="270.2" r="4.9" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_037 | task=2 gap=2 | margin=-333.547 ms | duration=325.618 ms | tool_gap=10.051 ms | tools=write_file</title></circle>
+<circle cx="531.5" cy="268.3" r="4.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_038 | task=2 gap=3 | margin=-310.741 ms | duration=296.028 ms | tool_gap=10.303 ms | tools=edit_file</title></circle>
+<circle cx="543.2" cy="293.8" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_039 | task=4 gap=0 | margin=-769.294 ms | duration=759.421 ms | tool_gap=13.168 ms | tools=ls</title></circle>
+<circle cx="555.0" cy="271.3" r="5.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_040 | task=4 gap=1 | margin=-347.950 ms | duration=343.931 ms | tool_gap=9.252 ms | tools=read_file</title></circle>
+<circle cx="566.7" cy="303.1" r="7.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_041 | task=5 gap=0 | margin=-1055.967 ms | duration=1054.946 ms | tool_gap=13.492 ms | tools=ls</title></circle>
+<circle cx="578.4" cy="276.5" r="5.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_042 | task=5 gap=1 | margin=-419.616 ms | duration=467.34 ms | tool_gap=49.379 ms | tools=execute</title></circle>
+<circle cx="590.1" cy="293.2" r="6.1" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_043 | task=7 gap=0 | margin=-753.549 ms | duration=750.749 ms | tool_gap=12.709 ms | tools=ls</title></circle>
+<circle cx="601.9" cy="306.8" r="7.4" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_044 | task=7 gap=1 | margin=-1196.948 ms | duration=1181.01 ms | tool_gap=9.66 ms | tools=read_file</title></circle>
+<circle cx="613.6" cy="306.2" r="7.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_045 | task=7 gap=2 | margin=-1172.468 ms | duration=1171.304 ms | tool_gap=9.501 ms | tools=read_file</title></circle>
+<circle cx="625.3" cy="307.8" r="7.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_046 | task=7 gap=3 | margin=-1235.542 ms | duration=1220.502 ms | tool_gap=10.232 ms | tools=read_file</title></circle>
+<circle cx="637.0" cy="286.7" r="5.7" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_047 | task=7 gap=4 | margin=-602.995 ms | duration=604.126 ms | tool_gap=9.517 ms | tools=read_file</title></circle>
+<circle cx="648.8" cy="254.7" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_048 | task=7 gap=5 | margin=-182.545 ms | duration=175.898 ms | tool_gap=9.444 ms | tools=read_file</title></circle>
+<circle cx="660.5" cy="254.6" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_049 | task=7 gap=6 | margin=-182.336 ms | duration=182.543 ms | tool_gap=9.469 ms | tools=read_file</title></circle>
+<circle cx="672.2" cy="254.5" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_050 | task=7 gap=7 | margin=-181.155 ms | duration=171.142 ms | tool_gap=9.401 ms | tools=read_file</title></circle>
+<circle cx="683.9" cy="254.5" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_051 | task=7 gap=8 | margin=-181.588 ms | duration=175.277 ms | tool_gap=9.354 ms | tools=read_file</title></circle>
+<circle cx="695.7" cy="254.6" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_052 | task=7 gap=9 | margin=-181.748 ms | duration=177.835 ms | tool_gap=9.448 ms | tools=read_file</title></circle>
+<circle cx="707.4" cy="310.2" r="7.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_053 | task=8 gap=0 | margin=-1342.834 ms | duration=1341.794 ms | tool_gap=11.742 ms | tools=read_file</title></circle>
+<circle cx="719.1" cy="289.1" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_054 | task=8 gap=1 | margin=-654.824 ms | duration=646.126 ms | tool_gap=9.329 ms | tools=grep</title></circle>
+<circle cx="730.8" cy="283.8" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_055 | task=8 gap=2 | margin=-544.782 ms | duration=547.645 ms | tool_gap=9.255 ms | tools=grep</title></circle>
+<circle cx="742.6" cy="289.6" r="5.9" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_056 | task=9 gap=0 | margin=-666.179 ms | duration=666.012 ms | tool_gap=11.674 ms | tools=ls</title></circle>
+<circle cx="754.3" cy="261.3" r="4.7" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_057 | task=9 gap=1 | margin=-238.123 ms | duration=230.066 ms | tool_gap=12.269 ms | tools=ls</title></circle>
+<circle cx="766.0" cy="290.6" r="6.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_058 | task=9 gap=2 | margin=-690.453 ms | duration=690.947 ms | tool_gap=9.45 ms | tools=edit_file</title></circle>
+<circle cx="777.7" cy="287.3" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_059 | task=9 gap=3 | margin=-615.381 ms | duration=617.023 ms | tool_gap=9.687 ms | tools=read_file</title></circle>
+<circle cx="789.4" cy="285.9" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_060 | task=9 gap=4 | margin=-584.945 ms | duration=572.512 ms | tool_gap=9.19 ms | tools=read_file</title></circle>
+<circle cx="801.2" cy="285.7" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_061 | task=9 gap=5 | margin=-581.991 ms | duration=576.836 ms | tool_gap=9.16 ms | tools=read_file</title></circle>
+<circle cx="812.9" cy="281.9" r="5.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_062 | task=9 gap=6 | margin=-508.295 ms | duration=515.2 ms | tool_gap=9.29 ms | tools=read_file</title></circle>
+<circle cx="824.6" cy="285.7" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_063 | task=9 gap=7 | margin=-582.141 ms | duration=567.886 ms | tool_gap=9.093 ms | tools=read_file</title></circle>
+<circle cx="836.3" cy="285.4" r="5.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_064 | task=9 gap=8 | margin=-575.185 ms | duration=567.124 ms | tool_gap=8.976 ms | tools=read_file</title></circle>
+<circle cx="848.1" cy="282.1" r="5.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_065 | task=9 gap=9 | margin=-511.845 ms | duration=513.982 ms | tool_gap=9.178 ms | tools=read_file</title></circle>
+<circle cx="859.8" cy="282.1" r="5.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_066 | task=9 gap=10 | margin=-513.282 ms | duration=515.121 ms | tool_gap=9.135 ms | tools=read_file</title></circle>
+<circle cx="871.5" cy="280.3" r="5.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_067 | task=9 gap=11 | margin=-480.182 ms | duration=471.977 ms | tool_gap=9.228 ms | tools=read_file</title></circle>
+<circle cx="883.2" cy="280.1" r="5.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_068 | task=9 gap=12 | margin=-476.931 ms | duration=460.856 ms | tool_gap=8.984 ms | tools=read_file</title></circle>
+<circle cx="895.0" cy="303.0" r="7.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_069 | task=11 gap=0 | margin=-1054.162 ms | duration=1042.237 ms | tool_gap=13.235 ms | tools=ls</title></circle>
+<circle cx="906.7" cy="295.4" r="6.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_070 | task=11 gap=1 | margin=-814.530 ms | duration=800.203 ms | tool_gap=9.485 ms | tools=read_file</title></circle>
+<circle cx="918.4" cy="308.5" r="7.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_071 | task=11 gap=2 | margin=-1266.588 ms | duration=1260.835 ms | tool_gap=9.709 ms | tools=read_file</title></circle>
+<circle cx="930.1" cy="300.4" r="6.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_072 | task=12 gap=0 | margin=-963.615 ms | duration=963.543 ms | tool_gap=14.565 ms | tools=ls</title></circle>
+<circle cx="941.9" cy="298.4" r="6.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_073 | task=12 gap=1 | margin=-901.607 ms | duration=905.978 ms | tool_gap=9.523 ms | tools=read_file</title></circle>
+<circle cx="953.6" cy="294.2" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_074 | task=12 gap=2 | margin=-781.230 ms | duration=772.552 ms | tool_gap=9.188 ms | tools=read_file</title></circle>
+<circle cx="965.3" cy="294.4" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_075 | task=12 gap=3 | margin=-787.188 ms | duration=776.505 ms | tool_gap=9.36 ms | tools=read_file</title></circle>
+<circle cx="977.0" cy="294.4" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_076 | task=12 gap=4 | margin=-785.241 ms | duration=782.971 ms | tool_gap=9.213 ms | tools=read_file</title></circle>
+<circle cx="988.8" cy="294.2" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_077 | task=12 gap=5 | margin=-780.229 ms | duration=769.972 ms | tool_gap=9.451 ms | tools=read_file</title></circle>
+<circle cx="1000.5" cy="294.8" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_078 | task=12 gap=6 | margin=-796.374 ms | duration=780.298 ms | tool_gap=9.162 ms | tools=read_file</title></circle>
+<circle cx="1012.2" cy="291.2" r="6.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_079 | task=12 gap=7 | margin=-705.173 ms | duration=712.658 ms | tool_gap=9.385 ms | tools=read_file</title></circle>
+<circle cx="1023.9" cy="294.7" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_080 | task=12 gap=8 | margin=-793.264 ms | duration=786.545 ms | tool_gap=9.068 ms | tools=read_file</title></circle>
+<circle cx="1035.7" cy="294.6" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_081 | task=12 gap=9 | margin=-792.584 ms | duration=784.695 ms | tool_gap=9.172 ms | tools=read_file</title></circle>
+<circle cx="1047.4" cy="275.4" r="5.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_082 | task=12 gap=10 | margin=-404.093 ms | duration=406.544 ms | tool_gap=9.153 ms | tools=read_file</title></circle>
+<circle cx="1059.1" cy="275.6" r="5.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_083 | task=12 gap=11 | margin=-406.261 ms | duration=412.646 ms | tool_gap=9.132 ms | tools=read_file</title></circle>
+<circle cx="1070.8" cy="293.7" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_084 | task=13 gap=0 | margin=-767.421 ms | duration=778.471 ms | tool_gap=12.553 ms | tools=read_file</title></circle>
+<circle cx="1082.6" cy="311.4" r="8.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_085 | task=13 gap=1 | margin=-1394.011 ms | duration=1401.898 ms | tool_gap=9.984 ms | tools=read_file</title></circle>
+<circle cx="1094.3" cy="310.8" r="7.9" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_086 | task=13 gap=2 | margin=-1368.598 ms | duration=1371.966 ms | tool_gap=9.645 ms | tools=read_file</title></circle>
+<circle cx="1106.0" cy="308.6" r="7.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_087 | task=13 gap=3 | margin=-1271.140 ms | duration=1265.822 ms | tool_gap=9.871 ms | tools=read_file</title></circle>
+<circle cx="1117.7" cy="241.8" r="4.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_088 | task=13 gap=4 | margin=-103.830 ms | duration=104.238 ms | tool_gap=9.68 ms | tools=read_file</title></circle>
+<circle cx="1129.4" cy="254.8" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_089 | task=13 gap=5 | margin=-183.352 ms | duration=167.923 ms | tool_gap=9.391 ms | tools=read_file</title></circle>
+<circle cx="1141.2" cy="254.8" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_090 | task=13 gap=6 | margin=-183.432 ms | duration=181.254 ms | tool_gap=9.431 ms | tools=read_file</title></circle>
+<circle cx="1152.9" cy="254.8" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_091 | task=13 gap=7 | margin=-183.729 ms | duration=183.214 ms | tool_gap=9.465 ms | tools=read_file</title></circle>
+<circle cx="1164.6" cy="255.2" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_092 | task=13 gap=8 | margin=-186.612 ms | duration=184.053 ms | tool_gap=9.209 ms | tools=read_file</title></circle>
+<circle cx="1176.3" cy="240.8" r="4.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_093 | task=13 gap=9 | margin=-98.936 ms | duration=102.7 ms | tool_gap=9.535 ms | tools=read_file</title></circle>
+<circle cx="1188.1" cy="344.6" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_094 | task=13 gap=10 | margin=-4158.286 ms | duration=4148.326 ms | tool_gap=9.573 ms | tools=read_file</title></circle>
+<circle cx="1199.8" cy="325.7" r="9.0" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_095 | task=13 gap=11 | margin=-2242.912 ms | duration=2248.841 ms | tool_gap=9.732 ms | tools=read_file</title></circle>
+<circle cx="1211.5" cy="297.9" r="6.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_096 | task=14 gap=0 | margin=-884.489 ms | duration=886.253 ms | tool_gap=11.812 ms | tools=read_file</title></circle>
+<circle cx="1223.2" cy="187.2" r="4.4" fill="#84cc16" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_097 | task=14 gap=1 | margin=44.337 ms | duration=144.028 ms | tool_gap=196.239 ms | tools=grep</title></circle>
+<circle cx="1235.0" cy="298.6" r="6.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_098 | task=14 gap=2 | margin=-907.109 ms | duration=912.215 ms | tool_gap=9.413 ms | tools=read_file</title></circle>
+<circle cx="1246.7" cy="284.1" r="6.1" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_099 | task=14 gap=3 | margin=-550.237 ms | duration=735.558 ms | tool_gap=192.752 ms | tools=grep</title></circle>
+<circle cx="1258.4" cy="278.6" r="5.8" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_100 | task=14 gap=4 | margin=-453.453 ms | duration=644.216 ms | tool_gap=196.48 ms | tools=grep</title></circle>
+<circle cx="1270.1" cy="179.3" r="4.3" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_101 | task=14 gap=5 | margin=71.816 ms | duration=106.568 ms | tool_gap=195.414 ms | tools=grep</title></circle>
+<circle cx="1281.9" cy="178.5" r="4.3" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_102 | task=14 gap=6 | margin=74.728 ms | duration=104.377 ms | tool_gap=197.049 ms | tools=grep</title></circle>
+<circle cx="1293.6" cy="177.7" r="4.3" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_103 | task=14 gap=7 | margin=78.131 ms | duration=107.562 ms | tool_gap=197.538 ms | tools=grep</title></circle>
+<circle cx="1305.3" cy="175.6" r="4.3" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_104 | task=14 gap=8 | margin=87.198 ms | duration=102.778 ms | tool_gap=192.739 ms | tools=grep</title></circle>
+<circle cx="1317.0" cy="177.2" r="4.3" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_105 | task=14 gap=9 | margin=80.432 ms | duration=103.594 ms | tool_gap=193.82 ms | tools=grep</title></circle>
+<circle cx="1328.8" cy="178.6" r="4.3" fill="#16a34a" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_106 | task=14 gap=10 | margin=74.321 ms | duration=102.14 ms | tool_gap=197.37 ms | tools=grep</title></circle>
+<circle cx="1340.5" cy="304.7" r="7.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_107 | task=15 gap=0 | margin=-1113.567 ms | duration=1110.592 ms | tool_gap=14.246 ms | tools=ls</title></circle>
+<circle cx="1352.2" cy="299.3" r="6.7" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_108 | task=15 gap=1 | margin=-930.458 ms | duration=931.694 ms | tool_gap=9.497 ms | tools=read_file</title></circle>
+<circle cx="1363.9" cy="297.5" r="6.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_109 | task=15 gap=2 | margin=-873.795 ms | duration=874.725 ms | tool_gap=13.239 ms | tools=read_file</title></circle>
+<circle cx="1375.7" cy="297.6" r="6.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_110 | task=15 gap=3 | margin=-876.104 ms | duration=882.208 ms | tool_gap=9.447 ms | tools=read_file</title></circle>
+<circle cx="1387.4" cy="299.3" r="6.6" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_111 | task=15 gap=4 | margin=-928.180 ms | duration=923.079 ms | tool_gap=9.094 ms | tools=read_file</title></circle>
+<circle cx="1399.1" cy="293.7" r="6.2" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_112 | task=15 gap=5 | margin=-768.653 ms | duration=773.352 ms | tool_gap=9.789 ms | tools=read_file</title></circle>
+<circle cx="1410.8" cy="241.1" r="4.3" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_113 | task=15 gap=6 | margin=-100.481 ms | duration=105.985 ms | tool_gap=9.298 ms | tools=read_file</title></circle>
+<circle cx="1422.6" cy="254.0" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_114 | task=15 gap=7 | margin=-177.474 ms | duration=172.532 ms | tool_gap=9.134 ms | tools=read_file</title></circle>
+<circle cx="1434.3" cy="253.8" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_115 | task=15 gap=8 | margin=-176.012 ms | duration=169.255 ms | tool_gap=9.075 ms | tools=read_file</title></circle>
+<circle cx="1446.0" cy="253.9" r="4.5" fill="#dc2626" opacity="0.86" stroke="#ffffff" stroke-width="1.4"><title>live_gap_116 | task=15 gap=9 | margin=-176.584 ms | duration=169.697 ms | tool_gap=9.07 ms | tools=read_file</title></circle>
+<circle cx="86" cy="470" r="6" fill="#16a34a"/>
+<text x="98" y="474" font-size="12">early</text>
+<circle cx="231" cy="470" r="6" fill="#84cc16"/>
+<text x="243" y="474" font-size="12">barely early</text>
+<circle cx="376" cy="470" r="6" fill="#f97316"/>
+<text x="388" y="474" font-size="12">near miss</text>
+<circle cx="521" cy="470" r="6" fill="#dc2626"/>
+<text x="533" y="474" font-size="12">late</text>
+</svg></div>
+    <h3>Margin Buckets</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>bucket</th>
+<th>sessions</th>
+<th>pct</th>
+</tr></thead><tbody>
+<tr>
+<td>&gt; +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>+100 to +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to +100 ms early</td>
+<td>7</td>
+<td>5.98</td>
+</tr>
+<tr>
+<td>0 to -100 ms late</td>
+<td>4</td>
+<td>3.42</td>
+</tr>
+<tr>
+<td>-100 to -500 ms late</td>
+<td>28</td>
+<td>23.93</td>
+</tr>
+<tr>
+<td>&lt; -500 ms late</td>
+<td>78</td>
+<td>66.67</td>
+</tr>
+</tbody></table></div>
+    <h3>First 40 Points Behind The Plot</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>session_id</th>
+<th>task_index</th>
+<th>gap_order_in_task</th>
+<th>tools</th>
+<th>tool_gap_ms</th>
+<th>prefetch_duration_ms</th>
+<th>prefetch_margin_ms</th>
+<th>verdict</th>
+</tr></thead><tbody>
+<tr>
+<td>live_gap_000</td>
+<td>0</td>
+<td>0</td>
+<td>ls</td>
+<td>17.843</td>
+<td>1139.555</td>
+<td>-1127.25</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_001</td>
+<td>0</td>
+<td>1</td>
+<td>edit_file</td>
+<td>9.572</td>
+<td>1117.312</td>
+<td>-1127.949</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_002</td>
+<td>0</td>
+<td>2</td>
+<td>read_file</td>
+<td>10.014</td>
+<td>622.588</td>
+<td>-626.014</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_003</td>
+<td>0</td>
+<td>3</td>
+<td>edit_file</td>
+<td>10.367</td>
+<td>727.513</td>
+<td>-730.041</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_004</td>
+<td>0</td>
+<td>4</td>
+<td>edit_file</td>
+<td>9.524</td>
+<td>1120.903</td>
+<td>-1127.108</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_005</td>
+<td>0</td>
+<td>5</td>
+<td>read_file</td>
+<td>10.483</td>
+<td>626.453</td>
+<td>-628.183</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_006</td>
+<td>0</td>
+<td>6</td>
+<td>edit_file</td>
+<td>9.317</td>
+<td>923.0</td>
+<td>-921.885</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_007</td>
+<td>0</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.784</td>
+<td>627.695</td>
+<td>-631.032</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_008</td>
+<td>0</td>
+<td>8</td>
+<td>read_file</td>
+<td>9.361</td>
+<td>1305.372</td>
+<td>-1317.98</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_009</td>
+<td>0</td>
+<td>9</td>
+<td>edit_file</td>
+<td>9.388</td>
+<td>1097.486</td>
+<td>-1093.455</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_010</td>
+<td>0</td>
+<td>10</td>
+<td>read_file</td>
+<td>9.742</td>
+<td>208.867</td>
+<td>-207.289</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_011</td>
+<td>0</td>
+<td>11</td>
+<td>edit_file</td>
+<td>10.201</td>
+<td>773.921</td>
+<td>-775.843</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_012</td>
+<td>0</td>
+<td>12</td>
+<td>edit_file</td>
+<td>9.359</td>
+<td>980.871</td>
+<td>-985.876</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_013</td>
+<td>0</td>
+<td>13</td>
+<td>read_file</td>
+<td>9.914</td>
+<td>683.686</td>
+<td>-683.316</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_014</td>
+<td>0</td>
+<td>14</td>
+<td>edit_file</td>
+<td>9.158</td>
+<td>1017.437</td>
+<td>-1019.463</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_015</td>
+<td>0</td>
+<td>15</td>
+<td>read_file</td>
+<td>10.198</td>
+<td>211.467</td>
+<td>-209.685</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_016</td>
+<td>0</td>
+<td>16</td>
+<td>edit_file</td>
+<td>10.386</td>
+<td>524.17</td>
+<td>-519.932</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_017</td>
+<td>0</td>
+<td>17</td>
+<td>read_file</td>
+<td>10.816</td>
+<td>227.798</td>
+<td>-221.993</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_018</td>
+<td>0</td>
+<td>18</td>
+<td>edit_file</td>
+<td>11.908</td>
+<td>1717.039</td>
+<td>-1724.892</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_019</td>
+<td>0</td>
+<td>19</td>
+<td>read_file</td>
+<td>11.78</td>
+<td>7525.732</td>
+<td>-8163.298</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_020</td>
+<td>0</td>
+<td>20</td>
+<td>edit_file</td>
+<td>12.233</td>
+<td>1334.604</td>
+<td>-1761.741</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_021</td>
+<td>0</td>
+<td>21</td>
+<td>edit_file</td>
+<td>10.08</td>
+<td>1003.008</td>
+<td>-998.774</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_022</td>
+<td>0</td>
+<td>22</td>
+<td>read_file</td>
+<td>9.85</td>
+<td>212.387</td>
+<td>-211.017</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_023</td>
+<td>0</td>
+<td>23</td>
+<td>read_file</td>
+<td>9.829</td>
+<td>1684.748</td>
+<td>-1677.466</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_024</td>
+<td>0</td>
+<td>24</td>
+<td>read_file</td>
+<td>9.517</td>
+<td>78865.48</td>
+<td>-78873.619</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_025</td>
+<td>1</td>
+<td>0</td>
+<td>ls</td>
+<td>11.629</td>
+<td>684.243</td>
+<td>-694.51</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_026</td>
+<td>1</td>
+<td>1</td>
+<td>ls</td>
+<td>9.354</td>
+<td>691.398</td>
+<td>-700.495</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_027</td>
+<td>1</td>
+<td>2</td>
+<td>ls</td>
+<td>9.406</td>
+<td>620.355</td>
+<td>-623.385</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_028</td>
+<td>1</td>
+<td>3</td>
+<td>ls</td>
+<td>12.35</td>
+<td>553.439</td>
+<td>-545.726</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_029</td>
+<td>1</td>
+<td>4</td>
+<td>ls</td>
+<td>9.08</td>
+<td>624.229</td>
+<td>-639.841</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_030</td>
+<td>1</td>
+<td>5</td>
+<td>ls</td>
+<td>9.043</td>
+<td>629.675</td>
+<td>-638.865</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_031</td>
+<td>1</td>
+<td>6</td>
+<td>ls</td>
+<td>12.287</td>
+<td>557.432</td>
+<td>-548.259</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_032</td>
+<td>1</td>
+<td>7</td>
+<td>ls</td>
+<td>12.99</td>
+<td>102.623</td>
+<td>-90.695</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_033</td>
+<td>1</td>
+<td>8</td>
+<td>ls</td>
+<td>9.765</td>
+<td>99.123</td>
+<td>-95.878</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_034</td>
+<td>1</td>
+<td>9</td>
+<td>ls</td>
+<td>9.967</td>
+<td>99.195</td>
+<td>-95.357</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_035</td>
+<td>2</td>
+<td>0</td>
+<td>ls</td>
+<td>14.166</td>
+<td>1160.213</td>
+<td>-1168.344</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_036</td>
+<td>2</td>
+<td>1</td>
+<td>write_file</td>
+<td>11.188</td>
+<td>1107.234</td>
+<td>-1103.589</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_037</td>
+<td>2</td>
+<td>2</td>
+<td>write_file</td>
+<td>10.051</td>
+<td>325.618</td>
+<td>-333.547</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_038</td>
+<td>2</td>
+<td>3</td>
+<td>edit_file</td>
+<td>10.303</td>
+<td>296.028</td>
+<td>-310.741</td>
+<td>late</td>
+</tr>
+<tr>
+<td>live_gap_039</td>
+<td>4</td>
+<td>0</td>
+<td>ls</td>
+<td>13.168</td>
+<td>759.421</td>
+<td>-769.294</td>
+<td>late</td>
+</tr>
+</tbody></table></div>
+    
+    <h3>Live Direct-Prefetch Timeline</h3>
+    <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence; cyan is replay-side HtoD evidence from the real resume request.</p>
+    <svg viewBox="0 0 1580 1870" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due, symlog full replay view">
+<line x1="160" y1="62" x2="1510" y2="62" stroke="#111827"/>
+<line x1="160.0" y1="56" x2="160.0" y2="1752.0" stroke="#e5e7eb"/>
+<text x="160.0" y="48" text-anchor="middle" font-size="10">-15221 ms</text>
+<line x1="203.2" y1="56" x2="203.2" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="274.2" y1="56" x2="274.2" y2="1752.0" stroke="#e5e7eb"/>
+<text x="274.2" y="48" text-anchor="middle" font-size="10">-5000 ms</text>
+<line x1="436.2" y1="56" x2="436.2" y2="1752.0" stroke="#e5e7eb"/>
+<text x="436.2" y="48" text-anchor="middle" font-size="10">-1000 ms</text>
+<line x1="502.9" y1="56" x2="502.9" y2="1752.0" stroke="#e5e7eb"/>
+<text x="502.9" y="48" text-anchor="middle" font-size="10">-500 ms</text>
+<line x1="636.9" y1="56" x2="636.9" y2="1752.0" stroke="#e5e7eb"/>
+<text x="636.9" y="48" text-anchor="middle" font-size="10">-100 ms</text>
+<line x1="678.7" y1="56" x2="678.7" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="731.4" y1="56" x2="731.4" y2="1752.0" stroke="#e5e7eb"/>
+<text x="731.4" y="48" text-anchor="middle" font-size="10">-10 ms</text>
+<line x1="750.2" y1="56" x2="750.2" y2="1752.0" stroke="#e5e7eb"/>
+<text x="750.2" y="48" text-anchor="middle" font-size="10">0 ms</text>
+<line x1="769.0" y1="56" x2="769.0" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="821.7" y1="56" x2="821.7" y2="1752.0" stroke="#e5e7eb"/>
+<text x="821.7" y="48" text-anchor="middle" font-size="10">50 ms</text>
+<line x1="863.6" y1="56" x2="863.6" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="997.6" y1="56" x2="997.6" y2="1752.0" stroke="#e5e7eb"/>
+<text x="997.6" y="48" text-anchor="middle" font-size="10">500 ms</text>
+<line x1="1064.3" y1="56" x2="1064.3" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1064.3" y="48" text-anchor="middle" font-size="10">1000 ms</text>
+<line x1="1226.3" y1="56" x2="1226.3" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1226.3" y="48" text-anchor="middle" font-size="10">5000 ms</text>
+<line x1="1297.3" y1="56" x2="1297.3" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1297.3" y="48" text-anchor="middle" font-size="10">10000 ms</text>
+<line x1="1462.9" y1="56" x2="1462.9" y2="1752.0" stroke="#e5e7eb"/>
+<text x="1462.9" y="48" text-anchor="middle" font-size="10">50000 ms</text>
+<line x1="1510.0" y1="56" x2="1510.0" y2="1752.0" stroke="#e5e7eb"/>
+<line x1="750.2" y1="46" x2="750.2" y2="1752.0" stroke="#111827" stroke-width="3"/>
+<text x="757.2" y="38" font-size="12" font-weight="700">0 ms replay due</text>
+<text x="835.0" y="1842.0" text-anchor="middle" font-size="13" font-weight="700">local time around each gap (symlog full replay): negative = before replay due, positive = after replay due</text>
+<text x="10" y="108" font-size="15" font-weight="700">L00</text>
+<text x="10" y="129" font-size="12" fill="#b91c1c" font-weight="700">LATE -1318 ms</text>
+<text x="10" y="148" font-size="11" fill="#64748b">wait 9 ms</text>
+<line x1="160" y1="91" x2="1510" y2="91" stroke="#f1f5f9"/>
+<rect x="732.5" y="98.0" width="17.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.361 ms</title></rect>
+<rect x="381.3" y="98.0" width="351.2" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="773.4" y="124.0" width="318.2" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1305.372</title></rect>
+<rect x="998.4" y="124.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=13.832</title></rect>
+<rect x="750.2" y="150.0" width="689.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="179.0" x2="1091.6" y2="179.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1091.6" cy="179.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="200" font-size="15" font-weight="700">L01</text>
+<text x="10" y="221" font-size="12" fill="#b91c1c" font-weight="700">LATE -1093 ms</text>
+<text x="10" y="240" font-size="11" fill="#64748b">wait 9 ms</text>
+<line x1="160" y1="183" x2="1510" y2="183" stroke="#f1f5f9"/>
+<rect x="732.5" y="190.0" width="17.8" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.388 ms</title></rect>
+<rect x="244.7" y="190.0" width="487.8" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="742.2" y="216.0" width="330.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1097.486</title></rect>
+<rect x="812.1" y="216.0" width="20.4" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=13.975</title></rect>
+<rect x="750.2" y="242.0" width="377.4" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="271.0" x2="1073.1" y2="271.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1073.1" cy="271.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="292" font-size="15" font-weight="700">L02</text>
+<text x="10" y="313" font-size="12" fill="#b91c1c" font-weight="700">LATE -1019 ms</text>
+<text x="10" y="332" font-size="11" fill="#64748b">wait 9 ms</text>
+<line x1="160" y1="275" x2="1510" y2="275" stroke="#f1f5f9"/>
+<rect x="732.9" y="282.0" width="17.3" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.158 ms</title></rect>
+<rect x="232.4" y="282.0" width="500.5" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="754.3" y="308.0" width="311.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1017.437</title></rect>
+<rect x="911.6" y="308.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=13.664</title></rect>
+<rect x="750.2" y="334.0" width="373.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="363.0" x2="1066.2" y2="363.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1066.2" cy="363.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="384" font-size="15" font-weight="700">L03</text>
+<text x="10" y="405" font-size="12" fill="#b91c1c" font-weight="700">LATE -520 ms</text>
+<text x="10" y="424" font-size="11" fill="#64748b">wait 10 ms</text>
+<line x1="160" y1="367" x2="1510" y2="367" stroke="#f1f5f9"/>
+<rect x="730.8" y="374.0" width="19.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 10.386 ms</title></rect>
+<rect x="240.9" y="374.0" width="489.9" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="741.8" y="400.0" width="259.4" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=524.17</title></rect>
+<rect x="750.2" y="426.0" width="362.0" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1005.3" y="429.0" width="14.0" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=56; duration_ms=50.225</title></rect>
+<line x1="750.2" y1="455.0" x2="1001.3" y2="455.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1001.3" cy="455.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="476" font-size="15" font-weight="700">L04</text>
+<text x="10" y="497" font-size="12" fill="#b91c1c" font-weight="700">LATE -222 ms</text>
+<text x="10" y="516" font-size="11" fill="#64748b">wait 11 ms</text>
+<line x1="160" y1="459" x2="1510" y2="459" stroke="#f1f5f9"/>
+<rect x="730.0" y="466.0" width="20.2" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 10.816 ms</title></rect>
+<rect x="387.6" y="466.0" width="342.4" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="738.9" y="492.0" width="186.1" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=227.798</title></rect>
+<rect x="750.2" y="518.0" width="513.9" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="934.1" y="521.0" width="14.0" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=56; duration_ms=25.247</title></rect>
+<line x1="750.2" y1="547.0" x2="925.0" y2="547.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="925.0" cy="547.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="568" font-size="15" font-weight="700">L05</text>
+<text x="10" y="589" font-size="12" fill="#b91c1c" font-weight="700">LATE -1725 ms</text>
+<text x="10" y="608" font-size="11" fill="#64748b">wait 12 ms</text>
+<line x1="160" y1="551" x2="1510" y2="551" stroke="#f1f5f9"/>
+<rect x="728.2" y="558.0" width="22.0" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 11.908 ms</title></rect>
+<rect x="236.1" y="558.0" width="492.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="765.3" y="584.0" width="353.2" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1717.039</title></rect>
+<rect x="1076.6" y="584.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=70.664</title></rect>
+<rect x="750.2" y="610.0" width="323.5" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="639.0" x2="1118.4" y2="639.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1118.4" cy="639.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="660" font-size="15" font-weight="700">L06</text>
+<text x="10" y="681" font-size="12" fill="#b91c1c" font-weight="700">LATE -8163 ms</text>
+<text x="10" y="700" font-size="11" fill="#64748b">wait 12 ms</text>
+<line x1="160" y1="643" x2="1510" y2="643" stroke="#f1f5f9"/>
+<rect x="728.4" y="650.0" width="21.8" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 11.780 ms</title></rect>
+<rect x="425.7" y="650.0" width="302.8" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="1020.6" y="676.0" width="255.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=7525.732</title></rect>
+<rect x="1271.7" y="676.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=175.466</title></rect>
+<rect x="750.2" y="702.0" width="520.9" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="1022.1" y="705.0" width="16.6" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=56; duration_ms=115.804</title></rect>
+<line x1="750.2" y1="731.0" x2="1276.5" y2="731.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1276.5" cy="731.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="752" font-size="15" font-weight="700">L07</text>
+<text x="10" y="773" font-size="12" fill="#b91c1c" font-weight="700">LATE -1762 ms</text>
+<text x="10" y="792" font-size="11" fill="#64748b">wait 12 ms</text>
+<line x1="160" y1="735" x2="1510" y2="735" stroke="#f1f5f9"/>
+<rect x="727.7" y="742.0" width="22.6" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 12.233 ms</title></rect>
+<rect x="229.2" y="742.0" width="498.5" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="982.9" y="768.0" width="137.6" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1334.604</title></rect>
+<rect x="1063.0" y="768.0" width="21.2" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=230.193</title></rect>
+<rect x="750.2" y="794.0" width="308.0" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<rect x="987.5" y="797.0" width="38.7" height="12.0" rx="3" fill="#06b6d4" opacity="0.92"><title>replay-side KV HtoD movement; events=56; duration_ms=220.811</title></rect>
+<line x1="750.2" y1="823.0" x2="1120.6" y2="823.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1120.6" cy="823.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="844" font-size="15" font-weight="700">L08</text>
+<text x="10" y="865" font-size="12" fill="#b91c1c" font-weight="700">LATE -999 ms</text>
+<text x="10" y="884" font-size="11" fill="#64748b">wait 10 ms</text>
+<line x1="160" y1="827" x2="1510" y2="827" stroke="#f1f5f9"/>
+<rect x="731.3" y="834.0" width="18.9" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 10.080 ms</title></rect>
+<rect x="231.4" y="834.0" width="499.9" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="741.8" y="860.0" width="322.3" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1003.008</title></rect>
+<rect x="814.3" y="860.0" width="20.8" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=14.742</title></rect>
+<rect x="750.2" y="886.0" width="372.2" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="915.0" x2="1064.2" y2="915.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1064.2" cy="915.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="936" font-size="15" font-weight="700">L09</text>
+<text x="10" y="957" font-size="12" fill="#b91c1c" font-weight="700">LATE -1677 ms</text>
+<text x="10" y="976" font-size="11" fill="#64748b">wait 10 ms</text>
+<line x1="160" y1="919" x2="1510" y2="919" stroke="#f1f5f9"/>
+<rect x="731.7" y="926.0" width="18.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.829 ms</title></rect>
+<rect x="343.9" y="926.0" width="387.8" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="736.2" y="952.0" width="379.4" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1684.748</title></rect>
+<rect x="814.1" y="952.0" width="63.7" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=73.377</title></rect>
+<rect x="750.2" y="978.0" width="756.9" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1007.0" x2="1115.7" y2="1007.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1115.7" cy="1007.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1028" font-size="15" font-weight="700">L10</text>
+<text x="10" y="1049" font-size="12" fill="#b91c1c" font-weight="700">LATE -78874 ms</text>
+<text x="10" y="1068" font-size="11" fill="#64748b">wait 10 ms</text>
+<line x1="160" y1="1011" x2="1510" y2="1011" stroke="#f1f5f9"/>
+<rect x="732.3" y="1018.0" width="18.0" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.517 ms</title></rect>
+<rect x="314.6" y="1018.0" width="417.7" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="765.8" y="1044.0" width="744.1" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=78865.48</title></rect>
+<rect x="1506.6" y="1044.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=85.705</title></rect>
+<rect x="750.2" y="1070.0" width="756.4" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1099.0" x2="1509.9" y2="1099.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1509.9" cy="1099.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1120" font-size="15" font-weight="700">L11</text>
+<text x="10" y="1141" font-size="12" fill="#b91c1c" font-weight="700">LATE -695 ms</text>
+<text x="10" y="1160" font-size="11" fill="#64748b">wait 12 ms</text>
+<line x1="160" y1="1103" x2="1510" y2="1103" stroke="#f1f5f9"/>
+<rect x="728.7" y="1110.0" width="21.6" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 11.629 ms</title></rect>
+<rect x="380.8" y="1110.0" width="347.9" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="769.5" y="1136.0" width="259.3" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=684.243</title></rect>
+<rect x="870.5" y="1136.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=15.311</title></rect>
+<rect x="750.2" y="1162.0" width="424.7" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1191.0" x2="1028.8" y2="1191.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1028.8" cy="1191.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1212" font-size="15" font-weight="700">L12</text>
+<text x="10" y="1233" font-size="12" fill="#b91c1c" font-weight="700">LATE -700 ms</text>
+<text x="10" y="1252" font-size="11" fill="#64748b">wait 9 ms</text>
+<line x1="160" y1="1195" x2="1510" y2="1195" stroke="#f1f5f9"/>
+<rect x="732.5" y="1202.0" width="17.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.354 ms</title></rect>
+<rect x="395.8" y="1202.0" width="336.8" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="767.5" y="1228.0" width="262.2" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=691.398</title></rect>
+<rect x="871.5" y="1228.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=14.376</title></rect>
+<rect x="750.2" y="1254.0" width="425.0" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1283.0" x2="1029.7" y2="1283.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1029.7" cy="1283.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1304" font-size="15" font-weight="700">L13</text>
+<text x="10" y="1325" font-size="12" fill="#b91c1c" font-weight="700">LATE -1168 ms</text>
+<text x="10" y="1344" font-size="11" fill="#64748b">wait 14 ms</text>
+<line x1="160" y1="1287" x2="1510" y2="1287" stroke="#f1f5f9"/>
+<rect x="724.5" y="1294.0" width="25.7" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 14.166 ms</title></rect>
+<rect x="375.2" y="1294.0" width="349.3" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="765.8" y="1320.0" width="313.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1160.213</title></rect>
+<rect x="913.0" y="1320.0" width="33.7" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=87.785</title></rect>
+<rect x="750.2" y="1346.0" width="402.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1375.0" x2="1079.6" y2="1375.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1079.6" cy="1375.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1396" font-size="15" font-weight="700">L14</text>
+<text x="10" y="1417" font-size="12" fill="#b91c1c" font-weight="700">LATE -1104 ms</text>
+<text x="10" y="1436" font-size="11" fill="#64748b">wait 11 ms</text>
+<line x1="160" y1="1379" x2="1510" y2="1379" stroke="#f1f5f9"/>
+<rect x="729.4" y="1386.0" width="20.8" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 11.188 ms</title></rect>
+<rect x="160.4" y="1386.0" width="569.0" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="743.0" y="1412.0" width="331.0" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1107.234</title></rect>
+<rect x="810.5" y="1412.0" width="22.3" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=15.486</title></rect>
+<rect x="750.2" y="1438.0" width="458.3" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1467.0" x2="1074.0" y2="1467.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1074.0" cy="1467.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1488" font-size="15" font-weight="700">L15</text>
+<text x="10" y="1509" font-size="12" fill="#b91c1c" font-weight="700">LATE -769 ms</text>
+<text x="10" y="1528" font-size="11" fill="#64748b">wait 13 ms</text>
+<line x1="160" y1="1471" x2="1510" y2="1471" stroke="#f1f5f9"/>
+<rect x="726.1" y="1478.0" width="24.1" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 13.168 ms</title></rect>
+<rect x="415.7" y="1478.0" width="310.4" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="768.8" y="1504.0" width="269.9" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=759.421</title></rect>
+<rect x="895.8" y="1504.0" width="37.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=82.547</title></rect>
+<rect x="750.2" y="1530.0" width="379.9" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1559.0" x2="1038.7" y2="1559.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1038.7" cy="1559.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1580" font-size="15" font-weight="700">L16</text>
+<text x="10" y="1601" font-size="12" fill="#b91c1c" font-weight="700">LATE -348 ms</text>
+<text x="10" y="1620" font-size="11" fill="#64748b">wait 9 ms</text>
+<line x1="160" y1="1563" x2="1510" y2="1563" stroke="#f1f5f9"/>
+<rect x="732.7" y="1570.0" width="17.5" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 9.252 ms</title></rect>
+<rect x="431.3" y="1570.0" width="301.5" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="758.2" y="1596.0" width="206.0" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=343.931</title></rect>
+<rect x="865.4" y="1596.0" width="14.2" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=56; duration_ms=16.337</title></rect>
+<rect x="750.2" y="1622.0" width="391.2" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1651.0" x2="964.2" y2="1651.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="964.2" cy="1651.0" r="3.5" fill="#dc2626"/>
+<text x="10" y="1672" font-size="15" font-weight="700">L17</text>
+<text x="10" y="1693" font-size="12" fill="#b91c1c" font-weight="700">LATE -1056 ms</text>
+<text x="10" y="1712" font-size="11" fill="#64748b">wait 13 ms</text>
+<line x1="160" y1="1655" x2="1510" y2="1655" stroke="#f1f5f9"/>
+<rect x="725.6" y="1662.0" width="24.6" height="18.0" rx="3" fill="#d1d5db" opacity="0.68"><title>tool wait window 13.492 ms</title></rect>
+<rect x="375.7" y="1662.0" width="349.9" height="18.0" rx="3" fill="#2563eb" opacity="0.9"><title>initial model turn that emitted tool call</title></rect>
+<rect x="752.3" y="1688.0" width="317.3" height="18.0" rx="3" fill="#a855f7" opacity="0.76"><title>prefetch attempt; status=done; duration_ms=1054.946</title></rect>
+<rect x="893.4" y="1688.0" width="14.0" height="18.0" rx="3" fill="#16a34a" opacity="0.92"><title>direct KV HtoD movement; events=2; duration_ms=7.344</title></rect>
+<rect x="750.2" y="1714.0" width="423.4" height="18.0" rx="3" fill="#ef4444" opacity="0.68"><title>resume model request after tool result</title></rect>
+<line x1="750.2" y1="1743.0" x2="1069.6" y2="1743.0" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5"/>
+<circle cx="1069.6" cy="1743.0" r="3.5" fill="#dc2626"/>
+<line x1="160" y1="1770.0" x2="1510" y2="1770.0" stroke="#e5e7eb"/>
+<rect x="160" y="1788" width="14" height="14" fill="#2563eb"/>
+<text x="180" y="1800">initial model turn</text>
+<rect x="345" y="1788" width="14" height="14" fill="#d1d5db"/>
+<text x="365" y="1800">tool wait</text>
+<rect x="530" y="1788" width="14" height="14" fill="#a855f7"/>
+<text x="550" y="1800">prefetch attempt</text>
+<rect x="715" y="1788" width="14" height="14" fill="#16a34a"/>
+<text x="735" y="1800">direct KV HtoD</text>
+<rect x="900" y="1788" width="14" height="14" fill="#06b6d4"/>
+<text x="920" y="1800">replay-side KV HtoD</text>
+<line x1="1085" y1="1788" x2="1085" y2="1804" stroke="#111827" stroke-width="4"/>
+<text x="1105" y="1800">replay due</text>
+<rect x="1270" y="1788" width="14" height="14" fill="#ef4444"/>
+<text x="1290" y="1800">resume request</text>
+</svg>
+    <h3>Live Row Map</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>row</th>
+<th>mode</th>
+<th>fillers</th>
+<th>task</th>
+<th>gap</th>
+<th>tool_wait_ms</th>
+<th>prefetch_margin_ms</th>
+<th>movement</th>
+</tr></thead><tbody>
+<tr>
+<td>L00</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>8</td>
+<td>9.361</td>
+<td>-1317.98</td>
+<td></td>
+</tr>
+<tr>
+<td>L01</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>9</td>
+<td>9.388</td>
+<td>-1093.455</td>
+<td></td>
+</tr>
+<tr>
+<td>L02</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>14</td>
+<td>9.158</td>
+<td>-1019.463</td>
+<td></td>
+</tr>
+<tr>
+<td>L03</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>16</td>
+<td>10.386</td>
+<td>-519.932</td>
+<td></td>
+</tr>
+<tr>
+<td>L04</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>17</td>
+<td>10.816</td>
+<td>-221.993</td>
+<td></td>
+</tr>
+<tr>
+<td>L05</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>18</td>
+<td>11.908</td>
+<td>-1724.892</td>
+<td></td>
+</tr>
+<tr>
+<td>L06</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>19</td>
+<td>11.78</td>
+<td>-8163.298</td>
+<td></td>
+</tr>
+<tr>
+<td>L07</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>20</td>
+<td>12.233</td>
+<td>-1761.741</td>
+<td></td>
+</tr>
+<tr>
+<td>L08</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>21</td>
+<td>10.08</td>
+<td>-998.774</td>
+<td></td>
+</tr>
+<tr>
+<td>L09</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>23</td>
+<td>9.829</td>
+<td>-1677.466</td>
+<td></td>
+</tr>
+<tr>
+<td>L10</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>0</td>
+<td>24</td>
+<td>9.517</td>
+<td>-78873.619</td>
+<td></td>
+</tr>
+<tr>
+<td>L11</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>1</td>
+<td>0</td>
+<td>11.629</td>
+<td>-694.51</td>
+<td></td>
+</tr>
+<tr>
+<td>L12</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>1</td>
+<td>1</td>
+<td>9.354</td>
+<td>-700.495</td>
+<td></td>
+</tr>
+<tr>
+<td>L13</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>2</td>
+<td>0</td>
+<td>14.166</td>
+<td>-1168.344</td>
+<td></td>
+</tr>
+<tr>
+<td>L14</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>2</td>
+<td>1</td>
+<td>11.188</td>
+<td>-1103.589</td>
+<td></td>
+</tr>
+<tr>
+<td>L15</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>4</td>
+<td>0</td>
+<td>13.168</td>
+<td>-769.294</td>
+<td></td>
+</tr>
+<tr>
+<td>L16</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>4</td>
+<td>1</td>
+<td>9.252</td>
+<td>-347.95</td>
+<td></td>
+</tr>
+<tr>
+<td>L17</td>
+<td>live_direct_prefetch</td>
+<td></td>
+<td>5</td>
+<td>0</td>
+<td>13.492</td>
+<td>-1055.967</td>
+<td></td>
+</tr>
+</tbody></table></div>
+    <h3>Live Key Observations</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>row</th>
+<th>mode</th>
+<th>status</th>
+<th>what happened</th>
+<th>why it matters</th>
+<th>tool_wait_ms</th>
+<th>resume_ttft_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>L00</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1318 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.361</td>
+<td></td>
+</tr>
+<tr>
+<td>L01</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1093 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.388</td>
+<td></td>
+</tr>
+<tr>
+<td>L02</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1019 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.158</td>
+<td></td>
+</tr>
+<tr>
+<td>L03</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 520 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>10.386</td>
+<td></td>
+</tr>
+<tr>
+<td>L04</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 222 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>10.816</td>
+<td></td>
+</tr>
+<tr>
+<td>L05</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1725 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>11.908</td>
+<td></td>
+</tr>
+<tr>
+<td>L06</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 8163 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>11.78</td>
+<td></td>
+</tr>
+<tr>
+<td>L07</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 1762 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>12.233</td>
+<td></td>
+</tr>
+<tr>
+<td>L08</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 999 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>10.08</td>
+<td></td>
+</tr>
+<tr>
+<td>L09</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1677 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.829</td>
+<td></td>
+</tr>
+<tr>
+<td>L10</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 78874 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.517</td>
+<td></td>
+</tr>
+<tr>
+<td>L11</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 695 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>11.629</td>
+<td></td>
+</tr>
+<tr>
+<td>L12</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 700 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.354</td>
+<td></td>
+</tr>
+<tr>
+<td>L13</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1168 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>14.166</td>
+<td></td>
+</tr>
+<tr>
+<td>L14</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1104 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>11.188</td>
+<td></td>
+</tr>
+<tr>
+<td>L15</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 769 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>13.168</td>
+<td></td>
+</tr>
+<tr>
+<td>L16</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 348 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>9.252</td>
+<td></td>
+</tr>
+<tr>
+<td>L17</td>
+<td>live_direct_prefetch</td>
+<td>Late prefetch</td>
+<td>The prefetch attempt finished 1056 ms after the resume request was already due.</td>
+<td>The hint path was late, so software prefetch did not meet the agent resume deadline.</td>
+<td>13.492</td>
+<td></td>
+</tr>
+</tbody></table></div>
+    <h3>Live Direct KV Evidence</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>session_id</th>
+<th>task_index</th>
+<th>gap_order_in_task</th>
+<th>tool_names</th>
+<th>tool_gap_ms</th>
+<th>prefetch_duration_ms</th>
+<th>prefetch_margin_ms</th>
+<th>resume_latency_ms</th>
+<th>direct_kv_h2d_events</th>
+<th>replay_kv_h2d_events</th>
+</tr></thead><tbody>
+<tr>
+<td>live_gap_000</td>
+<td>0</td>
+<td>0</td>
+<td>ls</td>
+<td>17.843</td>
+<td>1139.555</td>
+<td>-1127.25</td>
+<td>2531.785</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_001</td>
+<td>0</td>
+<td>1</td>
+<td>edit_file</td>
+<td>9.572</td>
+<td>1117.312</td>
+<td>-1127.949</td>
+<td>1919.108</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_002</td>
+<td>0</td>
+<td>2</td>
+<td>read_file</td>
+<td>10.014</td>
+<td>622.588</td>
+<td>-626.014</td>
+<td>3427.182</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_003</td>
+<td>0</td>
+<td>3</td>
+<td>edit_file</td>
+<td>10.367</td>
+<td>727.513</td>
+<td>-730.041</td>
+<td>249.19</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_004</td>
+<td>0</td>
+<td>4</td>
+<td>edit_file</td>
+<td>9.524</td>
+<td>1120.903</td>
+<td>-1127.108</td>
+<td>1919.223</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_005</td>
+<td>0</td>
+<td>5</td>
+<td>read_file</td>
+<td>10.483</td>
+<td>626.453</td>
+<td>-628.183</td>
+<td>712.191</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_006</td>
+<td>0</td>
+<td>6</td>
+<td>edit_file</td>
+<td>9.317</td>
+<td>923.0</td>
+<td>-921.885</td>
+<td>1712.898</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_007</td>
+<td>0</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.784</td>
+<td>627.695</td>
+<td>-631.032</td>
+<td>715.367</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_008</td>
+<td>0</td>
+<td>8</td>
+<td>read_file</td>
+<td>9.361</td>
+<td>1305.372</td>
+<td>-1317.98</td>
+<td>39845.091</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_009</td>
+<td>0</td>
+<td>9</td>
+<td>edit_file</td>
+<td>9.388</td>
+<td>1097.486</td>
+<td>-1093.455</td>
+<td>1889.318</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_010</td>
+<td>0</td>
+<td>10</td>
+<td>read_file</td>
+<td>9.742</td>
+<td>208.867</td>
+<td>-207.289</td>
+<td>6325.604</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_011</td>
+<td>0</td>
+<td>11</td>
+<td>edit_file</td>
+<td>10.201</td>
+<td>773.921</td>
+<td>-775.843</td>
+<td>278.81</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_012</td>
+<td>0</td>
+<td>12</td>
+<td>edit_file</td>
+<td>9.359</td>
+<td>980.871</td>
+<td>-985.876</td>
+<td>1780.557</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_013</td>
+<td>0</td>
+<td>13</td>
+<td>read_file</td>
+<td>9.914</td>
+<td>683.686</td>
+<td>-683.316</td>
+<td>768.693</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_014</td>
+<td>0</td>
+<td>14</td>
+<td>edit_file</td>
+<td>9.158</td>
+<td>1017.437</td>
+<td>-1019.463</td>
+<td>1815.181</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_015</td>
+<td>0</td>
+<td>15</td>
+<td>read_file</td>
+<td>10.198</td>
+<td>211.467</td>
+<td>-209.685</td>
+<td>6911.624</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_016</td>
+<td>0</td>
+<td>16</td>
+<td>edit_file</td>
+<td>10.386</td>
+<td>524.17</td>
+<td>-519.932</td>
+<td>1620.671</td>
+<td>0</td>
+<td>56</td>
+</tr>
+<tr>
+<td>live_gap_017</td>
+<td>0</td>
+<td>17</td>
+<td>read_file</td>
+<td>10.816</td>
+<td>227.798</td>
+<td>-221.993</td>
+<td>7237.652</td>
+<td>0</td>
+<td>56</td>
+</tr>
+<tr>
+<td>live_gap_018</td>
+<td>0</td>
+<td>18</td>
+<td>edit_file</td>
+<td>11.908</td>
+<td>1717.039</td>
+<td>-1724.892</td>
+<td>1100.89</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_019</td>
+<td>0</td>
+<td>19</td>
+<td>read_file</td>
+<td>11.78</td>
+<td>7525.732</td>
+<td>-8163.298</td>
+<td>7749.286</td>
+<td>56</td>
+<td>56</td>
+</tr>
+<tr>
+<td>live_gap_020</td>
+<td>0</td>
+<td>20</td>
+<td>edit_file</td>
+<td>12.233</td>
+<td>1334.604</td>
+<td>-1761.741</td>
+<td>940.319</td>
+<td>56</td>
+<td>56</td>
+</tr>
+<tr>
+<td>live_gap_021</td>
+<td>0</td>
+<td>21</td>
+<td>edit_file</td>
+<td>10.08</td>
+<td>1003.008</td>
+<td>-998.774</td>
+<td>1794.338</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_022</td>
+<td>0</td>
+<td>22</td>
+<td>read_file</td>
+<td>9.85</td>
+<td>212.387</td>
+<td>-211.017</td>
+<td>775.223</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_023</td>
+<td>0</td>
+<td>23</td>
+<td>read_file</td>
+<td>9.829</td>
+<td>1684.748</td>
+<td>-1677.466</td>
+<td>76762.364</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_024</td>
+<td>0</td>
+<td>24</td>
+<td>read_file</td>
+<td>9.517</td>
+<td>78865.48</td>
+<td>-78873.619</td>
+<td>76390.934</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_025</td>
+<td>1</td>
+<td>0</td>
+<td>ls</td>
+<td>11.629</td>
+<td>684.243</td>
+<td>-694.51</td>
+<td>3019.369</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_026</td>
+<td>1</td>
+<td>1</td>
+<td>ls</td>
+<td>9.354</td>
+<td>691.398</td>
+<td>-700.495</td>
+<td>3027.668</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_027</td>
+<td>1</td>
+<td>2</td>
+<td>ls</td>
+<td>9.406</td>
+<td>620.355</td>
+<td>-623.385</td>
+<td>2952.639</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_028</td>
+<td>1</td>
+<td>3</td>
+<td>ls</td>
+<td>12.35</td>
+<td>553.439</td>
+<td>-545.726</td>
+<td>2949.548</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_029</td>
+<td>1</td>
+<td>4</td>
+<td>ls</td>
+<td>9.08</td>
+<td>624.229</td>
+<td>-639.841</td>
+<td>2973.326</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_030</td>
+<td>1</td>
+<td>5</td>
+<td>ls</td>
+<td>9.043</td>
+<td>629.675</td>
+<td>-638.865</td>
+<td>2974.975</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_031</td>
+<td>1</td>
+<td>6</td>
+<td>ls</td>
+<td>12.287</td>
+<td>557.432</td>
+<td>-548.259</td>
+<td>2957.521</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_032</td>
+<td>1</td>
+<td>7</td>
+<td>ls</td>
+<td>12.99</td>
+<td>102.623</td>
+<td>-90.695</td>
+<td>2493.505</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_033</td>
+<td>1</td>
+<td>8</td>
+<td>ls</td>
+<td>9.765</td>
+<td>99.123</td>
+<td>-95.878</td>
+<td>2498.014</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_034</td>
+<td>1</td>
+<td>9</td>
+<td>ls</td>
+<td>9.967</td>
+<td>99.195</td>
+<td>-95.357</td>
+<td>2498.985</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_035</td>
+<td>2</td>
+<td>0</td>
+<td>ls</td>
+<td>14.166</td>
+<td>1160.213</td>
+<td>-1168.344</td>
+<td>2419.054</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_036</td>
+<td>2</td>
+<td>1</td>
+<td>write_file</td>
+<td>11.188</td>
+<td>1107.234</td>
+<td>-1103.589</td>
+<td>4201.033</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_037</td>
+<td>2</td>
+<td>2</td>
+<td>write_file</td>
+<td>10.051</td>
+<td>325.618</td>
+<td>-333.547</td>
+<td>5382.552</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_038</td>
+<td>2</td>
+<td>3</td>
+<td>edit_file</td>
+<td>10.303</td>
+<td>296.028</td>
+<td>-310.741</td>
+<td>2739.221</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_039</td>
+<td>4</td>
+<td>0</td>
+<td>ls</td>
+<td>13.168</td>
+<td>759.421</td>
+<td>-769.294</td>
+<td>1937.586</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_040</td>
+<td>4</td>
+<td>1</td>
+<td>read_file</td>
+<td>9.252</td>
+<td>343.931</td>
+<td>-347.95</td>
+<td>2167.099</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_041</td>
+<td>5</td>
+<td>0</td>
+<td>ls</td>
+<td>13.492</td>
+<td>1054.946</td>
+<td>-1055.967</td>
+<td>2980.729</td>
+<td>2</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_042</td>
+<td>5</td>
+<td>1</td>
+<td>execute</td>
+<td>49.379</td>
+<td>467.34</td>
+<td>-419.616</td>
+<td>6559.031</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_043</td>
+<td>7</td>
+<td>0</td>
+<td>ls</td>
+<td>12.709</td>
+<td>750.749</td>
+<td>-753.549</td>
+<td>1397.414</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_044</td>
+<td>7</td>
+<td>1</td>
+<td>read_file</td>
+<td>9.66</td>
+<td>1181.01</td>
+<td>-1196.948</td>
+<td>44684.586</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_045</td>
+<td>7</td>
+<td>2</td>
+<td>read_file</td>
+<td>9.501</td>
+<td>1171.304</td>
+<td>-1172.468</td>
+<td>44804.706</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_046</td>
+<td>7</td>
+<td>3</td>
+<td>read_file</td>
+<td>10.232</td>
+<td>1220.502</td>
+<td>-1235.542</td>
+<td>44987.357</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_047</td>
+<td>7</td>
+<td>4</td>
+<td>read_file</td>
+<td>9.517</td>
+<td>604.126</td>
+<td>-602.995</td>
+<td>44789.486</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_048</td>
+<td>7</td>
+<td>5</td>
+<td>read_file</td>
+<td>9.444</td>
+<td>175.898</td>
+<td>-182.545</td>
+<td>43842.96</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_049</td>
+<td>7</td>
+<td>6</td>
+<td>read_file</td>
+<td>9.469</td>
+<td>182.543</td>
+<td>-182.336</td>
+<td>43833.279</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_050</td>
+<td>7</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.401</td>
+<td>171.142</td>
+<td>-181.155</td>
+<td>43875.25</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_051</td>
+<td>7</td>
+<td>8</td>
+<td>read_file</td>
+<td>9.354</td>
+<td>175.277</td>
+<td>-181.588</td>
+<td>43863.265</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_052</td>
+<td>7</td>
+<td>9</td>
+<td>read_file</td>
+<td>9.448</td>
+<td>177.835</td>
+<td>-181.748</td>
+<td>43865.281</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_053</td>
+<td>8</td>
+<td>0</td>
+<td>read_file</td>
+<td>11.742</td>
+<td>1341.794</td>
+<td>-1342.834</td>
+<td>6007.06</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_054</td>
+<td>8</td>
+<td>1</td>
+<td>grep</td>
+<td>9.329</td>
+<td>646.126</td>
+<td>-654.824</td>
+<td>5351.971</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_055</td>
+<td>8</td>
+<td>2</td>
+<td>grep</td>
+<td>9.255</td>
+<td>547.645</td>
+<td>-544.782</td>
+<td>5319.959</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_056</td>
+<td>9</td>
+<td>0</td>
+<td>ls</td>
+<td>11.674</td>
+<td>666.012</td>
+<td>-666.179</td>
+<td>3057.828</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_057</td>
+<td>9</td>
+<td>1</td>
+<td>ls</td>
+<td>12.269</td>
+<td>230.066</td>
+<td>-238.123</td>
+<td>1511.958</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_058</td>
+<td>9</td>
+<td>2</td>
+<td>edit_file</td>
+<td>9.45</td>
+<td>690.947</td>
+<td>-690.453</td>
+<td>1508.279</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_059</td>
+<td>9</td>
+<td>3</td>
+<td>read_file</td>
+<td>9.687</td>
+<td>617.023</td>
+<td>-615.381</td>
+<td>1506.84</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_060</td>
+<td>9</td>
+<td>4</td>
+<td>read_file</td>
+<td>9.19</td>
+<td>572.512</td>
+<td>-584.945</td>
+<td>1403.246</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_061</td>
+<td>9</td>
+<td>5</td>
+<td>read_file</td>
+<td>9.16</td>
+<td>576.836</td>
+<td>-581.991</td>
+<td>1400.391</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_062</td>
+<td>9</td>
+<td>6</td>
+<td>read_file</td>
+<td>9.29</td>
+<td>515.2</td>
+<td>-508.295</td>
+<td>1400.948</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_063</td>
+<td>9</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.093</td>
+<td>567.886</td>
+<td>-582.141</td>
+<td>1400.072</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_064</td>
+<td>9</td>
+<td>8</td>
+<td>read_file</td>
+<td>8.976</td>
+<td>567.124</td>
+<td>-575.185</td>
+<td>1396.178</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_065</td>
+<td>9</td>
+<td>9</td>
+<td>read_file</td>
+<td>9.178</td>
+<td>513.982</td>
+<td>-511.845</td>
+<td>1408.021</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_066</td>
+<td>9</td>
+<td>10</td>
+<td>read_file</td>
+<td>9.135</td>
+<td>515.121</td>
+<td>-513.282</td>
+<td>1407.992</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_067</td>
+<td>9</td>
+<td>11</td>
+<td>read_file</td>
+<td>9.228</td>
+<td>471.977</td>
+<td>-480.182</td>
+<td>1292.944</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_068</td>
+<td>9</td>
+<td>12</td>
+<td>read_file</td>
+<td>8.984</td>
+<td>460.856</td>
+<td>-476.931</td>
+<td>1290.904</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_069</td>
+<td>11</td>
+<td>0</td>
+<td>ls</td>
+<td>13.235</td>
+<td>1042.237</td>
+<td>-1054.162</td>
+<td>1737.407</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_070</td>
+<td>11</td>
+<td>1</td>
+<td>read_file</td>
+<td>9.485</td>
+<td>800.203</td>
+<td>-814.53</td>
+<td>45966.741</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_071</td>
+<td>11</td>
+<td>2</td>
+<td>read_file</td>
+<td>9.709</td>
+<td>1260.835</td>
+<td>-1266.588</td>
+<td>2991.157</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_072</td>
+<td>12</td>
+<td>0</td>
+<td>ls</td>
+<td>14.565</td>
+<td>963.543</td>
+<td>-963.615</td>
+<td>2422.277</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_073</td>
+<td>12</td>
+<td>1</td>
+<td>read_file</td>
+<td>9.523</td>
+<td>905.978</td>
+<td>-901.607</td>
+<td>1653.549</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_074</td>
+<td>12</td>
+<td>2</td>
+<td>read_file</td>
+<td>9.188</td>
+<td>772.552</td>
+<td>-781.23</td>
+<td>1536.306</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_075</td>
+<td>12</td>
+<td>3</td>
+<td>read_file</td>
+<td>9.36</td>
+<td>776.505</td>
+<td>-787.188</td>
+<td>1539.338</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_076</td>
+<td>12</td>
+<td>4</td>
+<td>read_file</td>
+<td>9.213</td>
+<td>782.971</td>
+<td>-785.241</td>
+<td>1536.549</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_077</td>
+<td>12</td>
+<td>5</td>
+<td>read_file</td>
+<td>9.451</td>
+<td>769.972</td>
+<td>-780.229</td>
+<td>1533.04</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_078</td>
+<td>12</td>
+<td>6</td>
+<td>read_file</td>
+<td>9.162</td>
+<td>780.298</td>
+<td>-796.374</td>
+<td>1551.165</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_079</td>
+<td>12</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.385</td>
+<td>712.658</td>
+<td>-705.173</td>
+<td>1535.903</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_080</td>
+<td>12</td>
+<td>8</td>
+<td>read_file</td>
+<td>9.068</td>
+<td>786.545</td>
+<td>-793.264</td>
+<td>1550.639</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_081</td>
+<td>12</td>
+<td>9</td>
+<td>read_file</td>
+<td>9.172</td>
+<td>784.695</td>
+<td>-792.584</td>
+<td>1546.558</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_082</td>
+<td>12</td>
+<td>10</td>
+<td>read_file</td>
+<td>9.153</td>
+<td>406.544</td>
+<td>-404.093</td>
+<td>1216.565</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_083</td>
+<td>12</td>
+<td>11</td>
+<td>read_file</td>
+<td>9.132</td>
+<td>412.646</td>
+<td>-406.261</td>
+<td>1222.241</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_084</td>
+<td>13</td>
+<td>0</td>
+<td>read_file</td>
+<td>12.553</td>
+<td>778.471</td>
+<td>-767.421</td>
+<td>39614.766</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_085</td>
+<td>13</td>
+<td>1</td>
+<td>read_file</td>
+<td>9.984</td>
+<td>1401.898</td>
+<td>-1394.011</td>
+<td>39886.544</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_086</td>
+<td>13</td>
+<td>2</td>
+<td>read_file</td>
+<td>9.645</td>
+<td>1371.966</td>
+<td>-1368.598</td>
+<td>39921.778</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_087</td>
+<td>13</td>
+<td>3</td>
+<td>read_file</td>
+<td>9.871</td>
+<td>1265.822</td>
+<td>-1271.14</td>
+<td>9174.206</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_088</td>
+<td>13</td>
+<td>4</td>
+<td>read_file</td>
+<td>9.68</td>
+<td>104.238</td>
+<td>-103.83</td>
+<td>8090.331</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_089</td>
+<td>13</td>
+<td>5</td>
+<td>read_file</td>
+<td>9.391</td>
+<td>167.923</td>
+<td>-183.352</td>
+<td>8080.631</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_090</td>
+<td>13</td>
+<td>6</td>
+<td>read_file</td>
+<td>9.431</td>
+<td>181.254</td>
+<td>-183.432</td>
+<td>8078.98</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_091</td>
+<td>13</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.465</td>
+<td>183.214</td>
+<td>-183.729</td>
+<td>8077.074</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_092</td>
+<td>13</td>
+<td>8</td>
+<td>read_file</td>
+<td>9.209</td>
+<td>184.053</td>
+<td>-186.612</td>
+<td>8082.564</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_093</td>
+<td>13</td>
+<td>9</td>
+<td>read_file</td>
+<td>9.535</td>
+<td>102.7</td>
+<td>-98.936</td>
+<td>8069.454</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_094</td>
+<td>13</td>
+<td>10</td>
+<td>read_file</td>
+<td>9.573</td>
+<td>4148.326</td>
+<td>-4158.286</td>
+<td>1911.97</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_095</td>
+<td>13</td>
+<td>11</td>
+<td>read_file</td>
+<td>9.732</td>
+<td>2248.841</td>
+<td>-2242.912</td>
+<td>43937.979</td>
+<td>56</td>
+<td>56</td>
+</tr>
+<tr>
+<td>live_gap_096</td>
+<td>14</td>
+<td>0</td>
+<td>read_file</td>
+<td>11.812</td>
+<td>886.253</td>
+<td>-884.489</td>
+<td>5549.962</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_097</td>
+<td>14</td>
+<td>1</td>
+<td>grep</td>
+<td>196.239</td>
+<td>144.028</td>
+<td>44.337</td>
+<td>7366.626</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_098</td>
+<td>14</td>
+<td>2</td>
+<td>read_file</td>
+<td>9.413</td>
+<td>912.215</td>
+<td>-907.109</td>
+<td>9105.208</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_099</td>
+<td>14</td>
+<td>3</td>
+<td>grep</td>
+<td>192.752</td>
+<td>735.558</td>
+<td>-550.237</td>
+<td>62905.233</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_100</td>
+<td>14</td>
+<td>4</td>
+<td>grep</td>
+<td>196.48</td>
+<td>644.216</td>
+<td>-453.453</td>
+<td>73381.646</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_101</td>
+<td>14</td>
+<td>5</td>
+<td>grep</td>
+<td>195.414</td>
+<td>106.568</td>
+<td>71.816</td>
+<td>72910.676</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_102</td>
+<td>14</td>
+<td>6</td>
+<td>grep</td>
+<td>197.049</td>
+<td>104.377</td>
+<td>74.728</td>
+<td>72881.092</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_103</td>
+<td>14</td>
+<td>7</td>
+<td>grep</td>
+<td>197.538</td>
+<td>107.562</td>
+<td>78.131</td>
+<td>72884.04</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_104</td>
+<td>14</td>
+<td>8</td>
+<td>grep</td>
+<td>192.739</td>
+<td>102.778</td>
+<td>87.198</td>
+<td>72920.222</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_105</td>
+<td>14</td>
+<td>9</td>
+<td>grep</td>
+<td>193.82</td>
+<td>103.594</td>
+<td>80.432</td>
+<td>72909.904</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_106</td>
+<td>14</td>
+<td>10</td>
+<td>grep</td>
+<td>197.37</td>
+<td>102.14</td>
+<td>74.321</td>
+<td>72921.476</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_107</td>
+<td>15</td>
+<td>0</td>
+<td>ls</td>
+<td>14.246</td>
+<td>1110.592</td>
+<td>-1113.567</td>
+<td>1724.101</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_108</td>
+<td>15</td>
+<td>1</td>
+<td>read_file</td>
+<td>9.497</td>
+<td>931.694</td>
+<td>-930.458</td>
+<td>4889.477</td>
+<td>56</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_109</td>
+<td>15</td>
+<td>2</td>
+<td>read_file</td>
+<td>13.239</td>
+<td>874.725</td>
+<td>-873.795</td>
+<td>4838.09</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_110</td>
+<td>15</td>
+<td>3</td>
+<td>read_file</td>
+<td>9.447</td>
+<td>882.208</td>
+<td>-876.104</td>
+<td>4851.039</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_111</td>
+<td>15</td>
+<td>4</td>
+<td>read_file</td>
+<td>9.094</td>
+<td>923.079</td>
+<td>-928.18</td>
+<td>4903.855</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_112</td>
+<td>15</td>
+<td>5</td>
+<td>read_file</td>
+<td>9.789</td>
+<td>773.352</td>
+<td>-768.653</td>
+<td>4830.866</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_113</td>
+<td>15</td>
+<td>6</td>
+<td>read_file</td>
+<td>9.298</td>
+<td>105.985</td>
+<td>-100.481</td>
+<td>4149.668</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_114</td>
+<td>15</td>
+<td>7</td>
+<td>read_file</td>
+<td>9.134</td>
+<td>172.532</td>
+<td>-177.474</td>
+<td>4149.579</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_115</td>
+<td>15</td>
+<td>8</td>
+<td>read_file</td>
+<td>9.075</td>
+<td>169.255</td>
+<td>-176.012</td>
+<td>4146.157</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>live_gap_116</td>
+<td>15</td>
+<td>9</td>
+<td>read_file</td>
+<td>9.07</td>
+<td>169.697</td>
+<td>-176.584</td>
+<td>4147.505</td>
+<td>0</td>
+<td>0</td>
+</tr>
+</tbody></table></div>
+  </details>
+
+
+  <details id="observations" class="section-card theme-observations">
+    <summary><h2>Key Observations Per Gap/Session</h2></summary>
+    <p>This section translates the timeline rows into plain English. It uses the same compact row names as the chart, so <code>G00</code> here means the same <code>G00</code> in the timeline.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>row</th>
+<th>mode</th>
+<th>status</th>
+<th>what happened</th>
+<th>why it matters</th>
+<th>tool_wait_ms</th>
+<th>resume_ttft_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>G00</td>
+<td>direct_prefetch</td>
+<td>Prefetch ready, but replay also loaded KV</td>
+<td>The prefetch attempt finished 9963 ms before the resume request was due. But replay-side KV HtoD was also visible later.</td>
+<td>This is an important hardware argument: moving KV early is not enough unless residency and reuse are also protected.</td>
+<td>100.0</td>
+<td>197.878</td>
+</tr>
+<tr>
+<td>G01</td>
+<td>direct_prefetch</td>
+<td>Prefetch ready, but replay also loaded KV</td>
+<td>The prefetch attempt finished 4894 ms before the resume request was due. But replay-side KV HtoD was also visible later.</td>
+<td>This is an important hardware argument: moving KV early is not enough unless residency and reuse are also protected.</td>
+<td>250.0</td>
+<td>420.187</td>
+</tr>
+<tr>
+<td>G02</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 420 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>500.0</td>
+<td>1197.198</td>
+</tr>
+<tr>
+<td>G03</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 351 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>1000.0</td>
+<td>533.347</td>
+</tr>
+<tr>
+<td>G04</td>
+<td>direct_prefetch</td>
+<td>Prefetch ready, but replay also loaded KV</td>
+<td>The prefetch attempt finished 5037 ms before the resume request was due. But replay-side KV HtoD was also visible later.</td>
+<td>This is an important hardware argument: moving KV early is not enough unless residency and reuse are also protected.</td>
+<td>100.0</td>
+<td>596.812</td>
+</tr>
+<tr>
+<td>G05</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 247 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>250.0</td>
+<td>596.812</td>
+</tr>
+<tr>
+<td>G06</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 279 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>500.0</td>
+<td>1528.227</td>
+</tr>
+<tr>
+<td>G07</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 187 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>100.0</td>
+<td>565.068</td>
+</tr>
+<tr>
+<td>G08</td>
+<td>direct_prefetch</td>
+<td>Prefetch ready, but replay also loaded KV</td>
+<td>The prefetch attempt finished 9927 ms before the resume request was due. But replay-side KV HtoD was also visible later.</td>
+<td>This is an important hardware argument: moving KV early is not enough unless residency and reuse are also protected.</td>
+<td>250.0</td>
+<td>564.988</td>
+</tr>
+<tr>
+<td>G09</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 379 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>500.0</td>
+<td>1192.834</td>
+</tr>
+<tr>
+<td>G10</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 505 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>1000.0</td>
+<td>718.847</td>
+</tr>
+<tr>
+<td>G11</td>
+<td>direct_prefetch</td>
+<td>Useful direct KV prefetch</td>
+<td>The prefetch attempt finished 10022 ms before the resume request was due. Direct KV HtoD movement was visible on the hint side, with no replay-side HtoD in this row.</td>
+<td>This is the clean success case: the hint appears to have prepared KV before the agent resumed.</td>
+<td>100.0</td>
+<td>1310.11</td>
+</tr>
+<tr>
+<td>G12</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 1310 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>250.0</td>
+<td>1814.808</td>
+</tr>
+<tr>
+<td>G13</td>
+<td>direct_prefetch</td>
+<td>Late prefetch; replay loaded KV</td>
+<td>The prefetch attempt finished 335 ms after the resume request was already due. The resume request also showed replay-side KV HtoD movement.</td>
+<td>This is the failure case: the normal request path had to move KV because the hint path did not finish in time.</td>
+<td>500.0</td>
+<td>1615.116</td>
+</tr>
+<tr>
+<td>G14</td>
+<td>no_prefetch</td>
+<td>No prefetch; replay loaded KV</td>
+<td>No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement.</td>
+<td>This is the baseline: the real request path had to handle KV movement at resume time.</td>
+<td>100.0</td>
+<td>205.691</td>
+</tr>
+<tr>
+<td>G15</td>
+<td>no_prefetch</td>
+<td>No prefetch; replay loaded KV</td>
+<td>No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement.</td>
+<td>This is the baseline: the real request path had to handle KV movement at resume time.</td>
+<td>250.0</td>
+<td>396.311</td>
+</tr>
+<tr>
+<td>G16</td>
+<td>no_prefetch</td>
+<td>No prefetch; replay loaded KV</td>
+<td>No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement.</td>
+<td>This is the baseline: the real request path had to handle KV movement at resume time.</td>
+<td>500.0</td>
+<td>1161.835</td>
+</tr>
+<tr>
+<td>G17</td>
+<td>no_prefetch</td>
+<td>No prefetch; replay loaded KV</td>
+<td>No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement.</td>
+<td>This is the baseline: the real request path had to handle KV movement at resume time.</td>
+<td>1000.0</td>
+<td>530.251</td>
+</tr>
+</tbody></table></div>
+  </details>
+
+  <details id="performance" class="section-card theme-clean-table">
+    <summary><h2>Mode Tables</h2></summary>
+    <h3>Mode Summary</h3>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>mode</th>
+<th>controlled_gaps</th>
+<th>prefetch_attempts</th>
+<th>late_prefetches</th>
+<th>median_prefetch_margin_ms</th>
+<th>avg_resume_ttft_ms</th>
+<th>hint_h2d_gaps</th>
+<th>replay_h2d_gaps</th>
+</tr></thead><tbody>
+<tr>
+<td>direct_prefetch</td>
+<td>16</td>
+<td>16</td>
+<td>11</td>
+<td>-307.019</td>
+<td>1028.348</td>
+<td>13</td>
+<td>13</td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>16</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td>977.723</td>
+<td>0</td>
+<td>12</td>
+</tr>
+</tbody></table></div>
+  </details>
+
+  <details id="direct-kv" class="section-card theme-directkv">
+    <summary><h2>Direct KV Load Evidence</h2></summary>
+    <p>Green bars and <code>direct_kv_h2d_*</code> columns come from SGLang-level KV movement hooks and lightweight copy telemetry during the prefetch attempt. Cyan/replay columns show KV movement performed by the real resume request.</p>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>session_id</th>
+<th>mode</th>
+<th>tool_gap_ms</th>
+<th>prefetch_margin_ms</th>
+<th>movement_class</th>
+<th>direct_kv_h2d_events</th>
+<th>direct_kv_h2d_duration_ms</th>
+<th>replay_kv_h2d_events</th>
+<th>replay_kv_h2d_duration_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>direct_prefetch</td>
+<td>100</td>
+<td>9962.762</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>259.33</td>
+<td>89</td>
+<td>374.324</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>250</td>
+<td>4893.561</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>389.837</td>
+<td>89</td>
+<td>398.635</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>500</td>
+<td>-419.873</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>33</td>
+<td>286.853</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>1000</td>
+<td>-350.933</td>
+<td>hint and replay both moved KV</td>
+<td>3</td>
+<td>10.763</td>
+<td>92</td>
+<td>380.578</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>100</td>
+<td>5037.496</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>454.757</td>
+<td>2</td>
+<td>4.023</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>250</td>
+<td>-246.529</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>489.48</td>
+<td>122</td>
+<td>961.127</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>500</td>
+<td>-279.443</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>576.978</td>
+<td>89</td>
+<td>576.978</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>1000</td>
+<td>-1527.881</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td></td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>direct_prefetch</td>
+<td>100</td>
+<td>-186.748</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>326.252</td>
+<td>122</td>
+<td>844.6</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>250</td>
+<td>9926.543</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>387.54</td>
+<td>2</td>
+<td>3.835</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>500</td>
+<td>-379.34</td>
+<td>hint and replay both moved KV</td>
+<td>4</td>
+<td>29.926</td>
+<td>37</td>
+<td>369.694</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>1000</td>
+<td>-505.35</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>433.906</td>
+<td>178</td>
+<td>882.464</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>100</td>
+<td>10022.452</td>
+<td>hint-side KV movement observed</td>
+<td>88</td>
+<td>177.989</td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>250</td>
+<td>-1310.156</td>
+<td>hint and replay both moved KV</td>
+<td>88</td>
+<td>192.322</td>
+<td>88</td>
+<td>192.322</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>500</td>
+<td>-334.595</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>740.344</td>
+<td>89</td>
+<td>740.344</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>1000</td>
+<td>-1614.759</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td></td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>no_prefetch</td>
+<td>100</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>89</td>
+<td>396.398</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>250</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>89</td>
+<td>382.593</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>500</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>33</td>
+<td>269.459</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>1000</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>3</td>
+<td>10.877</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>100</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>89</td>
+<td>450.715</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>250</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>33</td>
+<td>462.224</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>500</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>88</td>
+<td>239.609</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>1000</td>
+<td></td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td></td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>no_prefetch</td>
+<td>100</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>89</td>
+<td>405.77</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>250</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>89</td>
+<td>437.656</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>500</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>33</td>
+<td>321.942</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>1000</td>
+<td></td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td></td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>100</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>88</td>
+<td>173.288</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>250</td>
+<td></td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td></td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>500</td>
+<td></td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td></td>
+<td>88</td>
+<td>285.402</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>1000</td>
+<td></td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td></td>
+<td>0</td>
+<td></td>
+</tr>
+</tbody></table></div>
+  </details>
+
+  <details id="appendix" class="section-card theme-appendix">
+    <summary><h2>Gap Details</h2></summary>
+    <div class="table-wrap"><table>
+<thead><tr>
+<th>session_id</th>
+<th>mode</th>
+<th>task_index</th>
+<th>tool_names</th>
+<th>tool_gap_ms</th>
+<th>prefetch_duration_ms</th>
+<th>prefetch_margin_ms</th>
+<th>resume_ttft_ms</th>
+<th>movement_class</th>
+<th>direct_kv_h2d_events</th>
+<th>replay_kv_h2d_events</th>
+</tr></thead><tbody>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td>8612.54</td>
+<td>9962.762</td>
+<td>197.878</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td>13681.129</td>
+<td>4893.561</td>
+<td>420.187</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td>18746.089</td>
+<td>-419.873</td>
+<td>1197.198</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>33</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td>32494.139</td>
+<td>-350.933</td>
+<td>533.347</td>
+<td>hint and replay both moved KV</td>
+<td>3</td>
+<td>92</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td>27607.339</td>
+<td>5037.496</td>
+<td>596.812</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>2</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td>32891.118</td>
+<td>-246.529</td>
+<td>596.812</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>122</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td>40141.439</td>
+<td>-279.443</td>
+<td>1528.227</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td>40889.203</td>
+<td>-1527.881</td>
+<td>1745.678</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td>33390.324</td>
+<td>-186.748</td>
+<td>565.068</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>122</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td>23278.574</td>
+<td>9926.543</td>
+<td>564.988</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>2</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td>33522.466</td>
+<td>-379.34</td>
+<td>1192.834</td>
+<td>hint and replay both moved KV</td>
+<td>4</td>
+<td>37</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td>65066.396</td>
+<td>-505.35</td>
+<td>718.847</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>178</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td>53975.71</td>
+<td>10022.452</td>
+<td>1310.11</td>
+<td>hint-side KV movement observed</td>
+<td>88</td>
+<td>0</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td>65307.964</td>
+<td>-1310.156</td>
+<td>1814.808</td>
+<td>hint and replay both moved KV</td>
+<td>88</td>
+<td>88</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td>84058.216</td>
+<td>-334.595</td>
+<td>1615.116</td>
+<td>hint and replay both moved KV</td>
+<td>89</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>direct_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td>84839.665</td>
+<td>-1614.759</td>
+<td>1855.651</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td></td>
+<td></td>
+<td>205.691</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td></td>
+<td></td>
+<td>396.311</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td></td>
+<td></td>
+<td>1161.835</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>33</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td></td>
+<td></td>
+<td>530.251</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>3</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td></td>
+<td></td>
+<td>225.021</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td></td>
+<td></td>
+<td>530.931</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>33</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td></td>
+<td></td>
+<td>1273.536</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>88</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td></td>
+<td></td>
+<td>1436.401</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>m27_000_agentbench_000_agentbench-20260817_141828_planning_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td></td>
+<td></td>
+<td>208.716</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_001_agentbench_001_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td></td>
+<td></td>
+<td>417.972</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>89</td>
+</tr>
+<tr>
+<td>m27_002_agentbench_002_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td></td>
+<td></td>
+<td>1214.721</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>33</td>
+</tr>
+<tr>
+<td>m27_003_agentbench_003_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td></td>
+<td></td>
+<td>2123.013</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>m27_004_agentbench_004_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>100</td>
+<td></td>
+<td></td>
+<td>1218.323</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>88</td>
+</tr>
+<tr>
+<td>m27_005_agentbench_005_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>250</td>
+<td></td>
+<td></td>
+<td>1859.408</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>m27_006_agentbench_006_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>500</td>
+<td></td>
+<td></td>
+<td>1321.539</td>
+<td>replay loaded KV</td>
+<td>0</td>
+<td>88</td>
+</tr>
+<tr>
+<td>m27_007_agentbench_007_agentbench-20260817_141828_execution_to_execution</td>
+<td>no_prefetch</td>
+<td>0</td>
+<td></td>
+<td>1000</td>
+<td></td>
+<td></td>
+<td>1519.897</td>
+<td>no visible HtoD</td>
+<td>0</td>
+<td>0</td>
+</tr>
+</tbody></table></div>
+  </details>
+
+  <details id="reproduce" class="section-card theme-reproduce">
+    <summary><h2>Reproduce This Report</h2></summary>
+    <p>This section gives copy-paste commands for reproducing the direct-KV controlled replay master report. The default experiment compares only <code>no_prefetch</code> and <code>direct_prefetch</code>. Labeled runs write to their own folder and do not overwrite the normal latest report.</p>
+<h3>Rebuild This Exact Report</h3>
+<p>Use this when the run folders already exist and you only want to regenerate the HTML, tables, and timelines.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/build_milestone27_controlled_replay_report.py \
+  --root artifacts/results/milestone27_two_mode_20260817_234633 \
+  --out-dir artifacts/results/milestone27_two_mode_20260817_234633/controlled_replay_report \
+  --latest-root artifacts/results \
+  --max-timeline-gaps 18</code></pre>
+<p>Output:</p>
+<pre><code>artifacts/results/milestone27_two_mode_20260817_234633/controlled_replay_report/controlled_replay_report.html
+artifacts/results/latest_master_report.html</code></pre>
+<h3>Run A New Labeled Controlled Replay Experiment</h3>
+<p>Use this for a new manager-demo run from an existing real prompt-pair workload. This keeps the output under a label-specific folder.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+export REPORT_LABEL=manager_demo_1
+export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
+export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
+
+WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
+MAX_PAIRS=8 \
+MODES=&quot;no_prefetch direct_prefetch&quot; \
+TOOL_WAIT_LIST_MS=&quot;100 250 500 1000&quot; \
+FILLER_LIST=&quot;16 32&quot; \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct</code></pre>
+<p>Output:</p>
+<pre><code>artifacts/results/labeled/controlled_replay/manager_demo_1/controlled_replay_report/controlled_replay_report.html
+artifacts/results/labeled/controlled_replay/manager_demo_1/latest/latest_master_report.html</code></pre>
+<h3>Generate The Live Direct-Prefetch Timeline</h3>
+<p>Use this when you want the real SWE-bench / DeepAgents live timeline in <code>latest_master_report.html</code>. This is the current preferred live path: real tool calls create live gaps, and the controller tries direct SGLang KV load-back during those gaps.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+# This runs the real SWE-bench / DeepAgents live path and generates
+# the live direct-prefetch timeline inside latest_master_report.html.
+RESULT_ROOT=artifacts/results/milestone26_live_direct_only_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+START_INDEX=1 \
+END_INDEX=4 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=6 \
+AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=512 \
+MAX_TOTAL_TOKENS=16384 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone26_live_direct_kv_load_intervention.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+
+# Rebuild the master report so it includes the latest controlled replay
+# section plus the latest live direct-prefetch section.
+bash scripts/build_latest_master_with_live_direct.sh</code></pre>
+<p>Output:</p>
+<pre><code>artifacts/results/latest_master_report.html</code></pre>
+<h3>Run A Full Live Paired Experiment</h3>
+<p>Use this when you want both live no-prefetch and live direct-prefetch runs. This is heavier, but it gives a fuller real-workload comparison.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+# This runs both live no-prefetch and live direct-prefetch, then builds
+# the real-workload master report. It takes longer than the direct-only path.
+RESULT_ROOT=artifacts/results/milestone26_live_paired_direct_kv_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+START_INDEX=0 \
+END_INDEX=15 \
+AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10 \
+MAX_TOTAL_TOKENS=32768 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.45 \
+bash scripts/run_milestone26_live_paired_direct_kv_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct</code></pre>
+<h3>Build Prompt Pairs From An AgentBench Trace Index</h3>
+<p>Use this when you have an AgentBench trace index and want the script to extract real Turn A / Turn B prompt pairs first.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+export REPORT_LABEL=trace_index_demo_1
+export RESULT_ROOT=artifacts/results/labeled/controlled_replay/${REPORT_LABEL}
+export LATEST_REPORT_ROOT=${RESULT_ROOT}/latest
+
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+MAX_PAIRS=8 \
+MODES=&quot;no_prefetch direct_prefetch&quot; \
+TOOL_WAIT_LIST_MS=&quot;100 250 500 1000&quot; \
+FILLER_LIST=&quot;16 32&quot; \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct</code></pre>
+<h3>Deliberately Refresh The Latest Master Report</h3>
+<p>Only use this when you want to replace <code>artifacts/results/latest_master_report.html</code>.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
+MAX_PAIRS=8 \
+MODES=&quot;no_prefetch direct_prefetch&quot; \
+TOOL_WAIT_LIST_MS=&quot;100 250 500 1000&quot; \
+FILLER_LIST=&quot;16 32&quot; \
+REQUEST_CONCURRENCY=4 \
+MAX_TOTAL_TOKENS=8192 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct</code></pre>
+  </details>
+</main>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const cards = Array.from(document.querySelectorAll("details.section-card"));
+  document.querySelectorAll(".toc a[href^='#']").forEach(function (link) {
+    link.addEventListener("click", function () {
+      const id = link.getAttribute("href").slice(1);
+      const target = document.getElementById(id);
+      if (target && target.tagName.toLowerCase() === "details") {
+        target.open = true;
+      }
+    });
+  });
+  document.querySelectorAll("[data-action='expand-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = true; });
+    });
+  });
+  document.querySelectorAll("[data-action='collapse-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = false; });
+    });
+  });
+});
+</script>
+
+</body>
+</html>

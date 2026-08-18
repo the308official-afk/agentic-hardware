@@ -1,0 +1,2546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Milestone 12 Paired Evidence Report</title>
+<style>
+:root{--ink:#111827;--muted:#4b5563;--line:#e5e7eb;--soft:#f8fafc;--panel:#ffffff;--good:#166534;--bad:#b91c1c;--warn:#b45309}
+body{font-family:Arial,sans-serif;margin:28px;background:var(--soft);color:var(--ink)}
+h1{font-size:32px;margin:0 0 8px} h2{font-size:22px;margin:0 0 12px} h3{font-size:16px;margin:14px 0 8px}
+.subtle{color:var(--muted);line-height:1.5;margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:18px 0;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px}
+.card{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fbfdff}
+.card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.card .value{font-size:24px;font-weight:700;margin-top:6px}
+.theme-summary{--theme:#1e3a8a;--theme-bg:#eff6ff}
+.theme-setup{--theme:#2563eb;--theme-bg:#eff6ff}
+.theme-guide{--theme:#475569;--theme-bg:#f1f5f9}
+.theme-global{--theme:#dc2626;--theme-bg:#fef2f2}
+.theme-clean{--theme:#15803d;--theme-bg:#f0fdf4}
+.theme-clean-table{--theme:#65a30d;--theme-bg:#f7fee7}
+.theme-profiled{--theme:#7e22ce;--theme-bg:#faf5ff}
+.theme-deductions{--theme:#b45309;--theme-bg:#fffbeb}
+.theme-observations{--theme:#0f766e;--theme-bg:#f0fdfa}
+.theme-paired{--theme:#be123c;--theme-bg:#fff1f2}
+.theme-reproduce{--theme:#0891b2;--theme-bg:#ecfeff}
+.theme-appendix{--theme:#64748b;--theme-bg:#f8fafc}
+.panel[class*='theme-']{border-top:5px solid var(--theme)}
+.panel[class*='theme-']>h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme)}
+details.section-card{background:var(--panel);border:1px solid var(--line);border-top:5px solid var(--theme);border-radius:8px;padding:18px;margin:18px 0;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+details.section-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
+details.section-card summary::-webkit-details-marker{display:none}
+details.section-card summary h2{border-left:8px solid var(--theme);padding-left:10px;color:var(--theme);margin:0}
+details.section-card summary h2::before{content:'▶';display:inline-block;color:var(--theme);font-size:16px;margin-right:8px;transform:translateY(-1px)}
+details.section-card[open] summary h2::before{content:'▼'}
+.section-color-legend{color:#475569;font-size:14px;margin:8px 0 12px}
+.toc{display:flex;flex-wrap:wrap;gap:10px 12px;margin-top:14px}
+.toc a{background:var(--theme-bg,#f1f5f9);border:1px solid #e2e8f0;border-left:7px solid var(--theme,#64748b);border-radius:6px;padding:7px 10px;color:#0f172a;text-decoration:none;font-weight:650}
+.toc-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.toc-actions button{border:1px solid #cbd5e1;background:#fff;color:#0f172a;border-radius:6px;padding:7px 10px;font-weight:650;cursor:pointer}
+.toc-actions button:hover{background:#f8fafc}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13px;background:white}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:700;white-space:nowrap}
+td{white-space:normal;min-width:90px}
+.wide td{min-width:180px}
+.caption{color:#374151;line-height:1.5}
+.good{color:var(--good);font-weight:700}
+.bad{color:var(--bad);font-weight:700}
+.warn{color:var(--warn);font-weight:700}
+.pill{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;background:#eef2ff;color:#3730a3}
+ul{line-height:1.55;margin:8px 0 0 20px;padding:0}
+code{background:#f3f4f6;border-radius:4px;padding:1px 4px}
+pre{white-space:pre-wrap;background:#0f172a;color:#e5e7eb;border-radius:8px;padding:12px;overflow:auto}
+</style>
+</head>
+<body>
+<h1>Milestone 12 Paired Evidence Report</h1>
+<p class="subtle">Clean runs answer performance questions. Profiled runs answer mechanism questions. This keeps the TTFT story separate from profiler overhead.</p>
+<div class="panel"><h2>Table of Contents</h2><p class="section-color-legend">Colors group sections by evidence type: setup, clean performance, profiled mechanism, interpretation, and appendix.</p><div class="toc"><a class="theme-summary" href="#executive">Executive Summary</a><a class="theme-setup" href="#setup">Experiment Setup</a><a class="theme-guide" href="#timeline-guide">How To Read Timelines</a><a class="theme-global" href="#global-prefetch">Global Prefetch Margin</a><a class="theme-clean" href="#clean-timelines">Clean Performance Timelines</a><a class="theme-clean" href="#expanded-clean-timelines">Expanded Per-Gap Timelines</a><a class="theme-clean-table" href="#clean-tables">Clean Performance Tables</a><a class="theme-profiled" href="#profiled-timelines">Profiled Mechanism Timelines</a><a class="theme-profiled" href="#profiled-tables">Profiled Mechanism Tables</a><a class="theme-deductions" href="#deductions">Key Deductions</a><a class="theme-observations" href="#observations">Session Observations</a><a class="theme-paired" href="#paired">Paired Evidence</a><a class="theme-reproduce" href="#reproduce">Reproduce This Report</a><a class="theme-appendix" href="#appendix">Appendix</a></div><div class="toc-actions"><button type="button" data-action="expand-all">Expand All</button><button type="button" data-action="collapse-all">Collapse All</button></div></div>
+<div class="panel theme-summary" id="executive"><h2>Executive Summary</h2>
+<p class="caption">This report is designed to answer two different questions without mixing them together.</p>
+<ul>
+<li>The clean run is the performance source of truth because it runs without torch.profiler overhead.</li>
+<li>The mechanism run is the movement source of truth because it exposes lightweight SGLang KV-copy telemetry, with torch-profiler CUDA HtoD as optional validation.</li>
+<li>Best clean mode so far: oracle_direct_load with -57.929 ms average replay TTFT delta versus no_prefetch.</li>
+<li>Mechanism attribution: KV copy ready before replay in 0 / 6 sessions; profiler CUDA HtoD visible in 3 / 6 sessions; replay reloaded KV in 6 / 6 sessions.</li>
+</ul>
+<div class="cards">
+<div class="card"><div class="label">Baseline Replay TTFT</div><div class="value">172.867 ms</div><p class="subtle">From the clean no-prefetch run.</p></div>
+<div class="card"><div class="label">Best Clean Delta</div><div class="value">-57.929 ms</div><p class="subtle">Best mode: oracle_direct_load.</p></div>
+<div class="card"><div class="label">KV Copy Ready</div><div class="value">0 / 6</div><p class="subtle">Sessions where scalable KV-copy telemetry finished before replay.</p></div>
+<div class="card"><div class="label">Replay Reloaded KV</div><div class="value">6 / 6</div><p class="subtle">Profiled sessions where replay still did KV load-back work.</p></div>
+</div></div>
+<div class="panel theme-setup" id="setup"><h2>Experiment Setup And Manager Summary</h2>
+<p class="caption">This section is intended for slide-building. It explains how the controlled synthetic experiment was set up, what was measured, and how to read the hardware motivation.</p>
+<svg viewBox="0 0 1440 210" width="100%" role="img" aria-label="Simple synthetic experiment setup flow diagram">
+<defs>
+<marker id="synthetic-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+</marker>
+</defs>
+<rect x="20" y="25" width="1400" height="150" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>
+<line x1="240" y1="102" x2="280" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>
+<line x1="470" y1="102" x2="510" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>
+<line x1="700" y1="102" x2="740" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>
+<line x1="930" y1="102" x2="970" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>
+<line x1="1160" y1="102" x2="1200" y2="102" stroke="#334155" stroke-width="2" marker-end="url(#synthetic-arrow)"/>
+<rect x="50" y="65" width="190" height="74" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="145.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Agent Task</text>
+<text x="145.0" y="113" text-anchor="middle" font-size="12" fill="#475569">synthetic session</text>
+<rect x="280" y="65" width="190" height="74" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="375.0" y="92" text-anchor="middle" font-size="15" font-weight="700">First Turn</text>
+<text x="375.0" y="113" text-anchor="middle" font-size="12" fill="#475569">model builds KV</text>
+<rect x="510" y="65" width="190" height="74" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="605.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Tool Call</text>
+<text x="605.0" y="113" text-anchor="middle" font-size="12" fill="#475569">controlled trigger</text>
+<rect x="740" y="65" width="190" height="74" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+<text x="835.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Tool Wait Gap</text>
+<text x="835.0" y="113" text-anchor="middle" font-size="12" fill="#475569">prefetch opportunity</text>
+<rect x="970" y="65" width="190" height="74" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+<text x="1065.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Hint / Prefetch</text>
+<text x="1065.0" y="113" text-anchor="middle" font-size="12" fill="#475569">warm/direct-load/oracle</text>
+<rect x="1200" y="65" width="190" height="74" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="1295.0" y="92" text-anchor="middle" font-size="15" font-weight="700">Resume Turn</text>
+<text x="1295.0" y="113" text-anchor="middle" font-size="12" fill="#475569">measure TTFT + reloads</text>
+<text x="720" y="192" text-anchor="middle" font-size="13" fill="#475569">Core question: was the right KV ready before the resume turn arrived?</text>
+</svg>
+<h3>Simple Setup</h3>
+<div class="table-wrap">
+<table><thead><tr>
+<th>part</th>
+<th>simple meaning</th>
+<th>example</th>
+</tr></thead><tbody>
+<tr>
+<td>1. Request source</td>
+<td>Synthetic agent sessions create controlled model turns.</td>
+<td>synthetic task -&gt; initial SGLang model request</td>
+</tr>
+<tr>
+<td>2. Tool wait window</td>
+<td>The driver inserts a controlled pause. That pause is the chance to prefetch KV.</td>
+<td>emulated read_file(), grep(), or run_tests() wait</td>
+</tr>
+<tr>
+<td>3. Resume request</td>
+<td>The replay turn arrives, and we measure whether KV was ready before first token generation.</td>
+<td>tool result arrives -&gt; replay prompt starts</td>
+</tr>
+</tbody></table>
+</div>
+<h3>Modes Compared</h3>
+<div class="table-wrap">
+<table><thead><tr>
+<th>mode</th>
+<th>what happens</th>
+</tr></thead><tbody>
+<tr>
+<td>No prefetch</td>
+<td>The system waits until replay arrives, then SGLang handles KV reuse/load normally.</td>
+</tr>
+<tr>
+<td>Prefetch modes</td>
+<td>During the tool wait, request-warm/direct-load/oracle modes try to prepare KV before replay.</td>
+</tr>
+</tbody></table>
+</div>
+<h3>What Was Measured</h3>
+<div class="table-wrap">
+<table><thead><tr>
+<th>metric</th>
+<th>meaning</th>
+</tr></thead><tbody>
+<tr>
+<td>replay TTFT</td>
+<td>Time from replay admission to first generated token in the clean run.</td>
+</tr>
+<tr>
+<td>prefetch margin</td>
+<td>Whether the copy/hint path finished before or after replay was due.</td>
+</tr>
+<tr>
+<td>KV copy ready</td>
+<td>Whether SGLang-level KV-copy telemetry finished before replay.</td>
+</tr>
+<tr>
+<td>CUDA HtoD ready</td>
+<td>Whether torch-profiler CUDA host-to-device copy evidence finished before replay.</td>
+</tr>
+<tr>
+<td>replay reloaded KV</td>
+<td>Whether the replay still triggered SGLang KV load-back work even after a hint.</td>
+</tr>
+</tbody></table>
+</div>
+<h3>What Was Observed</h3>
+<div class="table-wrap">
+<table><thead><tr>
+<th>observation</th>
+<th>evidence</th>
+</tr></thead><tbody>
+<tr>
+<td>The synthetic setup gives controlled stress conditions.</td>
+<td>We can make tool waits short, add cache pressure, and choose prefetch timing deliberately.</td>
+</tr>
+<tr>
+<td>Performance and attribution are intentionally separated.</td>
+<td>Clean runs support TTFT claims; profiled runs support DMA/KV mechanism claims.</td>
+</tr>
+<tr>
+<td>The current best clean mode is recorded in the report.</td>
+<td>Best non-baseline mode shown here: oracle_direct_load.</td>
+</tr>
+<tr>
+<td>The mechanism run shows whether KV movement was actually visible.</td>
+<td>CUDA HtoD visible sessions: 3 / 6.</td>
+</tr>
+<tr>
+<td>Replay reload behavior is a key failure signal.</td>
+<td>Replay reloaded KV in 6 / 6 profiled sessions.</td>
+</tr>
+</tbody></table>
+</div>
+<h3>Why This Supports The Hardware Proposal</h3>
+<p class="caption">The synthetic setup lets us stress the exact failure modes we care about: short tool gaps, cache pressure, late prefetch, replay reloads, and unclear residency. If a software hint path copies or loads KV too late, or if replay reloads KV anyway, that supports the need for deadline-aware KV movement, residency protection, and better hardware/runtime telemetry.</p>
+</div>
+<div class="panel theme-guide" id="timeline-guide"><h2>How To Read The Timelines</h2>
+<p class="caption">The timelines are the main visual evidence. Read the clean timelines first for performance, then the profiled mechanism timeline for KV/copy attribution.</p>
+<h3>One Row In Plain English</h3>
+<p class="caption">Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>
+<div class="table-wrap">
+<table><thead><tr>
+<th>step</th>
+<th>timeline color</th>
+<th>simple meaning</th>
+</tr></thead><tbody>
+<tr>
+<td>1. Ask model what to do</td>
+<td>blue bar</td>
+<td>model turn before the tool call</td>
+</tr>
+<tr>
+<td>2. Model says to call a tool</td>
+<td>end of blue bar</td>
+<td>the model turn hands work to a tool</td>
+</tr>
+<tr>
+<td>3. Tool runs</td>
+<td>gray bar</td>
+<td>the synthetic tool wait is happening</td>
+</tr>
+<tr>
+<td>4. Agent waits</td>
+<td>gray bar</td>
+<td>this wait is the prefetch opportunity</td>
+</tr>
+<tr>
+<td>5. Tool returns</td>
+<td>black vertical line</td>
+<td>the next model turn is due</td>
+</tr>
+<tr>
+<td>6. Agent asks model again</td>
+<td>red bar</td>
+<td>resume request after the tool result</td>
+</tr>
+<tr>
+<td>During steps 3/4, if prefetch is enabled</td>
+<td>purple bar</td>
+<td>our prefetch/direct-load attempt runs during the wait</td>
+</tr>
+</tbody></table>
+</div>
+<h3>Color Legend</h3>
+<div class="table-wrap">
+<table><thead><tr>
+<th>color</th>
+<th>meaning</th>
+<th>simple description</th>
+</tr></thead><tbody>
+<tr>
+<td>blue</td>
+<td>Initial model turn</td>
+<td>The agent asks the model what to do next. In the synthetic report, this is the first request before the simulated tool wait.</td>
+</tr>
+<tr>
+<td>gray</td>
+<td>Tool wait window</td>
+<td>The tool is assumed to be running, so the model is idle for this session. This pause is the opportunity to prepare that session&#x27;s KV before the agent resumes.</td>
+</tr>
+<tr>
+<td>purple</td>
+<td>Prefetch attempt window</td>
+<td>This includes detecting the tool-wait opportunity, creating a hint for that agent/session, calling our direct SGLang KV hook, letting SGLang check whether host-side KV exists, and if needed, asking SGLang to move KV back to GPU memory.</td>
+</tr>
+<tr>
+<td>green</td>
+<td>KV copy/load activity</td>
+<td>This is evidence that KV load/copy work was observed for the hint. Dark green is CUDA HtoD profiler evidence; light green is lightweight SGLang KV telemetry fallback.</td>
+</tr>
+<tr>
+<td>black</td>
+<td>Replay due boundary</td>
+<td>This is when the tool result is ready and the next model turn should be able to start. If purple or green finishes after this line, the prefetch path was late for that resume.</td>
+</tr>
+<tr>
+<td>red</td>
+<td>Replay request</td>
+<td>The agent asks the model to continue after the tool result. This is the request we want to speed up by having the right KV ready before it arrives.</td>
+</tr>
+<tr>
+<td>yellow</td>
+<td>First token marker</td>
+<td>This marks when the replay request starts producing output. It helps separate request arrival from first-token latency.</td>
+</tr>
+</tbody></table>
+</div></div>
+<div class="panel theme-global" id="global-prefetch"><h2>Global Prefetch Margin</h2><p class="caption">This is the high-level view across profiled synthetic sessions with measured prefetch margins. Positive margin means prefetch finished before replay; negative margin means replay was already due before prefetch finished. Sessions without visible copy/margin attribution are counted in the summary table but are not plotted as dots.</p><div class="table-wrap"><table><thead><tr>
+<th>profiled_sessions</th>
+<th>sessions_with_measured_margin</th>
+<th>sessions_without_measured_margin</th>
+<th>finished_before_replay</th>
+<th>late</th>
+<th>late_pct</th>
+<th>median_margin_ms</th>
+<th>worst_lateness_ms</th>
+<th>best_early_margin_ms</th>
+<th>avg_hint_duration_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>6</td>
+<td>3</td>
+<td>3</td>
+<td>0</td>
+<td>3</td>
+<td>100.0</td>
+<td>-84.113</td>
+<td>224.349</td>
+<td></td>
+<td>289.394</td>
+</tr>
+</tbody></table></div><h3>Linear View</h3><p class="caption">The linear view preserves the true size of large early or late margins.</p><svg viewBox="0 0 1480 500" width="100%" role="img" aria-label="Synthetic global prefetch margin dot plot linear view">
+<rect x="86" y="56" width="1360" height="362" fill="#ffffff" stroke="#e5e7eb"/>
+<line x1="86" y1="111.8" x2="1446" y2="111.8" stroke="#111827" stroke-width="2"/>
+<text x="1438" y="103.8" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>
+<text x="18" y="250" transform="rotate(-90 18 250)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms</text>
+<text x="766.0" y="478" text-anchor="middle" font-size="13" font-weight="700">synthetic session order</text>
+<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before replay</text>
+<text x="350" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>
+<line x1="80" y1="418.0" x2="1446" y2="418.0" stroke="#e5e7eb"/>
+<text x="74" y="422.0" text-anchor="end" font-size="11">-274 ms</text>
+<line x1="80" y1="264.9" x2="1446" y2="264.9" stroke="#e5e7eb"/>
+<text x="74" y="268.9" text-anchor="end" font-size="11">-137 ms</text>
+<line x1="80" y1="111.8" x2="1446" y2="111.8" stroke="#e5e7eb"/>
+<text x="74" y="115.8" text-anchor="end" font-size="11">0 ms</text>
+<line x1="80" y1="83.9" x2="1446" y2="83.9" stroke="#e5e7eb"/>
+<text x="74" y="87.9" text-anchor="end" font-size="11">25 ms</text>
+<line x1="80" y1="56.0" x2="1446" y2="56.0" stroke="#e5e7eb"/>
+<text x="74" y="60.0" text-anchor="end" font-size="11">50 ms</text>
+<circle cx="86.0" cy="205.7" r="5.9" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_000 | margin=-84.113 ms | hint_duration=226.517 ms | tool_wait=363 ms | prompt_tokens=768</title></circle>
+<text x="86.0" y="440" text-anchor="middle" font-size="10">agent_000</text>
+<circle cx="766.0" cy="362.2" r="6.4" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_003 | margin=-224.349 ms | hint_duration=357.41 ms | tool_wait=526 ms | prompt_tokens=768</title></circle>
+<text x="766.0" y="440" text-anchor="middle" font-size="10">agent_003</text>
+<circle cx="1446.0" cy="180.3" r="6.1" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_004 | margin=-61.339 ms | hint_duration=284.256 ms | tool_wait=496 ms | prompt_tokens=1024</title></circle>
+<text x="1446.0" y="440" text-anchor="middle" font-size="10">agent_004</text>
+<circle cx="86" cy="450" r="6" fill="#16a34a"/>
+<text x="98" y="454" font-size="12">early</text>
+<circle cx="231" cy="450" r="6" fill="#84cc16"/>
+<text x="243" y="454" font-size="12">barely early</text>
+<circle cx="376" cy="450" r="6" fill="#f97316"/>
+<text x="388" y="454" font-size="12">near miss</text>
+<circle cx="521" cy="450" r="6" fill="#dc2626"/>
+<text x="533" y="454" font-size="12">late</text>
+</svg><h3>Symlog View</h3><p class="caption">Same data as above, but compressed with a symmetric log-style scale so both small near-deadline misses and very large late prefetches are easier to see. Above zero still means early; below zero still means late.</p><svg viewBox="0 0 1480 500" width="100%" role="img" aria-label="Synthetic global prefetch margin dot plot symlog view">
+<rect x="86" y="56" width="1360" height="362" fill="#ffffff" stroke="#e5e7eb"/>
+<line x1="86" y1="153.9" x2="1446" y2="153.9" stroke="#111827" stroke-width="2"/>
+<text x="1438" y="145.9" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>
+<text x="18" y="250" transform="rotate(-90 18 250)" text-anchor="middle" font-size="13" font-weight="700">prefetch margin ms (symlog)</text>
+<text x="766.0" y="478" text-anchor="middle" font-size="13" font-weight="700">synthetic session order</text>
+<text x="94" y="34" font-size="13" fill="#166534" font-weight="700">above line = finished before replay</text>
+<text x="350" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late prefetch</text>
+<line x1="80" y1="418.0" x2="1446" y2="418.0" stroke="#e5e7eb"/>
+<text x="74" y="422.0" text-anchor="end" font-size="11">-274 ms</text>
+<line x1="80" y1="309.1" x2="1446" y2="309.1" stroke="#e5e7eb"/>
+<text x="74" y="313.1" text-anchor="end" font-size="11">-100 ms</text>
+<line x1="80" y1="251.8" x2="1446" y2="251.8" stroke="#e5e7eb"/>
+<text x="74" y="255.8" text-anchor="end" font-size="11">-50 ms</text>
+<line x1="80" y1="153.9" x2="1446" y2="153.9" stroke="#e5e7eb"/>
+<text x="74" y="157.9" text-anchor="end" font-size="11">0 ms</text>
+<line x1="80" y1="56.0" x2="1446" y2="56.0" stroke="#e5e7eb"/>
+<text x="74" y="60.0" text-anchor="end" font-size="11">50 ms</text>
+<circle cx="86.0" cy="293.3" r="5.9" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_000 | margin=-84.113 ms | hint_duration=226.517 ms | tool_wait=363 ms | prompt_tokens=768</title></circle>
+<text x="86.0" y="440" text-anchor="middle" font-size="10">agent_000</text>
+<circle cx="766.0" cy="394.4" r="6.4" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_003 | margin=-224.349 ms | hint_duration=357.41 ms | tool_wait=526 ms | prompt_tokens=768</title></circle>
+<text x="766.0" y="440" text-anchor="middle" font-size="10">agent_003</text>
+<circle cx="1446.0" cy="267.0" r="6.1" fill="#dc2626" opacity="0.88" stroke="#ffffff" stroke-width="1.4"><title>agent_004 | margin=-61.339 ms | hint_duration=284.256 ms | tool_wait=496 ms | prompt_tokens=1024</title></circle>
+<text x="1446.0" y="440" text-anchor="middle" font-size="10">agent_004</text>
+<circle cx="86" cy="450" r="6" fill="#16a34a"/>
+<text x="98" y="454" font-size="12">early</text>
+<circle cx="231" cy="450" r="6" fill="#84cc16"/>
+<text x="243" y="454" font-size="12">barely early</text>
+<circle cx="376" cy="450" r="6" fill="#f97316"/>
+<text x="388" y="454" font-size="12">near miss</text>
+<circle cx="521" cy="450" r="6" fill="#dc2626"/>
+<text x="533" y="454" font-size="12">late</text>
+</svg><h3>Margin Buckets</h3><div class="table-wrap"><table><thead><tr>
+<th>bucket</th>
+<th>sessions</th>
+<th>pct</th>
+</tr></thead><tbody>
+<tr>
+<td>&gt; +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>+100 to +500 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to +100 ms early</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>0 to -100 ms late</td>
+<td>2</td>
+<td>66.67</td>
+</tr>
+<tr>
+<td>-100 to -500 ms late</td>
+<td>1</td>
+<td>33.33</td>
+</tr>
+<tr>
+<td>&lt; -500 ms late</td>
+<td>0</td>
+<td>0.0</td>
+</tr>
+</tbody></table></div><h3>Points Behind The Plot</h3><div class="table-wrap"><table><thead><tr>
+<th>session_id</th>
+<th>priority</th>
+<th>prompt_tokens</th>
+<th>tool_wait_ms</th>
+<th>hint_total_duration_ms</th>
+<th>prefetch_margin_ms</th>
+<th>checkpoint_result</th>
+<th>verdict</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_000</td>
+<td>high</td>
+<td>768</td>
+<td>363</td>
+<td>226.517</td>
+<td>-84.113</td>
+<td>not_ready</td>
+<td>late</td>
+</tr>
+<tr>
+<td>agent_003</td>
+<td>normal</td>
+<td>768</td>
+<td>526</td>
+<td>357.41</td>
+<td>-224.349</td>
+<td>not_ready</td>
+<td>late</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>high</td>
+<td>1024</td>
+<td>496</td>
+<td>284.256</td>
+<td>-61.339</td>
+<td>not_ready</td>
+<td>late</td>
+</tr>
+</tbody></table></div></div>
+<div class="panel theme-guide"><h2>How To Read This Report</h2>
+<p class="caption"><span class="pill">Clean performance</span> comes from profiler-off runs. Use these rows for TTFT and latency claims.</p>
+<p class="caption"><span class="pill">Mechanism attribution</span> shows lightweight SGLang KV-copy telemetry, optional torch-profiler CUDA HtoD validation, hint completion, and replay reload behavior.</p>
+<p class="caption"><span class="pill">Paired evidence</span> joins the two views by session id, so we can say what improved and what mechanism was observed.</p>
+</div>
+<div class="panel theme-deductions" id="deductions"><h2>Key Deductions</h2><ul>
+<li>We should judge TTFT using the clean run, then use the profiled run to explain why the result happened.</li>
+<li>Some hint paths did not fully finish before replay. That supports the concern that software hints can be delayed by the normal serving path.</li>
+<li>6 paired sessions show replay reload behavior, which is the exact failure mode eviction protection/residency hints are meant to address.</li>
+</ul></div>
+<div class="panel theme-clean" id="clean-timelines"><h2>A. Clean Performance Timelines</h2>
+<p class="caption"><span class="pill">Profiler OFF</span> Use these timelines for request-flow, replay timing, and TTFT/performance claims. They intentionally do not show CUDA HtoD bars.</p>
+<h3>no_prefetch</h3>
+<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, red is replay admission/execution, and yellow is first token. Long replay bars are clipped so the chart focuses on the resume boundary.</p>
+<svg viewBox="0 0 1500 602" width="100%" role="img" aria-label="Clean performance timeline for no_prefetch">
+<line x1="225" y1="54" x2="1445" y2="54" stroke="#111827"/>
+<line x1="225.0" y1="48" x2="225.0" y2="572" stroke="#e5e7eb"/>
+<text x="225.0" y="40" text-anchor="middle">33249 ms</text>
+<line x1="469.0" y1="48" x2="469.0" y2="572" stroke="#e5e7eb"/>
+<text x="469.0" y="40" text-anchor="middle">33730 ms</text>
+<line x1="713.0" y1="48" x2="713.0" y2="572" stroke="#e5e7eb"/>
+<text x="713.0" y="40" text-anchor="middle">34210 ms</text>
+<line x1="957.0" y1="48" x2="957.0" y2="572" stroke="#e5e7eb"/>
+<text x="957.0" y="40" text-anchor="middle">34691 ms</text>
+<line x1="1201.0" y1="48" x2="1201.0" y2="572" stroke="#e5e7eb"/>
+<text x="1201.0" y="40" text-anchor="middle">35172 ms</text>
+<line x1="1445.0" y1="48" x2="1445.0" y2="572" stroke="#e5e7eb"/>
+<text x="1445.0" y="40" text-anchor="middle">35652 ms</text>
+<text x="10" y="93" font-weight="700">agent_000</text>
+<text x="10" y="114" font-size="13" fill="#374151" font-weight="700">TTFT 125 ms</text>
+<text x="10" y="133" font-size="12" fill="#4b5563">replay TTFT 125 ms; due-&gt;token 125 ms</text>
+<line x1="225" y1="90" x2="1445" y2="90" stroke="#f3f4f6"/>
+<text x="10" y="165" font-weight="700">agent_002</text>
+<text x="10" y="186" font-size="13" fill="#374151" font-weight="700">TTFT 86 ms</text>
+<text x="10" y="205" font-size="12" fill="#4b5563">replay TTFT 86 ms; due-&gt;token 86 ms</text>
+<line x1="225" y1="162" x2="1445" y2="162" stroke="#f3f4f6"/>
+<text x="10" y="237" font-weight="700">agent_003</text>
+<text x="10" y="258" font-size="13" fill="#374151" font-weight="700">TTFT 268 ms</text>
+<text x="10" y="277" font-size="12" fill="#4b5563">replay TTFT 268 ms; due-&gt;token 268 ms</text>
+<line x1="225" y1="234" x2="1445" y2="234" stroke="#f3f4f6"/>
+<text x="10" y="309" font-weight="700">agent_005</text>
+<text x="10" y="330" font-size="13" fill="#374151" font-weight="700">TTFT 150 ms</text>
+<text x="10" y="349" font-size="12" fill="#4b5563">replay TTFT 150 ms; due-&gt;token 150 ms</text>
+<line x1="225" y1="306" x2="1445" y2="306" stroke="#f3f4f6"/>
+<text x="10" y="381" font-weight="700">agent_001</text>
+<text x="10" y="402" font-size="13" fill="#374151" font-weight="700">TTFT 151 ms</text>
+<text x="10" y="421" font-size="12" fill="#4b5563">replay TTFT 151 ms; due-&gt;token 152 ms</text>
+<line x1="225" y1="378" x2="1445" y2="378" stroke="#f3f4f6"/>
+<text x="10" y="453" font-weight="700">agent_004</text>
+<text x="10" y="474" font-size="13" fill="#374151" font-weight="700">TTFT 256 ms</text>
+<text x="10" y="493" font-size="12" fill="#4b5563">replay TTFT 256 ms; due-&gt;token 257 ms</text>
+<line x1="225" y1="450" x2="1445" y2="450" stroke="#f3f4f6"/>
+<rect x="787.6" y="82" width="184.2" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="787.4" y="370" width="96.0" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="788.1" y="154" width="84.8" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="787.8" y="226" width="267.1" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="787.7" y="442" width="252.0" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="787.9" y="298" width="222.3" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="285.9" y="82" width="501.6" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="326.8" y="370" width="460.5" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="352.2" y="154" width="435.8" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="372.0" y="226" width="415.7" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="388.6" y="442" width="399.1" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="421.9" y="298" width="366.0" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<line x1="971.8" y1="79" x2="971.8" y2="112" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="883.4" y1="367" x2="883.4" y2="400" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="872.9" y1="151" x2="872.9" y2="184" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1054.9" y1="223" x2="1054.9" y2="256" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1039.8" y1="439" x2="1039.8" y2="472" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1010.2" y1="295" x2="1010.2" y2="328" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<rect x="972.0" y="82" width="296.5" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="883.5" y="370" width="355.1" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="873.0" y="154" width="365.8" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1055.0" y="226" width="213.7" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1039.9" y="442" width="229.0" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1010.3" y="298" width="258.6" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<line x1="1035.6" y1="79" x2="1035.6" y2="112" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1035.6" y="122" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +125 ms</text>
+<line x1="960.4" y1="367" x2="960.4" y2="400" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="960.4" y="410" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +151 ms</text>
+<line x1="916.6" y1="151" x2="916.6" y2="184" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="916.6" y="194" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +86 ms</text>
+<line x1="1191.1" y1="223" x2="1191.1" y2="256" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1191.1" y="266" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +268 ms</text>
+<line x1="1170.1" y1="439" x2="1170.1" y2="472" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1170.1" y="482" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +256 ms</text>
+<line x1="1086.5" y1="295" x2="1086.5" y2="328" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1086.5" y="338" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +150 ms</text>
+<rect x="225" y="572" width="14" height="14" fill="#2563eb"/>
+<text x="245" y="584">initial</text>
+<rect x="355" y="572" width="14" height="14" fill="#d1d5db"/>
+<text x="375" y="584">tool wait</text>
+<rect x="485" y="572" width="14" height="14" fill="#7c3aed"/>
+<text x="505" y="584">hint submitted</text>
+<rect x="615" y="572" width="14" height="14" fill="#a855f7"/>
+<text x="635" y="584">hint request</text>
+<rect x="745" y="572" width="14" height="14" fill="#111827"/>
+<text x="765" y="584">replay due</text>
+<rect x="875" y="572" width="14" height="14" fill="#dc2626"/>
+<text x="895" y="584">replay</text>
+<rect x="1005" y="572" width="14" height="14" fill="#f59e0b"/>
+<text x="1025" y="584">first token</text>
+</svg>
+<div class="table-wrap">
+<table><thead><tr>
+<th>mode</th>
+<th>session_id</th>
+<th>priority</th>
+<th>prompt_tokens</th>
+<th>tool_wait_ms</th>
+<th>outcome</th>
+<th>initial_ttft_ms</th>
+<th>hint_ttft_ms</th>
+<th>replay_ttft_ms</th>
+<th>replay_due_ms</th>
+<th>replay_start_ms</th>
+<th>replay_delay_after_due_ms</th>
+<th>first_token_ms</th>
+<th>effective_wait_after_due_ms</th>
+<th>hint_done_before_replay_due</th>
+</tr></thead><tbody>
+<tr>
+<td>no_prefetch</td>
+<td>agent_000</td>
+<td>high</td>
+<td>768</td>
+<td>363</td>
+<td>no_hint</td>
+<td>356.706</td>
+<td></td>
+<td>125.252</td>
+<td>34720.245</td>
+<td>34720.463</td>
+<td>0.218</td>
+<td>34845.715</td>
+<td>125.47</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_002</td>
+<td>normal</td>
+<td>768</td>
+<td>167</td>
+<td>no_hint</td>
+<td>547.089</td>
+<td></td>
+<td>85.948</td>
+<td>34525.297</td>
+<td>34525.515</td>
+<td>0.218</td>
+<td>34611.463</td>
+<td>86.166</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_003</td>
+<td>normal</td>
+<td>768</td>
+<td>526</td>
+<td>no_hint</td>
+<td>507.682</td>
+<td></td>
+<td>268.046</td>
+<td>34883.8</td>
+<td>34884.013</td>
+<td>0.213</td>
+<td>35152.059</td>
+<td>268.259</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_005</td>
+<td>normal</td>
+<td>1024</td>
+<td>437</td>
+<td>no_hint</td>
+<td>555.476</td>
+<td></td>
+<td>150.077</td>
+<td>34795.843</td>
+<td>34796.055</td>
+<td>0.212</td>
+<td>34946.132</td>
+<td>150.289</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_001</td>
+<td>normal</td>
+<td>768</td>
+<td>187</td>
+<td>no_hint</td>
+<td>441.331</td>
+<td></td>
+<td>151.469</td>
+<td>34546.04</td>
+<td>34546.244</td>
+<td>0.204</td>
+<td>34697.713</td>
+<td>151.673</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_004</td>
+<td>high</td>
+<td>1024</td>
+<td>496</td>
+<td>no_hint</td>
+<td>620.644</td>
+<td></td>
+<td>256.407</td>
+<td>34854.012</td>
+<td>34854.212</td>
+<td>0.2</td>
+<td>35110.619</td>
+<td>256.607</td>
+<td></td>
+</tr>
+</tbody></table>
+</div>
+<h3>oracle_direct_load</h3>
+<p class="caption">Blue is the initial request, gray is the tool wait, purple is the hint request if this mode sends one, black is replay due, red is replay admission/execution, and yellow is first token. Long replay bars are clipped so the chart focuses on the resume boundary.</p>
+<svg viewBox="0 0 1500 602" width="100%" role="img" aria-label="Clean performance timeline for oracle_direct_load">
+<line x1="225" y1="54" x2="1445" y2="54" stroke="#111827"/>
+<line x1="225.0" y1="48" x2="225.0" y2="572" stroke="#e5e7eb"/>
+<text x="225.0" y="40" text-anchor="middle">35288 ms</text>
+<line x1="469.0" y1="48" x2="469.0" y2="572" stroke="#e5e7eb"/>
+<text x="469.0" y="40" text-anchor="middle">35807 ms</text>
+<line x1="713.0" y1="48" x2="713.0" y2="572" stroke="#e5e7eb"/>
+<text x="713.0" y="40" text-anchor="middle">36325 ms</text>
+<line x1="957.0" y1="48" x2="957.0" y2="572" stroke="#e5e7eb"/>
+<text x="957.0" y="40" text-anchor="middle">36844 ms</text>
+<line x1="1201.0" y1="48" x2="1201.0" y2="572" stroke="#e5e7eb"/>
+<text x="1201.0" y="40" text-anchor="middle">37363 ms</text>
+<line x1="1445.0" y1="48" x2="1445.0" y2="572" stroke="#e5e7eb"/>
+<text x="1445.0" y="40" text-anchor="middle">37882 ms</text>
+<text x="10" y="93" font-weight="700">agent_005</text>
+<text x="10" y="114" font-size="13" fill="#b91c1c" font-weight="700">delayed +162 ms</text>
+<text x="10" y="133" font-size="12" fill="#4b5563">replay TTFT 218 ms; due-&gt;token 380 ms</text>
+<line x1="225" y1="90" x2="1445" y2="90" stroke="#f3f4f6"/>
+<text x="10" y="165" font-weight="700">agent_003</text>
+<text x="10" y="186" font-size="13" fill="#b91c1c" font-weight="700">delayed +158 ms</text>
+<text x="10" y="205" font-size="12" fill="#4b5563">replay TTFT 300 ms; due-&gt;token 458 ms</text>
+<line x1="225" y1="162" x2="1445" y2="162" stroke="#f3f4f6"/>
+<text x="10" y="237" font-weight="700">agent_004</text>
+<text x="10" y="258" font-size="13" fill="#b91c1c" font-weight="700">delayed +104 ms</text>
+<text x="10" y="277" font-size="12" fill="#4b5563">replay TTFT 382 ms; due-&gt;token 486 ms</text>
+<line x1="225" y1="234" x2="1445" y2="234" stroke="#f3f4f6"/>
+<text x="10" y="309" font-weight="700">agent_002</text>
+<text x="10" y="330" font-size="13" fill="#92400e" font-weight="700">resume still loaded kv</text>
+<text x="10" y="349" font-size="12" fill="#4b5563">replay TTFT 92 ms; due-&gt;token 92 ms</text>
+<line x1="225" y1="306" x2="1445" y2="306" stroke="#f3f4f6"/>
+<text x="10" y="381" font-weight="700">agent_001</text>
+<text x="10" y="402" font-size="13" fill="#92400e" font-weight="700">too early no load then evicted</text>
+<text x="10" y="421" font-size="12" fill="#4b5563">replay TTFT 158 ms; due-&gt;token 158 ms</text>
+<line x1="225" y1="378" x2="1445" y2="378" stroke="#f3f4f6"/>
+<text x="10" y="453" font-weight="700">agent_000</text>
+<text x="10" y="474" font-size="13" fill="#92400e" font-weight="700">late prefetch</text>
+<text x="10" y="493" font-size="12" fill="#4b5563">replay TTFT 234 ms; due-&gt;token 235 ms</text>
+<line x1="225" y1="450" x2="1445" y2="450" stroke="#f3f4f6"/>
+<rect x="747.7" y="442" width="171.3" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="747.5" y="370" width="88.0" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="748.0" y="298" width="78.7" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="747.1" y="154" width="247.4" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="747.4" y="226" width="233.8" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="747.9" y="82" width="205.8" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="281.4" y="442" width="466.2" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="319.3" y="370" width="428.2" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="342.8" y="298" width="405.2" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="361.0" y="154" width="386.0" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="376.7" y="226" width="370.6" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="407.1" y="82" width="340.7" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<line x1="747.7" y1="439" x2="747.7" y2="472" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="747.6" y1="367" x2="747.6" y2="400" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="748.1" y1="295" x2="748.1" y2="328" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="747.1" y1="151" x2="747.1" y2="184" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="747.4" y1="223" x2="747.4" y2="256" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="747.9" y1="79" x2="747.9" y2="112" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<rect x="871.2" y="442" width="80.5" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="871.2" y="436" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="951.8" y="479" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="788.5" y="370" width="24.7" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="788.5" y="364" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="813.3" y="407" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="779.7" y="298" width="21.8" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="779.7" y="292" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="801.5" y="335" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="951.9" y="154" width="116.7" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="951.9" y="148" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1068.6" y="191" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="934.1" y="226" width="95.4" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="934.1" y="220" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1029.5" y="263" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="906.8" y="82" width="122.8" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="906.8" y="76" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1029.6" y="119" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<line x1="919.0" y1="439" x2="919.0" y2="472" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="835.5" y1="367" x2="835.5" y2="400" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="826.7" y1="295" x2="826.7" y2="328" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="994.5" y1="151" x2="994.5" y2="184" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="981.1" y1="223" x2="981.1" y2="256" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="953.7" y1="79" x2="953.7" y2="112" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<rect x="919.1" y="442" width="365.4" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="835.6" y="370" width="449.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="826.8" y="298" width="458.1" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1068.7" y="154" width="216.1" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1029.9" y="226" width="254.8" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1029.8" y="82" width="254.9" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<line x1="1029.4" y1="439" x2="1029.4" y2="472" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1029.4" y="482" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +234 ms</text>
+<line x1="909.9" y1="367" x2="909.9" y2="400" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="909.9" y="410" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +158 ms</text>
+<line x1="870.0" y1="295" x2="870.0" y2="328" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="870.0" y="338" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +92 ms</text>
+<line x1="1209.8" y1="151" x2="1209.8" y2="184" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1209.8" y="194" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +300 ms</text>
+<line x1="1209.7" y1="223" x2="1209.7" y2="256" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1209.7" y="266" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +382 ms</text>
+<line x1="1132.5" y1="79" x2="1132.5" y2="112" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1132.5" y="122" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +218 ms</text>
+<rect x="225" y="572" width="14" height="14" fill="#2563eb"/>
+<text x="245" y="584">initial</text>
+<rect x="355" y="572" width="14" height="14" fill="#d1d5db"/>
+<text x="375" y="584">tool wait</text>
+<rect x="485" y="572" width="14" height="14" fill="#7c3aed"/>
+<text x="505" y="584">hint submitted</text>
+<rect x="615" y="572" width="14" height="14" fill="#a855f7"/>
+<text x="635" y="584">hint request</text>
+<rect x="745" y="572" width="14" height="14" fill="#111827"/>
+<text x="765" y="584">replay due</text>
+<rect x="875" y="572" width="14" height="14" fill="#dc2626"/>
+<text x="895" y="584">replay</text>
+<rect x="1005" y="572" width="14" height="14" fill="#f59e0b"/>
+<text x="1025" y="584">first token</text>
+</svg>
+<div class="table-wrap">
+<table><thead><tr>
+<th>mode</th>
+<th>session_id</th>
+<th>priority</th>
+<th>prompt_tokens</th>
+<th>tool_wait_ms</th>
+<th>outcome</th>
+<th>initial_ttft_ms</th>
+<th>hint_ttft_ms</th>
+<th>replay_ttft_ms</th>
+<th>replay_due_ms</th>
+<th>replay_start_ms</th>
+<th>replay_delay_after_due_ms</th>
+<th>first_token_ms</th>
+<th>effective_wait_after_due_ms</th>
+<th>hint_done_before_replay_due</th>
+</tr></thead><tbody>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_005</td>
+<td>normal</td>
+<td>1024</td>
+<td>437</td>
+<td>late_prefetch</td>
+<td>556.905</td>
+<td>260.101</td>
+<td>218.417</td>
+<td>36837.146</td>
+<td>36998.921</td>
+<td>161.775</td>
+<td>37217.338</td>
+<td>380.192</td>
+<td class="bad">no</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_003</td>
+<td>normal</td>
+<td>768</td>
+<td>526</td>
+<td>late_prefetch</td>
+<td>509.493</td>
+<td>247.691</td>
+<td>299.973</td>
+<td>36923.892</td>
+<td>37081.783</td>
+<td>157.891</td>
+<td>37381.756</td>
+<td>457.864</td>
+<td class="bad">no</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_004</td>
+<td>high</td>
+<td>1024</td>
+<td>496</td>
+<td>late_prefetch</td>
+<td>621.862</td>
+<td>201.665</td>
+<td>382.147</td>
+<td>36895.529</td>
+<td>36999.286</td>
+<td>103.757</td>
+<td>37381.433</td>
+<td>485.904</td>
+<td class="bad">no</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_002</td>
+<td>normal</td>
+<td>768</td>
+<td>167</td>
+<td>resume_still_loaded_kv</td>
+<td>547.845</td>
+<td>46.005</td>
+<td>91.837</td>
+<td>36567.266</td>
+<td>36567.489</td>
+<td>0.223</td>
+<td>36659.326</td>
+<td>92.06</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_001</td>
+<td>normal</td>
+<td>768</td>
+<td>187</td>
+<td>too_early_no_load_then_evicted</td>
+<td>442.054</td>
+<td>52.145</td>
+<td>157.949</td>
+<td>36585.928</td>
+<td>36586.143</td>
+<td>0.215</td>
+<td>36744.092</td>
+<td>158.164</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_000</td>
+<td>high</td>
+<td>768</td>
+<td>363</td>
+<td>late_prefetch</td>
+<td>357.699</td>
+<td>170.828</td>
+<td>234.449</td>
+<td>36763.417</td>
+<td>36763.6</td>
+<td>0.183</td>
+<td>36998.049</td>
+<td>234.632</td>
+<td class="bad">no</td>
+</tr>
+</tbody></table>
+</div>
+</div>
+<div class="panel theme-clean" id="expanded-clean-timelines"><h2>A.1 Expanded Per-Gap Timelines</h2>
+<p class="caption"><span class="pill">Profiler OFF</span> This is the same clean-performance data, but each row has its own local clock. The black replay-due line is always <code>0 ms</code>; negative time is before replay due, and positive time is after the resume boundary.</p>
+<p class="caption">Use this view when the global timeline feels compressed. It stretches each synthetic tool gap independently so the hint window, replay boundary, replay request, and first-token marker are easier to compare.</p>
+<h3>no_prefetch</h3>
+<svg viewBox="0 0 1500 634" width="100%" role="img" aria-label="Expanded clean performance timeline for no_prefetch">
+<line x1="250" y1="62" x2="1440" y2="62" stroke="#111827"/>
+<line x1="250.0" y1="56" x2="250.0" y2="592" stroke="#e5e7eb"/>
+<text x="250.0" y="48" text-anchor="middle">-1411 ms</text>
+<line x1="448.3" y1="56" x2="448.3" y2="592" stroke="#e5e7eb"/>
+<text x="448.3" y="48" text-anchor="middle">-1062 ms</text>
+<line x1="646.7" y1="56" x2="646.7" y2="592" stroke="#e5e7eb"/>
+<text x="646.7" y="48" text-anchor="middle">-714 ms</text>
+<line x1="845.0" y1="56" x2="845.0" y2="592" stroke="#e5e7eb"/>
+<text x="845.0" y="48" text-anchor="middle">-365 ms</text>
+<line x1="1043.3" y1="56" x2="1043.3" y2="592" stroke="#e5e7eb"/>
+<text x="1043.3" y="48" text-anchor="middle">-17 ms</text>
+<line x1="1241.7" y1="56" x2="1241.7" y2="592" stroke="#e5e7eb"/>
+<text x="1241.7" y="48" text-anchor="middle">332 ms</text>
+<line x1="1440.0" y1="56" x2="1440.0" y2="592" stroke="#e5e7eb"/>
+<text x="1440.0" y="48" text-anchor="middle">680 ms</text>
+<line x1="1053.0" y1="46" x2="1053.0" y2="592" stroke="#111827" stroke-width="3"/>
+<text x="1060.0" y="38" font-size="12" font-weight="700">0 ms replay due</text>
+<text x="845.0" y="616" text-anchor="middle" font-size="13" font-weight="700">local time around each synthetic gap: negative = before replay due, positive = after replay due</text>
+<text x="10" y="102" font-weight="700">agent_000</text>
+<text x="10" y="122" font-size="13" fill="#374151" font-weight="700">TTFT 125 ms</text>
+<text x="10" y="141" font-size="12" fill="#4b5563">wait=363 ms; TTFT=125 ms</text>
+<line x1="250" y1="95" x2="1440" y2="95" stroke="#f3f4f6"/>
+<text x="10" y="178" font-weight="700">agent_002</text>
+<text x="10" y="198" font-size="13" fill="#374151" font-weight="700">TTFT 86 ms</text>
+<text x="10" y="217" font-size="12" fill="#4b5563">wait=167 ms; TTFT=86 ms</text>
+<line x1="250" y1="171" x2="1440" y2="171" stroke="#f3f4f6"/>
+<text x="10" y="254" font-weight="700">agent_003</text>
+<text x="10" y="274" font-size="13" fill="#374151" font-weight="700">TTFT 268 ms</text>
+<text x="10" y="293" font-size="12" fill="#4b5563">wait=526 ms; TTFT=268 ms</text>
+<line x1="250" y1="247" x2="1440" y2="247" stroke="#f3f4f6"/>
+<text x="10" y="330" font-weight="700">agent_005</text>
+<text x="10" y="350" font-size="13" fill="#374151" font-weight="700">TTFT 150 ms</text>
+<text x="10" y="369" font-size="12" fill="#4b5563">wait=437 ms; TTFT=150 ms</text>
+<line x1="250" y1="323" x2="1440" y2="323" stroke="#f3f4f6"/>
+<text x="10" y="406" font-weight="700">agent_001</text>
+<text x="10" y="426" font-size="13" fill="#374151" font-weight="700">TTFT 151 ms</text>
+<text x="10" y="445" font-size="12" fill="#4b5563">wait=187 ms; TTFT=151 ms</text>
+<line x1="250" y1="399" x2="1440" y2="399" stroke="#f3f4f6"/>
+<text x="10" y="482" font-weight="700">agent_004</text>
+<text x="10" y="502" font-size="13" fill="#374151" font-weight="700">TTFT 256 ms</text>
+<text x="10" y="521" font-size="12" fill="#4b5563">wait=496 ms; TTFT=256 ms</text>
+<line x1="250" y1="475" x2="1440" y2="475" stroke="#f3f4f6"/>
+<rect x="846.5" y="90" width="206.5" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="945.4" y="394" width="107.6" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="957.9" y="166" width="95.0" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="753.6" y="242" width="299.3" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="770.5" y="470" width="282.5" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="803.8" y="318" width="249.2" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="284.1" y="90" width="562.3" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="429.2" y="394" width="516.1" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="469.4" y="166" width="488.5" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="287.6" y="242" width="466.0" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="323.1" y="470" width="447.3" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="393.5" y="318" width="410.3" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<line x1="1053.0" y1="87" x2="1053.0" y2="120" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.0" y1="391" x2="1053.0" y2="424" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.0" y1="163" x2="1053.0" y2="196" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.0" y1="239" x2="1053.0" y2="272" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.0" y1="467" x2="1053.0" y2="500" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.0" y1="315" x2="1053.0" y2="348" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<rect x="1053.1" y="90" width="296.0" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1294.1" y="86" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1053.1" y="394" width="296.0" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1294.1" y="390" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1053.1" y="166" width="296.0" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1294.1" y="162" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1053.1" y="242" width="239.6" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1053.1" y="470" width="256.6" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1053.1" y="318" width="289.9" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<line x1="1124.4" y1="87" x2="1124.4" y2="120" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1124.4" y="133" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +125 ms</text>
+<line x1="1139.3" y1="391" x2="1139.3" y2="424" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1139.3" y="437" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +151 ms</text>
+<line x1="1102.0" y1="163" x2="1102.0" y2="196" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1102.0" y="209" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +86 ms</text>
+<line x1="1205.7" y1="239" x2="1205.7" y2="272" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1205.7" y="285" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +268 ms</text>
+<line x1="1199.0" y1="467" x2="1199.0" y2="500" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1199.0" y="513" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +256 ms</text>
+<line x1="1138.5" y1="315" x2="1138.5" y2="348" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1138.5" y="361" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +150 ms</text>
+<rect x="250" y="572" width="14" height="14" fill="#2563eb"/>
+<text x="270" y="584">initial</text>
+<rect x="380" y="572" width="14" height="14" fill="#d1d5db"/>
+<text x="400" y="584">tool wait</text>
+<rect x="510" y="572" width="14" height="14" fill="#7c3aed"/>
+<text x="530" y="584">hint submitted</text>
+<rect x="640" y="572" width="14" height="14" fill="#a855f7"/>
+<text x="660" y="584">hint request</text>
+<line x1="770" y1="572" x2="770" y2="588" stroke="#111827" stroke-width="4"/>
+<text x="790" y="584">replay due</text>
+<rect x="900" y="572" width="14" height="14" fill="#dc2626"/>
+<text x="920" y="584">replay</text>
+<rect x="1030" y="572" width="14" height="14" fill="#f59e0b"/>
+<text x="1050" y="584">first token</text>
+</svg>
+<div class="table-wrap">
+<table><thead><tr>
+<th>mode</th>
+<th>session_id</th>
+<th>priority</th>
+<th>prompt_tokens</th>
+<th>tool_wait_ms</th>
+<th>outcome</th>
+<th>initial_ttft_ms</th>
+<th>hint_ttft_ms</th>
+<th>replay_ttft_ms</th>
+<th>replay_due_ms</th>
+<th>replay_start_ms</th>
+<th>replay_delay_after_due_ms</th>
+<th>first_token_ms</th>
+<th>effective_wait_after_due_ms</th>
+<th>hint_done_before_replay_due</th>
+</tr></thead><tbody>
+<tr>
+<td>no_prefetch</td>
+<td>agent_000</td>
+<td>high</td>
+<td>768</td>
+<td>363</td>
+<td>no_hint</td>
+<td>356.706</td>
+<td></td>
+<td>125.252</td>
+<td>34720.245</td>
+<td>34720.463</td>
+<td>0.218</td>
+<td>34845.715</td>
+<td>125.47</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_002</td>
+<td>normal</td>
+<td>768</td>
+<td>167</td>
+<td>no_hint</td>
+<td>547.089</td>
+<td></td>
+<td>85.948</td>
+<td>34525.297</td>
+<td>34525.515</td>
+<td>0.218</td>
+<td>34611.463</td>
+<td>86.166</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_003</td>
+<td>normal</td>
+<td>768</td>
+<td>526</td>
+<td>no_hint</td>
+<td>507.682</td>
+<td></td>
+<td>268.046</td>
+<td>34883.8</td>
+<td>34884.013</td>
+<td>0.213</td>
+<td>35152.059</td>
+<td>268.259</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_005</td>
+<td>normal</td>
+<td>1024</td>
+<td>437</td>
+<td>no_hint</td>
+<td>555.476</td>
+<td></td>
+<td>150.077</td>
+<td>34795.843</td>
+<td>34796.055</td>
+<td>0.212</td>
+<td>34946.132</td>
+<td>150.289</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_001</td>
+<td>normal</td>
+<td>768</td>
+<td>187</td>
+<td>no_hint</td>
+<td>441.331</td>
+<td></td>
+<td>151.469</td>
+<td>34546.04</td>
+<td>34546.244</td>
+<td>0.204</td>
+<td>34697.713</td>
+<td>151.673</td>
+<td></td>
+</tr>
+<tr>
+<td>no_prefetch</td>
+<td>agent_004</td>
+<td>high</td>
+<td>1024</td>
+<td>496</td>
+<td>no_hint</td>
+<td>620.644</td>
+<td></td>
+<td>256.407</td>
+<td>34854.012</td>
+<td>34854.212</td>
+<td>0.2</td>
+<td>35110.619</td>
+<td>256.607</td>
+<td></td>
+</tr>
+</tbody></table>
+</div>
+<h3>oracle_direct_load</h3>
+<svg viewBox="0 0 1500 634" width="100%" role="img" aria-label="Expanded clean performance timeline for oracle_direct_load">
+<line x1="250" y1="62" x2="1440" y2="62" stroke="#111827"/>
+<line x1="250.0" y1="56" x2="250.0" y2="592" stroke="#e5e7eb"/>
+<text x="250.0" y="48" text-anchor="middle">-1415 ms</text>
+<line x1="448.3" y1="56" x2="448.3" y2="592" stroke="#e5e7eb"/>
+<text x="448.3" y="48" text-anchor="middle">-1066 ms</text>
+<line x1="646.7" y1="56" x2="646.7" y2="592" stroke="#e5e7eb"/>
+<text x="646.7" y="48" text-anchor="middle">-717 ms</text>
+<line x1="845.0" y1="56" x2="845.0" y2="592" stroke="#e5e7eb"/>
+<text x="845.0" y="48" text-anchor="middle">-368 ms</text>
+<line x1="1043.3" y1="56" x2="1043.3" y2="592" stroke="#e5e7eb"/>
+<text x="1043.3" y="48" text-anchor="middle">-18 ms</text>
+<line x1="1241.7" y1="56" x2="1241.7" y2="592" stroke="#e5e7eb"/>
+<text x="1241.7" y="48" text-anchor="middle">331 ms</text>
+<line x1="1440.0" y1="56" x2="1440.0" y2="592" stroke="#e5e7eb"/>
+<text x="1440.0" y="48" text-anchor="middle">680 ms</text>
+<line x1="1053.8" y1="46" x2="1053.8" y2="592" stroke="#111827" stroke-width="3"/>
+<text x="1060.8" y="38" font-size="12" font-weight="700">0 ms replay due</text>
+<text x="845.0" y="616" text-anchor="middle" font-size="13" font-weight="700">local time around each synthetic gap: negative = before replay due, positive = after replay due</text>
+<text x="10" y="102" font-weight="700">agent_005</text>
+<text x="10" y="122" font-size="13" fill="#b91c1c" font-weight="700">delayed +162 ms</text>
+<text x="10" y="141" font-size="12" fill="#4b5563">wait=437 ms; TTFT=218 ms</text>
+<line x1="250" y1="95" x2="1440" y2="95" stroke="#f3f4f6"/>
+<text x="10" y="178" font-weight="700">agent_003</text>
+<text x="10" y="198" font-size="13" fill="#b91c1c" font-weight="700">delayed +158 ms</text>
+<text x="10" y="217" font-size="12" fill="#4b5563">wait=526 ms; TTFT=300 ms</text>
+<line x1="250" y1="171" x2="1440" y2="171" stroke="#f3f4f6"/>
+<text x="10" y="254" font-weight="700">agent_004</text>
+<text x="10" y="274" font-size="13" fill="#b91c1c" font-weight="700">delayed +104 ms</text>
+<text x="10" y="293" font-size="12" fill="#4b5563">wait=496 ms; TTFT=382 ms</text>
+<line x1="250" y1="247" x2="1440" y2="247" stroke="#f3f4f6"/>
+<text x="10" y="330" font-weight="700">agent_002</text>
+<text x="10" y="350" font-size="13" fill="#92400e" font-weight="700">resume still loaded kv</text>
+<text x="10" y="369" font-size="12" fill="#4b5563">wait=167 ms; TTFT=92 ms</text>
+<line x1="250" y1="323" x2="1440" y2="323" stroke="#f3f4f6"/>
+<text x="10" y="406" font-weight="700">agent_001</text>
+<text x="10" y="426" font-size="13" fill="#92400e" font-weight="700">too early no load then evicted</text>
+<text x="10" y="445" font-size="12" fill="#4b5563">wait=187 ms; TTFT=158 ms</text>
+<line x1="250" y1="399" x2="1440" y2="399" stroke="#f3f4f6"/>
+<text x="10" y="482" font-weight="700">agent_000</text>
+<text x="10" y="502" font-size="13" fill="#92400e" font-weight="700">late prefetch</text>
+<text x="10" y="521" font-size="12" fill="#4b5563">wait=363 ms; TTFT=234 ms</text>
+<line x1="250" y1="475" x2="1440" y2="475" stroke="#f3f4f6"/>
+<rect x="847.0" y="470" width="206.8" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="947.6" y="394" width="106.2" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="958.8" y="318" width="95.0" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="755.2" y="166" width="298.7" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="771.6" y="242" width="282.2" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="805.4" y="90" width="248.5" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="284.1" y="470" width="562.9" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="430.6" y="394" width="517.0" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="469.5" y="318" width="489.3" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="289.0" y="166" width="466.1" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="324.1" y="242" width="447.4" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<rect x="393.9" y="90" width="411.4" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial request</title></rect>
+<line x1="847.1" y1="467" x2="847.1" y2="500" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="947.7" y1="391" x2="947.7" y2="424" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="958.9" y1="315" x2="958.9" y2="348" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="755.2" y1="163" x2="755.2" y2="196" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="771.6" y1="239" x2="771.6" y2="272" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<line x1="805.4" y1="87" x2="805.4" y2="120" stroke="#7c3aed" stroke-width="3"><title>hint submitted</title></line>
+<rect x="996.1" y="470" width="97.2" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="996.1" y="464" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1093.4" y="507" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="997.1" y="394" width="29.8" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="997.1" y="388" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1027.0" y="431" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="997.0" y="318" width="26.4" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="997.0" y="312" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1023.4" y="355" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="1002.4" y="166" width="140.9" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="1002.4" y="160" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1143.3" y="203" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="997.1" y="242" width="115.2" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="997.1" y="236" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1112.2" y="279" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="997.2" y="90" width="148.3" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<text x="997.2" y="84" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1145.5" y="127" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<line x1="1053.8" y1="467" x2="1053.8" y2="500" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.8" y1="391" x2="1053.8" y2="424" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.8" y1="315" x2="1053.8" y2="348" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.8" y1="163" x2="1053.8" y2="196" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.8" y1="239" x2="1053.8" y2="272" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1053.8" y1="87" x2="1053.8" y2="120" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<rect x="1053.9" y="470" width="295.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1294.2" y="466" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1054.0" y="394" width="295.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1294.3" y="390" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1054.0" y="318" width="295.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1294.3" y="314" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1143.5" y="166" width="260.9" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<rect x="1112.8" y="242" width="295.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1353.1" y="238" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1145.7" y="90" width="295.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay request</title></rect>
+<text x="1386.0" y="86" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<line x1="1187.1" y1="467" x2="1187.1" y2="500" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1187.1" y="513" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +234 ms</text>
+<line x1="1143.7" y1="391" x2="1143.7" y2="424" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1143.7" y="437" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +158 ms</text>
+<line x1="1106.1" y1="315" x2="1106.1" y2="348" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1106.1" y="361" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +92 ms</text>
+<line x1="1313.9" y1="163" x2="1313.9" y2="196" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1313.9" y="209" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +300 ms</text>
+<line x1="1329.8" y1="239" x2="1329.8" y2="272" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1329.8" y="285" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +382 ms</text>
+<line x1="1269.7" y1="87" x2="1269.7" y2="120" stroke="#f59e0b" stroke-width="4" stroke-dasharray="5 3"><title>first token</title></line>
+<text x="1269.7" y="133" text-anchor="middle" font-size="10" fill="#92400e" font-weight="700">first token +218 ms</text>
+<rect x="250" y="572" width="14" height="14" fill="#2563eb"/>
+<text x="270" y="584">initial</text>
+<rect x="380" y="572" width="14" height="14" fill="#d1d5db"/>
+<text x="400" y="584">tool wait</text>
+<rect x="510" y="572" width="14" height="14" fill="#7c3aed"/>
+<text x="530" y="584">hint submitted</text>
+<rect x="640" y="572" width="14" height="14" fill="#a855f7"/>
+<text x="660" y="584">hint request</text>
+<line x1="770" y1="572" x2="770" y2="588" stroke="#111827" stroke-width="4"/>
+<text x="790" y="584">replay due</text>
+<rect x="900" y="572" width="14" height="14" fill="#dc2626"/>
+<text x="920" y="584">replay</text>
+<rect x="1030" y="572" width="14" height="14" fill="#f59e0b"/>
+<text x="1050" y="584">first token</text>
+</svg>
+<div class="table-wrap">
+<table><thead><tr>
+<th>mode</th>
+<th>session_id</th>
+<th>priority</th>
+<th>prompt_tokens</th>
+<th>tool_wait_ms</th>
+<th>outcome</th>
+<th>initial_ttft_ms</th>
+<th>hint_ttft_ms</th>
+<th>replay_ttft_ms</th>
+<th>replay_due_ms</th>
+<th>replay_start_ms</th>
+<th>replay_delay_after_due_ms</th>
+<th>first_token_ms</th>
+<th>effective_wait_after_due_ms</th>
+<th>hint_done_before_replay_due</th>
+</tr></thead><tbody>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_005</td>
+<td>normal</td>
+<td>1024</td>
+<td>437</td>
+<td>late_prefetch</td>
+<td>556.905</td>
+<td>260.101</td>
+<td>218.417</td>
+<td>36837.146</td>
+<td>36998.921</td>
+<td>161.775</td>
+<td>37217.338</td>
+<td>380.192</td>
+<td class="bad">no</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_003</td>
+<td>normal</td>
+<td>768</td>
+<td>526</td>
+<td>late_prefetch</td>
+<td>509.493</td>
+<td>247.691</td>
+<td>299.973</td>
+<td>36923.892</td>
+<td>37081.783</td>
+<td>157.891</td>
+<td>37381.756</td>
+<td>457.864</td>
+<td class="bad">no</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_004</td>
+<td>high</td>
+<td>1024</td>
+<td>496</td>
+<td>late_prefetch</td>
+<td>621.862</td>
+<td>201.665</td>
+<td>382.147</td>
+<td>36895.529</td>
+<td>36999.286</td>
+<td>103.757</td>
+<td>37381.433</td>
+<td>485.904</td>
+<td class="bad">no</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_002</td>
+<td>normal</td>
+<td>768</td>
+<td>167</td>
+<td>resume_still_loaded_kv</td>
+<td>547.845</td>
+<td>46.005</td>
+<td>91.837</td>
+<td>36567.266</td>
+<td>36567.489</td>
+<td>0.223</td>
+<td>36659.326</td>
+<td>92.06</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_001</td>
+<td>normal</td>
+<td>768</td>
+<td>187</td>
+<td>too_early_no_load_then_evicted</td>
+<td>442.054</td>
+<td>52.145</td>
+<td>157.949</td>
+<td>36585.928</td>
+<td>36586.143</td>
+<td>0.215</td>
+<td>36744.092</td>
+<td>158.164</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>agent_000</td>
+<td>high</td>
+<td>768</td>
+<td>363</td>
+<td>late_prefetch</td>
+<td>357.699</td>
+<td>170.828</td>
+<td>234.449</td>
+<td>36763.417</td>
+<td>36763.6</td>
+<td>0.183</td>
+<td>36998.049</td>
+<td>234.632</td>
+<td class="bad">no</td>
+</tr>
+</tbody></table>
+</div>
+</div>
+<div class="panel theme-clean-table" id="clean-tables"><h2>A.2 Clean Performance Tables</h2>
+<p class="caption">Profiler is off here. Use this table for TTFT and performance claims.</p>
+<div class="table-wrap">
+<table><thead><tr>
+<th>mode</th>
+<th>sessions</th>
+<th>performance_status</th>
+<th>avg_replay_ttft_ms</th>
+<th>median_replay_ttft_ms</th>
+<th>avg_improvement_vs_no_prefetch_ms</th>
+<th>avg_improvement_vs_no_prefetch_pct</th>
+<th>late_prefetch_sessions</th>
+<th>reload_or_unprotected_sessions</th>
+<th>total_resume_load_count</th>
+<th>total_eviction_pressure_after_prefetch</th>
+<th>outcomes</th>
+</tr></thead><tbody>
+<tr>
+<td>no_prefetch</td>
+<td>6</td>
+<td>baseline</td>
+<td>172.867</td>
+<td>150.773</td>
+<td>0.0</td>
+<td>0.0</td>
+<td>0</td>
+<td>0</td>
+<td>45</td>
+<td>0</td>
+<td>no_hint: 6</td>
+</tr>
+<tr>
+<td>oracle_direct_load</td>
+<td>6</td>
+<td class="warn">slower</td>
+<td>230.795</td>
+<td>226.433</td>
+<td>-57.929</td>
+<td>-33.51</td>
+<td>4</td>
+<td>1</td>
+<td>51</td>
+<td>21</td>
+<td>late_prefetch: 4, resume_still_loaded_kv: 1, too_early_no_load_then_evicted: 1</td>
+</tr>
+</tbody></table>
+</div></div>
+<div class="panel theme-profiled" id="profiled-timelines"><h2>B. Profiled Mechanism Timelines</h2>
+<p class="caption"><span class="pill">Profiler / telemetry view</span> Use this for KV-copy and DMA-style attribution, not clean TTFT claims. Dark green means CUDA HtoD profiler evidence; light green means lightweight SGLang KV telemetry fallback.</p>
+<svg viewBox="0 0 1500 686" width="100%" role="img" aria-label="Agentic prefetch timeline">
+<line x1="225" y1="54" x2="1445" y2="54" stroke="#111827"/>
+<line x1="225.0" y1="48" x2="225.0" y2="656" stroke="#e5e7eb"/>
+<text x="225.0" y="40" text-anchor="middle">31340 ms</text>
+<line x1="469.0" y1="48" x2="469.0" y2="656" stroke="#e5e7eb"/>
+<text x="469.0" y="40" text-anchor="middle">31819 ms</text>
+<line x1="713.0" y1="48" x2="713.0" y2="656" stroke="#e5e7eb"/>
+<text x="713.0" y="40" text-anchor="middle">32299 ms</text>
+<line x1="957.0" y1="48" x2="957.0" y2="656" stroke="#e5e7eb"/>
+<text x="957.0" y="40" text-anchor="middle">32779 ms</text>
+<line x1="1201.0" y1="48" x2="1201.0" y2="656" stroke="#e5e7eb"/>
+<text x="1201.0" y="40" text-anchor="middle">33258 ms</text>
+<line x1="1445.0" y1="48" x2="1445.0" y2="656" stroke="#e5e7eb"/>
+<text x="1445.0" y="40" text-anchor="middle">33738 ms</text>
+<text x="10" y="93" font-weight="700">agent_003</text>
+<text x="10" y="114" font-size="13" fill="#b91c1c" font-weight="700">LATE -224 ms</text>
+<line x1="225" y1="90" x2="1445" y2="90" stroke="#f3f4f6"/>
+<line x1="225" y1="126" x2="1445" y2="126" stroke="#f9fafb"/>
+<rect x="1059.8" y="81" width="114.1" height="40" fill="#fee2e2" opacity="0.55"/>
+<line x1="1059.8" y1="126" x2="1173.9" y2="126" stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>
+<circle cx="1173.9" cy="126" r="5" fill="#dc2626"><title>prefetch done after replay due</title></circle>
+<text x="1116.8" y="148" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">224 ms late</text>
+<text x="10" y="177" font-weight="700">agent_000</text>
+<text x="10" y="198" font-size="13" fill="#b91c1c" font-weight="700">LATE -84 ms</text>
+<text x="10" y="219" font-size="12" fill="#b91c1c" font-weight="700">hint/replay overlap 126 ms</text>
+<line x1="225" y1="174" x2="1445" y2="174" stroke="#f3f4f6"/>
+<line x1="225" y1="210" x2="1445" y2="210" stroke="#f9fafb"/>
+<rect x="977.6" y="165" width="64.3" height="40" fill="#fecaca" opacity="0.55"><title>hint and replay overlap</title></rect>
+<rect x="977.5" y="165" width="42.8" height="40" fill="#fee2e2" opacity="0.55"/>
+<line x1="977.5" y1="210" x2="1020.3" y2="210" stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>
+<circle cx="1020.3" cy="210" r="5" fill="#dc2626"><title>prefetch done after replay due</title></circle>
+<text x="998.9" y="232" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">84 ms late</text>
+<text x="10" y="261" font-weight="700">agent_004</text>
+<text x="10" y="282" font-size="13" fill="#b91c1c" font-weight="700">LATE -61 ms</text>
+<line x1="225" y1="258" x2="1445" y2="258" stroke="#f3f4f6"/>
+<line x1="225" y1="294" x2="1445" y2="294" stroke="#f9fafb"/>
+<rect x="1044.4" y="249" width="31.2" height="40" fill="#fee2e2" opacity="0.55"/>
+<line x1="1044.4" y1="294" x2="1075.6" y2="294" stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>
+<circle cx="1075.6" cy="294" r="5" fill="#dc2626"><title>prefetch done after replay due</title></circle>
+<text x="1060.0" y="316" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="700">61 ms late</text>
+<text x="10" y="345" font-weight="700">agent_001</text>
+<text x="10" y="366" font-size="13" fill="#6b7280" font-weight="700">NO VISIBLE COPY</text>
+<line x1="225" y1="342" x2="1445" y2="342" stroke="#f3f4f6"/>
+<line x1="225" y1="378" x2="1445" y2="378" stroke="#f9fafb"/>
+<text x="10" y="429" font-weight="700">agent_002</text>
+<text x="10" y="450" font-size="13" fill="#6b7280" font-weight="700">NO VISIBLE COPY</text>
+<line x1="225" y1="426" x2="1445" y2="426" stroke="#f3f4f6"/>
+<line x1="225" y1="462" x2="1445" y2="462" stroke="#f9fafb"/>
+<text x="10" y="513" font-weight="700">agent_005</text>
+<text x="10" y="534" font-size="13" fill="#6b7280" font-weight="700">NO VISIBLE COPY</text>
+<line x1="225" y1="510" x2="1445" y2="510" stroke="#f3f4f6"/>
+<line x1="225" y1="546" x2="1445" y2="546" stroke="#f9fafb"/>
+<rect x="792.8" y="166" width="184.7" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="791.7" y="334" width="95.1" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="792.6" y="418" width="85.1" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="792.0" y="82" width="267.8" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="792.2" y="250" width="252.1" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="792.4" y="502" width="222.2" height="24" rx="3" fill="#d1d5db" opacity="0.88"><title>tool wait</title></rect>
+<rect x="286.0" y="166" width="506.7" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial</title></rect>
+<rect x="327.1" y="334" width="464.5" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial</title></rect>
+<rect x="352.6" y="418" width="439.9" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial</title></rect>
+<rect x="371.4" y="82" width="420.5" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial</title></rect>
+<rect x="389.0" y="250" width="403.2" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial</title></rect>
+<rect x="422.3" y="502" width="370.1" height="24" rx="3" fill="#2563eb" opacity="0.88"><title>initial</title></rect>
+<line x1="792.9" y1="163" x2="792.9" y2="196" stroke="#7c3aed" stroke-width="3"><title>hint</title></line>
+<line x1="791.8" y1="331" x2="791.8" y2="364" stroke="#7c3aed" stroke-width="3"><title>hint</title></line>
+<line x1="792.6" y1="415" x2="792.6" y2="448" stroke="#7c3aed" stroke-width="3"><title>hint</title></line>
+<line x1="792.0" y1="79" x2="792.0" y2="112" stroke="#7c3aed" stroke-width="3"><title>hint</title></line>
+<line x1="792.3" y1="247" x2="792.3" y2="280" stroke="#7c3aed" stroke-width="3"><title>hint</title></line>
+<line x1="792.4" y1="499" x2="792.4" y2="532" stroke="#7c3aed" stroke-width="3"><title>hint</title></line>
+<rect x="926.9" y="166" width="115.0" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<line x1="926.9" y1="163" x2="926.9" y2="193" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>
+<line x1="1041.9" y1="163" x2="1041.9" y2="193" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>
+<text x="926.9" y="160" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1041.9" y="203" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="836.3" y="334" width="26.8" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<line x1="836.3" y1="331" x2="836.3" y2="361" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>
+<line x1="863.1" y1="331" x2="863.1" y2="361" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>
+<text x="836.3" y="328" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="863.1" y="371" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="827.2" y="418" width="23.5" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<line x1="827.2" y1="415" x2="827.2" y2="445" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>
+<line x1="850.7" y1="415" x2="850.7" y2="445" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>
+<text x="827.2" y="412" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="850.7" y="455" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="1042.1" y="82" width="148.4" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<line x1="1042.1" y1="79" x2="1042.1" y2="109" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>
+<line x1="1190.5" y1="79" x2="1190.5" y2="109" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>
+<text x="1042.1" y="76" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1190.5" y="119" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="993.8" y="250" width="144.4" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<line x1="993.8" y1="247" x2="993.8" y2="277" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>
+<line x1="1138.2" y1="247" x2="1138.2" y2="277" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>
+<text x="993.8" y="244" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1138.2" y="287" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="964.4" y="502" width="173.4" height="24" rx="3" fill="#a855f7" opacity="0.72"><title>hint request</title></rect>
+<line x1="964.4" y1="499" x2="964.4" y2="529" stroke="#6d28d9" stroke-width="1.3"><title>hint request start</title></line>
+<line x1="1137.8" y1="499" x2="1137.8" y2="529" stroke="#6d28d9" stroke-width="1.3"><title>hint request end</title></line>
+<text x="964.4" y="496" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint start</text>
+<text x="1137.8" y="539" text-anchor="middle" font-size="9" fill="#6d28d9" font-weight="700">hint end</text>
+<rect x="986.6" y="162" width="33.7" height="32" rx="3" fill="#16a34a" opacity="1" stroke="#f8fafc" stroke-width="3"><title>CUDA HtoD copy</title></rect>
+<line x1="986.6" y1="159" x2="986.6" y2="197" stroke="#064e3b" stroke-width="1.5"><title>exact copy start</title></line>
+<line x1="1020.3" y1="159" x2="1020.3" y2="197" stroke="#064e3b" stroke-width="1.5"><title>exact copy end</title></line>
+<text x="1003.4" y="182" text-anchor="middle" font-size="10" fill="white" font-weight="700">HtoD</text>
+<rect x="1141.9" y="78" width="32.0" height="32" rx="3" fill="#16a34a" opacity="1" stroke="#f8fafc" stroke-width="3"><title>CUDA HtoD copy</title></rect>
+<line x1="1141.9" y1="75" x2="1141.9" y2="113" stroke="#064e3b" stroke-width="1.5"><title>exact copy start</title></line>
+<line x1="1173.9" y1="75" x2="1173.9" y2="113" stroke="#064e3b" stroke-width="1.5"><title>exact copy end</title></line>
+<text x="1157.9" y="98" text-anchor="middle" font-size="10" fill="white" font-weight="700">HtoD</text>
+<rect x="1052.4" y="246" width="24.0" height="32" rx="3" fill="#16a34a" opacity="1" stroke="#f8fafc" stroke-width="3"><title>CUDA HtoD copy</title></rect>
+<line x1="1052.4" y1="243" x2="1052.4" y2="281" stroke="#064e3b" stroke-width="1.5"><title>exact copy start</title></line>
+<line x1="1075.6" y1="243" x2="1075.6" y2="281" stroke="#064e3b" stroke-width="1.5"><title>exact copy end</title></line>
+<text x="1064.4" y="266" text-anchor="middle" font-size="10" fill="white" font-weight="700">HtoD</text>
+<line x1="977.5" y1="163" x2="977.5" y2="196" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="886.9" y1="331" x2="886.9" y2="364" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="877.7" y1="415" x2="877.7" y2="448" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1059.8" y1="79" x2="1059.8" y2="112" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1044.4" y1="247" x2="1044.4" y2="280" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<line x1="1014.6" y1="499" x2="1014.6" y2="532" stroke="#111827" stroke-width="6"><title>replay due</title></line>
+<rect x="977.6" y="166" width="467.4" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay</title></rect>
+<line x1="977.6" y1="163" x2="977.6" y2="193" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>
+<path d="M 1431.0 171.0 L 1438.0 178.0 L 1431.0 185.0" fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>
+<text x="1363.0" y="162" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="887.0" y="334" width="558.0" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay</title></rect>
+<line x1="887.0" y1="331" x2="887.0" y2="361" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>
+<path d="M 1431.0 339.0 L 1438.0 346.0 L 1431.0 353.0" fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>
+<text x="1363.0" y="330" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="877.9" y="418" width="567.1" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay</title></rect>
+<line x1="877.9" y1="415" x2="877.9" y2="445" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>
+<path d="M 1431.0 423.0 L 1438.0 430.0 L 1431.0 437.0" fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>
+<text x="1363.0" y="414" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1190.7" y="82" width="254.3" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay</title></rect>
+<line x1="1190.7" y1="79" x2="1190.7" y2="109" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>
+<path d="M 1431.0 87.0 L 1438.0 94.0 L 1431.0 101.0" fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>
+<text x="1363.0" y="78" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1138.4" y="250" width="306.6" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay</title></rect>
+<line x1="1138.4" y1="247" x2="1138.4" y2="277" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>
+<path d="M 1431.0 255.0 L 1438.0 262.0 L 1431.0 269.0" fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>
+<text x="1363.0" y="246" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="1138.0" y="502" width="307.0" height="24" rx="3" fill="#dc2626" opacity="0.72"><title>replay</title></rect>
+<line x1="1138.0" y1="499" x2="1138.0" y2="529" stroke="#991b1b" stroke-width="1.3"><title>replay start</title></line>
+<path d="M 1431.0 507.0 L 1438.0 514.0 L 1431.0 521.0" fill="none" stroke="#991b1b" stroke-width="2"><title>replay continues beyond focused window</title></path>
+<text x="1363.0" y="498" font-size="10" fill="#991b1b" font-weight="700">continues</text>
+<rect x="225" y="654" width="14" height="14" fill="#2563eb"/>
+<text x="245" y="666">initial</text>
+<rect x="355" y="654" width="14" height="14" fill="#d1d5db"/>
+<text x="375" y="666">tool wait</text>
+<rect x="485" y="654" width="14" height="14" fill="#7c3aed"/>
+<text x="505" y="666">hint submitted</text>
+<rect x="615" y="654" width="14" height="14" fill="#a855f7"/>
+<text x="635" y="666">hint request</text>
+<rect x="745" y="654" width="14" height="14" fill="#16a34a"/>
+<text x="765" y="666">copy activity</text>
+<rect x="875" y="654" width="14" height="14" fill="#111827"/>
+<text x="895" y="666">replay due</text>
+<rect x="1005" y="654" width="14" height="14" fill="#dc2626"/>
+<text x="1025" y="666">replay</text>
+<line x1="225" y1="678" x2="315" y2="678" stroke="#16a34a" stroke-width="4" stroke-dasharray="8 5"/>
+<text x="325" y="682" fill="#166534">green gap = prefetch done before replay</text>
+<line x1="645" y1="678" x2="735" y2="678" stroke="#dc2626" stroke-width="4" stroke-dasharray="8 5"/>
+<text x="745" y="682" fill="#b91c1c">red gap = prefetch finished after replay was due</text>
+</svg>
+</div>
+<div class="panel theme-profiled" id="profiled-tables"><h2>B.1 Profiled Mechanism Tables</h2>
+<p class="caption">Use this table to understand scalable KV-copy telemetry, optional CUDA HtoD validation, hint completion, and replay reloads.</p>
+<div class="table-wrap">
+<table><thead><tr>
+<th>profiled_sessions</th>
+<th>evidence_status</th>
+<th>sessions_with_visible_copy_telemetry</th>
+<th>sessions_with_lightweight_kv_copy_telemetry</th>
+<th>sessions_with_profiler_cuda_h2d_copy</th>
+<th>kv_copy_ready_before_replay</th>
+<th>cuda_copy_ready_before_replay</th>
+<th>full_hint_done_before_replay</th>
+<th>replay_reloaded_kv</th>
+<th>clean_success</th>
+<th>checkpoint_results</th>
+</tr></thead><tbody>
+<tr>
+<td>6</td>
+<td>mechanism_visible</td>
+<td>3</td>
+<td>3</td>
+<td>3</td>
+<td>0</td>
+<td>0</td>
+<td>2</td>
+<td>6</td>
+<td>0</td>
+<td>not_ready: 3, hint_done_but_no_cuda_ready: 2, no_visible_prefetch: 1</td>
+</tr>
+</tbody></table>
+</div>
+<h3>Timeline Summary</h3>
+<div class="table-wrap">
+<table><thead><tr>
+<th>sessions</th>
+<th>sessions_with_visible_copy_telemetry</th>
+<th>sessions_with_lightweight_kv_copy_telemetry</th>
+<th>sessions_with_profiler_cuda_h2d_copy</th>
+<th>late_prefetch_sessions</th>
+<th>kv_copy_ready_before_replay</th>
+<th>cuda_copy_ready_before_replay</th>
+<th>full_hint_done_before_replay</th>
+<th>sessions_where_replay_reloaded_kv</th>
+<th>clean_success_sessions</th>
+<th>h2d_missing_reasons</th>
+<th>avg_prefetch_margin_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>6</td>
+<td>3</td>
+<td>3</td>
+<td>3</td>
+<td>3</td>
+<td>0</td>
+<td>0</td>
+<td>2</td>
+<td>6</td>
+<td>0</td>
+<td>no_sglang_kv_load</td>
+<td>-123.267</td>
+</tr>
+</tbody></table>
+</div>
+<h3>Timeline Sanity Checks</h3>
+<table><thead><tr>
+<th>session_id</th>
+<th>green_inside_purple</th>
+<th>light_green_inside_purple</th>
+<th>dark_green_inside_purple</th>
+<th>hint_overlaps_replay</th>
+<th>hint_replay_overlap_ms</th>
+<th>replay_reloaded_kv</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_003</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td class="bad">no</td>
+<td>0.0</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>agent_000</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td>126.318</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td class="bad">no</td>
+<td>0.0</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>agent_001</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td>0.0</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>agent_002</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td>0.0</td>
+<td class="good">yes</td>
+</tr>
+<tr>
+<td>agent_005</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td>0.0</td>
+<td class="good">yes</td>
+</tr>
+</tbody></table>
+<h3>Visible KV Copy Telemetry</h3>
+<p class="caption">These are the selected sessions represented by green copy bars in the timeline. `sglang_lightweight_h2d_telemetry` is the scalable source for larger runs; `torch_profiler_h2d` is the heavier CUDA-validation source for smaller runs.</p>
+<div class="table-wrap">
+<table><thead><tr>
+<th>session_id</th>
+<th>copy_start_ms</th>
+<th>copy_end_ms</th>
+<th>copy_source</th>
+<th>telemetry_events</th>
+<th>torch_h2d_events</th>
+<th>torch_h2d_bytes</th>
+<th>copy_inside_hint</th>
+<th>replay_due_ms</th>
+<th>prefetch_margin_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_003</td>
+<td>33142.204505</td>
+<td>33205.040729</td>
+<td>torch_profiler_h2d</td>
+<td>28</td>
+<td>672</td>
+<td>30248960</td>
+<td class="good">yes</td>
+<td>32980.692</td>
+<td>-224.349</td>
+</tr>
+<tr>
+<td>agent_000</td>
+<td>32836.798809</td>
+<td>32903.103577</td>
+<td>torch_profiler_h2d</td>
+<td>28</td>
+<td>840</td>
+<td>30248960</td>
+<td class="good">yes</td>
+<td>32818.991</td>
+<td>-84.113</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>32966.276185</td>
+<td>33011.710297</td>
+<td>torch_profiler_h2d</td>
+<td>28</td>
+<td>179</td>
+<td>13166080</td>
+<td class="good">yes</td>
+<td>32950.371</td>
+<td>-61.339</td>
+</tr>
+</tbody></table>
+</div>
+<h3>Timeline Layers</h3>
+<table><thead><tr>
+<th>Layer</th>
+<th>Meaning</th>
+<th>Why it matters</th>
+</tr></thead><tbody>
+<tr>
+<td>gray tool_wait</td>
+<td>The agent is waiting for a tool result, such as tests, search, or build output.</td>
+<td>This is the opportunity window where prefetch can happen before the next model turn.</td>
+</tr>
+<tr>
+<td>purple hint_request</td>
+<td>The software request we currently send to SGLang to trigger KV load-back.</td>
+<td>This is not pure DMA. It includes scheduling, prefix matching, KV load-back, model work, and request bookkeeping.</td>
+</tr>
+<tr>
+<td>green copy activity</td>
+<td>The single visible KV copy-activity bar. Dark green is used when CUDA HtoD profiler evidence exists. Light green is used as a fallback when only lightweight SGLang KV telemetry exists.</td>
+<td>This keeps the main chart simple while preserving the exact telemetry and torch timings in the tables.</td>
+</tr>
+<tr>
+<td>red replay</td>
+<td>The real agent replay request.</td>
+<td>If the purple hint request overlaps the red replay in time, the prefetch path was still running when the agent needed to resume.</td>
+</tr>
+<tr>
+<td>black replay_due</td>
+<td>The time when the tool result is ready and the real replay request is due.</td>
+<td>If prefetch finishes after this line, the agent can still stall waiting for KV.</td>
+</tr>
+<tr>
+<td>green/red dashed gap</td>
+<td>The time between KV/copy completion and replay due.</td>
+<td>Green means KV movement finished before replay. Red means replay was already due before movement finished.</td>
+</tr>
+</tbody></table>
+<h3>Prefetch Checkpoints</h3>
+<table><thead><tr>
+<th>Checkpoint</th>
+<th>Simple meaning</th>
+<th>Why it matters</th>
+</tr></thead><tbody>
+<tr>
+<td>KV copy ready before replay</td>
+<td>The lightweight green KV-copy telemetry ended before the black replay-due line.</td>
+<td>This is the scalable checkpoint for larger runs where torch.profiler is off.</td>
+</tr>
+<tr>
+<td>CUDA copy ready before replay</td>
+<td>The dark-green profiler HtoD copy ended before the black replay-due line.</td>
+<td>This proves profiler-visible GPU copy work happened early enough, but only for the copied slice we attributed in smaller validation runs.</td>
+</tr>
+<tr>
+<td>Full hint done before replay</td>
+<td>The whole purple hint request finished before replay resumed.</td>
+<td>This catches cases where the copy started early but the normal SGLang request path was still busy.</td>
+</tr>
+<tr>
+<td>Replay reloaded KV</td>
+<td>The real replay request still triggered SGLang KV load-back events.</td>
+<td>This catches cases where prefetched KV was incomplete, evicted, or not enough for the replay.</td>
+</tr>
+</tbody></table>
+<h3>Checkpoint Results Per Session</h3>
+<table><thead><tr>
+<th>session_id</th>
+<th>kv_copy_ready_before_replay</th>
+<th>cuda_copy_ready_before_replay</th>
+<th>full_hint_done_before_replay</th>
+<th>replay_reloaded_kv</th>
+<th>resume_load_count</th>
+<th>hint_outcome</th>
+<th>checkpoint_result</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_003</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>3</td>
+<td>late_prefetch</td>
+<td>not_ready</td>
+</tr>
+<tr>
+<td>agent_000</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>10</td>
+<td>late_prefetch</td>
+<td>not_ready</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>6</td>
+<td>late_prefetch</td>
+<td>not_ready</td>
+</tr>
+<tr>
+<td>agent_001</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>1</td>
+<td>13</td>
+<td>too_early_no_load_then_evicted</td>
+<td>hint_done_but_no_cuda_ready</td>
+</tr>
+<tr>
+<td>agent_002</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>1</td>
+<td>13</td>
+<td>resume_still_loaded_kv</td>
+<td>hint_done_but_no_cuda_ready</td>
+</tr>
+<tr>
+<td>agent_005</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>6</td>
+<td>late_prefetch</td>
+<td>no_visible_prefetch</td>
+</tr>
+</tbody></table>
+</div>
+<div class="panel theme-observations" id="observations"><h2>Key Observations Per Session</h2>
+<p class="caption">Plain-English interpretation of the selected sessions in the timeline.</p>
+<div class="table-wrap wide">
+<table><thead><tr>
+<th>session_id</th>
+<th>status</th>
+<th>what happened</th>
+<th>deduction and evidence</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_003</td>
+<td>Late prefetch</td>
+<td>The hinted KV movement completed 224.349 ms after replay was already due.</td>
+<td>The software hint existed, but the normal serving/KV path did not act early enough. tool wait 526.000 ms; KV copy ready before replay no; CUDA copy ready before replay no; full hint done before replay no; replay reloaded KV yes; SGLang load 33141.493 ms -&gt; 33205.154 ms; lightweight KV copy 33141.624 ms -&gt; 33205.263 ms; CUDA HtoD 33142.205 ms -&gt; 33205.041 ms; profiler window 32834.231 ms -&gt; 41742.169 ms; HtoD missing reason none; replay due 32980.692 ms; margin -224.349 ms</td>
+</tr>
+<tr>
+<td>agent_000</td>
+<td>Late prefetch</td>
+<td>The hinted KV movement completed 84.113 ms after replay was already due.</td>
+<td>The software hint existed, but the normal serving/KV path did not act early enough. tool wait 363.000 ms; KV copy ready before replay no; CUDA copy ready before replay no; full hint done before replay no; replay reloaded KV yes; SGLang load 32806.114 ms -&gt; 32903.159 ms; lightweight KV copy 32806.254 ms -&gt; 32903.269 ms; CUDA HtoD 32836.799 ms -&gt; 32903.104 ms; profiler window 32834.231 ms -&gt; 41742.169 ms; HtoD missing reason none; replay due 32818.991 ms; margin -84.113 ms</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>Late prefetch</td>
+<td>The hinted KV movement completed 61.339 ms after replay was already due.</td>
+<td>The software hint existed, but the normal serving/KV path did not act early enough. tool wait 496.000 ms; KV copy ready before replay no; CUDA copy ready before replay no; full hint done before replay no; replay reloaded KV yes; SGLang load 32965.410 ms -&gt; 33011.712 ms; lightweight KV copy 32965.702 ms -&gt; 33011.886 ms; CUDA HtoD 32966.276 ms -&gt; 33011.710 ms; profiler window 32834.231 ms -&gt; 41742.169 ms; HtoD missing reason none; replay due 32950.371 ms; margin -61.339 ms</td>
+</tr>
+<tr>
+<td>agent_001</td>
+<td>No visible prefetch</td>
+<td>The trace did not show a SGLang KV load or CUDA HtoD copy for this hint.</td>
+<td>This session is weak evidence for movement timing; use it mainly to show missing visibility. tool wait 187.000 ms; KV copy ready before replay no; CUDA copy ready before replay no; full hint done before replay yes; replay reloaded KV yes; SGLang load not attributed -&gt; not attributed; lightweight KV copy not attributed -&gt; not attributed; CUDA HtoD not attributed -&gt; not attributed; profiler window 32834.231 ms -&gt; 41742.169 ms; HtoD missing reason no_sglang_kv_load; replay due 32640.793 ms; margin not attributed</td>
+</tr>
+<tr>
+<td>agent_002</td>
+<td>No visible prefetch</td>
+<td>The trace did not show a SGLang KV load or CUDA HtoD copy for this hint.</td>
+<td>This session is weak evidence for movement timing; use it mainly to show missing visibility. tool wait 167.000 ms; KV copy ready before replay no; CUDA copy ready before replay no; full hint done before replay yes; replay reloaded KV yes; SGLang load not attributed -&gt; not attributed; lightweight KV copy not attributed -&gt; not attributed; CUDA HtoD not attributed -&gt; not attributed; profiler window 32834.231 ms -&gt; 41742.169 ms; HtoD missing reason no_sglang_kv_load; replay due 32622.752 ms; margin not attributed</td>
+</tr>
+<tr>
+<td>agent_005</td>
+<td>No visible prefetch</td>
+<td>The trace did not show a SGLang KV load or CUDA HtoD copy for this hint.</td>
+<td>This session is weak evidence for movement timing; use it mainly to show missing visibility. tool wait 437.000 ms; KV copy ready before replay no; CUDA copy ready before replay no; full hint done before replay no; replay reloaded KV yes; SGLang load not attributed -&gt; not attributed; lightweight KV copy not attributed -&gt; not attributed; CUDA HtoD not attributed -&gt; not attributed; profiler window 32834.231 ms -&gt; 41742.169 ms; HtoD missing reason no_sglang_kv_load; replay due 32891.823 ms; margin not attributed</td>
+</tr>
+</tbody></table>
+</div></div>
+<div class="panel theme-appendix" id="appendix"><h2>Session Details</h2>
+<p class="caption">Raw timing fields for the selected sessions. Use this to defend the visual conclusions.</p>
+<div class="table-wrap wide">
+<table><thead><tr>
+<th>session_id</th>
+<th>priority</th>
+<th>tool_wait_ms</th>
+<th>prompt_tokens</th>
+<th>hint_submitted_ms</th>
+<th>hint_request_start_ms</th>
+<th>hint_request_end_ms</th>
+<th>sglang_copy_start_ms</th>
+<th>sglang_copy_end_ms</th>
+<th>telemetry_copy_start_ms</th>
+<th>telemetry_copy_end_ms</th>
+<th>telemetry_h2d_copy_events</th>
+<th>telemetry_host_index_count</th>
+<th>torch_copy_start_ms</th>
+<th>torch_copy_end_ms</th>
+<th>torch_h2d_copy_events</th>
+<th>torch_h2d_bytes</th>
+<th>visible_copy_start_ms</th>
+<th>visible_copy_end_ms</th>
+<th>visible_copy_source</th>
+<th>sglang_kv_profiler_status</th>
+<th>h2d_missing_reason</th>
+<th>profiler_start_ms</th>
+<th>profiler_end_ms</th>
+<th>profiler_stop_reason</th>
+<th>replay_due_ms</th>
+<th>replay_start_ms</th>
+<th>replay_end_ms</th>
+<th>hint_replay_overlap_ms</th>
+<th>hint_overlaps_replay</th>
+<th>telemetry_copy_inside_hint</th>
+<th>torch_copy_inside_hint</th>
+<th>visible_copy_inside_hint</th>
+<th>prefetch_margin_ms</th>
+<th>late_prefetch</th>
+<th>kv_copy_ready_before_replay</th>
+<th>cuda_copy_ready_before_replay</th>
+<th>full_hint_done_before_replay</th>
+<th>replay_reloaded_kv</th>
+<th>resume_load_count</th>
+<th>resume_hicache_load_count</th>
+<th>eviction_pressure_after_prefetch</th>
+<th>hint_total_duration_ms</th>
+<th>hint_outcome</th>
+<th>checkpoint_result</th>
+<th>replay_ttft_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_003</td>
+<td>normal</td>
+<td>526</td>
+<td>768</td>
+<td>32454.24</td>
+<td>32945.891</td>
+<td>33237.688</td>
+<td>33141.493</td>
+<td>33205.154</td>
+<td>33141.624</td>
+<td>33205.263</td>
+<td>28</td>
+<td>1055</td>
+<td>33142.204505</td>
+<td>33205.040729</td>
+<td>672</td>
+<td>30248960</td>
+<td>33142.204505</td>
+<td>33205.040729</td>
+<td>torch_profiler_h2d</td>
+<td>inside_profiler_window</td>
+<td></td>
+<td>32834.231</td>
+<td>41742.169</td>
+<td>event_limit_220</td>
+<td>32980.692</td>
+<td>33238.001</td>
+<td>41755.099</td>
+<td>0.0</td>
+<td>0</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>-224.349</td>
+<td>True</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>3</td>
+<td>1</td>
+<td>5</td>
+<td>357.41</td>
+<td>late_prefetch</td>
+<td>not_ready</td>
+<td>331.256</td>
+</tr>
+<tr>
+<td>agent_000</td>
+<td>high</td>
+<td>363</td>
+<td>768</td>
+<td>32455.943</td>
+<td>32719.472</td>
+<td>32945.515</td>
+<td>32806.114</td>
+<td>32903.159</td>
+<td>32806.254</td>
+<td>32903.269</td>
+<td>28</td>
+<td>1055</td>
+<td>32836.798809</td>
+<td>32903.103577</td>
+<td>840</td>
+<td>30248960</td>
+<td>32836.798809</td>
+<td>32903.103577</td>
+<td>torch_profiler_h2d</td>
+<td>partly_outside_profiler_window</td>
+<td></td>
+<td>32834.231</td>
+<td>41742.169</td>
+<td>event_limit_220</td>
+<td>32818.991</td>
+<td>32819.197</td>
+<td>41755.271</td>
+<td>126.318</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>-84.113</td>
+<td>True</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>10</td>
+<td>4</td>
+<td>3</td>
+<td>226.517</td>
+<td>late_prefetch</td>
+<td>not_ready</td>
+<td>314.38</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>high</td>
+<td>496</td>
+<td>1024</td>
+<td>32454.781</td>
+<td>32851.014</td>
+<td>33134.906</td>
+<td>32965.41</td>
+<td>33011.712</td>
+<td>32965.702</td>
+<td>33011.886</td>
+<td>28</td>
+<td>462</td>
+<td>32966.276185</td>
+<td>33011.710297</td>
+<td>179</td>
+<td>13166080</td>
+<td>32966.276185</td>
+<td>33011.710297</td>
+<td>torch_profiler_h2d</td>
+<td>inside_profiler_window</td>
+<td></td>
+<td>32834.231</td>
+<td>41742.169</td>
+<td>event_limit_220</td>
+<td>32950.371</td>
+<td>33135.29</td>
+<td>41755.439</td>
+<td>0.0</td>
+<td>0</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>-61.339</td>
+<td>True</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>6</td>
+<td>2</td>
+<td>13</td>
+<td>284.256</td>
+<td>late_prefetch</td>
+<td>not_ready</td>
+<td>434.277</td>
+</tr>
+<tr>
+<td>agent_001</td>
+<td>normal</td>
+<td>187</td>
+<td>768</td>
+<td>32453.842</td>
+<td>32541.447</td>
+<td>32594.094</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>0</td>
+<td></td>
+<td></td>
+<td></td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td></td>
+<td></td>
+<td>no_sglang_kv_window</td>
+<td>no_sglang_kv_load</td>
+<td>32834.231</td>
+<td>41742.169</td>
+<td>event_limit_220</td>
+<td>32640.793</td>
+<td>32641.023</td>
+<td>41755.648</td>
+<td>0.0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td>False</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>1</td>
+<td>13</td>
+<td>5</td>
+<td>5</td>
+<td>53.084</td>
+<td>too_early_no_load_then_evicted</td>
+<td>hint_done_but_no_cuda_ready</td>
+<td>158.656</td>
+</tr>
+<tr>
+<td>agent_002</td>
+<td>normal</td>
+<td>167</td>
+<td>768</td>
+<td>32455.515</td>
+<td>32523.476</td>
+<td>32569.622</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>0</td>
+<td></td>
+<td></td>
+<td></td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td></td>
+<td></td>
+<td>no_sglang_kv_window</td>
+<td>no_sglang_kv_load</td>
+<td>32834.231</td>
+<td>41742.169</td>
+<td>event_limit_220</td>
+<td>32622.752</td>
+<td>32623.113</td>
+<td>41754.528</td>
+<td>0.0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td>False</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>1</td>
+<td>13</td>
+<td>5</td>
+<td>0</td>
+<td>46.746</td>
+<td>resume_still_loaded_kv</td>
+<td>hint_done_but_no_cuda_ready</td>
+<td>91.767</td>
+</tr>
+<tr>
+<td>agent_005</td>
+<td>normal</td>
+<td>437</td>
+<td>1024</td>
+<td>32455.148</td>
+<td>32793.238</td>
+<td>33134.141</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>0</td>
+<td></td>
+<td></td>
+<td></td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td></td>
+<td></td>
+<td>no_sglang_kv_window</td>
+<td>no_sglang_kv_load</td>
+<td>32834.231</td>
+<td>41742.169</td>
+<td>event_limit_220</td>
+<td>32891.823</td>
+<td>33134.5</td>
+<td>41754.918</td>
+<td>0.0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td>False</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+<td>6</td>
+<td>2</td>
+<td>16</td>
+<td>341.305</td>
+<td>late_prefetch</td>
+<td>no_visible_prefetch</td>
+<td>247.612</td>
+</tr>
+</tbody></table>
+</div></div>
+<div class="panel theme-paired" id="paired"><h2>Paired Session Evidence</h2>
+<p class="caption">This joins the clean and profiled views by session id so each session has both a performance view and a mechanism view.</p>
+<div class="table-wrap">
+<table><thead><tr>
+<th>session_id</th>
+<th>clean_mode</th>
+<th>paired_takeaway</th>
+<th>clean_replay_ttft_ms</th>
+<th>no_prefetch_replay_ttft_ms</th>
+<th>clean_delta_vs_no_prefetch_ms</th>
+<th>clean_hint_outcome</th>
+<th>profiled_cuda_copy_ready_before_replay</th>
+<th>profiled_full_hint_done_before_replay</th>
+<th>profiled_replay_reloaded_kv</th>
+<th>profiled_checkpoint_result</th>
+<th>profiled_kv_copy_ready_before_replay</th>
+<th>profiled_visible_copy_source</th>
+<th>profiled_telemetry_h2d_events</th>
+<th>profiled_h2d_events</th>
+<th>profiled_h2d_bytes</th>
+<th>profiled_prefetch_margin_ms</th>
+</tr></thead><tbody>
+<tr>
+<td>agent_000</td>
+<td>oracle_direct_load</td>
+<td>no clean prefetch win</td>
+<td>234.449</td>
+<td>125.252</td>
+<td>-109.197</td>
+<td>late_prefetch</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="good">yes</td>
+<td>not_ready</td>
+<td class="bad">no</td>
+<td>torch_profiler_h2d</td>
+<td>28</td>
+<td>840</td>
+<td>30248960</td>
+<td>-84.113</td>
+</tr>
+<tr>
+<td>agent_001</td>
+<td>oracle_direct_load</td>
+<td>hint finished, CUDA copy was not clearly attributed</td>
+<td>157.949</td>
+<td>151.469</td>
+<td>-6.48</td>
+<td>too_early_no_load_then_evicted</td>
+<td class="bad">no</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td>hint_done_but_no_cuda_ready</td>
+<td class="bad">no</td>
+<td></td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>agent_002</td>
+<td>oracle_direct_load</td>
+<td>hint finished, CUDA copy was not clearly attributed</td>
+<td>91.837</td>
+<td>85.948</td>
+<td>-5.889</td>
+<td>resume_still_loaded_kv</td>
+<td class="bad">no</td>
+<td class="good">yes</td>
+<td class="good">yes</td>
+<td>hint_done_but_no_cuda_ready</td>
+<td class="bad">no</td>
+<td></td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>agent_003</td>
+<td>oracle_direct_load</td>
+<td>no clean prefetch win</td>
+<td>299.973</td>
+<td>268.046</td>
+<td>-31.927</td>
+<td>late_prefetch</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="good">yes</td>
+<td>not_ready</td>
+<td class="bad">no</td>
+<td>torch_profiler_h2d</td>
+<td>28</td>
+<td>672</td>
+<td>30248960</td>
+<td>-224.349</td>
+</tr>
+<tr>
+<td>agent_004</td>
+<td>oracle_direct_load</td>
+<td>no clean prefetch win</td>
+<td>382.147</td>
+<td>256.407</td>
+<td>-125.74</td>
+<td>late_prefetch</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="good">yes</td>
+<td>not_ready</td>
+<td class="bad">no</td>
+<td>torch_profiler_h2d</td>
+<td>28</td>
+<td>179</td>
+<td>13166080</td>
+<td>-61.339</td>
+</tr>
+<tr>
+<td>agent_005</td>
+<td>oracle_direct_load</td>
+<td>no clean prefetch win</td>
+<td>218.417</td>
+<td>150.077</td>
+<td>-68.34</td>
+<td>late_prefetch</td>
+<td class="bad">no</td>
+<td class="bad">no</td>
+<td class="good">yes</td>
+<td>no_visible_prefetch</td>
+<td class="bad">no</td>
+<td></td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+</tr>
+</tbody></table>
+</div></div>
+<div class="panel theme-reproduce" id="reproduce"><h2>Reproduce This Report</h2>
+<p class="caption">These commands reproduce or archive the controlled synthetic master report. Labeled builds do not overwrite the current latest report unless <code>UPDATE_LATEST=1</code>.</p>
+<h3>Archive A Labeled Synthetic Report From Existing Runs</h3>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_manager_demo_1 \
+UPDATE_LATEST=0 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh</code></pre>
+<p class="caption">Output:</p>
+<pre><code>artifacts/results/labeled/synthetic/synthetic_manager_demo_1/master_report.html</code></pre>
+<h3>Deliberately Refresh The Latest Synthetic Master Report</h3>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+REPORT_LABEL=synthetic_latest_refresh \
+UPDATE_LATEST=1 \
+CLEAN_ROOT=artifacts/results/milestone15_targeted_dma_validation/clean_performance \
+ATTRIBUTION_ROOT=artifacts/results/milestone15_targeted_dma_validation/profiled_attribution \
+bash scripts/build_labeled_synthetic_master_report.sh</code></pre>
+<h3>Rerun The Full Synthetic Experiment</h3>
+<p class="caption">This reruns the clean and profiled synthetic experiment, then regenerates the standard latest synthetic report.</p>
+<pre><code>cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone12_rerun_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+SESSION_COUNT=12 \
+RANDOMIZE_TRAFFIC=1 \
+ORACLE_LEAD_MS=1000 \
+bash scripts/run_milestone12_paired_evidence.sh Qwen/Qwen2.5-1.5B-Instruct</code></pre>
+</div>
+<div class="panel theme-appendix" id="appendix-metadata"><h2>Appendix: Metadata</h2><pre>
+{
+  &quot;attribution_mode&quot;: &quot;oracle_direct_load&quot;,
+  &quot;attribution_root&quot;: &quot;artifacts/results/milestone15_targeted_dma_validation/profiled_attribution&quot;,
+  &quot;clean_root&quot;: &quot;artifacts/results/milestone15_targeted_dma_validation/clean_performance&quot;,
+  &quot;generated_at&quot;: &quot;2026-08-17T16:09:43&quot;,
+  &quot;latest_root&quot;: &quot;artifacts/results&quot;,
+  &quot;max_timeline_sessions&quot;: 6,
+  &quot;modes&quot;: [
+    &quot;no_prefetch&quot;,
+    &quot;oracle_direct_load&quot;
+  ],
+  &quot;note&quot;: &quot;Profiled attribution rows should not be used for TTFT performance claims.&quot;,
+  &quot;timeline_json&quot;: &quot;artifacts/results/milestone15_targeted_dma_validation/profiled_attribution/oracle_direct_load_agentic_prefetch_timeline.json&quot;
+}
+</pre></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".panel[id][class*='theme-']").forEach(function (panel) {
+    const id = panel.id;
+    const h2 = panel.querySelector(":scope > h2");
+    if (!id || !h2) return;
+    const details = document.createElement("details");
+    details.id = id;
+    details.className = panel.className.replace("panel", "section-card").trim();
+    if (id === "executive") details.open = true;
+    const summary = document.createElement("summary");
+    summary.appendChild(h2);
+    details.appendChild(summary);
+    panel.removeAttribute("id");
+    while (panel.firstChild) {
+      details.appendChild(panel.firstChild);
+    }
+    panel.replaceWith(details);
+  });
+  const cards = Array.from(document.querySelectorAll("details.section-card"));
+  document.querySelectorAll(".toc a[href^='#']").forEach(function (link) {
+    link.addEventListener("click", function () {
+      const id = link.getAttribute("href").slice(1);
+      const target = document.getElementById(id);
+      if (target && target.tagName.toLowerCase() === "details") {
+        target.open = true;
+      }
+    });
+  });
+  document.querySelectorAll("[data-action='expand-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = true; });
+    });
+  });
+  document.querySelectorAll("[data-action='collapse-all']").forEach(function (button) {
+    button.addEventListener("click", function () {
+      cards.forEach(function (card) { card.open = false; });
+    });
+  });
+});
+</script>
+
+</body>
+</html>
