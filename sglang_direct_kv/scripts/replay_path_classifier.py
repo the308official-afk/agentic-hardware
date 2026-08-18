@@ -49,6 +49,9 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
     active_input_tokens = as_int(row.get("replay_active_input_tokens"))
     scheduler_trimmed_tokens = as_int(row.get("replay_scheduler_trimmed_tokens"))
     cached_prefix = as_int(row.get("replay_cached_prefix_tokens"))
+    final_cached_prefix = as_int(row.get("replay_final_cached_prefix_tokens"))
+    progressive_cache_events = as_int(row.get("replay_progressive_cache_events")) or 0
+    post_cache_write_events = as_int(row.get("replay_post_request_cache_write_events")) or 0
     host_hit = as_int(row.get("replay_host_hit_tokens")) or 0
     host_load = as_int(row.get("replay_host_load_tokens")) or 0
     replay_h2d_events = as_int(row.get("replay_kv_h2d_events")) or 0
@@ -161,6 +164,8 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
         evidence_bits.append(f"input={input_tokens}")
     if cached_prefix is not None:
         evidence_bits.append(f"matched={cached_prefix}")
+    if final_cached_prefix is not None and final_cached_prefix != cached_prefix:
+        evidence_bits.append(f"final_cached_after_replay={final_cached_prefix}")
     if active_input_tokens is not None and scheduler_trimmed_tokens is not None:
         evidence_bits.append(f"active={active_input_tokens}")
         evidence_bits.append(f"trimmed_before_later_hook={scheduler_trimmed_tokens}")
@@ -172,6 +177,10 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
         evidence_bits.append(f"scheduler_events={scheduler_events}")
     if model_forward_events:
         evidence_bits.append(f"model_forward_events={model_forward_events}")
+    if progressive_cache_events:
+        evidence_bits.append(f"progressive_cache_events={progressive_cache_events}")
+    if post_cache_write_events:
+        evidence_bits.append(f"post_request_cache_writes={post_cache_write_events}")
     if ttft_ms is not None:
         evidence_bits.append(f"TTFT={ttft_ms:.1f} ms")
     if first_cache_delay is not None:
@@ -182,6 +191,9 @@ def classify_replay_path(row: dict[str, Any]) -> dict[str, Any]:
         "active_input_tokens": active_input_tokens if active_input_tokens is not None else "",
         "scheduler_trimmed_tokens": scheduler_trimmed_tokens if scheduler_trimmed_tokens is not None else "",
         "matched_prefix_tokens": cached_prefix if cached_prefix is not None else "",
+        "final_cached_prefix_tokens": final_cached_prefix if final_cached_prefix is not None else "",
+        "progressive_cache_events": progressive_cache_events,
+        "post_request_cache_write_events": post_cache_write_events,
         "unmatched_tokens": unmatched_tokens if unmatched_tokens is not None else "",
         "cache_hit_ratio_pct": _ratio(cached_prefix, input_tokens),
         "gpu_resident_hit_tokens": gpu_resident_hit_tokens,
@@ -259,6 +271,9 @@ def build_replay_path_ledger(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "active_input_tokens": path["active_input_tokens"],
                 "scheduler_trimmed_tokens": path["scheduler_trimmed_tokens"],
                 "matched_prefix_tokens": path["matched_prefix_tokens"],
+                "final_cached_prefix_tokens": path["final_cached_prefix_tokens"],
+                "progressive_cache_events": path["progressive_cache_events"],
+                "post_request_cache_write_events": path["post_request_cache_write_events"],
                 "unmatched_tokens": path["unmatched_tokens"],
                 "cache_hit_ratio_pct": path["cache_hit_ratio_pct"],
                 "gpu_resident_hit_tokens": path["gpu_resident_hit_tokens"],

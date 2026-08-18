@@ -359,11 +359,15 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
             "active_input_tokens": "",
             "scheduler_trimmed_tokens": "",
             "cached_prefix_tokens": "",
+            "initial_cached_prefix_tokens": "",
+            "final_cached_prefix_tokens": "",
             "new_prefill_tokens_est": "",
             "cache_hit_ratio_pct": "",
             "host_hit_tokens": "",
             "host_load_tokens": "",
             "cache_write_events": 0,
+            "post_request_cache_write_events": 0,
+            "progressive_cache_events": 0,
             "match_prefix_events": 0,
             "init_load_back_events": 0,
             "load_back_events": 0,
@@ -376,8 +380,21 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
     events = compact_events or events
     input_tokens = max_numeric(events, "input_tokens")
     active_input_tokens = max_numeric(events, "active_input_tokens")
-    scheduler_trimmed_tokens = max_numeric(events, "scheduler_trimmed_tokens")
-    cached_prefix = max_numeric(events, "cached_prefix_tokens")
+    prefix_categories = {"match_prefix", "ready_to_load_host_cache", "init_load_back", "load_back", "hicache_load"}
+    prefix_events = [event for event in events if event.get("category") in prefix_categories]
+    progressive_categories = {"cache_unfinished_req"}
+    post_categories = {"cache_finished_req"}
+    progressive_events = [event for event in events if event.get("category") in progressive_categories]
+    post_events = [event for event in events if event.get("category") in post_categories]
+    scheduler_trimmed_tokens = max_numeric(prefix_events, "scheduler_trimmed_tokens")
+    prefix_counts = [
+        int(value)
+        for value in (as_float(event.get("cached_prefix_tokens")) for event in prefix_events)
+        if value is not None
+    ]
+    initial_cached_prefix = prefix_counts[0] if prefix_counts else None
+    cached_prefix = initial_cached_prefix
+    final_cached_prefix = max_numeric(events, "cached_prefix_tokens")
     if scheduler_trimmed_tokens is not None:
         cached_prefix = max(cached_prefix or 0, scheduler_trimmed_tokens)
     host_hit = max_numeric(events, "host_hit_tokens")
@@ -411,11 +428,15 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
         "active_input_tokens": active_input_tokens if active_input_tokens is not None else "",
         "scheduler_trimmed_tokens": scheduler_trimmed_tokens if scheduler_trimmed_tokens is not None else "",
         "cached_prefix_tokens": cached_prefix if cached_prefix is not None else "",
+        "initial_cached_prefix_tokens": initial_cached_prefix if initial_cached_prefix is not None else "",
+        "final_cached_prefix_tokens": final_cached_prefix if final_cached_prefix is not None else "",
         "new_prefill_tokens_est": new_prefill,
         "cache_hit_ratio_pct": hit_ratio,
         "host_hit_tokens": host_hit if host_hit is not None else "",
         "host_load_tokens": host_load_tokens if host_load_tokens is not None else "",
         "cache_write_events": count_category(events, "cache_finished_req") + count_category(events, "cache_unfinished_req"),
+        "post_request_cache_write_events": len(post_events),
+        "progressive_cache_events": len(progressive_events),
         "match_prefix_events": count_category(events, "match_prefix"),
         "ready_to_load_host_cache_events": count_category(events, "ready_to_load_host_cache"),
         "init_load_back_events": count_category(events, "init_load_back"),
@@ -426,7 +447,11 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
         "hicache_load_total_ms": sum_duration(events, "hicache_load"),
         "first_cache_event_delay_ms": first_delay,
         "cache_work_end_to_first_token_ms": end_to_first,
-        "cache_path_summary": f"{prefix_text}; {host_text}; {load_tokens_text}",
+        "cache_path_summary": (
+            f"{prefix_text}; final_cached_prefix={final_cached_prefix if final_cached_prefix is not None else 'unknown'};"
+            f" post_cache_writes={len(post_events)}; progressive_cache_events={len(progressive_events)};"
+            f" {host_text}; {load_tokens_text}"
+        ),
     }
 
 
@@ -653,10 +678,14 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "hint_active_input_tokens": hint_cache_summary["active_input_tokens"],
             "hint_scheduler_trimmed_tokens": hint_cache_summary["scheduler_trimmed_tokens"],
             "hint_cached_prefix_tokens": hint_cache_summary["cached_prefix_tokens"],
+            "hint_initial_cached_prefix_tokens": hint_cache_summary["initial_cached_prefix_tokens"],
+            "hint_final_cached_prefix_tokens": hint_cache_summary["final_cached_prefix_tokens"],
             "hint_new_prefill_tokens_est": hint_cache_summary["new_prefill_tokens_est"],
             "hint_cache_hit_ratio_pct": hint_cache_summary["cache_hit_ratio_pct"],
             "hint_host_hit_tokens": hint_cache_summary["host_hit_tokens"],
             "hint_host_load_tokens": hint_cache_summary["host_load_tokens"],
+            "hint_progressive_cache_events": hint_cache_summary["progressive_cache_events"],
+            "hint_post_request_cache_write_events": hint_cache_summary["post_request_cache_write_events"],
             "hint_match_prefix_events": hint_cache_summary["match_prefix_events"],
             "hint_init_load_back_events": hint_cache_summary["init_load_back_events"],
             "hint_load_back_events": hint_cache_summary["load_back_events"],
@@ -672,11 +701,15 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_active_input_tokens": replay_cache_summary["active_input_tokens"],
             "replay_scheduler_trimmed_tokens": replay_cache_summary["scheduler_trimmed_tokens"],
             "replay_cached_prefix_tokens": replay_cache_summary["cached_prefix_tokens"],
+            "replay_initial_cached_prefix_tokens": replay_cache_summary["initial_cached_prefix_tokens"],
+            "replay_final_cached_prefix_tokens": replay_cache_summary["final_cached_prefix_tokens"],
             "replay_new_prefill_tokens_est": replay_cache_summary["new_prefill_tokens_est"],
             "replay_cache_hit_ratio_pct": replay_cache_summary["cache_hit_ratio_pct"],
             "replay_host_hit_tokens": replay_cache_summary["host_hit_tokens"],
             "replay_host_load_tokens": replay_cache_summary["host_load_tokens"],
             "replay_cache_write_events": replay_cache_summary["cache_write_events"],
+            "replay_progressive_cache_events": replay_cache_summary["progressive_cache_events"],
+            "replay_post_request_cache_write_events": replay_cache_summary["post_request_cache_write_events"],
             "replay_match_prefix_events": replay_cache_summary["match_prefix_events"],
             "replay_ready_to_load_host_cache_events": replay_cache_summary["ready_to_load_host_cache_events"],
             "replay_init_load_back_events": replay_cache_summary["init_load_back_events"],
@@ -830,6 +863,9 @@ def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "path_confidence": row.get("path_confidence", ""),
                 "replay_cache_hit_pct": row.get("replay_cache_hit_ratio_pct", ""),
                 "replay_new_prefill_tokens_est": row.get("replay_new_prefill_tokens_est", ""),
+                "replay_final_cached_prefix_tokens": row.get("replay_final_cached_prefix_tokens", ""),
+                "replay_progressive_cache_events": row.get("replay_progressive_cache_events", ""),
+                "replay_post_request_cache_write_events": row.get("replay_post_request_cache_write_events", ""),
                 "verdict": row.get("per_gap_verdict", ""),
                 "movement": row.get("movement_class", ""),
             }
@@ -853,12 +889,15 @@ def replay_attribution_rows(rows: list[dict[str, Any]], limit: int | None = None
                 "active_input_tokens": row.get("replay_active_input_tokens", ""),
                 "scheduler_trimmed_tokens": row.get("replay_scheduler_trimmed_tokens", ""),
                 "cached_prefix_tokens": row.get("replay_cached_prefix_tokens", ""),
+                "final_cached_prefix_tokens": row.get("replay_final_cached_prefix_tokens", ""),
                 "cache_hit_pct": row.get("replay_cache_hit_ratio_pct", ""),
                 "new_prefill_tokens_est": row.get("replay_new_prefill_tokens_est", ""),
                 "host_hit_tokens": row.get("replay_host_hit_tokens", ""),
                 "host_load_tokens": row.get("replay_host_load_tokens", ""),
                 "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
                 "cache_events": row.get("replay_cache_event_count", ""),
+                "progressive_cache_events": row.get("replay_progressive_cache_events", ""),
+                "post_request_cache_write_events": row.get("replay_post_request_cache_write_events", ""),
                 "first_cache_event_delay_ms": row.get("replay_first_cache_event_delay_ms", ""),
                 "scheduler_events": row.get("replay_scheduler_event_count", ""),
                 "scheduler_total_ms": row.get("replay_scheduler_total_ms", ""),
@@ -912,9 +951,12 @@ def replay_path_proof_rows(ledger: list[dict[str, Any]], limit: int | None = Non
         "active_input_tokens",
         "scheduler_trimmed_tokens",
         "matched_prefix_tokens",
+        "final_cached_prefix_tokens",
         "unmatched_tokens",
         "host_load_tokens",
         "recomputed_tokens_est",
+        "progressive_cache_events",
+        "post_request_cache_write_events",
         "scheduler_wait_ms",
         "kv_prepare_ms",
         "model_forward_ms",
@@ -1333,8 +1375,11 @@ def render_html(
         "replay_active_input_tokens",
         "replay_scheduler_trimmed_tokens",
         "replay_cached_prefix_tokens",
+        "replay_final_cached_prefix_tokens",
         "replay_cache_hit_ratio_pct",
         "replay_new_prefill_tokens_est",
+        "replay_progressive_cache_events",
+        "replay_post_request_cache_write_events",
         "movement_class",
         "direct_kv_h2d_events",
         "replay_kv_h2d_events",
@@ -1402,6 +1447,7 @@ def render_html(
     <summary><h2>Replay Path Proof Table</h2></summary>
     <p>This is the main evidence ledger. Each row explains what happened when the replay request resumed: whether it reused cache, loaded KV from host to GPU, recomputed missing tokens, or mostly waited in the scheduler/request path.</p>
     <p class="note">Confidence matters. High confidence means the row has direct SGLang evidence plus HtoD movement evidence. Medium confidence means SGLang counters support the label. Low confidence means the label still depends mostly on TTFT and timeline shape.</p>
+    <p class="note"><code>matched_prefix_tokens</code> means the first cache match visible when replay started. <code>final_cached_prefix_tokens</code> means how much prefix existed later after replay/cache work progressed. A large difference between them is evidence of replay-side prefill/recompute work, not a clean cache hit.</p>
     {table_html(replay_path_proof_rows(ledger), limit=250)}
   </details>
 
@@ -1431,7 +1477,7 @@ def render_html(
   <details id="replay-attribution" class="section-card theme-directkv" open>
     <summary><h2>Replay Path Attribution</h2></summary>
     <p>This section turns the orange TTFT window into stronger evidence. For each replay, it reports SGLang prefix/cache counters observed inside the replay window: prompt tokens, cached prefix tokens, estimated new prefill tokens, host-hit tokens, host-load tokens, and replay-side HtoD events.</p>
-    <p class="note">The verdict is evidence-backed but still conservative. A long orange TTFT window plus low cache reuse suggests replay recompute/prefill or scheduler/cache waiting. A cyan bar plus host-load tokens is stronger proof that replay loaded KV from host to GPU.</p>
+    <p class="note">The verdict is evidence-backed but still conservative. Initial cached-prefix tokens show what was reusable when replay began. Final cached-prefix tokens show what existed later after replay work. A cyan bar plus host-load tokens is stronger proof that replay loaded KV from host to GPU.</p>
     <h3>Verdict Summary</h3>
     {table_html(verdict_summary_rows(gaps))}
     <h3>Replay Attribution Rows</h3>
@@ -1472,7 +1518,7 @@ def render_html(
   <details id="direct-kv" class="section-card theme-directkv">
     <summary><h2>Direct KV Load Evidence</h2></summary>
     <p>Green bars and <code>direct_kv_h2d_*</code> columns come from SGLang-level KV movement hooks and lightweight copy telemetry during the prefetch attempt. Cyan/replay columns show KV movement performed by the real resume request.</p>
-    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_active_input_tokens", "replay_scheduler_trimmed_tokens", "replay_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms", "model_forward_ms", "replay_scheduler_event_count", "replay_scheduler_total_ms", "replay_model_forward_event_count", "replay_model_forward_total_ms"])}
+    {table_html(gaps, ["session_id", "mode", "tool_gap_ms", "prefetch_margin_ms", "resume_ttft_ms", "final_path", "bottleneck_label", "path_confidence", "prefetch_outcome", "movement_class", "direct_kv_h2d_events", "direct_kv_h2d_duration_ms", "replay_kv_h2d_events", "replay_kv_h2d_duration_ms", "replay_input_tokens", "replay_active_input_tokens", "replay_scheduler_trimmed_tokens", "replay_cached_prefix_tokens", "replay_final_cached_prefix_tokens", "replay_cache_hit_ratio_pct", "replay_new_prefill_tokens_est", "replay_progressive_cache_events", "replay_post_request_cache_write_events", "replay_host_hit_tokens", "replay_host_load_tokens", "scheduler_wait_ms", "kv_prepare_ms", "model_forward_ms", "replay_scheduler_event_count", "replay_scheduler_total_ms", "replay_model_forward_event_count", "replay_model_forward_total_ms"])}
   </details>
 
   <details id="appendix" class="section-card theme-appendix">

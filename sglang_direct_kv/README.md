@@ -84,6 +84,29 @@ Under overlapping agent traffic, hints can complete too late, or complete early 
 The measured KV load calls are short compared with end-to-end hint completion, which suggests the issue is not only raw memory copy speed.
 The stronger argument is that current runtime/GPU memory paths lack deadline-aware, priority-aware, and residency-aware enforcement for agentic KV prefetch.
 
+Latest harsher controlled run:
+
+```text
+forced_eviction_harsh_valid_target4096_f128_1_reclassified
+```
+
+This run used one real AgentBench prompt pair, 128 early-diverging filler requests,
+100 ms tool wait, 2048-token filler prompts, and a 4096-token target prompt.
+The replay was valid under SGLang's token budget and showed strong pressure:
+
+```text
+Replay TTFT:                      13551.504 ms
+Replay input tokens:              13383
+Initial replay cache match:       24 tokens
+Final cached prefix after replay: 13383 tokens
+Estimated replay prefill/recompute: 13359 tokens
+Replay HtoD KV events observed:   0
+```
+
+Important interpretation: the full prefix existed after replay/cache work
+progressed, but it was not a clean cache hit at replay start. This is why the
+report now separates initial cache match from final post-replay cache state.
+
 Open this report first:
 
 ```text
