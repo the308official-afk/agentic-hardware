@@ -56,6 +56,7 @@ async function main() {
   const setupFlow = await dataUrl("simple_experiment_setup_flow.png");
   const readable = await dataUrl("readable_phase_timeline_8rows_wide.png");
   const globalPrefetch = await dataUrl("global_prefetch_margin_backup.png");
+  const syntheticMechanism = await dataUrl("synthetic_profiled_mechanism_timeline_compact.png");
   const h2dReadiness = await dataUrl("global_h2d_readiness.png");
   const queueTimeline = await dataUrl("replay_queue_timeline.png");
 
@@ -171,6 +172,22 @@ async function main() {
     }),
     slide({
       number: 7,
+      title: "Mechanism traces show why prefetch misses",
+      subtitle: "In the profiled synthetic run, the hint path existed, but KV copy/readiness still landed too late for replay.",
+      body: `
+        <div class="chart-with-callouts">
+          <img class="chart-img" src="${syntheticMechanism}" alt="Synthetic profiled mechanism timeline showing hint, HtoD copy, replay due, and replay reload behavior">
+          <div class="callout-stack">
+            ${evidenceCard("0 / 6", "ready before replay", "danger")}
+            ${evidenceCard("3 / 6", "visible CUDA HtoD", "cyan-card")}
+            ${evidenceCard("6 / 6", "replay reloaded KV", "warning")}
+          </div>
+        </div>
+      `,
+      source: "Source: latest_synthetic_master_report.html, Profiled Mechanism Timelines; mechanism evidence, not clean TTFT claims",
+    }),
+    slide({
+      number: 8,
       title: "Replay-side KV loads missed the deadline in this run",
       subtitle: "The aggregate view shows whether KV H2D finished before or after replay was due.",
       body: `
@@ -185,7 +202,7 @@ async function main() {
       source: "Source: latest_master_report.html, Global Replay H2D Readiness",
     }),
     slide({
-      number: 8,
+      number: 9,
       title: "The delay is not just copy time",
       subtitle: "The request enters normal software/runtime scheduling before visible KV H2D begins.",
       body: `
@@ -195,7 +212,7 @@ async function main() {
       source: "Source: latest_master_report.html, Replay Queue Timeline vs H2D Start",
     }),
     slide({
-      number: 9,
+      number: 10,
       title: "Hardware support can make hints enforceable",
       subtitle: "The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.",
       body: `
@@ -488,6 +505,7 @@ async function main() {
       padding: 18px;
     }
     .evidence-card.danger { background: #fef2f2; border-color: #fecaca; }
+    .evidence-card.cyan-card { background: #ecfeff; border-color: #67e8f9; }
     .evidence-value {
       color: #b91c1c;
       font-size: 44px;
@@ -495,6 +513,7 @@ async function main() {
       line-height: 1;
     }
     .evidence-card.warning .evidence-value { color: #c2410c; }
+    .evidence-card.cyan-card .evidence-value { color: #0e7490; }
     .evidence-label {
       margin-top: 12px;
       color: var(--body);

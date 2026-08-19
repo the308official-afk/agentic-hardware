@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 
 const repoRoot = "/Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware";
 const reportPath = path.join(repoRoot, "sglang_direct_kv/artifacts/results/latest_master_report.html");
+const syntheticReportPath = path.join(repoRoot, "sglang_direct_kv/artifacts/results/latest_synthetic_master_report.html");
 const backupReportPath = path.join(repoRoot, "backups/latest_master_report-1.html");
 const outDir = path.join(repoRoot, "sglang_direct_kv/artifacts/slides/images");
 
@@ -34,6 +35,13 @@ const backupCharts = [
   {
     name: "global_prefetch_margin_backup.png",
     selector: 'svg[aria-label="Global prefetch margin dot plot"]',
+  },
+];
+
+const syntheticCharts = [
+  {
+    name: "synthetic_profiled_mechanism_timeline.png",
+    selector: 'svg[aria-label="Agentic prefetch timeline"]',
   },
 ];
 
@@ -70,6 +78,23 @@ async function main() {
   });
 
   for (const chart of backupCharts) {
+    const locator = page.locator(chart.selector).first();
+    await locator.waitFor({ state: "visible" });
+    await locator.screenshot({
+      path: path.join(outDir, chart.name),
+      omitBackground: false,
+    });
+  }
+
+  await page.goto(`file://${syntheticReportPath}`, { waitUntil: "load" });
+  await page.evaluate(() => {
+    for (const details of document.querySelectorAll("details")) {
+      details.open = true;
+    }
+    document.body.style.background = "#ffffff";
+  });
+
+  for (const chart of syntheticCharts) {
     const locator = page.locator(chart.selector).first();
     await locator.waitFor({ state: "visible" });
     await locator.screenshot({

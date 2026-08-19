@@ -316,17 +316,25 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
-    addTitle(slide, "Replay-side KV loads missed the deadline in this run", "The aggregate view shows whether KV H2D finished before or after replay was due.");
-    await addImage(slide, "global_h2d_readiness.png", 42, 158, 900, 390, "Global replay H2D readiness dot chart", "contain");
-    addRect(slide, 972, 194, 220, 116, "#fef2f2", "#fecaca", "rounded-md");
-    addText(slide, "8 / 8", 998, 218, 168, 50, { size: 48, bold: true, color: "#b91c1c", align: "center" });
-    addText(slide, "H2D loads finished late", 998, 276, 168, 28, { size: 17, color: C.body, align: "center" });
-    addText(slide, "All visible replay-side KV loads finished below the 0 ms deadline line.", 972, 370, 220, 78, { size: 21, color: C.body });
-    addSource(slide, "Source: latest_master_report.html, Global Replay H2D Readiness");
+    addTitle(slide, "Mechanism traces show why prefetch misses", "In the profiled synthetic run, the hint path existed, but KV copy/readiness still landed too late for replay.");
+    await addImage(slide, "synthetic_profiled_mechanism_timeline_compact.png", 34, 160, 790, 360, "Synthetic profiled mechanism timeline showing hint, HtoD copy, replay due, and replay reload behavior", "contain");
+    addRect(slide, 860, 170, 328, 82, "#fef2f2", "#fecaca", "rounded-md");
+    addText(slide, "0 / 6", 884, 188, 280, 34, { size: 34, bold: true, color: "#b91c1c", align: "center" });
+    addText(slide, "ready before replay", 884, 226, 280, 20, { size: 16, color: C.body, align: "center" });
+    addRect(slide, 860, 278, 328, 82, "#ecfeff", "#67e8f9", "rounded-md");
+    addText(slide, "3 / 6", 884, 296, 280, 34, { size: 34, bold: true, color: "#0e7490", align: "center" });
+    addText(slide, "visible CUDA HtoD", 884, 334, 280, 20, { size: 16, color: C.body, align: "center" });
+    addRect(slide, 860, 386, 328, 82, "#fff7ed", "#fed7aa", "rounded-md");
+    addText(slide, "6 / 6", 884, 404, 280, 34, { size: 34, bold: true, color: "#c2410c", align: "center" });
+    addText(slide, "replay reloaded KV", 884, 442, 280, 20, { size: 16, color: C.body, align: "center" });
+    addText(slide, "The semantic hint was present, but the normal movement path did not make residency/reuse predictable before replay.", 854, 492, 348, 48, { size: 17, color: C.body, align: "center" });
+    addText(slide, "Preliminary mechanism evidence only: useful for copy-path attribution, not clean TTFT claims.", 72, 560, 1070, 24, { size: 16, color: C.muted, align: "center" });
+    addSource(slide, "Source: latest_synthetic_master_report.html, Profiled Mechanism Timelines");
     addFooter(slide, 7);
     addNotes(slide, [
-      "This is the aggregate evidence slide. The current controlled no-prefetch run reports 8 no-prefetch replay H2D gaps and 8 late H2D finishes.",
-      "Measured claim source: Global Replay H2D Readiness table and dot plot in latest_master_report.html.",
+      "This slide uses the synthetic profiled mechanism timeline. It is not the clean performance run; it is useful for mechanism attribution.",
+      "The report states: KV copy ready before replay in 0 / 6 sessions; profiler CUDA HtoD visible in 3 / 6 sessions; replay reloaded KV in 6 / 6 sessions.",
+      "Manager takeaway: the software hint path can exist and still miss replay because the movement/readiness path is not deadline-enforced.",
     ]);
   }
 
@@ -334,18 +342,36 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
+    addTitle(slide, "Replay-side KV loads missed the deadline in this run", "The aggregate view shows whether KV H2D finished before or after replay was due.");
+    await addImage(slide, "global_h2d_readiness.png", 42, 158, 900, 390, "Global replay H2D readiness dot chart", "contain");
+    addRect(slide, 972, 194, 220, 116, "#fef2f2", "#fecaca", "rounded-md");
+    addText(slide, "8 / 8", 998, 218, 168, 50, { size: 48, bold: true, color: "#b91c1c", align: "center" });
+    addText(slide, "H2D loads finished late", 998, 276, 168, 28, { size: 17, color: C.body, align: "center" });
+    addText(slide, "All visible replay-side KV loads finished below the 0 ms deadline line.", 972, 370, 220, 78, { size: 21, color: C.body });
+    addSource(slide, "Source: latest_master_report.html, Global Replay H2D Readiness");
+    addFooter(slide, 8);
+    addNotes(slide, [
+      "This is the aggregate evidence slide. The current controlled no-prefetch run reports 8 no-prefetch replay H2D gaps and 8 late H2D finishes.",
+      "Measured claim source: Global Replay H2D Readiness table and dot plot in latest_master_report.html.",
+    ]);
+  }
+
+  // Slide 9
+  {
+    const slide = deck.slides.add();
+    slide.background.fill = "#ffffff";
     addTitle(slide, "The delay is not just copy time", "The request enters normal software/runtime scheduling before visible KV H2D begins.");
     await addImage(slide, "replay_queue_timeline.png", 42, 148, 1120, 440, "Replay queue timeline versus H2D start chart", "contain");
     addText(slide, "The stage markers separate submission, SGLang receive, scheduler queue/admit, and visible KV H2D movement.", 72, 608, 1040, 24, { size: 17, color: C.body });
     addSource(slide, "Source: latest_master_report.html, Replay Queue Timeline vs H2D Start");
-    addFooter(slide, 8);
+    addFooter(slide, 9);
     addNotes(slide, [
       "This chart separates replay due, client submit, SGLang receive, scheduler queue/admit, H2D start, and H2D finish.",
       "The key manager takeaway: a hint-aware design should influence scheduling and priority, not merely request more copies.",
     ]);
   }
 
-  // Slide 9
+  // Slide 10
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
@@ -367,7 +393,7 @@ async function main() {
     addRect(slide, 210, 474, 860, 84, "#f8fafc", C.rule, "rounded-md");
     addText(slide, "Resulting research question", 236, 498, 260, 26, { size: 22, bold: true, color: C.ink });
     addText(slide, "How much replay latency and wasted movement can be avoided when KV movement has session context, priority, deadline, protection, and telemetry?", 520, 492, 500, 44, { size: 19, color: C.body });
-    addFooter(slide, 9);
+    addFooter(slide, 10);
     addNotes(slide, [
       "Closing slide. This translates observed software/runtime behavior into concrete hardware support candidates.",
       "Hardware ideas come from the project proposal: KV metadata, deadline-aware queues, priority-aware migration, residency protection, and telemetry.",
