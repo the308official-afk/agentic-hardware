@@ -5398,6 +5398,23 @@ This means the chart itself can now answer:
 When the agent resumed, did it reuse KV, reload KV from host, or rebuild KV?
 ```
 
+Readable phase timeline:
+
+```text
+The report also includes a Readable Phase Timeline.
+
+This chart removes the global time axis.
+Each row is still one tool gap, but each phase gets a fixed readable column:
+  initial turn
+  tool wait
+  prefetch
+  replay path
+
+Every bar prints the true measured duration.
+This makes long prefetch/replay requests easy to explain without compressing
+small TTFT, HtoD, or recompute bars into the far right of the chart.
+```
+
 New report sections:
 
 ```text

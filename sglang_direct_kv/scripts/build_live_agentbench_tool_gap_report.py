@@ -135,6 +135,191 @@ def replay_recompute_segment_ms(row: dict[str, Any]) -> float:
     return 0.0
 
 
+def duration_between(row: dict[str, Any], start_key: str, end_key: str) -> float | None:
+    start = maybe_float(row.get(start_key))
+    end = maybe_float(row.get(end_key))
+    if start is None or end is None:
+        return None
+    return max(0.0, end - start)
+
+
+def display_ms(value: Any) -> str:
+    parsed = maybe_float(value)
+    if parsed is None:
+        return ""
+    if abs(parsed) >= 1000:
+        return f"{parsed / 1000.0:.1f} s"
+    return f"{parsed:.0f} ms"
+
+
+def replay_phase_segments(row: dict[str, Any]) -> dict[str, float]:
+    ttft = maybe_float(row.get("resume_ttft_ms")) or duration_between(row, "replay_prefill_start_ms", "replay_prefill_end_ms") or 0.0
+    replay_h2d = maybe_float(row.get("replay_kv_h2d_duration_ms")) or maybe_float(row.get("host_load_ms")) or 0.0
+    recompute = replay_recompute_segment_ms(row)
+    known = min(ttft, replay_h2d + recompute)
+    normal_prefill = max(0.0, ttft - known)
+    latency = maybe_float(row.get("resume_latency_ms")) or duration_between(row, "resume_start_ms", "resume_end_ms") or 0.0
+    decode = max(0.0, latency - ttft)
+    return {
+        "ttft": ttft,
+        "replay_h2d": replay_h2d,
+        "recompute": recompute,
+        "normal_prefill": normal_prefill,
+        "decode": decode,
+    }
+
+
+def build_readable_phase_timeline_svg(
+    gaps: list[dict[str, Any]],
+    max_rows: int,
+    show_prefetch_legend: bool = True,
+) -> str:
+    rows = gaps[:max_rows]
+    if not rows:
+        return "<p>No readable phase timeline available.</p>"
+
+    width = 1580
+    left = 205
+    right = 40
+    top = 86
+    row_h = 172
+    header_h = 40
+    gap = 16
+    turn_w = 220
+    wait_w = 190
+    prefetch_w = 330 if show_prefetch_legend else 170
+    replay_w = width - left - right - turn_w - wait_w - prefetch_w - (3 * gap)
+    x_turn = left
+    x_wait = x_turn + turn_w + gap
+    x_prefetch = x_wait + wait_w + gap
+    x_replay = x_prefetch + prefetch_w + gap
+    plot_bottom = top + header_h + len(rows) * row_h
+    legend_y = plot_bottom + 42
+    height = legend_y + 56
+
+    def rect(
+        svg: list[str],
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        color: str,
+        label: str,
+        title: str,
+        opacity: float = 0.9,
+        text_color: str = "#ffffff",
+        dashed: bool = False,
+    ) -> None:
+        stroke = ' stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4"' if dashed else ""
+        svg.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" '
+            f'fill="{color}" opacity="{opacity}"{stroke}><title>{fmt(title)}</title></rect>'
+        )
+        if label:
+            svg.append(
+                f'<text x="{x + w / 2:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" '
+                f'font-size="10" fill="{text_color}" font-weight="700">{fmt(label)}</text>'
+            )
+
+    def missing(svg: list[str], x: float, y: float, w: float, h: float, label: str) -> None:
+        rect(svg, x, y, w, h, "#f8fafc", label, label, 1.0, "#64748b", dashed=True)
+
+    def active_bar(svg: list[str], x: float, y: float, w: float, h: float, color: str, name: str, duration: Any, title: str, text_color: str = "#ffffff") -> None:
+        duration_label = display_ms(duration)
+        label = f"{name}: {duration_label}" if duration_label else name
+        rect(svg, x, y, w, h, color, label, title, 0.9, text_color)
+
+    svg = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Readable phase timeline without global time scale">',
+        '<text x="10" y="26" font-size="18" font-weight="700" fill="#0f172a">Readable phase timeline</text>',
+        '<text x="10" y="48" font-size="12" fill="#475569">Each bar is stretched for readability. The printed duration is the measured value.</text>',
+    ]
+    headers = [
+        ("initial turn", x_turn, turn_w),
+        ("tool wait", x_wait, wait_w),
+        ("prefetch", x_prefetch, prefetch_w),
+        ("replay path", x_replay, replay_w),
+    ]
+    for label, x, w in headers:
+        svg.append(f'<text x="{x + w / 2:.1f}" y="{top - 8}" text-anchor="middle" font-size="13" fill="#334155" font-weight="700">{fmt(label)}</text>')
+        svg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{plot_bottom - top:.1f}" fill="none" stroke="#e5e7eb"/>')
+
+    for idx, row in enumerate(rows):
+        y = top + header_h + idx * row_h
+        band_fill = "#ffffff" if idx % 2 == 0 else "#e8eef6"
+        svg.append(f'<rect x="0" y="{y:.1f}" width="{width}" height="{row_h:.1f}" fill="{band_fill}" opacity="0.96"/>')
+        svg.append(f'<line x1="0" y1="{y:.1f}" x2="{width}" y2="{y:.1f}" stroke="#cbd5e1"/>')
+
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        margin = maybe_float(row.get("prefetch_margin_ms"))
+        if margin is None:
+            timing = "NO PREFETCH"
+            timing_color = "#64748b"
+        elif margin >= 0:
+            timing = f"READY +{display_ms(margin)}"
+            timing_color = "#166534"
+        else:
+            timing = f"LATE -{display_ms(abs(margin))}"
+            timing_color = "#b91c1c"
+        outcome, outcome_color, outcome_title = timeline_kv_outcome(row)
+        svg.append(f'<text x="12" y="{y + 27}" font-size="16" fill="#0f172a" font-weight="800">{fmt(label)}</text>')
+        svg.append(f'<text x="12" y="{y + 49}" font-size="12" fill="{timing_color}" font-weight="800">{fmt(timing)}</text>')
+        svg.append(f'<text x="12" y="{y + 70}" font-size="12" fill="{outcome_color}" font-weight="800"><title>{fmt(outcome_title)}</title>{fmt(outcome)}</text>')
+        svg.append(f'<text x="12" y="{y + 91}" font-size="10" fill="#64748b">wait {fmt(display_ms(row.get("tool_gap_ms")))}</text>')
+
+        lane_y = y + 24
+        small_h = 22
+        current_duration = maybe_float(row.get("current_latency_ms")) or duration_between(row, "current_start_ms", "current_end_ms")
+        active_bar(svg, x_turn + 12, lane_y, turn_w - 24, 28, "#2563eb", "turn", current_duration, "initial model turn")
+        active_bar(svg, x_wait + 12, lane_y, wait_w - 24, 28, "#d1d5db", "wait", row.get("tool_gap_ms"), "tool/tool-wait window", "#334155")
+
+        if show_prefetch_legend:
+            prefetch_duration = maybe_float(row.get("prefetch_duration_ms"))
+            direct_h2d_duration = maybe_float(row.get("direct_kv_h2d_duration_ms"))
+            if prefetch_duration is not None:
+                active_bar(svg, x_prefetch + 12, y + 16, prefetch_w - 24, small_h, "#a855f7", "attempt", prefetch_duration, "software/direct prefetch attempt")
+            else:
+                missing(svg, x_prefetch + 12, y + 16, prefetch_w - 24, small_h, "no prefetch attempt")
+            if direct_h2d_duration is not None and direct_h2d_duration > 0:
+                active_bar(svg, x_prefetch + 12, y + 46, prefetch_w - 24, small_h, "#16a34a", "hint HtoD", direct_h2d_duration, "hint-side direct KV host-to-device movement")
+            else:
+                missing(svg, x_prefetch + 12, y + 46, prefetch_w - 24, small_h, "no hint HtoD observed")
+
+        segments = replay_phase_segments(row)
+        replay_h2d_duration = maybe_float(row.get("replay_kv_h2d_duration_ms")) or maybe_float(row.get("host_load_ms"))
+        replay_rows = [
+            ("replay HtoD", replay_h2d_duration, "#06b6d4", "replay-side KV host-to-device load", "#ffffff"),
+            ("recompute", segments["recompute"] if segments["recompute"] > 0 else None, "#db2777", "replay recompute / rebuilt missing prefix", "#ffffff"),
+            ("other TTFT", segments["normal_prefill"] if segments["normal_prefill"] > 0 else None, "#eab308", "remaining before-first-token work", "#713f12"),
+            ("decode", segments["decode"] if segments["decode"] > 0 else None, "#ef4444", "decode/generation after first token", "#ffffff"),
+        ]
+        for lane_idx, (name, duration, color, title, text_color) in enumerate(replay_rows):
+            ry = y + 8 + lane_idx * 35
+            if duration is not None and duration > 0:
+                active_bar(svg, x_replay + 12, ry, replay_w - 24, small_h, color, name, duration, title, text_color)
+            else:
+                missing(svg, x_replay + 12, ry, replay_w - 24, small_h, f"no {name}")
+
+    svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#cbd5e1"/>')
+    legend = [
+        ("initial model turn", "#2563eb"),
+        ("tool wait", "#d1d5db"),
+        ("prefetch attempt", "#a855f7"),
+        ("hint-side KV HtoD", "#16a34a"),
+        ("replay-side KV HtoD", "#06b6d4"),
+        ("recompute/rebuild", "#db2777"),
+        ("remaining TTFT", "#eab308"),
+        ("decode", "#ef4444"),
+    ]
+    lx = left
+    for label, color in legend:
+        svg.append(f'<rect x="{lx:.1f}" y="{legend_y - 12:.1f}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20:.1f}" y="{legend_y:.1f}" font-size="12">{fmt(label)}</text>')
+        lx += 160
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
 def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 

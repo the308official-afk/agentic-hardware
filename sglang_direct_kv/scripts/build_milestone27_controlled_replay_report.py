@@ -26,6 +26,7 @@ from agentic_kv.block_ledger import (
 )
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
+    build_readable_phase_timeline_svg,
     build_replay_execution_timeline_svg,
     read_jsonl,
     table_html,
@@ -1681,6 +1682,7 @@ def render_html(
         ("counterfactual", "Hardware Opportunity"),
         ("replay-attribution", "Replay Path Attribution"),
         ("timelines", "Mixed Timeline Sample"),
+        ("readable-phase-timeline", "Readable Phase Timeline"),
         ("kv-lifecycle", "KV Lifecycle Evidence"),
         ("kv-block-ledger", "KV Block Ledger"),
         ("replay-execution-timeline", "Replay Execution Timeline"),
@@ -1774,7 +1776,7 @@ def render_html(
   </details>
 
   <details id="timelines" class="section-card theme-clean">
-    <summary><h2>Mixed Timeline Sample</h2></summary>
+    <summary><h2>Mixed Timeline Sample / Deadline Timeline</h2></summary>
     <p class="note">This is the deadline view. The black line is when replay was due. This view is best for seeing whether the purple prefetch attempt finished before the deadline.</p>
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
     <h3>KV Outcome For Timeline Rows</h3>
@@ -1783,6 +1785,15 @@ def render_html(
     <h3>Timeline Row Map</h3>
     <p>This table maps the compact row names in the chart back to the full experiment details.</p>
     {table_html(timeline_mapping_rows(interesting))}
+  </details>
+
+  <details id="readable-phase-timeline" class="section-card theme-clean">
+    <summary><h2>Readable Phase Timeline</h2></summary>
+    <p class="note">This view removes the global time axis. Each phase gets a fixed readable column, and each bar prints the true measured duration. Use it to explain what happened in each tool gap without squinting at compressed far-right bars.</p>
+    <p class="note">Replay work is split into separate rows: cyan means replay-side KV HtoD, magenta means recompute/rebuild, gold means remaining before-first-token work, and red means decode after first token.</p>
+    {build_readable_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
+    <h3>Readable Phase Row Map</h3>
+    {table_html(timeline_kv_outcome_rows(interesting))}
   </details>
 
   <details id="kv-lifecycle" class="section-card theme-directkv">

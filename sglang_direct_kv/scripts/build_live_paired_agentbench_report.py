@@ -1152,6 +1152,7 @@ def timeline_guide_html(profiled_available: bool) -> str:
     return f"""
     <p class="note">{html.escape(note)}</p>
     <p class="note">The timeline uses a symlog full-replay view. It compresses very long replay requests so red bars can extend to their true end while the important activity around <code>0 ms</code> remains visible.</p>
+    <p class="note">The report may also include a Readable Phase Timeline. That view removes the global time axis: each phase gets a fixed readable column, and the true duration is printed on the bar.</p>
     <h3>One Row In Plain English</h3>
     <p>Each timeline row is one tool-wait episode: model turn, tool call, wait, optional prefetch, then model resume.</p>
     {table_html(step_rows, ["step", "timeline color", "simple meaning"])}
