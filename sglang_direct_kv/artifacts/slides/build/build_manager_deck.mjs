@@ -375,6 +375,51 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
+    addTitle(slide, "Key findings make the hardware case", "The recurring pattern is not just missing bandwidth; it is missing context, deadlines, residency control, and telemetry.");
+
+    const findings = [
+      ["Agent gaps can be short", "Real coding-agent tool gaps can be only tens of milliseconds, leaving little room for slow software paths.", "#eff6ff", "#bfdbfe", C.blue],
+      ["Correct hints can still be late", "The hint path can exist, but KV readiness can still miss replay deadlines in profiled traces.", "#f5f3ff", "#c4b5fd", C.purple],
+      ["Copy time is not the whole delay", "Visible H2D copy can be short while end-to-end request/prefetch latency is much longer.", "#ecfeff", "#67e8f9", C.cyan],
+      ["KV can be lost before replay", "Lifecycle traces show KV written to host, evicted from GPU, then sometimes evicted from host before replay.", "#fff7ed", "#fed7aa", "#c2410c"],
+      ["Replay loads can miss the deadline", "Replay-side H2D movement often starts or finishes after the agent already needed KV ready.", "#fef2f2", "#fecaca", "#b91c1c"],
+    ];
+
+    const positions = [
+      [58, 176, 350, 154],
+      [466, 176, 350, 154],
+      [874, 176, 350, 154],
+      [158, 362, 430, 154],
+      [692, 362, 430, 154],
+    ];
+    findings.forEach(([title, body, fill, line, accent], idx) => {
+      const [x, y, w, h] = positions[idx];
+      addRect(slide, x, y, w, h, fill, line, "rounded-md");
+      slide.shapes.add({
+        geometry: "rect",
+        position: { left: x, top: y, width: 7, height: h },
+        fill: accent,
+        line: { style: "solid", fill: "none", width: 0 },
+      });
+      addText(slide, title, x + 24, y + 22, w - 42, 50, { size: 20, bold: true, color: C.ink });
+      addText(slide, body, x + 24, y + 78, w - 42, 58, { size: 15, color: C.body });
+    });
+
+    addRect(slide, 190, 552, 900, 54, "#f8fafc", C.rule, "rounded-md");
+    addText(slide, "Implication: smarter DMA needs KV/session metadata, deadline-aware scheduling, residency protection, and useful telemetry.", 224, 568, 832, 24, { size: 18, bold: true, color: C.ink, align: "center" });
+    addSource(slide, "Source: project traces and latest master/synthetic report observations");
+    addFooter(slide, 10);
+    addNotes(slide, [
+      "This slide summarizes findings observed across the project so far.",
+      "It connects the evidence slides to hardware implications: short tool gaps, late hints, scheduler/request-path delay, lost KV lifecycle, and replay-side H2D lateness.",
+      "Manager takeaway: a smarter DMA path needs KV/session context and deadline enforcement, not only more bandwidth.",
+    ]);
+  }
+
+  // Slide 11
+  {
+    const slide = deck.slides.add();
+    slide.background.fill = "#ffffff";
     addTitle(slide, "Hardware support can make hints enforceable", "The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.");
     const top = 206;
     const nodes = [
@@ -393,7 +438,7 @@ async function main() {
     addRect(slide, 210, 474, 860, 84, "#f8fafc", C.rule, "rounded-md");
     addText(slide, "Resulting research question", 236, 498, 260, 26, { size: 22, bold: true, color: C.ink });
     addText(slide, "How much replay latency and wasted movement can be avoided when KV movement has session context, priority, deadline, protection, and telemetry?", 520, 492, 500, 44, { size: 19, color: C.body });
-    addFooter(slide, 10);
+    addFooter(slide, 11);
     addNotes(slide, [
       "Closing slide. This translates observed software/runtime behavior into concrete hardware support candidates.",
       "Hardware ideas come from the project proposal: KV metadata, deadline-aware queues, priority-aware migration, residency protection, and telemetry.",

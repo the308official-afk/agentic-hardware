@@ -41,6 +41,10 @@ function configCell(label, value, className = "") {
   return `<div class="config-cell ${className}"><div>${escapeHtml(label)}</div><strong>${escapeHtml(value)}</strong></div>`;
 }
 
+function findingCard(title, body, className = "") {
+  return `<div class="finding-card ${className}"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(body)}</p></div>`;
+}
+
 function slide({ eyebrow = "Agent-aware KV movement", title, subtitle = "", body, source = "", number }) {
   return `<section class="slide" id="slide-${number}">
     <div class="slide-eyebrow">${escapeHtml(eyebrow)}</div>
@@ -213,6 +217,22 @@ async function main() {
     }),
     slide({
       number: 10,
+      title: "Key findings make the hardware case",
+      subtitle: "The recurring pattern is not just missing bandwidth; it is missing context, deadlines, residency control, and telemetry.",
+      body: `
+        <div class="findings-grid">
+          ${findingCard("Agent gaps can be short", "Real coding-agent tool gaps can be only tens of milliseconds, leaving little room for slow software paths.", "blue-line")}
+          ${findingCard("Correct hints can still be late", "The hint path can exist, but KV readiness can still miss replay deadlines in profiled traces.", "purple-line")}
+          ${findingCard("Copy time is not the whole delay", "Visible H2D copy can be short while end-to-end request/prefetch latency is much longer.", "cyan-line")}
+          ${findingCard("KV can be lost before replay", "Lifecycle traces show KV written to host, evicted from GPU, then sometimes evicted from host before replay.", "orange-line")}
+          ${findingCard("Replay loads can miss the deadline", "Replay-side H2D movement often starts or finishes after the agent already needed KV ready.", "red-line")}
+        </div>
+        <div class="implication-box">Implication: smarter DMA needs KV/session metadata, deadline-aware scheduling, residency protection, and useful telemetry.</div>
+      `,
+      source: "Source: project traces and latest master/synthetic report observations",
+    }),
+    slide({
+      number: 11,
       title: "Hardware support can make hints enforceable",
       subtitle: "The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.",
       body: `
@@ -474,6 +494,57 @@ async function main() {
       color: var(--ink);
       font-size: 21px;
       line-height: 1.12;
+    }
+    .findings-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 20px;
+      margin: 34px 18px 0;
+    }
+    .finding-card {
+      min-height: 132px;
+      grid-column: span 2;
+      border: 1px solid var(--line);
+      border-left-width: 7px;
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 18px 22px 16px;
+    }
+    .finding-card:nth-child(4) {
+      grid-column: 2 / span 2;
+    }
+    .finding-card:nth-child(5) {
+      grid-column: 4 / span 2;
+    }
+    .finding-card h2 {
+      margin: 0 0 12px;
+      color: var(--ink);
+      font-size: 21px;
+      line-height: 1.12;
+    }
+    .finding-card p {
+      margin: 0;
+      color: var(--body);
+      font-size: 15.5px;
+      line-height: 1.32;
+    }
+    .blue-line { border-left-color: var(--blue); background: #eff6ff; }
+    .purple-line { border-left-color: var(--purple); background: #f5f3ff; }
+    .cyan-line { border-left-color: var(--cyan); background: #ecfeff; }
+    .orange-line { border-left-color: #c2410c; background: #fff7ed; }
+    .red-line { border-left-color: #b91c1c; background: #fef2f2; }
+    .implication-box {
+      margin: 24px auto 0;
+      max-width: 930px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 18px 28px;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1.28;
+      font-weight: 800;
+      text-align: center;
     }
     .chart-img {
       width: 100%;
