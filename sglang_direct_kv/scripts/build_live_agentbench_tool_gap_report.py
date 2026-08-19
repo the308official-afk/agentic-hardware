@@ -72,6 +72,69 @@ def maybe_float(value: Any) -> float | None:
         return None
 
 
+def maybe_int(value: Any) -> int | None:
+    parsed = maybe_float(value)
+    if parsed is None:
+        return None
+    return int(parsed)
+
+
+def has_positive(value: Any) -> bool:
+    parsed = maybe_float(value)
+    return parsed is not None and parsed > 0
+
+
+def timeline_kv_outcome(row: dict[str, Any]) -> tuple[str, str, str]:
+    hint_h2d = has_positive(row.get("direct_kv_h2d_events")) or has_positive(row.get("hint_host_load_tokens"))
+    replay_h2d = has_positive(row.get("replay_kv_h2d_events")) or has_positive(row.get("replay_host_load_tokens"))
+    recomputed_tokens = maybe_int(row.get("recomputed_tokens_est"))
+    if recomputed_tokens is None:
+        recomputed_tokens = maybe_int(row.get("replay_new_prefill_tokens_est"))
+    recompute = recomputed_tokens is not None and recomputed_tokens >= 128
+    margin = maybe_float(row.get("prefetch_margin_ms"))
+    hit_ratio = maybe_float(row.get("replay_cache_hit_ratio_pct"))
+    mode = str(row.get("mode") or "")
+
+    if hint_h2d and (replay_h2d or recompute):
+        return "WASTED PREFETCH", "#92400e", "Prefetch moved or touched KV, but replay still loaded or rebuilt KV."
+    if hint_h2d and margin is not None and margin >= 0:
+        return "PREFETCH HIT", "#166534", "Hint-side KV movement finished before replay and replay did not need visible recovery."
+    if replay_h2d and recompute:
+        return "MIXED LOAD+RECOMPUTE", "#7c3aed", "Replay loaded some KV from host and also rebuilt missing prefix work."
+    if replay_h2d:
+        return "REPLAY HOST LOAD", "#0e7490", "Replay itself loaded KV from host to GPU."
+    if recompute:
+        return "RECOMPUTE", "#be185d", "Replay rebuilt/prefilled missing prefix tokens instead of cleanly loading old KV."
+    if mode == "no_prefetch":
+        if hit_ratio is not None and hit_ratio >= 90:
+            return "FULL REUSE", "#475569", "Replay mostly reused already available KV."
+        return "NO PREFETCH", "#64748b", "No hint path ran for this row."
+    if margin is not None and margin < 0:
+        return "LATE PREFETCH", "#b91c1c", "The prefetch attempt finished after replay was due."
+    if hit_ratio is not None and hit_ratio >= 90:
+        return "FULL REUSE", "#475569", "Replay mostly reused already available KV."
+    return "NO VISIBLE KV MOVE", "#64748b", "No host-to-device KV movement was visible for this row."
+
+
+def replay_recompute_segment_ms(row: dict[str, Any]) -> float:
+    recomputed_tokens = maybe_int(row.get("recomputed_tokens_est"))
+    if recomputed_tokens is None:
+        recomputed_tokens = maybe_int(row.get("replay_new_prefill_tokens_est"))
+    if recomputed_tokens is None or recomputed_tokens < 128:
+        return 0.0
+    prefill_compute = maybe_float(row.get("prefill_compute_ms_est"))
+    model_forward = maybe_float(row.get("model_forward_ms"))
+    ttft = maybe_float(row.get("resume_ttft_ms"))
+    replay_h2d = maybe_float(row.get("replay_kv_h2d_duration_ms")) or 0.0
+    if prefill_compute is not None and prefill_compute > 0:
+        return prefill_compute
+    if model_forward is not None and model_forward > 0:
+        return model_forward
+    if ttft is not None:
+        return max(0.0, ttft - replay_h2d)
+    return 0.0
+
+
 def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -726,11 +789,13 @@ def build_expanded_gap_timeline_svg(
         else:
             status = "NO PREFETCH"
             status_color = "#64748b"
+        kv_outcome, kv_outcome_color, kv_outcome_title = timeline_kv_outcome(row)
         svg.append(f'<line x1="{left}" y1="{y + 39:.1f}" x2="{left + plot_w}" y2="{y + 39:.1f}" stroke="#f1f5f9"/>')
         svg.append(f'<line x1="{left}" y1="{y + 74:.1f}" x2="{left + plot_w}" y2="{y + 74:.1f}" stroke="#e5e7eb"/>')
         svg.append(f'<text x="10" y="{y + 27}" font-size="15" font-weight="700">{fmt(label)}</text>')
         svg.append(f'<text x="10" y="{y + 49}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
-        svg.append(f'<text x="10" y="{y + 69}" font-size="11" fill="#64748b">wait {gap_ms:.0f} ms</text>')
+        svg.append(f'<text x="10" y="{y + 68}" font-size="11" fill="{kv_outcome_color}" font-weight="700"><title>{fmt(kv_outcome_title)}</title>{fmt(kv_outcome)}</text>')
+        svg.append(f'<text x="10" y="{y + 87}" font-size="10" fill="#64748b">wait {gap_ms:.0f} ms</text>')
         svg.append(f'<text x="{left - 52}" y="{y + 25}" font-size="10" fill="#64748b" text-anchor="end">turn</text>')
         if show_prefetch_legend:
             svg.append(f'<text x="{left - 52}" y="{y + 58}" font-size="10" fill="#64748b" text-anchor="end">prefetch</text>')
@@ -805,8 +870,11 @@ def build_expanded_gap_timeline_svg(
                 0.92,
                 14,
             )
+        first_token_rel = replay_start
         if replay_start is not None:
-            replay_display_end = replay_start + 260.0
+            if replay_prefill_end is not None and replay_prefill_end >= replay_start:
+                first_token_rel = replay_prefill_end
+            replay_display_end = max(first_token_rel or replay_start, replay_start + 260.0)
             continues = False
             if replay_end is not None:
                 if scale == "symlog":
@@ -817,32 +885,73 @@ def build_expanded_gap_timeline_svg(
                     continues = replay_end > replay_display_end
             rect(
                 svg,
-                x_pos(replay_start),
+                x_pos(first_token_rel or replay_start),
                 x_pos(replay_display_end),
                 lower_y,
                 bar_h,
                 "#ef4444",
-                "resume model request after tool result",
+                "resume decode/generation after first token",
                 0.68,
                 12,
             )
-        if replay_prefill_start is not None and replay_prefill_end is not None:
-            rect(
-                svg,
-                x_pos(replay_prefill_start),
-                x_pos(replay_prefill_end),
-                lower_y + 3,
-                overlay_h,
-                "#f59e0b",
-                f"replay prefill / time before first token; duration_ms={row.get('replay_prefill_duration_ms', '')}",
-                0.88,
-                14,
-            )
-            if replay_prefill_end - replay_prefill_start >= 12:
+            if first_token_rel is not None and replay_display_end > first_token_rel:
+                label_x = x_pos(first_token_rel) + 4
                 svg.append(
-                    f'<text x="{max(left + 2, x_pos(replay_prefill_start) + 3):.1f}" y="{lower_y + 13:.1f}" '
-                    f'font-size="9" fill="#78350f" font-weight="700">TTFT</text>'
+                    f'<text x="{label_x:.1f}" y="{lower_y - 4:.1f}" font-size="9" fill="#991b1b" font-weight="700">'
+                    f'{fmt(kv_outcome)}</text>'
                 )
+        if replay_prefill_start is not None and replay_prefill_end is not None:
+            replay_h2d_duration = maybe_float(row.get("replay_kv_h2d_duration_ms")) or 0.0
+            recompute_ms = replay_recompute_segment_ms(row)
+            ttft_ms = max(0.0, replay_prefill_end - replay_prefill_start)
+            known_ms = min(ttft_ms, replay_h2d_duration + recompute_ms)
+            gold_ms = max(0.0, ttft_ms - known_ms)
+            cursor_ms = replay_prefill_start
+            if recompute_ms > 0 and (replay_h2d_start is None or recompute_ms >= ttft_ms * 0.5):
+                recompute_end = min(replay_prefill_end, cursor_ms + recompute_ms)
+                rect(
+                    svg,
+                    x_pos(cursor_ms),
+                    x_pos(recompute_end),
+                    lower_y + 3,
+                    overlay_h,
+                    "#db2777",
+                    f"replay recompute / rebuilt prefix; recomputed_tokens_est={row.get('recomputed_tokens_est', row.get('replay_new_prefill_tokens_est', ''))}",
+                    0.9,
+                    14,
+                )
+                cursor_ms = recompute_end
+            if gold_ms > 0:
+                gold_end = min(replay_prefill_end, cursor_ms + gold_ms)
+                rect(
+                    svg,
+                    x_pos(cursor_ms),
+                    x_pos(gold_end),
+                    lower_y + 3,
+                    overlay_h,
+                    "#eab308",
+                    f"normal remaining replay prefill / queue work; estimated_ms={gold_ms:.3f}",
+                    0.88,
+                    14,
+                )
+                cursor_ms = gold_end
+            if recompute_ms > 0 and cursor_ms < replay_prefill_end and replay_h2d_start is not None and recompute_ms < ttft_ms * 0.5:
+                rect(
+                    svg,
+                    x_pos(cursor_ms),
+                    x_pos(replay_prefill_end),
+                    lower_y + 3,
+                    overlay_h,
+                    "#db2777",
+                    f"replay recompute / rebuilt prefix; recomputed_tokens_est={row.get('recomputed_tokens_est', row.get('replay_new_prefill_tokens_est', ''))}",
+                    0.9,
+                    14,
+                )
+        if replay_prefill_start is not None and replay_prefill_end is not None and replay_prefill_end - replay_prefill_start >= 12:
+            svg.append(
+                f'<text x="{max(left + 2, x_pos(replay_prefill_start) + 3):.1f}" y="{lower_y + 13:.1f}" '
+                f'font-size="9" fill="#713f12" font-weight="700">TTFT</text>'
+            )
         if show_prefetch_legend and replay_h2d_start is not None and replay_h2d_end is not None:
             rect(
                 svg,
@@ -870,8 +979,9 @@ def build_expanded_gap_timeline_svg(
         ("initial model turn", "#2563eb"),
         ("tool wait", "#d1d5db"),
         ("replay due", "#111827"),
-        ("resume request", "#ef4444"),
-        ("replay prefill / TTFT", "#f59e0b"),
+        ("replay decode", "#ef4444"),
+        ("normal prefill", "#eab308"),
+        ("recompute", "#db2777"),
     ]
     if show_prefetch_legend:
         legend.insert(2, ("prefetch attempt", "#a855f7"))
@@ -966,7 +1076,7 @@ def build_replay_execution_timeline_svg(
     svg.append(f'<line x1="{zero_x:.1f}" y1="{top - 40}" x2="{zero_x:.1f}" y2="{plot_bottom:.1f}" stroke="#111827" stroke-width="3"/>')
     svg.append(f'<text x="{zero_x + 7:.1f}" y="{top - 48}" font-size="12" font-weight="700">0 ms resume starts</text>')
     svg.append(
-        f'<text x="{left + plot_w / 2:.1f}" y="{axis_label_y:.1f}" text-anchor="middle" font-size="13" font-weight="700">time inside actual resume request: orange shows time-to-first-token, red shows full request latency</text>'
+        f'<text x="{left + plot_w / 2:.1f}" y="{axis_label_y:.1f}" text-anchor="middle" font-size="13" font-weight="700">time inside actual resume request: cyan = host KV load, magenta = recompute, gold = remaining TTFT, red = decode after first token</text>'
     )
 
     for idx, row in enumerate(rows):
@@ -985,39 +1095,79 @@ def build_replay_execution_timeline_svg(
             status = "NO PREFETCH"
             status_color = "#64748b"
         delay_text = f"start delay {start_delay:.0f} ms" if start_delay is not None else "start delay unknown"
+        kv_outcome, kv_outcome_color, kv_outcome_title = timeline_kv_outcome(row)
 
         svg.append(f'<text x="10" y="{y + 23}" font-size="15" font-weight="700">{fmt(label)}</text>')
         svg.append(f'<text x="10" y="{y + 43}" font-size="12" fill="{status_color}" font-weight="700">{fmt(status)}</text>')
-        svg.append(f'<text x="10" y="{y + 62}" font-size="11" fill="#64748b">{fmt(delay_text)}</text>')
+        svg.append(f'<text x="10" y="{y + 60}" font-size="10" fill="{kv_outcome_color}" font-weight="700"><title>{fmt(kv_outcome_title)}</title>{fmt(kv_outcome)}</text>')
+        svg.append(f'<text x="10" y="{y + 73}" font-size="9" fill="#64748b">{fmt(delay_text)}</text>')
 
         bar_y = y + 22
         bar_h = 24
         overlay_y = y + 27
         overlay_h = 14
+        first_token_ms = ttft if ttft is not None else 0.0
         if replay_start is not None and replay_end is not None:
+            decode_end_ms = max(first_token_ms, replay_end - replay_start)
             rect(
                 svg,
-                x_pos(0.0),
-                x_pos(max(0.0, replay_end - replay_start)),
+                x_pos(max(0.0, first_token_ms)),
+                x_pos(max(0.0, decode_end_ms)),
                 bar_y,
                 bar_h,
                 "#ef4444",
-                f"resume request latency_ms={row.get('resume_latency_ms', '')}",
+                f"resume decode/generation after first token; latency_ms={row.get('resume_latency_ms', '')}",
                 0.56,
                 16,
             )
         if ttft is not None:
-            rect(
-                svg,
-                x_pos(0.0),
-                x_pos(max(0.0, ttft)),
-                overlay_y,
-                overlay_h,
-                "#f59e0b",
-                f"time to first token; ttft_ms={row.get('resume_ttft_ms', '')}",
-                0.94,
-                16,
-            )
+            replay_h2d_duration = maybe_float(row.get("replay_kv_h2d_duration_ms")) or 0.0
+            recompute_ms = replay_recompute_segment_ms(row)
+            known_ms = min(ttft, replay_h2d_duration + recompute_ms)
+            gold_ms = max(0.0, ttft - known_ms)
+            cursor_ms = 0.0
+            replay_h2d_start = maybe_float(row.get("replay_kv_h2d_start_ms"))
+            replay_h2d_end = maybe_float(row.get("replay_kv_h2d_end_ms"))
+            if recompute_ms > 0 and (replay_h2d_start is None or recompute_ms >= ttft * 0.5):
+                recompute_end = min(ttft, cursor_ms + recompute_ms)
+                rect(
+                    svg,
+                    x_pos(cursor_ms),
+                    x_pos(recompute_end),
+                    overlay_y,
+                    overlay_h,
+                    "#db2777",
+                    f"replay recompute / rebuilt prefix; recomputed_tokens_est={row.get('recomputed_tokens_est', row.get('replay_new_prefill_tokens_est', ''))}",
+                    0.92,
+                    16,
+                )
+                cursor_ms = recompute_end
+            if gold_ms > 0:
+                gold_end = min(ttft, cursor_ms + gold_ms)
+                rect(
+                    svg,
+                    x_pos(cursor_ms),
+                    x_pos(gold_end),
+                    overlay_y,
+                    overlay_h,
+                    "#eab308",
+                    f"normal remaining replay prefill / queue work; estimated_ms={gold_ms:.3f}",
+                    0.9,
+                    16,
+                )
+                cursor_ms = gold_end
+            if recompute_ms > 0 and cursor_ms < ttft and replay_h2d_start is not None and recompute_ms < ttft * 0.5:
+                rect(
+                    svg,
+                    x_pos(cursor_ms),
+                    x_pos(ttft),
+                    overlay_y,
+                    overlay_h,
+                    "#db2777",
+                    f"replay recompute / rebuilt prefix; recomputed_tokens_est={row.get('recomputed_tokens_est', row.get('replay_new_prefill_tokens_est', ''))}",
+                    0.92,
+                    16,
+                )
             if x_pos(max(0.0, ttft)) - x_pos(0.0) >= 64:
                 svg.append(
                     f'<text x="{x_pos(max(0.0, ttft)) - 6:.1f}" y="{overlay_y + 11:.1f}" '
@@ -1040,8 +1190,9 @@ def build_replay_execution_timeline_svg(
 
     svg.append(f'<line x1="{left}" y1="{plot_bottom + 18:.1f}" x2="{left + plot_w}" y2="{plot_bottom + 18:.1f}" stroke="#e5e7eb"/>')
     legend = [
-        ("resume request", "#ef4444"),
-        ("replay prefill / TTFT", "#f59e0b"),
+        ("replay decode", "#ef4444"),
+        ("normal prefill", "#eab308"),
+        ("recompute", "#db2777"),
         ("replay-side KV HtoD", "#06b6d4"),
         ("resume start", "#111827"),
     ]

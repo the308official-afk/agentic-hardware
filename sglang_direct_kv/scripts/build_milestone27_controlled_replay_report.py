@@ -29,6 +29,7 @@ from build_live_agentbench_tool_gap_report import (
     build_replay_execution_timeline_svg,
     read_jsonl,
     table_html,
+    timeline_kv_outcome,
     write_csv,
 )
 from build_live_paired_agentbench_report import (
@@ -997,6 +998,29 @@ def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def timeline_kv_outcome_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        outcome, _color, meaning = timeline_kv_outcome(row)
+        hint_h2d = row.get("direct_kv_h2d_events", "")
+        replay_h2d = row.get("replay_kv_h2d_events", "")
+        recomputed = row.get("recomputed_tokens_est") or row.get("replay_new_prefill_tokens_est", "")
+        output.append(
+            {
+                "row": row.get("timeline_label") or f"G{idx:02d}",
+                "kv_outcome": outcome,
+                "prefetch_timing": row.get("per_gap_verdict", ""),
+                "hint_h2d_events": hint_h2d,
+                "replay_h2d_events": replay_h2d,
+                "recomputed_tokens_est": recomputed,
+                "normal_prefill_or_wait_ms_est": row.get("prefill_compute_ms_est", ""),
+                "ttft_ms": row.get("resume_ttft_ms", ""),
+                "simple_meaning": meaning,
+            }
+        )
+    return output
+
+
 def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
@@ -1320,7 +1344,7 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cache_summary = row.get("replay_cache_path_summary") or ""
         lifecycle_summary = row.get("lifecycle_explanation") or ""
         status, _ = observation_status(row)
-        orange_note = (
+        ttft_note = (
             f" Replay waited {ttft_ms:.0f} ms before first token."
             if ttft_ms is not None
             else ""
@@ -1328,28 +1352,28 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         if mode == "no_prefetch":
             if replay_h2d:
-                what = "No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement." + orange_note
+                what = "No hint was issued. When the resume request arrived, SGLang performed replay-side KV HtoD movement." + ttft_note
                 why = "This is the baseline: the real request path had to handle KV movement at resume time."
             else:
-                what = "No hint was issued, and this row did not show replay-side HtoD movement." + orange_note
+                what = "No hint was issued, and this row did not show replay-side HtoD movement." + ttft_note
                 if path == "recompute/scheduler wait suspected":
-                    why = "The orange TTFT window is long even without cyan HtoD, so replay-side recompute, prefill, or scheduler waiting is suspected."
+                    why = "The TTFT window is long even without cyan HtoD, so replay-side recompute, prefill, or scheduler waiting is suspected."
                 else:
                     why = "The KV may already have been resident/reusable, or this row did not trigger observable host-to-device movement."
         elif margin is None:
             what = "A prefetch mode was selected, but the trace did not show a completed prefetch window for this row."
             why = "This is useful as a control/coverage warning, but it is weaker evidence than rows with measured margins."
         elif margin < 0:
-            what = f"The prefetch attempt finished {abs(margin):.0f} ms after the resume request was already due." + orange_note
+            what = f"The prefetch attempt finished {abs(margin):.0f} ms after the resume request was already due." + ttft_note
             if replay_h2d:
                 what += " The resume request also showed replay-side KV HtoD movement."
                 why = "This is the failure case: the normal request path had to move KV because the hint path did not finish in time."
             elif path == "recompute/scheduler wait suspected":
-                why = "The hint path was late and the orange TTFT window is long, so replay-side recompute, prefill, or scheduler waiting is suspected."
+                why = "The hint path was late and the TTFT window is long, so replay-side recompute, prefill, or scheduler waiting is suspected."
             else:
                 why = "The hint path was late, so software prefetch did not meet the agent resume deadline."
         else:
-            what = f"The prefetch attempt finished {margin:.0f} ms before the resume request was due." + orange_note
+            what = f"The prefetch attempt finished {margin:.0f} ms before the resume request was due." + ttft_note
             if hint_h2d and not replay_h2d:
                 what += " Direct KV HtoD movement was visible on the hint side, with no replay-side HtoD in this row."
                 why = "This is the clean success case: the hint appears to have prepared KV before the agent resumed."
@@ -1688,7 +1712,7 @@ def render_html(
 
   <details id="summary" class="section-card theme-summary" open>
     <summary><h2>Summary</h2></summary>
-    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. Orange replay-prefill windows are inferred from TTFT: they show how long the replay waited before first token, which can include queueing, prefix work, recompute/prefill, and cache work.</p>
+    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is inferred from TTFT and is now split into evidence colors: cyan for replay-side host KV load, magenta for recompute/rebuild, and gold for remaining prefill or wait.</p>
     {metric_cards_html(mode_rows)}
   </details>
 
@@ -1741,7 +1765,7 @@ def render_html(
 
   <details id="replay-attribution" class="section-card theme-directkv" open>
     <summary><h2>Replay Path Attribution</h2></summary>
-    <p>This section turns the orange TTFT window into stronger evidence. For each replay, it reports SGLang prefix/cache counters observed inside the replay window: prompt tokens, cached prefix tokens, estimated new prefill tokens, host-hit tokens, host-load tokens, and replay-side HtoD events.</p>
+    <p>This section turns the segmented TTFT window into stronger evidence. For each replay, it reports SGLang prefix/cache counters observed inside the replay window: prompt tokens, cached prefix tokens, estimated new prefill tokens, host-hit tokens, host-load tokens, and replay-side HtoD events.</p>
     <p class="note">The verdict is evidence-backed but still conservative. Initial cached-prefix tokens show what was reusable when replay began. Final cached-prefix tokens show what existed later after replay work. A cyan bar plus host-load tokens is stronger proof that replay loaded KV from host to GPU.</p>
     <h3>Verdict Summary</h3>
     {table_html(verdict_summary_rows(gaps))}
@@ -1753,6 +1777,9 @@ def render_html(
     <summary><h2>Mixed Timeline Sample</h2></summary>
     <p class="note">This is the deadline view. The black line is when replay was due. This view is best for seeing whether the purple prefetch attempt finished before the deadline.</p>
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
+    <h3>KV Outcome For Timeline Rows</h3>
+    <p>This table uses the same row names as the timeline. It explains whether replay reused KV, loaded KV from host, recomputed missing prefix tokens, or had a late/wasted prefetch.</p>
+    {table_html(timeline_kv_outcome_rows(interesting))}
     <h3>Timeline Row Map</h3>
     <p>This table maps the compact row names in the chart back to the full experiment details.</p>
     {table_html(timeline_mapping_rows(interesting))}
@@ -1789,7 +1816,7 @@ def render_html(
 
   <details id="replay-execution-timeline" class="section-card theme-clean">
     <summary><h2>Replay Execution Timeline</h2></summary>
-    <p class="note">This is the replay view. Each row is aligned at the actual resume request start, so the orange TTFT bar is drawn at its real visual length. Use this view to judge how long the replay waited before first token.</p>
+    <p class="note">This is the replay view. Each row is aligned at the actual resume request start. Cyan, magenta, and gold show the before-first-token work; red shows decode after first token.</p>
     {build_replay_execution_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
     <h3>Replay Timeline Row Map</h3>
     {table_html(timeline_mapping_rows(interesting))}

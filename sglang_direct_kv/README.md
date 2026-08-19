@@ -5353,7 +5353,7 @@ Simple meaning:
 
 ```text
 Instead of only saying:
-  G04 had a long orange TTFT bar.
+  G04 had a long TTFT window.
 
 The report can now say:
   G04 likely reused logical/GPU-resident KV, but waited in the scheduler path.
@@ -5363,6 +5363,39 @@ Or:
 
 Or:
   G12 had a prefix miss and likely recomputed/prefilled missing tokens.
+```
+
+Timeline outcome view:
+
+```text
+The mixed timeline now shows the replay path more directly:
+
+cyan
+  replay loaded KV from host to GPU
+
+magenta
+  replay recomputed/rebuilt missing prefix/KV work
+
+gold
+  remaining before-first-token work, such as queueing or normal prefill
+
+red
+  decode/generation after first token
+
+Each timeline row also carries a compact verdict such as:
+  PREFETCH HIT
+  REPLAY HOST LOAD
+  RECOMPUTE
+  MIXED LOAD+RECOMPUTE
+  FULL REUSE
+  WASTED PREFETCH
+  LATE PREFETCH
+```
+
+This means the chart itself can now answer:
+
+```text
+When the agent resumed, did it reuse KV, reload KV from host, or rebuild KV?
 ```
 
 New report sections:
