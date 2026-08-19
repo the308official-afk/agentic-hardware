@@ -166,6 +166,38 @@ For G00:
 
 That is stronger than only showing high TTFT or a missing green bar.
 
+## Exact Attribution Extension
+
+The next layer is documented in:
+
+```text
+KV_EXACT_MOVEMENT_ATTRIBUTION.md
+```
+
+Difference:
+
+```text
+This ledger:
+  tracks logical KV blocks across lifecycle states.
+
+Exact attribution:
+  also records host/device index signatures, layer IDs, request IDs, and
+  copy start/end windows for the SGLang movement functions.
+```
+
+In simple words, this ledger says:
+
+```text
+G04 had KV written, evicted, and loaded.
+```
+
+The exact attribution layer tries to say:
+
+```text
+G04 host indices 1812..3859 moved into GPU/device indices 4200..6247
+between time A and time B.
+```
+
 ## Modularity Rule
 
 Only this file should be SGLang-version-sensitive:
@@ -177,4 +209,3 @@ src/agentic_kv/block_ledger/normalizer.py
 The state machine, block matching, CSV/JSON outputs, and report summaries should
 consume stable normalized events. For a future SGLang version, update the
 normalizer first before touching the rest of the infrastructure.
-

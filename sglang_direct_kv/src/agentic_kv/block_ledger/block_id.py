@@ -11,12 +11,16 @@ class BlockIdentity:
     token_end: int | None
     token_count: int
     node_id: str = ""
+    host_index_signature: str = ""
+    device_index_signature: str = ""
 
     def stable_key(self) -> str:
         node = self.node_id or "no-node"
+        host_sig = self.host_index_signature or "no-host"
+        device_sig = self.device_index_signature or "no-device"
         start = "na" if self.token_start is None else str(self.token_start)
         end = "na" if self.token_end is None else str(self.token_end)
-        payload = f"{self.session_id}|{node}|{start}|{end}|{self.token_count}"
+        payload = f"{self.session_id}|{node}|{host_sig}|{device_sig}|{start}|{end}|{self.token_count}"
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -58,4 +62,3 @@ def nearby_range_score(
     if count_delta <= 8 and start_delta <= 16 and end_delta <= 16:
         return 0.80
     return 0.0
-

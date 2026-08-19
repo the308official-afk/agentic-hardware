@@ -537,7 +537,7 @@ build_report() {
   fi
 
   cp -f "${built_report}" "${REPORT_DIR}/master_report.html"
-  for artifact in controlled_replay_report.json controlled_replay_gaps.csv replay_path_ledger.csv hardware_counterfactual.csv instrumentation_coverage.csv request_id_coverage_report.csv; do
+  for artifact in controlled_replay_report.json controlled_replay_gaps.csv replay_path_ledger.csv hardware_counterfactual.csv instrumentation_coverage.csv request_id_coverage_report.csv exact_kv_movement_attribution.csv exact_kv_movement_summary.csv kv_block_ledger.csv kv_block_ledger.json kv_block_lifecycle_summary.csv kv_block_gap_summary.csv; do
     if [[ -f "${REPORT_DIR}/report/${artifact}" ]]; then
       cp -f "${REPORT_DIR}/report/${artifact}" "${REPORT_DIR}/${artifact}"
     fi

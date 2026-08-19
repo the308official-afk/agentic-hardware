@@ -18,13 +18,29 @@ class KVBlockRecord:
     current_state: str = "UNKNOWN"
     first_seen_ms: float | None = None
     last_seen_ms: float | None = None
+    host_index_signature: str = ""
+    host_index_start: int | None = None
+    host_index_end: int | None = None
+    host_index_count: int = 0
+    device_index_signature: str = ""
+    device_index_start: int | None = None
+    device_index_end: int | None = None
+    device_index_count: int = 0
+    first_write_host_ms: float | None = None
+    first_evict_gpu_ms: float | None = None
+    first_evict_host_ms: float | None = None
+    first_load_gpu_ms: float | None = None
+    last_load_gpu_ms: float | None = None
     write_host_events: int = 0
     evict_gpu_events: int = 0
     evict_host_events: int = 0
     load_gpu_events: int = 0
+    replay_load_gpu_events: int = 0
+    hint_load_gpu_events: int = 0
     match_prefix_events: int = 0
     recompute_events: int = 0
     confidence: str = "medium"
+    exact_attribution: str = "range_only"
     history: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,6 +49,14 @@ class KVBlockRecord:
     @property
     def lost_before_replay(self) -> bool:
         return self.write_host_events > 0 and self.evict_gpu_events > 0 and self.evict_host_events > 0 and self.load_gpu_events == 0
+
+    @property
+    def loaded_by_replay(self) -> bool:
+        return self.replay_load_gpu_events > 0
+
+    @property
+    def loaded_by_hint(self) -> bool:
+        return self.hint_load_gpu_events > 0
 
 
 class KVBlockLedger:
@@ -49,6 +73,18 @@ class KVBlockLedger:
         if event.node_id:
             for record in self.records.values():
                 if record.session_id == event.session_id and record.node_id == event.node_id:
+                    return record
+        for signature_attr, record_attr in (
+            ("host_index_signature", "host_index_signature"),
+            ("device_index_signature", "device_index_signature"),
+        ):
+            event_signature = getattr(event, signature_attr, "")
+            if not event_signature:
+                continue
+            for record in self.records.values():
+                if record.session_id != event.session_id:
+                    continue
+                if getattr(record, record_attr) == event_signature:
                     return record
         best_record: KVBlockRecord | None = None
         best_score = 0.0
@@ -86,9 +122,18 @@ class KVBlockLedger:
             token_end=event.token_end,
             token_count=event.token_count,
             node_id=event.node_id,
+            host_index_signature=event.host_index_signature,
+            host_index_start=event.host_index_start,
+            host_index_end=event.host_index_end,
+            host_index_count=event.host_index_count,
+            device_index_signature=event.device_index_signature,
+            device_index_start=event.device_index_start,
+            device_index_end=event.device_index_end,
+            device_index_count=event.device_index_count,
             first_seen_ms=event.time_ms,
             last_seen_ms=event.time_ms,
             confidence=event.confidence,
+            exact_attribution=exact_attribution_level(event),
         )
         self.records[block_id] = record
         return record
@@ -97,18 +142,32 @@ class KVBlockLedger:
         record.last_seen_ms = event.time_ms
         if record.first_seen_ms is None:
             record.first_seen_ms = event.time_ms
+        merge_identity_fields(record, event)
         record.history.append(event.to_dict())
         if event.event_type == KVEventType.WRITE_HOST:
             record.write_host_events += 1
+            if record.first_write_host_ms is None:
+                record.first_write_host_ms = event.time_ms
             record.current_state = "GPU_AND_HOST"
         elif event.event_type == KVEventType.EVICT_GPU:
             record.evict_gpu_events += 1
+            if record.first_evict_gpu_ms is None:
+                record.first_evict_gpu_ms = event.time_ms
             record.current_state = "HOST_RESIDENT" if record.write_host_events else "MISSING"
         elif event.event_type == KVEventType.EVICT_HOST:
             record.evict_host_events += 1
+            if record.first_evict_host_ms is None:
+                record.first_evict_host_ms = event.time_ms
             record.current_state = "MISSING" if record.evict_gpu_events else "GPU_RESIDENT"
         elif event.event_type == KVEventType.LOAD_GPU:
             record.load_gpu_events += 1
+            if event.phase == "replay":
+                record.replay_load_gpu_events += 1
+            if event.phase == "hint_prefetch":
+                record.hint_load_gpu_events += 1
+            if record.first_load_gpu_ms is None:
+                record.first_load_gpu_ms = event.time_ms
+            record.last_load_gpu_ms = event.time_ms
             record.current_state = "RELOADED_TO_GPU"
         elif event.event_type == KVEventType.RECOMPUTE:
             record.recompute_events += 1
@@ -130,3 +189,49 @@ def build_block_ledger(events: list[NormalizedKVEvent]) -> KVBlockLedger:
         ledger.apply(event)
     return ledger
 
+
+def merge_identity_fields(record: KVBlockRecord, event: NormalizedKVEvent) -> None:
+    if not record.node_id and event.node_id:
+        record.node_id = event.node_id
+    if not record.host_index_signature and event.host_index_signature:
+        record.host_index_signature = event.host_index_signature
+    if record.host_index_start is None and event.host_index_start is not None:
+        record.host_index_start = event.host_index_start
+    if record.host_index_end is None and event.host_index_end is not None:
+        record.host_index_end = event.host_index_end
+    if not record.host_index_count and event.host_index_count:
+        record.host_index_count = event.host_index_count
+    if not record.device_index_signature and event.device_index_signature:
+        record.device_index_signature = event.device_index_signature
+    if record.device_index_start is None and event.device_index_start is not None:
+        record.device_index_start = event.device_index_start
+    if record.device_index_end is None and event.device_index_end is not None:
+        record.device_index_end = event.device_index_end
+    if not record.device_index_count and event.device_index_count:
+        record.device_index_count = event.device_index_count
+    record.exact_attribution = strongest_attribution(record.exact_attribution, exact_attribution_level(event))
+    if event.confidence == "high":
+        record.confidence = "high"
+
+
+def exact_attribution_level(event: NormalizedKVEvent) -> str:
+    if event.host_index_signature and event.device_index_signature:
+        return "host_and_device_indices"
+    if event.host_index_signature:
+        return "host_indices"
+    if event.device_index_signature:
+        return "device_indices"
+    if event.node_id:
+        return "node_id"
+    return "range_only"
+
+
+def strongest_attribution(current: str, candidate: str) -> str:
+    rank = {
+        "range_only": 0,
+        "node_id": 1,
+        "device_indices": 2,
+        "host_indices": 2,
+        "host_and_device_indices": 3,
+    }
+    return candidate if rank.get(candidate, 0) > rank.get(current, 0) else current

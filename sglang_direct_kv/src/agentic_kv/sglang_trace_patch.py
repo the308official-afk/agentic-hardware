@@ -153,6 +153,30 @@ def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _nvtx_label(event_name: str, class_name: str, method_name: str, context: dict[str, Any]) -> str:
+    parts = [f"agentic_kv:{event_name}:{class_name}.{method_name}"]
+    agent = _copy_agent_context(context)
+    session = agent.get("agent_session_id")
+    phase = agent.get("agent_phase")
+    if session:
+        parts.append(f"session={session}")
+    if phase:
+        parts.append(f"phase={phase}")
+    direction = context.get("direction")
+    if direction:
+        parts.append(f"direction={direction}")
+    host_count = _count_from_index_summary(context.get("host_indices"))
+    device_count = _count_from_index_summary(context.get("device_indices"))
+    if host_count is not None:
+        parts.append(f"host_indices={host_count}")
+    if device_count is not None:
+        parts.append(f"device_indices={device_count}")
+    node_id = context.get("node_id")
+    if node_id not in (None, "", [], {}):
+        parts.append(f"node={node_id}")
+    return " ".join(str(part) for part in parts)
+
+
 def _agent_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
     direct = _copy_agent_context(context)
     if direct:
@@ -1339,8 +1363,8 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         _CALL_SEQ += 1
         call_id = f"{os.getpid()}-{_CALL_SEQ}"
         start_ns = time.perf_counter_ns()
-        nvtx_name = f"agentic_kv:{event_name}:{cls.__name__}.{method_name}"
         start_kv_context = _kv_context(event_name, method_name, self, args, kwargs)
+        nvtx_name = _nvtx_label(event_name, cls.__name__, method_name, start_kv_context)
         agent_context = _propagated_context_from_context(start_kv_context)
         context_token = _ACTIVE_AGENT_CONTEXT.set(agent_context) if agent_context else None
         start_event = {

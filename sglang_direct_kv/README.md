@@ -49,6 +49,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 29: Replay Path Instrumentation Ledger | Ready | [Milestone 29](#milestone-29-replay-path-instrumentation-ledger) |
 | Milestone 29B: Forced Eviction Sanity Probe | Ready | [Milestone 29B](#milestone-29b-forced-eviction-sanity-probe) |
 | Milestone 30: Stable KV Block Ledger | Ready | [Milestone 30](#milestone-30-stable-kv-block-ledger) |
+| Milestone 31: Exact KV Movement Attribution | Ready | [Milestone 31](#milestone-31-exact-kv-movement-attribution) |
 
 ## What We Are Testing
 
@@ -5904,12 +5905,110 @@ That gives us a strong per-block lifecycle ledger while keeping the add-on
 infrastructure reusable across future SGLang versions.
 ```
 
+### Milestone 31: Exact KV Movement Attribution
+
+Status: ready.
+
+Full proposal:
+
+```text
+KV_EXACT_MOVEMENT_ATTRIBUTION.md
+```
+
+Why this milestone is needed:
+
+```text
+The existing KV lifecycle table is useful, but it is mostly gap-level evidence.
+
+It can say:
+  G04 wrote KV to host and later loaded KV from host.
+
+Milestone 31 tries to say:
+  G04 host indices 1812..3859 moved into GPU/device indices 4200..6247.
+  The movement started at time A and ended at time B.
+  It happened during replay, not during hint prefetch.
+```
+
+What it adds:
+
+```text
+host/device index signatures
+host/device index ranges and counts
+request_id, node_id, and layer_id where SGLang exposes them
+copy_start_ms and copy_end_ms for SGLang movement functions
+hint-loaded vs replay-loaded block counts
+richer NVTX labels for profiler/Nsight validation
+```
+
+Why this is better:
+
+```text
+This follows the same logical KV block/index set across write, eviction, and
+load-back events. That makes the evidence closer to actual memory movement.
+```
+
+New master report section:
+
+```text
+Exact KV Movement Attribution
+  How To Read This Section
+  Exact Movement Summary
+  Exact Movement Rows For Timeline Sample
+```
+
+New output files:
+
+```text
+artifacts/results/reports/<report_label>/exact_kv_movement_attribution.csv
+artifacts/results/reports/<report_label>/exact_kv_movement_summary.csv
+```
+
+Run it through the normal master report script:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=exact_kv_attribution_demo \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+MAX_TIMELINE_GAPS=18 \
+MAX_PAIRS=8 \
+MODES="no_prefetch" \
+TOOL_WAIT_LIST_MS="100" \
+FILLER_LIST="32 64 128" \
+REQUEST_CONCURRENCY=8 \
+FILLER_PROMPT_TOKENS=1536 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.75 \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important interpretation:
+
+```text
+This is still software-visible SGLang evidence, not a physical DMA bus snooper.
+
+The strongest rows are rows with both:
+  host_index_signature
+  device_index_signature
+
+Those rows can connect the host-side KV block set to the GPU-side destination
+indices, and can be validated with torch.profiler/Nsight on smaller runs.
+```
+
 ## Directory Layout
 
 ```text
 sglang_direct_kv/
   README.md
   KV_BLOCK_LEDGER.md
+  KV_EXACT_MOVEMENT_ATTRIBUTION.md
   pyproject.toml
   requirements.txt
 

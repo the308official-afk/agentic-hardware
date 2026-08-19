@@ -11,6 +11,8 @@ EVENT_MAP: dict[str, KVEventType] = {
     "hicache.evict_device.end": KVEventType.EVICT_GPU,
     "hicache.evict_host.end": KVEventType.EVICT_HOST,
     "hicache.load.end": KVEventType.LOAD_GPU,
+    "hostpool.load_to_device_per_layer.end": KVEventType.LOAD_GPU,
+    "hostpool.backup_from_device_all_layer.end": KVEventType.WRITE_HOST,
     "hiradix.init_load_back.end": KVEventType.LOAD_GPU,
     "hiradix.load_back.end": KVEventType.LOAD_GPU,
     "hiradix.match_prefix.end": KVEventType.MATCH_PREFIX,
@@ -35,6 +37,10 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
         duration = as_float(row.get("duration_ms"))
         ts = as_float(row.get("ts_ns"))
         time_ms = round((ts - base_ts) / 1_000_000.0, 3) if ts is not None and base_ts else None
+        copy_start_ms = round(time_ms - duration, 3) if time_ms is not None and duration is not None else None
+        host_start, host_end, host_count = index_range(context.get("host_indices"))
+        device_start, device_end, device_count = index_range(context.get("device_indices"))
+        request = nested_request(context)
         events.append(
             NormalizedKVEvent(
                 event_type=event_type,
@@ -46,9 +52,22 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
                 token_end=token_end,
                 token_count=token_count,
                 node_id=str(context.get("node_id") or ""),
+                request_id=str(context.get("request_id") or request.get("rid") or request.get("request_id") or ""),
+                layer_id=str(context.get("layer_id") or ""),
+                direction=str(context.get("direction") or ""),
+                host_index_start=host_start,
+                host_index_end=host_end,
+                host_index_count=host_count,
+                host_index_signature=index_signature(context.get("host_indices")),
+                device_index_start=device_start,
+                device_index_end=device_end,
+                device_index_count=device_count,
+                device_index_signature=index_signature(context.get("device_indices")),
+                copy_start_ms=copy_start_ms,
+                copy_end_ms=time_ms,
                 source_event=source_event,
                 confidence=event_confidence(event_type, context),
-                raw={"event": source_event, "phase": phase},
+                raw={"event": source_event, "phase": phase, "direction": context.get("direction", "")},
             )
         )
     return sorted(events, key=lambda event: event.time_ms if event.time_ms is not None else -1.0)
@@ -93,6 +112,8 @@ def agent_phase_from_context(context: dict[str, Any]) -> str:
 
 
 def event_confidence(event_type: KVEventType, context: dict[str, Any]) -> str:
+    if index_signature(context.get("host_indices")) and index_signature(context.get("device_indices")):
+        return "high"
     if context.get("node_id") not in ("", None):
         return "high"
     if event_type == KVEventType.MATCH_PREFIX:
@@ -151,6 +172,28 @@ def index_range(value: Any) -> tuple[int | None, int | None, int]:
     return start, end, count
 
 
+def index_signature(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    count = 0
+    for key in ("index_count", "numel", "count"):
+        parsed = as_float(value.get(key))
+        if parsed is not None:
+            count = int(parsed)
+            break
+    digest = value.get("sha1_16")
+    if count and digest:
+        return f"{count}:{digest}"
+    values = value.get("values")
+    if isinstance(values, list):
+        return f"{len(values)}:{','.join(str(item) for item in values)}"
+    start = parse_int(value.get("min"))
+    end = parse_int(value.get("max"))
+    if count and start is not None and end is not None:
+        return f"{count}:{start}..{end}"
+    return ""
+
+
 def parse_int(value: Any) -> int | None:
     parsed = as_float(value)
     if parsed is None:
@@ -165,4 +208,3 @@ def as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-

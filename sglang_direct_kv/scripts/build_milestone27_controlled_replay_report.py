@@ -20,6 +20,8 @@ if str(SRC_ROOT) not in sys.path:
 from agentic_kv.block_ledger import (
     block_ledger_rows,
     build_block_ledger,
+    exact_movement_rows,
+    exact_movement_summary_rows,
     gap_lifecycle_summary_rows,
     ledger_summary_rows,
     normalize_sglang_trace_events,
@@ -1227,19 +1229,107 @@ def kv_block_detail_rows(kv_block_rows: list[dict[str, Any]], limit: int | None 
     columns = [
         "block_id",
         "session_id",
+        "exact_attribution",
+        "loaded_by_hint",
+        "loaded_by_replay",
         "token_start",
         "token_end",
         "token_count",
         "node_id",
+        "host_index_start",
+        "host_index_end",
+        "host_index_count",
+        "device_index_start",
+        "device_index_end",
+        "device_index_count",
         "current_state",
+        "first_write_host_ms",
+        "first_evict_gpu_ms",
+        "first_evict_host_ms",
+        "first_load_gpu_ms",
+        "last_load_gpu_ms",
         "write_host_events",
         "evict_gpu_events",
         "evict_host_events",
         "load_gpu_events",
+        "hint_load_gpu_events",
+        "replay_load_gpu_events",
         "lost_before_replay",
         "confidence",
     ]
     return [{column: row.get(column, "") for column in columns} for row in selected]
+
+
+def exact_movement_table_rows(rows: list[dict[str, Any]], gaps: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
+    label_by_session = {str(gap.get("session_id") or ""): gap.get("timeline_label") or f"G{idx:02d}" for idx, gap in enumerate(gaps)}
+    sampled_sessions = set(label_by_session)
+    prioritized = [row for row in rows if str(row.get("session_id") or "") in sampled_sessions]
+    if not prioritized:
+        prioritized = rows
+    selected = prioritized[:limit] if limit is not None else prioritized
+    columns = [
+        "row",
+        "session_id",
+        "phase",
+        "movement",
+        "direction",
+        "copy_start_ms",
+        "copy_end_ms",
+        "duration_ms",
+        "host_index_start",
+        "host_index_end",
+        "host_index_count",
+        "device_index_start",
+        "device_index_end",
+        "device_index_count",
+        "node_id",
+        "layer_id",
+        "request_id",
+        "source_event",
+        "confidence",
+        "simple_meaning",
+    ]
+    output: list[dict[str, Any]] = []
+    for row in selected:
+        copied = dict(row)
+        copied["row"] = label_by_session.get(str(row.get("session_id") or ""), "")
+        output.append({column: copied.get(column, "") for column in columns})
+    return output
+
+
+def exact_attribution_explainer_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "evidence": "host_index_signature",
+            "simple meaning": "Stable fingerprint of the host-side KV indices SGLang used.",
+            "why it matters": "Lets us connect write/load/evict events that touch the same host KV block set.",
+        },
+        {
+            "evidence": "device_index_signature",
+            "simple meaning": "Stable fingerprint of the GPU-side KV indices SGLang used.",
+            "why it matters": "Lets us see where host KV was loaded back into GPU KV storage.",
+        },
+        {
+            "evidence": "copy_start_ms / copy_end_ms",
+            "simple meaning": "The measured window around the SGLang KV movement function.",
+            "why it matters": "This gives the closest SGLang-level timing for when KV movement was acted on and completed.",
+        },
+        {
+            "evidence": "hostpool.load_to_device_per_layer",
+            "simple meaning": "Lower-level host-pool load path used during host-to-GPU KV movement.",
+            "why it matters": "This is closer to the actual H2D movement than the high-level HiCache load call.",
+        },
+        {
+            "evidence": "loaded_by_replay",
+            "simple meaning": "The replay request itself loaded this tracked block back to GPU.",
+            "why it matters": "This tells us the movement happened on the critical user-visible resume path.",
+        },
+        {
+            "evidence": "loaded_by_hint",
+            "simple meaning": "The prefetch/hint path loaded this tracked block back to GPU.",
+            "why it matters": "This tells us the hint path actually did useful KV movement before or during replay.",
+        },
+    ]
 
 
 def kv_lifecycle_legend_rows() -> list[dict[str, str]]:
@@ -2558,12 +2648,14 @@ def render_html(
     live_run: dict[str, Any] | None = None,
     request_coverage: list[dict[str, Any]] | None = None,
     kv_block_rows: list[dict[str, Any]] | None = None,
+    exact_kv_movement_rows: list[dict[str, Any]] | None = None,
     run_environment: dict[str, Any] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
     ledger = build_replay_path_ledger(gaps)
     request_coverage = request_coverage or []
     kv_block_rows = kv_block_rows or []
+    exact_kv_movement_rows = exact_kv_movement_rows or []
     run_environment = run_environment or {}
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     global_title = global_readiness_section_title(gaps)
@@ -2627,6 +2719,7 @@ def render_html(
         ("replay-attribution", "Replay Path Attribution"),
         ("timelines", "Mixed Timeline Sample"),
         ("readable-phase-timeline", "Readable Phase Timeline"),
+        ("exact-kv-attribution", "Exact KV Movement Attribution"),
         ("kv-lifecycle", "KV Lifecycle Evidence"),
         ("kv-block-ledger", "KV Block Ledger"),
         ("replay-execution-timeline", "Replay Execution Timeline"),
@@ -2741,6 +2834,19 @@ def render_html(
     <h3>Timeline Model</h3>
     {timeline_model_table_html()}
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
+  </details>
+
+  <details id="exact-kv-attribution" class="section-card theme-directkv">
+    <summary><h2>Exact KV Movement Attribution</h2></summary>
+    <p>This section is the deeper attribution layer. It tries to answer: which exact SGLang KV indices moved, when did the movement function start and finish, and did the movement belong to the hint path or replay path?</p>
+    <p class="note">This is still software-visible evidence, not a physical DMA snooper. The strongest rows are the ones with both host and device index signatures, because those can connect the host-side KV block set to the GPU-side destination indices.</p>
+    <h3>How To Read This Section</h3>
+    {table_html(exact_attribution_explainer_rows(), ["evidence", "simple meaning", "why it matters"])}
+    <h3>Exact Movement Summary</h3>
+    {table_html(exact_movement_summary_rows(exact_kv_movement_rows))}
+    <h3>Exact Movement Rows For Timeline Sample</h3>
+    <p class="note">These rows use the same compact labels as the timeline. Empty row labels mean the movement was observed in the run but was not part of the sampled timeline rows.</p>
+    {table_html(exact_movement_table_rows(exact_kv_movement_rows, interesting, limit=300))}
   </details>
 
   <details id="kv-lifecycle" class="section-card theme-directkv">
@@ -2859,6 +2965,7 @@ def main() -> None:
     normalized_kv_events = normalize_sglang_trace_events(all_trace_rows)
     kv_ledger = build_block_ledger(normalized_kv_events)
     kv_block_rows = block_ledger_rows(kv_ledger)
+    exact_kv_rows = exact_movement_rows(normalized_kv_events)
     request_coverage = request_id_coverage_rows(all_trace_rows)
     h2d_readiness = replay_h2d_readiness_rows(all_gaps)
     queue_timing = replay_queue_timing_rows(all_gaps)
@@ -2869,6 +2976,8 @@ def main() -> None:
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
+    write_csv(args.out_dir / "exact_kv_movement_attribution.csv", exact_kv_rows)
+    write_csv(args.out_dir / "exact_kv_movement_summary.csv", exact_movement_summary_rows(exact_kv_rows))
     write_ledger_artifacts(args.out_dir, kv_block_rows, all_gaps)
     write_json(
         args.out_dir / "controlled_replay_report.json",
@@ -2879,6 +2988,8 @@ def main() -> None:
             "replay_h2d_readiness": h2d_readiness,
             "replay_queue_timing": queue_timing,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
+            "exact_kv_movement_attribution": exact_kv_rows,
+            "exact_kv_movement_summary": exact_movement_summary_rows(exact_kv_rows),
             "kv_block_ledger": kv_block_rows,
             "kv_block_lifecycle_summary": ledger_summary_rows(kv_block_rows),
             "kv_block_gap_summary": gap_lifecycle_summary_rows(all_gaps, kv_block_rows),
@@ -2900,6 +3011,7 @@ def main() -> None:
         live_run=live_run,
         request_coverage=request_coverage,
         kv_block_rows=kv_block_rows,
+        exact_kv_movement_rows=exact_kv_rows,
         run_environment=load_json(args.run_environment_json),
     )
     report_path = args.out_dir / "controlled_replay_report.html"
