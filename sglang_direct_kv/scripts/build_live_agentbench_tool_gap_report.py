@@ -408,6 +408,7 @@ def build_local_timing_phase_timeline_svg(
         display_w = max(min_w, w)
         if max_x is not None and x + display_w > max_x:
             x = max(x, max_x - display_w)
+        safe_label = fmt(label)
         svg.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{display_w:.1f}" height="{h:.1f}" rx="4" '
             f'fill="{color}" opacity="{opacity}"{stroke}><title>{fmt(title)}</title></rect>'
@@ -415,8 +416,35 @@ def build_local_timing_phase_timeline_svg(
         if label and display_w >= 64:
             svg.append(
                 f'<text x="{x + display_w / 2:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" '
-                f'font-size="10" fill="{text_color}" font-weight="700">{fmt(label)}</text>'
+                f'font-size="10" fill="{text_color}" font-weight="700">{safe_label}</text>'
             )
+        elif label:
+            label_w = min(132.0, max(28.0, len(label) * 5.8))
+            label_y = y + h / 2 + 3.5
+            right_limit = (max_x if max_x is not None else x + display_w + label_w + 12) - 4
+            right_label_x = x + display_w + 6
+            if right_label_x + label_w <= right_limit:
+                svg.append(
+                    f'<line x1="{x + display_w:.1f}" y1="{y + h / 2:.1f}" '
+                    f'x2="{right_label_x - 2:.1f}" y2="{y + h / 2:.1f}" stroke="{color}" '
+                    f'stroke-width="1" opacity="0.75"/>'
+                )
+                svg.append(
+                    f'<text x="{right_label_x:.1f}" y="{label_y:.1f}" text-anchor="start" '
+                    f'font-size="9" fill="#0f172a" font-weight="700">{safe_label}</text>'
+                )
+            else:
+                above_y = max(10.0, y - 3)
+                label_x = min(max(x + display_w / 2, x + label_w / 2), right_limit)
+                svg.append(
+                    f'<line x1="{x + display_w / 2:.1f}" y1="{y:.1f}" '
+                    f'x2="{label_x:.1f}" y2="{above_y - 8:.1f}" stroke="{color}" '
+                    f'stroke-width="1" opacity="0.55"/>'
+                )
+                svg.append(
+                    f'<text x="{label_x:.1f}" y="{above_y:.1f}" text-anchor="middle" '
+                    f'font-size="9" fill="#0f172a" font-weight="700">{safe_label}</text>'
+                )
 
     def missing(svg: list[str], x: float, y: float, w: float, h: float, label: str) -> None:
         svg.append(

@@ -2722,6 +2722,7 @@ def render_html(
     <summary><h2>Readable Phase Timeline</h2></summary>
     <p class="note">This view keeps readable phase columns, but each column has its own local timing. In simple words: the bars inside <code>prefetch</code> are positioned relative to the prefetch attempt, and the bars inside <code>replay path</code> are positioned relative to the replay request.</p>
     <p class="note">Replay work is split into separate lanes: cyan means replay-side KV HtoD, magenta means recompute/rebuild, gold means remaining before-first-token work, and red means decode after first token.</p>
+    <p class="note">Wide bars show timing inside the bar. Very small bars show timing just outside the bar with a thin pointer, so short but important events are still visible.</p>
     <h3>Timeline Model</h3>
     {timeline_model_table_html()}
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
