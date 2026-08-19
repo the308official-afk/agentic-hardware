@@ -466,86 +466,52 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
-    addTitle(slide, "Potential hardware impact", "The ranges are tied to observed failure modes, not standalone guesses.");
-    addImpactTable(
-      slide,
-      [
-        [
-          { text: "Late replay H2D", bold: true, color: C.red },
-          { text: "deadline-aware KV queue" },
-          { text: "cuts time spent waiting for urgent KV" },
-          { text: "10-20% replay latency", bold: true, color: C.blue },
-        ],
-        [
-          { text: "Replay recomputes old prefix", bold: true, color: C.gold },
-          { text: "residency protection" },
-          { text: "keeps useful KV available until reuse" },
-          { text: "up to 20-30%", bold: true, color: C.purple },
-        ],
-        [
-          { text: "Hints finish after deadline", bold: true, color: C.purple },
-          { text: "session priority metadata" },
-          { text: "lets urgent agents preempt low-value movement" },
-          { text: "20-50% fewer late reloads", bold: true, color: C.green },
-        ],
-        [
-          { text: "Useful prefetch is wasted", bold: true, color: C.cyan },
-          { text: "KV-aware telemetry" },
-          { text: "detects late, wasted, and evicted-before-use KV" },
-          { text: "less bandwidth waste", bold: true, color: C.cyan },
-        ],
-      ],
-      54,
-      156,
-      [260, 250, 385, 250],
-      66,
+    addTitle(slide, "Potential hardware impact", "Simple targets for tool-heavy coding-agent workloads.");
+
+    const impacts = [
       {
-        headers: ["Observed in our traces", "Hardware assist", "Why it moves the number", "Target impact"],
-        headerFill: "#eef2ff",
-        headerSize: 15,
-        size: 15,
+        color: C.blue,
+        title: "Faster agent resume after tools",
+        target: "Target: 10-30% lower post-tool latency",
+        why: "Why: our traces show the next model turn can wait because useful KV is not ready when the agent resumes.",
       },
-    );
-    addText(slide, "Range rationale", 64, 482, 250, 28, { size: 20, bold: true, color: C.ink });
-    addImpactTable(
-      slide,
-      [
-        [
-          { text: "Low end: 10-15%", bold: true, color: C.blue },
-          { text: "KV is mostly hot, contexts are short, or pressure is light." },
-          { text: "Hardware mainly removes small replay stalls." },
-        ],
-        [
-          { text: "High end: 25-30%+", bold: true, color: C.red },
-          { text: "Long contexts, high pressure, frequent offload/reload, or recompute." },
-          { text: "Hardware avoids the expensive replay path." },
-        ],
-      ],
-      64,
-      510,
-      [230, 500, 390],
-      38,
       {
-        headers: ["Range", "When it applies", "Reason"],
-        headerFill: "#f1f5f9",
-        headerSize: 14,
-        size: 14,
-        headerHeight: 34,
+        color: C.purple,
+        title: "Fewer wasted memory movements",
+        target: "Target: 20-50% fewer late or wasted KV reloads",
+        why: "Why: memory movement can finish too late, or useful KV can be moved but not reused in time.",
       },
-    );
-    addText(slide, "Framing: these are conservative research targets; the prototype is meant to turn them into measured numbers.", 92, 633, 1040, 30, {
+      {
+        color: C.green,
+        title: "More predictable tail latency",
+        target: "Target: lower p95/p99 agent-resume stalls",
+        why: "Why: urgent agent KV currently competes with ordinary memory traffic without deadline or priority context.",
+      },
+    ];
+
+    impacts.forEach((impact, idx) => {
+      const y = 164 + idx * 128;
+      addText(slide, `${idx + 1}.`, 72, y, 56, 36, { size: 25, bold: true, color: impact.color });
+      addText(slide, impact.title, 118, y, 560, 34, { size: 25, bold: true, color: C.ink });
+      addText(slide, impact.target, 118, y + 38, 690, 30, { size: 21, bold: true, color: impact.color });
+      addText(slide, impact.why, 118, y + 72, 980, 45, { size: 18, color: C.body });
+      if (idx < impacts.length - 1) addRule(slide, y + 114, "#e2e8f0");
+    });
+
+    addRule(slide, 560, C.rule);
+    addText(slide, "Hardware support to test", 92, 584, 310, 28, { size: 20, bold: true, color: C.ink });
+    addText(slide, "KV/session metadata, deadline-aware movement queues, temporary KV protection, and useful/late/wasted telemetry.", 92, 616, 1030, 36, {
       size: 19,
       bold: true,
       color: C.ink,
-      align: "center",
     });
     addFooter(slide, 11);
     addNotes(slide, [
-      "This slide intentionally frames benefits as ballpark expectations and research targets.",
-      "The table ties each benefit estimate to an observed mechanism: late replay H2D, recompute after KV loss, late hint completion, and wasted prefetch.",
-      "Low-end gains are plausible when KV is already mostly resident and only small stalls remain.",
-      "High-end gains are plausible when contexts are long, cache pressure is high, and replay falls back to H2D reload or recompute.",
-      "Potential benefit ranges are internal proposal estimates based on observed late prefetch/replay H2D patterns and expected gains from deadline-aware KV movement.",
+      "This slide intentionally avoids internal terms such as H2D and replay-prefill on the visible canvas.",
+      "Translate for technical discussion: faster agent resume corresponds to lowering post-tool replay latency when KV is ready earlier.",
+      "Fewer wasted memory movements corresponds to reducing late prefetches, evicted-before-use KV, and redundant reloads.",
+      "More predictable tail latency corresponds to reducing p95/p99 stalls caused by context-agnostic memory scheduling.",
+      "Potential benefit ranges are conservative internal proposal targets based on observed late prefetch/replay H2D patterns and expected gains from deadline-aware KV movement.",
     ]);
   }
 

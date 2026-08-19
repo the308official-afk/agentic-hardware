@@ -165,6 +165,72 @@
       font-size: 21px;
       margin-top: 8px;
     }
+    .takeaway.left {
+      text-align: left;
+      max-width: 1120px;
+      font-size: 22px;
+    }
+    .impact-bullets {
+      display: grid;
+      gap: 24px;
+      margin: 6px 18px 0 18px;
+    }
+    .impact-item {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 18px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .impact-item:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+    .impact-number {
+      font-size: 26px;
+      line-height: 1.05;
+      font-weight: 900;
+    }
+    .impact-item h2 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 27px;
+      line-height: 1.12;
+    }
+    .impact-item p {
+      margin: 0;
+      max-width: 1060px;
+      color: var(--body);
+      font-size: 18px;
+      line-height: 1.24;
+    }
+    .impact-item .target {
+      margin-bottom: 8px;
+      font-size: 21px;
+      font-weight: 850;
+    }
+    .impact-rule {
+      margin: 22px 0 22px;
+    }
+    .impact-support {
+      margin: 0;
+      max-width: 1120px;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    .impact-item.blue .impact-number,
+    .impact-item.blue .target {
+      color: #2563eb;
+    }
+    .impact-item.purple .impact-number,
+    .impact-item.purple .target {
+      color: #9333ea;
+    }
+    .impact-item.green .impact-number,
+    .impact-item.green .target {
+      color: #16a34a;
+    }
     .chart {
       width: 100%;
       height: 100%;
@@ -443,18 +509,36 @@
   </section>
 <section class="slide" id="slide-11">
     <h1>Potential hardware impact</h1>
-    <p class="subtitle">The ranges are tied to observed failure modes, not standalone guesses.</p>
+    <p class="subtitle">Simple targets for tool-heavy coding-agent workloads.</p>
     <div class="slide-body">
-        <table class="impact-table ">
-    <thead><tr><th>Observed in our traces</th><th>Hardware assist</th><th>Why it moves the number</th><th>Target impact</th></tr></thead>
-    <tbody><tr><td class="red strong">Late replay H2D</td><td>deadline-aware KV queue</td><td>cuts time spent waiting for urgent KV</td><td class="blue strong">10-20% replay latency</td></tr><tr><td class="gold strong">Replay recomputes old prefix</td><td>residency protection</td><td>keeps useful KV available until reuse</td><td class="purple strong">up to 20-30%</td></tr><tr><td class="purple strong">Hints finish after deadline</td><td>session priority metadata</td><td>lets urgent agents preempt low-value movement</td><td class="green strong">20-50% fewer late reloads</td></tr><tr><td class="cyan strong">Useful prefetch is wasted</td><td>KV-aware telemetry</td><td>detects late, wasted, and evicted-before-use KV</td><td class="cyan strong">less bandwidth waste</td></tr></tbody>
-  </table>
-        <h2 class="mini-heading">Range rationale</h2>
-        <table class="impact-table compact">
-    <thead><tr><th>Range</th><th>When it applies</th><th>Reason</th></tr></thead>
-    <tbody><tr><td class="blue strong">Low end: 10-15%</td><td>KV is mostly hot, contexts are short, or pressure is light.</td><td>Hardware mainly removes small replay stalls.</td></tr><tr><td class="red strong">High end: 25-30%+</td><td>Long contexts, high pressure, frequent offload/reload, or recompute.</td><td>Hardware avoids the expensive replay path.</td></tr></tbody>
-  </table>
-        <p class="takeaway table-note">Conservative research targets; the prototype is meant to turn them into measured numbers.</p>
+        <div class="impact-bullets">
+          <div class="impact-item blue">
+            <div class="impact-number">1.</div>
+            <div>
+              <h2>Faster agent resume after tools</h2>
+              <p class="target">Target: 10-30% lower post-tool latency</p>
+              <p>Why: our traces show the next model turn can wait because useful KV is not ready when the agent resumes.</p>
+            </div>
+          </div>
+          <div class="impact-item purple">
+            <div class="impact-number">2.</div>
+            <div>
+              <h2>Fewer wasted memory movements</h2>
+              <p class="target">Target: 20-50% fewer late or wasted KV reloads</p>
+              <p>Why: memory movement can finish too late, or useful KV can be moved but not reused in time.</p>
+            </div>
+          </div>
+          <div class="impact-item green">
+            <div class="impact-number">3.</div>
+            <div>
+              <h2>More predictable tail latency</h2>
+              <p class="target">Target: lower p95/p99 agent-resume stalls</p>
+              <p>Why: urgent agent KV currently competes with ordinary memory traffic without deadline or priority context.</p>
+            </div>
+          </div>
+        </div>
+        <hr class="impact-rule">
+        <p class="impact-support"><strong>Hardware support to test:</strong> KV/session metadata, deadline-aware movement queues, temporary KV protection, and useful/late/wasted telemetry.</p>
       </div>
     <div class="footer">Agent-aware KV movement</div>
     <div class="slide-number">11</div>

@@ -228,55 +228,36 @@ async function main() {
     slide({
       number: 11,
       title: "Potential hardware impact",
-      subtitle: "The ranges are tied to observed failure modes, not standalone guesses.",
+      subtitle: "Simple targets for tool-heavy coding-agent workloads.",
       body: `
-        ${impactTable(
-          ["Observed in our traces", "Hardware assist", "Why it moves the number", "Target impact"],
-          [
-            [
-              { text: "Late replay H2D", className: "red strong" },
-              { text: "deadline-aware KV queue" },
-              { text: "cuts time spent waiting for urgent KV" },
-              { text: "10-20% replay latency", className: "blue strong" },
-            ],
-            [
-              { text: "Replay recomputes old prefix", className: "gold strong" },
-              { text: "residency protection" },
-              { text: "keeps useful KV available until reuse" },
-              { text: "up to 20-30%", className: "purple strong" },
-            ],
-            [
-              { text: "Hints finish after deadline", className: "purple strong" },
-              { text: "session priority metadata" },
-              { text: "lets urgent agents preempt low-value movement" },
-              { text: "20-50% fewer late reloads", className: "green strong" },
-            ],
-            [
-              { text: "Useful prefetch is wasted", className: "cyan strong" },
-              { text: "KV-aware telemetry" },
-              { text: "detects late, wasted, and evicted-before-use KV" },
-              { text: "less bandwidth waste", className: "cyan strong" },
-            ],
-          ],
-        )}
-        <h2 class="mini-heading">Range rationale</h2>
-        ${impactTable(
-          ["Range", "When it applies", "Reason"],
-          [
-            [
-              { text: "Low end: 10-15%", className: "blue strong" },
-              { text: "KV is mostly hot, contexts are short, or pressure is light." },
-              { text: "Hardware mainly removes small replay stalls." },
-            ],
-            [
-              { text: "High end: 25-30%+", className: "red strong" },
-              { text: "Long contexts, high pressure, frequent offload/reload, or recompute." },
-              { text: "Hardware avoids the expensive replay path." },
-            ],
-          ],
-          "compact",
-        )}
-        <p class="takeaway table-note">Conservative research targets; the prototype is meant to turn them into measured numbers.</p>
+        <div class="impact-bullets">
+          <div class="impact-item blue">
+            <div class="impact-number">1.</div>
+            <div>
+              <h2>Faster agent resume after tools</h2>
+              <p class="target">Target: 10-30% lower post-tool latency</p>
+              <p>Why: our traces show the next model turn can wait because useful KV is not ready when the agent resumes.</p>
+            </div>
+          </div>
+          <div class="impact-item purple">
+            <div class="impact-number">2.</div>
+            <div>
+              <h2>Fewer wasted memory movements</h2>
+              <p class="target">Target: 20-50% fewer late or wasted KV reloads</p>
+              <p>Why: memory movement can finish too late, or useful KV can be moved but not reused in time.</p>
+            </div>
+          </div>
+          <div class="impact-item green">
+            <div class="impact-number">3.</div>
+            <div>
+              <h2>More predictable tail latency</h2>
+              <p class="target">Target: lower p95/p99 agent-resume stalls</p>
+              <p>Why: urgent agent KV currently competes with ordinary memory traffic without deadline or priority context.</p>
+            </div>
+          </div>
+        </div>
+        <hr class="impact-rule">
+        <p class="impact-support"><strong>Hardware support to test:</strong> KV/session metadata, deadline-aware movement queues, temporary KV protection, and useful/late/wasted telemetry.</p>
       `,
     }),
     slide({
@@ -462,6 +443,72 @@ async function main() {
       text-align: left;
       font-size: 21px;
       margin-top: 8px;
+    }
+    .takeaway.left {
+      text-align: left;
+      max-width: 1120px;
+      font-size: 22px;
+    }
+    .impact-bullets {
+      display: grid;
+      gap: 24px;
+      margin: 6px 18px 0 18px;
+    }
+    .impact-item {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 18px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .impact-item:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+    .impact-number {
+      font-size: 26px;
+      line-height: 1.05;
+      font-weight: 900;
+    }
+    .impact-item h2 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 27px;
+      line-height: 1.12;
+    }
+    .impact-item p {
+      margin: 0;
+      max-width: 1060px;
+      color: var(--body);
+      font-size: 18px;
+      line-height: 1.24;
+    }
+    .impact-item .target {
+      margin-bottom: 8px;
+      font-size: 21px;
+      font-weight: 850;
+    }
+    .impact-rule {
+      margin: 22px 0 22px;
+    }
+    .impact-support {
+      margin: 0;
+      max-width: 1120px;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    .impact-item.blue .impact-number,
+    .impact-item.blue .target {
+      color: #2563eb;
+    }
+    .impact-item.purple .impact-number,
+    .impact-item.purple .target {
+      color: #9333ea;
+    }
+    .impact-item.green .impact-number,
+    .impact-item.green .target {
+      color: #16a34a;
     }
     .chart {
       width: 100%;
