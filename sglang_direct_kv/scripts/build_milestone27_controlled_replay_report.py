@@ -1665,7 +1665,9 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
         wall_window = round(h2d_end - h2d_start, 3)
         finish_lateness = round(h2d_end - due, 3)
         finish_margin = round(due - h2d_end, 3)
+        request_start_delay = round(resume_start - due, 3) if resume_start is not None else ""
         after_resume_start = round(h2d_start - resume_start, 3) if resume_start is not None else ""
+        h2d_end_after_request_start = round(h2d_end - resume_start, 3) if resume_start is not None else ""
         filler_count = case_fillers(row)
         rows.append(
             {
@@ -1676,10 +1678,12 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
                 "fillers": filler_count,
                 "tool_gap_ms": row.get("tool_gap_ms", ""),
                 "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "replay_due_to_request_start_ms": request_start_delay,
                 "replay_due_to_h2d_start_ms": start_delay,
-                "h2d_start_after_replay_start_ms": after_resume_start,
+                "request_start_to_h2d_start_ms": after_resume_start,
                 "h2d_visible_wall_window_ms": wall_window,
                 "h2d_event_duration_sum_ms": event_duration if event_duration is not None else "",
+                "request_start_to_h2d_end_ms": h2d_end_after_request_start,
                 "replay_due_to_h2d_end_ms": finish_lateness,
                 "h2d_finish_margin_ms": finish_margin,
                 "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
@@ -1698,7 +1702,9 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def replay_h2d_readiness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     margins = [float(row["h2d_finish_margin_ms"]) for row in rows if row.get("h2d_finish_margin_ms") not in ("", None)]
+    request_start_delays = [float(row["replay_due_to_request_start_ms"]) for row in rows if row.get("replay_due_to_request_start_ms") not in ("", None)]
     start_delays = [float(row["replay_due_to_h2d_start_ms"]) for row in rows if row.get("replay_due_to_h2d_start_ms") not in ("", None)]
+    request_to_h2d_start = [float(row["request_start_to_h2d_start_ms"]) for row in rows if row.get("request_start_to_h2d_start_ms") not in ("", None)]
     wall_windows = [float(row["h2d_visible_wall_window_ms"]) for row in rows if row.get("h2d_visible_wall_window_ms") not in ("", None)]
     event_durations = [float(row["h2d_event_duration_sum_ms"]) for row in rows if row.get("h2d_event_duration_sum_ms") not in ("", None)]
     late = [value for value in margins if value < 0]
@@ -1711,7 +1717,9 @@ def replay_h2d_readiness_summary(rows: list[dict[str, Any]]) -> list[dict[str, A
             "median_h2d_finish_margin_ms": round(median(margins), 3) if margins else "",
             "worst_h2d_lateness_ms": round(abs(min(late)), 3) if late else "",
             "best_early_margin_ms": round(max(early), 3) if early else "",
+            "avg_due_to_request_start_ms": avg(request_start_delays),
             "avg_due_to_h2d_start_ms": avg(start_delays),
+            "avg_request_start_to_h2d_start_ms": avg(request_to_h2d_start),
             "avg_h2d_visible_wall_window_ms": avg(wall_windows),
             "avg_h2d_event_duration_sum_ms": avg(event_durations),
         }
@@ -1866,6 +1874,142 @@ def build_replay_h2d_readiness_dot_plot(rows: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No no-prefetch replay-side H2D rows were available for the request-vs-H2D plot.</p>"
+    width = 1480
+    height = 560
+    left = 96
+    right = 40
+    top = 70
+    bottom = 104
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    numeric_keys = [
+        "replay_due_to_request_start_ms",
+        "replay_due_to_h2d_start_ms",
+        "replay_due_to_h2d_end_ms",
+    ]
+    values: list[float] = []
+    for row in rows:
+        for key in numeric_keys:
+            value = as_float(row.get(key))
+            if value is not None:
+                values.append(value)
+    if not values:
+        return "<p>No request/H2D timing values were available for the request-vs-H2D plot.</p>"
+    min_value = min(values)
+    max_value = max(values)
+    pad = max(50.0, (max_value - min_value) * 0.08)
+    y_min = min(min_value - pad, -50.0)
+    y_max = max(max_value + pad, 50.0)
+    scaled_min = h2d_symlog_value(y_min)
+    scaled_max = h2d_symlog_value(y_max)
+
+    def x_pos(index: int) -> float:
+        if len(rows) <= 1:
+            return left + plot_w / 2
+        return left + index * plot_w / (len(rows) - 1)
+
+    def y_pos(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return top + (scaled - scaled_min) * plot_h / (scaled_max - scaled_min)
+
+    def circle(x: float, y: float, color: str, title: str) -> str:
+        return (
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="{color}" opacity="0.9" '
+            f'stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></circle>'
+        )
+
+    def square(x: float, y: float, color: str, title: str) -> str:
+        return (
+            f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" fill="{color}" '
+            f'opacity="0.92" stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></rect>'
+        )
+
+    def triangle(x: float, y: float, color: str, title: str) -> str:
+        points = f"{x:.1f},{y - 7:.1f} {x - 7:.1f},{y + 6:.1f} {x + 7:.1f},{y + 6:.1f}"
+        return (
+            f'<polygon points="{points}" fill="{color}" opacity="0.92" stroke="#ffffff" '
+            f'stroke-width="1.5"><title>{html.escape(title)}</title></polygon>'
+        )
+
+    zero_y = y_pos(0.0)
+    parts = [
+        '<svg viewBox="0 0 1480 560" width="100%" role="img" aria-label="Replay request versus H2D start timeline plot">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
+        '<text x="20" y="288" transform="rotate(-90 20 288)" text-anchor="middle" font-size="13" font-weight="700">time relative to replay due ms (symlog)</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 30}" text-anchor="middle" font-size="13" font-weight="700">no-prefetch replay gap order</text>',
+        '<text x="104" y="36" font-size="13" fill="#334155" font-weight="700">higher = earlier/before due; lower = later/after due</text>',
+    ]
+
+    seen_ticks: set[int] = set()
+    for value in h2d_symlog_tick_values(y_min, y_max):
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+
+    x_tick_step = max(1, len(rows) // 10)
+    for index in range(0, len(rows), x_tick_step):
+        x = x_pos(index)
+        parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="10">{index}</text>')
+
+    for index, row in enumerate(rows):
+        x = x_pos(index)
+        request_start = as_float(row.get("replay_due_to_request_start_ms"))
+        h2d_start = as_float(row.get("replay_due_to_h2d_start_ms"))
+        h2d_end = as_float(row.get("replay_due_to_h2d_end_ms"))
+        if request_start is not None and h2d_start is not None:
+            y1 = y_pos(request_start)
+            y2 = y_pos(h2d_start)
+            parts.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="#94a3b8" stroke-width="2" opacity="0.75"/>')
+        if h2d_start is not None and h2d_end is not None:
+            y1 = y_pos(h2d_start)
+            y2 = y_pos(h2d_end)
+            parts.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="#06b6d4" stroke-width="4" opacity="0.75"/>')
+        title_prefix = (
+            f"{row.get('session_id')} | fillers={row.get('fillers')} | tool_gap={row.get('tool_gap_ms')} ms | "
+            f"TTFT={row.get('resume_ttft_ms')} ms"
+        )
+        if request_start is not None:
+            parts.append(circle(x, y_pos(request_start), "#2563eb", f"{title_prefix} | replay request start={request_start:.3f} ms after due"))
+        if h2d_start is not None:
+            parts.append(triangle(x, y_pos(h2d_start), "#0891b2", f"{title_prefix} | H2D start={h2d_start:.3f} ms after due"))
+        if h2d_end is not None:
+            parts.append(square(x, y_pos(h2d_end), "#06b6d4", f"{title_prefix} | H2D finish={h2d_end:.3f} ms after due"))
+
+    legend = [
+        ("replay request start", "#2563eb", "circle"),
+        ("H2D start", "#0891b2", "triangle"),
+        ("H2D finish", "#06b6d4", "square"),
+        ("request-to-H2D wait", "#94a3b8", "line"),
+        ("visible H2D window", "#06b6d4", "line"),
+    ]
+    lx = left
+    ly = height - 68
+    for label, color, kind in legend:
+        if kind == "circle":
+            parts.append(f'<circle cx="{lx}" cy="{ly}" r="6" fill="{color}"/>')
+        elif kind == "triangle":
+            points = f"{lx},{ly - 7} {lx - 7},{ly + 6} {lx + 7},{ly + 6}"
+            parts.append(f'<polygon points="{points}" fill="{color}"/>')
+        elif kind == "square":
+            parts.append(f'<rect x="{lx - 6}" y="{ly - 6}" width="12" height="12" rx="2" fill="{color}"/>')
+        else:
+            parts.append(f'<line x1="{lx - 8}" y1="{ly}" x2="{lx + 8}" y2="{ly}" stroke="{color}" stroke-width="4"/>')
+        parts.append(f'<text x="{lx + 14}" y="{ly + 4}" font-size="12">{html.escape(label)}</text>')
+        lx += 205
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
 def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
     rows = replay_h2d_readiness_rows(gaps)
     if not rows:
@@ -1881,12 +2025,15 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
     <p class="note">The dot value is <code>replay_due_time - replay_h2d_finish_time</code>. Positive means the KV load finished before the replay deadline. Negative means the replay deadline passed first, so the model turn had to wait for KV readiness.</p>
     <p class="note">The timing is split into three concrete pieces: <code>replay due -> H2D start</code>, <code>H2D start -> H2D end</code>, and <code>replay due -> H2D end</code>. This separates waiting before movement from the visible host-to-device movement window.</p>
     {table_html(summary)}
+    <h3>Replay Request vs H2D Start</h3>
+    <p>This chart checks whether the replay request itself was issued late, or whether the request arrived and then waited before visible KV H2D movement began.</p>
+    <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot(rows)}</div>
     <h3>Replay H2D Readiness Dot Plot</h3>
     <div class="setup-diagram">{build_replay_h2d_readiness_dot_plot(rows)}</div>
     <h3>Readiness Buckets</h3>
     {table_html(buckets)}
     <h3>Timing Split Behind The Plot</h3>
-    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_h2d_start_ms", "h2d_start_after_replay_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
+    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_request_start_ms", "replay_due_to_h2d_start_ms", "request_start_to_h2d_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "request_start_to_h2d_end_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
     """
 
 

@@ -5714,8 +5714,14 @@ replay_h2d_readiness.csv
 The important split is:
 
 ```text
+replay due -> replay request start
+  whether the replay request itself arrived on time or was delayed by the driver/load pattern
+
 replay due -> H2D start
   how long the system waited before starting visible KV movement
+
+replay request start -> H2D start
+  after the replay request entered SGLang, how long it took before visible KV movement began
 
 H2D start -> H2D end
   the visible host-to-device KV movement window
@@ -5726,6 +5732,24 @@ replay due -> H2D end
 
 In the dot chart, values below zero mean the replay deadline arrived before KV
 movement finished. Farther below zero means the replay-side H2D load was later.
+
+The report also includes a companion chart:
+
+```text
+Replay Request vs H2D Start
+```
+
+This chart shows three markers per no-prefetch gap:
+
+```text
+replay request start
+H2D start
+H2D finish
+```
+
+This makes it clear whether the replay request itself arrived late, or whether
+the request arrived and then waited before SGLang reached the host-to-device KV
+load path.
 
 Important output files:
 
