@@ -37,6 +37,10 @@ function evidenceCard(value, label, className = "") {
   return `<div class="evidence-card ${className}"><div class="evidence-value">${escapeHtml(value)}</div><div class="evidence-label">${escapeHtml(label)}</div></div>`;
 }
 
+function configCell(label, value, className = "") {
+  return `<div class="config-cell ${className}"><div>${escapeHtml(label)}</div><strong>${escapeHtml(value)}</strong></div>`;
+}
+
 function slide({ eyebrow = "Agent-aware KV movement", title, subtitle = "", body, source = "", number }) {
   return `<section class="slide" id="slide-${number}">
     <div class="slide-eyebrow">${escapeHtml(eyebrow)}</div>
@@ -90,6 +94,31 @@ async function main() {
     }),
     slide({
       number: 3,
+      title: "The prototype runs real prompts through SGLang",
+      subtitle: "Concrete setup behind the charts: traffic source, serving stack, one GPU, model, and host-side KV cache.",
+      body: `
+        ${flow([
+          { title: "Synthetic request generator", className: "gray" },
+          { title: "SWE-bench / DeepAgents traces", className: "blue" },
+          { title: "SGLang OpenAI server", className: "purple" },
+          { title: "Qwen Coder 7B Instruct", className: "cyan" },
+          { title: "GPU KV cache + HiCache", className: "green" },
+        ])}
+        <div class="config-grid">
+          ${configCell("GPU", "NVIDIA A10G class")}
+          ${configCell("GPU memory", "24 GB GDDR6")}
+          ${configCell("HiCache host KV shelf", "16 GB configured", "warm")}
+          ${configCell("Context length", "32,768 tokens")}
+          ${configCell("Max total tokens", "12,288")}
+          ${configCell("Memory fraction static", "0.72")}
+          ${configCell("Tensor parallel", "TP = 1")}
+          ${configCell("HiCache policy", "direct + write-through", "warm")}
+        </div>
+      `,
+      source: "Source: latest_master_report.html setup section and run configuration",
+    }),
+    slide({
+      number: 4,
       title: "Today's DMA engines move bytes, not intent",
       subtitle: "The hardware path is fast, but it usually lacks agent/session semantics.",
       body: `
@@ -116,7 +145,7 @@ async function main() {
       `,
     }),
     slide({
-      number: 4,
+      number: 5,
       title: "The replay path exposes the bottleneck",
       subtitle: "Several tool-gap sessions show where replay spends time before the first useful token.",
       body: `
@@ -125,7 +154,7 @@ async function main() {
       source: "Source: latest_master_report.html controlled run",
     }),
     slide({
-      number: 5,
+      number: 6,
       title: "Software prefetch often missed the agent replay deadline",
       subtitle: "Across live prefetch attempts, nearly every hint completed after the agent had already resumed.",
       body: `
@@ -141,7 +170,7 @@ async function main() {
       source: "Source: backups/latest_master_report-1.html, Global Prefetch Margin",
     }),
     slide({
-      number: 6,
+      number: 7,
       title: "Replay-side KV loads missed the deadline in this run",
       subtitle: "The aggregate view shows whether KV H2D finished before or after replay was due.",
       body: `
@@ -156,7 +185,7 @@ async function main() {
       source: "Source: latest_master_report.html, Global Replay H2D Readiness",
     }),
     slide({
-      number: 7,
+      number: 8,
       title: "The delay is not just copy time",
       subtitle: "The request enters normal software/runtime scheduling before visible KV H2D begins.",
       body: `
@@ -166,7 +195,7 @@ async function main() {
       source: "Source: latest_master_report.html, Replay Queue Timeline vs H2D Start",
     }),
     slide({
-      number: 8,
+      number: 9,
       title: "Hardware support can make hints enforceable",
       subtitle: "The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.",
       body: `
@@ -399,6 +428,35 @@ async function main() {
       color: var(--body);
       font-size: 18px;
       line-height: 1.28;
+    }
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 22px;
+      margin: 70px 26px 0;
+    }
+    .config-cell {
+      min-height: 96px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 18px;
+    }
+    .config-cell.warm {
+      background: #fff7ed;
+      border-color: #fed7aa;
+    }
+    .config-cell div {
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .config-cell strong {
+      display: block;
+      color: var(--ink);
+      font-size: 21px;
+      line-height: 1.12;
     }
     .chart-img {
       width: 100%;

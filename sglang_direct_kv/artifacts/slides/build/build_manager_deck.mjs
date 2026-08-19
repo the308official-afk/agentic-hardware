@@ -125,6 +125,12 @@ function addFlowNode(slide, text, left, top, width, height, fill, line = C.rule)
   });
 }
 
+function addConfigCell(slide, label, value, left, top, width, height, fill = "#f8fafc", line = C.rule) {
+  addRect(slide, left, top, width, height, fill, line, "rounded-md");
+  addText(slide, label, left + 16, top + 14, width - 32, 22, { size: 15, bold: true, color: C.muted });
+  addText(slide, value, left + 16, top + 42, width - 32, height - 52, { size: value.length > 19 ? 18 : 21, bold: true, color: C.ink });
+}
+
 async function main() {
   await fs.mkdir(outDir, { recursive: true });
   await fs.mkdir(path.join(buildDir, "rendered"), { recursive: true });
@@ -192,6 +198,43 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
+    addTitle(slide, "The prototype runs real prompts through SGLang", "Concrete setup behind the charts: traffic source, serving stack, one GPU, model, and host-side KV cache.");
+
+    const y = 184;
+    const nodes = [
+      ["Synthetic\nrequest generator", 54, "#f8fafc", C.rule],
+      ["SWE-bench /\nDeepAgents traces", 286, "#eff6ff", "#bfdbfe"],
+      ["SGLang\nOpenAI server", 518, "#f5f3ff", "#c4b5fd"],
+      ["Qwen Coder\n7B Instruct", 750, "#ecfeff", "#67e8f9"],
+      ["GPU KV cache\n+ HiCache", 982, "#f0fdf4", "#86efac"],
+    ];
+    nodes.forEach(([text, x, fill, line], idx) => {
+      addFlowNode(slide, text, x, y, 178, 96, fill, line);
+      if (idx < nodes.length - 1) addText(slide, "→", x + 186, y + 30, 40, 36, { size: 30, bold: true, color: C.muted, align: "center" });
+    });
+
+    addConfigCell(slide, "GPU", "NVIDIA A10G class", 70, 356, 246, 94, "#f8fafc");
+    addConfigCell(slide, "GPU memory", "24 GB GDDR6", 340, 356, 246, 94, "#f8fafc");
+    addConfigCell(slide, "HiCache host KV shelf", "16 GB configured", 610, 356, 246, 94, "#fff7ed", "#fed7aa");
+    addConfigCell(slide, "Context length", "32,768 tokens", 880, 356, 246, 94, "#f8fafc");
+
+    addConfigCell(slide, "Max total tokens", "12,288", 70, 480, 246, 94, "#f8fafc");
+    addConfigCell(slide, "Memory fraction static", "0.72", 340, 480, 246, 94, "#f8fafc");
+    addConfigCell(slide, "Tensor parallel", "TP = 1", 610, 480, 246, 94, "#f8fafc");
+    addConfigCell(slide, "HiCache policy", "direct + write-through", 880, 480, 246, 94, "#fff7ed", "#fed7aa");
+
+    addSource(slide, "Source: latest_master_report.html setup section and run configuration");
+    addFooter(slide, 3);
+    addNotes(slide, [
+      "This slide summarizes the concrete prototype setup used for the current manager report.",
+      "Hardware/runtime values are from the latest master report setup section and the project run configuration: Qwen2.5-Coder-7B, A10G-class single GPU, 24 GB GDDR6 GPU memory, 16 GB HiCache host KV shelf, context length 32768, max total tokens 12288, mem fraction static 0.72, tensor parallel size 1.",
+    ]);
+  }
+
+  // Slide 4
+  {
+    const slide = deck.slides.add();
+    slide.background.fill = "#ffffff";
     addTitle(slide, "Today’s DMA engines move bytes, not intent", "The hardware path is fast, but it usually lacks agent/session semantics.");
     addRect(slide, 58, 188, 520, 360, "#f8fafc", C.rule, "rounded-md");
     addText(slide, "Context-agnostic movement", 88, 218, 440, 34, { size: 26, bold: true, color: C.ink });
@@ -226,28 +269,28 @@ async function main() {
       54,
       20,
     );
-    addFooter(slide, 3);
+    addFooter(slide, 4);
     addNotes(slide, [
       "This slide frames the hardware opportunity: hints must become enforceable by the memory movement path.",
       "Hardware examples include SDMA, CPU-side DMA, NIC DMA, SSD DMA, and copy/migration engines.",
     ]);
   }
 
-  // Slide 4
+  // Slide 5
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
     addTitle(slide, "The replay path exposes the bottleneck", "Several tool-gap sessions show where replay spends time before the first useful token.");
     await addImage(slide, "readable_phase_timeline_8rows_wide.png", 32, 132, 1216, 506, "Readable phase timeline crop showing several gap sessions", "contain");
     addSource(slide);
-    addFooter(slide, 4);
+    addFooter(slide, 5);
     addNotes(slide, [
       "Use this as the narrative chart. It shows the initial model turn, tool wait, replay path, replay-side H2D, recompute, prefill, and decode.",
       "The image is a cropped view of the Readable Phase Timeline in latest_master_report.html.",
     ]);
   }
 
-  // Slide 5
+  // Slide 6
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
@@ -262,14 +305,14 @@ async function main() {
     addText(slide, "missed replay due deadline", 982, 402, 186, 30, { size: 17, color: C.body, align: "center" });
     addText(slide, "This shows that semantic knowledge alone is not enough if the movement path cannot act on hints predictably.", 958, 474, 236, 72, { size: 20, color: C.body });
     addSource(slide, "Source: backups/latest_master_report-1.html, Global Prefetch Margin");
-    addFooter(slide, 5);
+    addFooter(slide, 6);
     addNotes(slide, [
       "This slide is the global prefetch-attempt evidence. The backup report shows 114 matched prefetch attempts, 112 late, and 98.25% late.",
       "Use it to show that software prefetch through the normal serving path often misses tight replay windows.",
     ]);
   }
 
-  // Slide 6
+  // Slide 7
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
@@ -280,14 +323,14 @@ async function main() {
     addText(slide, "H2D loads finished late", 998, 276, 168, 28, { size: 17, color: C.body, align: "center" });
     addText(slide, "All visible replay-side KV loads finished below the 0 ms deadline line.", 972, 370, 220, 78, { size: 21, color: C.body });
     addSource(slide, "Source: latest_master_report.html, Global Replay H2D Readiness");
-    addFooter(slide, 6);
+    addFooter(slide, 7);
     addNotes(slide, [
       "This is the aggregate evidence slide. The current controlled no-prefetch run reports 8 no-prefetch replay H2D gaps and 8 late H2D finishes.",
       "Measured claim source: Global Replay H2D Readiness table and dot plot in latest_master_report.html.",
     ]);
   }
 
-  // Slide 7
+  // Slide 8
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
@@ -295,14 +338,14 @@ async function main() {
     await addImage(slide, "replay_queue_timeline.png", 42, 148, 1120, 440, "Replay queue timeline versus H2D start chart", "contain");
     addText(slide, "The stage markers separate submission, SGLang receive, scheduler queue/admit, and visible KV H2D movement.", 72, 608, 1040, 24, { size: 17, color: C.body });
     addSource(slide, "Source: latest_master_report.html, Replay Queue Timeline vs H2D Start");
-    addFooter(slide, 7);
+    addFooter(slide, 8);
     addNotes(slide, [
       "This chart separates replay due, client submit, SGLang receive, scheduler queue/admit, H2D start, and H2D finish.",
       "The key manager takeaway: a hint-aware design should influence scheduling and priority, not merely request more copies.",
     ]);
   }
 
-  // Slide 8
+  // Slide 9
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
@@ -324,7 +367,7 @@ async function main() {
     addRect(slide, 210, 474, 860, 84, "#f8fafc", C.rule, "rounded-md");
     addText(slide, "Resulting research question", 236, 498, 260, 26, { size: 22, bold: true, color: C.ink });
     addText(slide, "How much replay latency and wasted movement can be avoided when KV movement has session context, priority, deadline, protection, and telemetry?", 520, 492, 500, 44, { size: 19, color: C.body });
-    addFooter(slide, 8);
+    addFooter(slide, 9);
     addNotes(slide, [
       "Closing slide. This translates observed software/runtime behavior into concrete hardware support candidates.",
       "Hardware ideas come from the project proposal: KV metadata, deadline-aware queues, priority-aware migration, residency protection, and telemetry.",
