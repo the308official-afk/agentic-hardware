@@ -1781,7 +1781,16 @@ def h2d_symlog_tick_values(min_margin: float, max_margin: float) -> list[float]:
 
 
 def filler_palette(rows: list[dict[str, Any]]) -> dict[str, str]:
-    palette = ["#2563eb", "#7c3aed", "#0891b2", "#16a34a", "#f97316", "#dc2626", "#64748b", "#db2777"]
+    palette = [
+        "#1d4ed8",  # blue
+        "#f97316",  # orange
+        "#16a34a",  # green
+        "#db2777",  # magenta
+        "#0891b2",  # cyan
+        "#dc2626",  # red
+        "#ca8a04",  # yellow-brown
+        "#334155",  # slate
+    ]
     fillers = sorted({str(row.get("fillers") or "unknown") for row in rows}, key=lambda value: (as_float(value) is None, as_float(value) or 0.0, value))
     return {filler: palette[idx % len(palette)] for idx, filler in enumerate(fillers)}
 
