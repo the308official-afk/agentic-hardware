@@ -107,6 +107,27 @@ Important interpretation: the full prefix existed after replay/cache work
 progressed, but it was not a clean cache hit at replay start. This is why the
 report now separates initial cache match from final post-replay cache state.
 
+Latest synthetic large-prefix HiCache finding:
+
+```text
+synthetic_large_prefix_probe_1
+```
+
+HiCache was enabled and SGLang allocated an 8 GB host KV cache. The target
+first turn wrote about 4213 KV tokens to host. Under 64/128 filler pressure,
+the trace then showed target device-side eviction and target host-side eviction
+before replay. At replay time, SGLang observed no target H2D load-back events,
+matched only a tiny prefix, and rebuilt/prefilled the missing tokens.
+
+Simple interpretation:
+
+```text
+HiCache existed.
+The target KV was written to host.
+But useful target host KV was evicted before replay.
+So replay could not load it back and recomputed instead.
+```
+
 Open this report first:
 
 ```text
@@ -5034,6 +5055,19 @@ artifacts/results/<run>/controlled_replay_report/controlled_replay_report.html
 artifacts/results/<run>/controlled_replay_report/controlled_replay_gaps.csv
 artifacts/results/latest_controlled_replay_report.html
 artifacts/results/latest_master_report.html
+```
+
+Investigate whether replay reused GPU KV, loaded KV from host, or recomputed:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/investigate_hicache_reuse.py \
+  --run-root artifacts/results/runs/controlled/synthetic_large_prefix_probe_1 \
+  --gaps-csv artifacts/results/reports/synthetic_large_prefix_probe_1/controlled_replay_gaps.csv \
+  --out-json artifacts/results/reports/synthetic_large_prefix_probe_1/hicache_reuse_investigation.json \
+  --out-md artifacts/results/reports/synthetic_large_prefix_probe_1/hicache_reuse_investigation.md
 ```
 
 Attach a real live AgentBench direct-prefetch run to the same master report:
