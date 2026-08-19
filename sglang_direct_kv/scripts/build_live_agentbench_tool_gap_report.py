@@ -152,6 +152,28 @@ def display_ms(value: Any) -> str:
     return f"{parsed:.0f} ms"
 
 
+def append_timeline_legend(
+    svg: list[str],
+    legend: list[tuple[str, str]],
+    x: float,
+    y: float,
+    step: float,
+    line_labels: set[str] | None = None,
+) -> None:
+    line_labels = line_labels or set()
+    lx = x
+    for label, color in legend:
+        if label in line_labels:
+            svg.append(
+                f'<line x1="{lx:.1f}" y1="{y - 12:.1f}" x2="{lx:.1f}" y2="{y + 4:.1f}" '
+                f'stroke="{color}" stroke-width="4"/>'
+            )
+        else:
+            svg.append(f'<rect x="{lx:.1f}" y="{y - 12:.1f}" width="14" height="14" fill="{color}"/>')
+        svg.append(f'<text x="{lx + 20:.1f}" y="{y:.1f}" font-size="12">{fmt(label)}</text>')
+        lx += step
+
+
 def replay_phase_segments(row: dict[str, Any]) -> dict[str, float]:
     ttft = maybe_float(row.get("resume_ttft_ms")) or duration_between(row, "replay_prefill_start_ms", "replay_prefill_end_ms") or 0.0
     replay_h2d = maybe_float(row.get("replay_kv_h2d_duration_ms")) or maybe_float(row.get("host_load_ms")) or 0.0
@@ -181,7 +203,7 @@ def build_readable_phase_timeline_svg(
     width = 1580
     left = 205
     right = 40
-    top = 86
+    top = 112
     row_h = 172
     header_h = 40
     gap = 16
@@ -234,6 +256,17 @@ def build_readable_phase_timeline_svg(
         '<text x="10" y="26" font-size="18" font-weight="700" fill="#0f172a">Readable phase timeline</text>',
         '<text x="10" y="48" font-size="12" fill="#475569">Each bar is stretched for readability. The printed duration is the measured value.</text>',
     ]
+    legend = [
+        ("initial model turn", "#2563eb"),
+        ("tool wait", "#d1d5db"),
+        ("prefetch attempt", "#a855f7"),
+        ("hint-side KV HtoD", "#16a34a"),
+        ("replay-side KV HtoD", "#06b6d4"),
+        ("recompute/rebuild", "#db2777"),
+        ("remaining TTFT", "#eab308"),
+        ("decode", "#ef4444"),
+    ]
+    append_timeline_legend(svg, legend, left, 76, 160)
     headers = [
         ("initial turn", x_turn, turn_w),
         ("tool wait", x_wait, wait_w),
@@ -301,21 +334,7 @@ def build_readable_phase_timeline_svg(
                 missing(svg, x_replay + 12, ry, replay_w - 24, small_h, f"no {name}")
 
     svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#cbd5e1"/>')
-    legend = [
-        ("initial model turn", "#2563eb"),
-        ("tool wait", "#d1d5db"),
-        ("prefetch attempt", "#a855f7"),
-        ("hint-side KV HtoD", "#16a34a"),
-        ("replay-side KV HtoD", "#06b6d4"),
-        ("recompute/rebuild", "#db2777"),
-        ("remaining TTFT", "#eab308"),
-        ("decode", "#ef4444"),
-    ]
-    lx = left
-    for label, color in legend:
-        svg.append(f'<rect x="{lx:.1f}" y="{legend_y - 12:.1f}" width="14" height="14" fill="{color}"/>')
-        svg.append(f'<text x="{lx + 20:.1f}" y="{legend_y:.1f}" font-size="12">{fmt(label)}</text>')
-        lx += 160
+    append_timeline_legend(svg, legend, left, legend_y, 160)
     svg.append("</svg>")
     return "\n".join(svg)
 
@@ -678,7 +697,7 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
     width = 1580
     left = 380
     right = 60
-    top = 78
+    top = 104
     row_h = 72
     height = top + len(rows) * row_h + 78
     plot_w = width - left - right
@@ -691,6 +710,17 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Live AgentBench tool-gap timeline">',
         f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
     ]
+    legend = [
+        ("model turn with tool call", "#2563eb"),
+        ("observed tool gap", "#d1d5db"),
+        ("resume model turn", "#ef4444"),
+        ("resume start boundary", "#111827"),
+    ]
+    if show_prefetch_legend:
+        legend.insert(2, ("live prefetch attempt", "#a855f7"))
+        legend.insert(3, ("direct KV HtoD copy", "#16a34a"))
+        legend.insert(4, ("replay-side KV HtoD", "#06b6d4"))
+    append_timeline_legend(svg, legend, left, 30, 220, {"resume start boundary"})
     for tick in range(6):
         ms = start + span * tick / 5
         x = x_pos(ms)
@@ -778,21 +808,7 @@ def build_timeline_svg(gaps: list[dict[str, Any]], max_rows: int, show_prefetch_
                 f'<text x="{max(left + 2, replay_h2d_x1 + 3):.1f}" y="{y + 56}" font-size="9" fill="#ffffff" font-weight="700">replay KV</text>'
             )
     legend_y = height - 28
-    legend = [
-        ("model turn with tool call", "#2563eb"),
-        ("observed tool gap", "#d1d5db"),
-        ("resume model turn", "#ef4444"),
-        ("resume start boundary", "#111827"),
-    ]
-    if show_prefetch_legend:
-        legend.insert(2, ("live prefetch attempt", "#a855f7"))
-        legend.insert(3, ("direct KV HtoD copy", "#16a34a"))
-        legend.insert(4, ("replay-side KV HtoD", "#06b6d4"))
-    lx = left
-    for label, color in legend:
-        svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
-        svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
-        lx += 220
+    append_timeline_legend(svg, legend, left, legend_y, 220, {"resume start boundary"})
     svg.append("</svg>")
     return "\n".join(svg)
 
@@ -848,7 +864,7 @@ def build_expanded_gap_timeline_svg(
     width = 1580
     left = 178
     right = 70
-    top = 86
+    top = 112
     row_h = 118
     plot_w = width - left - right
     plot_bottom = top + len(rows) * row_h + 10
@@ -902,6 +918,19 @@ def build_expanded_gap_timeline_svg(
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Expanded per-gap timeline aligned at replay due, {scale_label} view">',
         f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
     ]
+    legend = [
+        ("initial model turn", "#2563eb"),
+        ("tool wait", "#d1d5db"),
+        ("replay due", "#111827"),
+        ("replay decode", "#ef4444"),
+        ("normal prefill", "#eab308"),
+        ("recompute", "#db2777"),
+    ]
+    if show_prefetch_legend:
+        legend.insert(2, ("prefetch attempt", "#a855f7"))
+        legend.insert(3, ("direct KV HtoD", "#16a34a"))
+        legend.insert(4, ("replay-side KV HtoD", "#06b6d4"))
+    append_timeline_legend(svg, legend, left, 34, 185, {"replay due"})
     for idx in range(len(rows)):
         y = top + idx * row_h
         band_fill = "#ffffff" if idx % 2 == 0 else "#eef2f7"
@@ -1160,26 +1189,7 @@ def build_expanded_gap_timeline_svg(
             svg.append(f'<circle cx="{x_done:.1f}" cy="{y_margin:.1f}" r="3.5" fill="{color}"/>')
 
     svg.append(f'<line x1="{left}" y1="{plot_bottom + 18:.1f}" x2="{left + plot_w}" y2="{plot_bottom + 18:.1f}" stroke="#e5e7eb"/>')
-    legend = [
-        ("initial model turn", "#2563eb"),
-        ("tool wait", "#d1d5db"),
-        ("replay due", "#111827"),
-        ("replay decode", "#ef4444"),
-        ("normal prefill", "#eab308"),
-        ("recompute", "#db2777"),
-    ]
-    if show_prefetch_legend:
-        legend.insert(2, ("prefetch attempt", "#a855f7"))
-        legend.insert(3, ("direct KV HtoD", "#16a34a"))
-        legend.insert(4, ("replay-side KV HtoD", "#06b6d4"))
-    lx = left
-    for label, color in legend:
-        if label == "replay due":
-            svg.append(f'<line x1="{lx}" y1="{legend_y - 12}" x2="{lx}" y2="{legend_y + 4}" stroke="{color}" stroke-width="4"/>')
-        else:
-            svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
-        svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
-        lx += 185
+    append_timeline_legend(svg, legend, left, legend_y, 185, {"replay due"})
     svg.append("</svg>")
     return "\n".join(svg)
 
@@ -1212,7 +1222,7 @@ def build_replay_execution_timeline_svg(
     width = 1580
     left = 178
     right = 70
-    top = 86
+    top = 112
     row_h = 78
     plot_w = width - left - right
     plot_bottom = top + len(rows) * row_h + 10
@@ -1244,6 +1254,14 @@ def build_replay_execution_timeline_svg(
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Replay execution timeline aligned at actual resume start">',
         f'<line x1="{left}" y1="{top - 24}" x2="{left + plot_w}" y2="{top - 24}" stroke="#111827"/>',
     ]
+    legend = [
+        ("replay decode", "#ef4444"),
+        ("normal prefill", "#eab308"),
+        ("recompute", "#db2777"),
+        ("replay-side KV HtoD", "#06b6d4"),
+        ("resume start", "#111827"),
+    ]
+    append_timeline_legend(svg, legend, left, 34, 220, {"resume start"})
     for idx in range(len(rows)):
         y = top + idx * row_h
         band_fill = "#ffffff" if idx % 2 == 0 else "#eef2f7"
@@ -1374,21 +1392,7 @@ def build_replay_execution_timeline_svg(
             )
 
     svg.append(f'<line x1="{left}" y1="{plot_bottom + 18:.1f}" x2="{left + plot_w}" y2="{plot_bottom + 18:.1f}" stroke="#e5e7eb"/>')
-    legend = [
-        ("replay decode", "#ef4444"),
-        ("normal prefill", "#eab308"),
-        ("recompute", "#db2777"),
-        ("replay-side KV HtoD", "#06b6d4"),
-        ("resume start", "#111827"),
-    ]
-    lx = left
-    for label, color in legend:
-        if label == "resume start":
-            svg.append(f'<line x1="{lx}" y1="{legend_y - 12}" x2="{lx}" y2="{legend_y + 4}" stroke="{color}" stroke-width="4"/>')
-        else:
-            svg.append(f'<rect x="{lx}" y="{legend_y - 12}" width="14" height="14" fill="{color}"/>')
-        svg.append(f'<text x="{lx + 20}" y="{legend_y}">{fmt(label)}</text>')
-        lx += 220
+    append_timeline_legend(svg, legend, left, legend_y, 220, {"resume start"})
     svg.append("</svg>")
     return "\n".join(svg)
 
