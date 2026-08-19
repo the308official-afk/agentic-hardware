@@ -906,13 +906,31 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
+    mode = str(row.get("mode") or "")
+    ranks = {
+        "no_prefetch": 0,
+        "direct_prefetch": 1,
+        "request_warm": 2,
+        "oracle_prefetch": 3,
+        "oracle_direct_load": 3,
+    }
+    return ranks.get(mode, 9), mode
+
+
 def selected_timeline_gaps(gaps: list[dict[str, Any]], max_rows: int) -> list[dict[str, Any]]:
-    visible = [row for row in gaps if has_visible_kv_movement(row)]
-    if len(visible) >= max_rows:
-        return visible[:max_rows]
-    visible_ids = {id(row) for row in visible}
-    fallback = [row for row in gaps if id(row) not in visible_ids]
-    return (visible + fallback)[:max_rows]
+    by_mode: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in gaps:
+        by_mode[timeline_mode_rank(row)].append(row)
+
+    ordered: list[dict[str, Any]] = []
+    for mode_key in sorted(by_mode):
+        mode_rows = by_mode[mode_key]
+        visible = [row for row in mode_rows if has_visible_kv_movement(row)]
+        visible_ids = {id(row) for row in visible}
+        fallback = [row for row in mode_rows if id(row) not in visible_ids]
+        ordered.extend(visible + fallback)
+    return ordered[:max_rows]
 
 
 def has_visible_kv_movement(row: dict[str, Any]) -> bool:
