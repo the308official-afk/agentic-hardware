@@ -293,6 +293,80 @@
       font-size: 22px;
       line-height: 1.22;
     }
+    .impact-layout {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 28px;
+      height: 410px;
+      align-items: stretch;
+    }
+    .impact-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .impact-card {
+      border: 1px solid #dbe3ee;
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 18px 20px;
+    }
+    .impact-card.green { background: #f0fdf4; border-color: #bbf7d0; }
+    .impact-card.cyan { background: #ecfeff; border-color: #a5f3fc; }
+    .impact-card.gold { background: #fffbeb; border-color: #fde68a; }
+    .impact-card.purple { background: #faf5ff; border-color: #e9d5ff; }
+    .impact-value {
+      color: var(--ink);
+      font-size: 34px;
+      font-weight: 850;
+      line-height: 1;
+    }
+    .impact-label {
+      margin-top: 10px;
+      color: var(--body);
+      font-size: 17px;
+      line-height: 1.22;
+    }
+    .impact-side {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .impact-side h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 24px;
+      line-height: 1.1;
+    }
+    .impact-side p {
+      margin: 0;
+      color: var(--body);
+      font-size: 18px;
+      line-height: 1.28;
+    }
+    .path-row {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 10px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+    .path-row strong {
+      color: var(--ink);
+      font-size: 16px;
+    }
+    .path-row span {
+      color: var(--body);
+      font-size: 15px;
+      line-height: 1.2;
+    }
     .caption {
       margin: 14px 30px 0;
       color: var(--body);
@@ -339,7 +413,7 @@
       <strong>Agent-aware KV Movement</strong>
       <span>HTML slide deck. Refresh after rebuilding from latest report charts.</span>
     </div>
-    <nav><a href="#slide-1">1</a><a href="#slide-2">2</a><a href="#slide-3">3</a><a href="#slide-4">4</a><a href="#slide-5">5</a><a href="#slide-6">6</a><a href="#slide-7">7</a><a href="#slide-8">8</a><a href="#slide-9">9</a><a href="#slide-10">10</a></nav>
+    <nav><a href="#slide-1">1</a><a href="#slide-2">2</a><a href="#slide-3">3</a><a href="#slide-4">4</a><a href="#slide-5">5</a><a href="#slide-6">6</a><a href="#slide-7">7</a><a href="#slide-8">8</a><a href="#slide-9">9</a><a href="#slide-10">10</a><a href="#slide-11">11</a></nav>
   </div>
   <main>
     <section class="slide" id="slide-1">
@@ -494,6 +568,42 @@
   </section>
 <section class="slide" id="slide-10">
     <div class="slide-eyebrow">Agent-aware KV movement</div>
+    <h1>Projected performance impact</h1>
+    <p class="subtitle">The benefit is workload-dependent, but coding agents are exactly the workload where it should show up: many sessions pause, offload KV, then resume shortly after tool calls.</p>
+    <div class="slide-body">
+      <div class="impact-layout">
+        <div class="impact-grid">
+          <div class="impact-card green">
+            <div class="impact-value">15-30%</div>
+            <div class="impact-label">conservative post-tool TTFT reduction when KV movement can be prepared earlier</div>
+          </div>
+          <div class="impact-card cyan">
+            <div class="impact-value">40-70%</div>
+            <div class="impact-label">strong-case TTFT reduction under KV pressure and short tool-wait deadlines</div>
+          </div>
+          <div class="impact-card purple">
+            <div class="impact-value">20-40%</div>
+            <div class="impact-label">tail-latency reduction by avoiding late replay-side KV movement</div>
+          </div>
+          <div class="impact-card gold">
+            <div class="impact-value">10-30%</div>
+            <div class="impact-label">more concurrent agent sessions per GPU at the same latency target</div>
+          </div>
+        </div>
+        <div class="impact-side">
+          <h2>Why these numbers are plausible</h2>
+          <p>Our controlled run saw replay TTFT around <strong>1.4 s</strong>, with visible replay-side KV H2D averaging about <strong>315 ms</strong> and sometimes exceeding <strong>600 ms</strong>.</p>
+          <div class="path-row"><strong>Today</strong><span>replay arrives -> waits in normal serving path -> KV H2D starts late -> TTFT stalls</span></div>
+          <div class="path-row"><strong>With hints</strong><span>tool wait begins -> urgent KV hint -> prioritized movement -> replay starts with less stall</span></div>
+          <p>The target is not faster raw compute. The target is lower resume stalls and better tail latency under KV pressure.</p>
+        </div>
+      </div>
+    </div>
+    <div class="source">Source: current SGLang direct-KV testbed measurements plus hardware extrapolation</div>
+    <div class="slide-number">10</div>
+  </section>
+<section class="slide" id="slide-11">
+    <div class="slide-eyebrow">Agent-aware KV movement</div>
     <h1>Hardware support can make hints enforceable</h1>
     <p class="subtitle">The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.</p>
     <div class="slide-body">
@@ -504,7 +614,7 @@
         </div>
       </div>
     
-    <div class="slide-number">10</div>
+    <div class="slide-number">11</div>
   </section>
   </main>
   <script>
