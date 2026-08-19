@@ -6,11 +6,24 @@ import csv
 import html
 import json
 import shutil
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
 
+SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from agentic_kv.block_ledger import (
+    block_ledger_rows,
+    build_block_ledger,
+    gap_lifecycle_summary_rows,
+    ledger_summary_rows,
+    normalize_sglang_trace_events,
+    write_ledger_artifacts,
+)
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
     build_replay_execution_timeline_svg,
@@ -1009,6 +1022,30 @@ def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return output
 
 
+def kv_block_gap_table_rows(gaps: list[dict[str, Any]], kv_block_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return gap_lifecycle_summary_rows(gaps, kv_block_rows)
+
+
+def kv_block_detail_rows(kv_block_rows: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
+    selected = kv_block_rows[:limit] if limit is not None else kv_block_rows
+    columns = [
+        "block_id",
+        "session_id",
+        "token_start",
+        "token_end",
+        "token_count",
+        "node_id",
+        "current_state",
+        "write_host_events",
+        "evict_gpu_events",
+        "evict_host_events",
+        "load_gpu_events",
+        "lost_before_replay",
+        "confidence",
+    ]
+    return [{column: row.get(column, "") for column in columns} for row in selected]
+
+
 def kv_lifecycle_legend_rows() -> list[dict[str, str]]:
     return [
         {
@@ -1563,10 +1600,12 @@ def render_html(
     max_timeline_gaps: int,
     live_run: dict[str, Any] | None = None,
     request_coverage: list[dict[str, Any]] | None = None,
+    kv_block_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
     ledger = build_replay_path_ledger(gaps)
     request_coverage = request_coverage or []
+    kv_block_rows = kv_block_rows or []
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     gap_columns = [
         "session_id",
@@ -1619,6 +1658,7 @@ def render_html(
         ("replay-attribution", "Replay Path Attribution"),
         ("timelines", "Mixed Timeline Sample"),
         ("kv-lifecycle", "KV Lifecycle Evidence"),
+        ("kv-block-ledger", "KV Block Ledger"),
         ("replay-execution-timeline", "Replay Execution Timeline"),
         ("observations", "Key Observations"),
         ("performance", "Mode Tables"),
@@ -1735,6 +1775,18 @@ def render_html(
     {table_html(kv_lifecycle_evidence_rows(interesting))}
   </details>
 
+  <details id="kv-block-ledger" class="section-card theme-directkv" open>
+    <summary><h2>KV Block Ledger</h2></summary>
+    <p>This section tracks logical KV blocks across SGLang cache events. It is more detailed than the timeline: each block has a stable ledger row showing whether it was written to host, evicted from GPU, evicted from host, or loaded back.</p>
+    <p class="note">This is logical block tracking, not a physical GPU page snooper. The ledger uses SGLang node IDs when available and nearby token-range matching when node IDs are missing.</p>
+    <h3>Block Ledger Summary</h3>
+    {table_html(ledger_summary_rows(kv_block_rows))}
+    <h3>Per-Gap Block Summary</h3>
+    {table_html(kv_block_gap_table_rows(interesting, kv_block_rows))}
+    <h3>Per-Block Ledger Rows</h3>
+    {table_html(kv_block_detail_rows(kv_block_rows, limit=500))}
+  </details>
+
   <details id="replay-execution-timeline" class="section-card theme-clean">
     <summary><h2>Replay Execution Timeline</h2></summary>
     <p class="note">This is the replay view. Each row is aligned at the actual resume request start, so the orange TTFT bar is drawn at its real visual length. Use this view to judge how long the replay waited before first token.</p>
@@ -1816,18 +1868,25 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     ledger = build_replay_path_ledger(all_gaps)
+    normalized_kv_events = normalize_sglang_trace_events(all_trace_rows)
+    kv_ledger = build_block_ledger(normalized_kv_events)
+    kv_block_rows = block_ledger_rows(kv_ledger)
     request_coverage = request_id_coverage_rows(all_trace_rows)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
+    write_ledger_artifacts(args.out_dir, kv_block_rows, all_gaps)
     write_json(
         args.out_dir / "controlled_replay_report.json",
         {
             "gaps": all_gaps,
             "summary": mode_summary_rows(all_gaps),
             "replay_path_ledger": ledger,
+            "kv_block_ledger": kv_block_rows,
+            "kv_block_lifecycle_summary": ledger_summary_rows(kv_block_rows),
+            "kv_block_gap_summary": gap_lifecycle_summary_rows(all_gaps, kv_block_rows),
             "bottleneck_summary": bottleneck_summary_rows(ledger),
             "confidence_summary": confidence_summary_rows(ledger),
             "counterfactual_summary": counterfactual_summary_rows(ledger),
@@ -1845,6 +1904,7 @@ def main() -> None:
         args.max_timeline_gaps,
         live_run=live_run,
         request_coverage=request_coverage,
+        kv_block_rows=kv_block_rows,
     )
     report_path = args.out_dir / "controlled_replay_report.html"
     report_path.write_text(html_text, encoding="utf-8")

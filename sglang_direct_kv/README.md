@@ -48,6 +48,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 28: Hardened Master Report Workflow | Ready | [Milestone 28](#milestone-28-hardened-master-report-workflow) |
 | Milestone 29: Replay Path Instrumentation Ledger | Ready | [Milestone 29](#milestone-29-replay-path-instrumentation-ledger) |
 | Milestone 29B: Forced Eviction Sanity Probe | Ready | [Milestone 29B](#milestone-29b-forced-eviction-sanity-probe) |
+| Milestone 30: Stable KV Block Ledger | Ready | [Milestone 30](#milestone-30-stable-kv-block-ledger) |
 
 ## What We Are Testing
 
@@ -128,9 +129,10 @@ But useful target host KV was evicted before replay.
 So replay could not load it back and recomputed instead.
 ```
 
-The master report now includes a `KV Lifecycle Evidence` section under the
-timeline. For each timeline row, it shows host writes, GPU evictions, host
-evictions, replay H2D loads, replay prefix match, and estimated replay prefill.
+The master report now includes `KV Lifecycle Evidence` and `KV Block Ledger`
+sections under the timeline. For each timeline row, it shows host writes, GPU
+evictions, host evictions, replay H2D loads, replay prefix match, estimated
+replay prefill, and logical KV blocks lost before replay.
 
 Open this report first:
 
@@ -5681,11 +5683,124 @@ The timeline charts and global prefetch-margin dot charts remain the key
 manager-facing evidence.
 ```
 
+### Milestone 30: Stable KV Block Ledger
+
+Status: ready.
+
+Full proposal:
+
+```text
+KV_BLOCK_LEDGER.md
+```
+
+Why this milestone is needed:
+
+```text
+The lifecycle table can tell us that a session wrote KV to host, evicted KV from
+GPU, evicted KV from host, and recomputed later.
+
+The stronger version is:
+  which logical KV blocks did this happen to?
+  how many blocks were lost?
+  how many tokens did those blocks represent?
+  did any blocks load back?
+```
+
+What it does:
+
+```text
+Adds a modular Stable KV Block Ledger:
+
+src/agentic_kv/block_ledger/events.py
+  stable normalized KV event schema
+
+src/agentic_kv/block_ledger/normalizer.py
+  SGLang-version-specific trace event -> stable KV event
+
+src/agentic_kv/block_ledger/block_id.py
+  stable logical block identity and nearby-range matching
+
+src/agentic_kv/block_ledger/ledger.py
+  KV block lifecycle state machine
+
+src/agentic_kv/block_ledger/report.py
+  CSV/JSON/report summary helpers
+```
+
+Modularity rule:
+
+```text
+Only normalizer.py should be SGLang-version-sensitive.
+The rest of the ledger consumes stable events, so future SGLang versions should
+mostly require normalizer updates instead of report rewrites.
+```
+
+New output files:
+
+```text
+artifacts/results/reports/<report_label>/kv_block_ledger.csv
+artifacts/results/reports/<report_label>/kv_block_ledger.json
+artifacts/results/reports/<report_label>/kv_block_lifecycle_summary.csv
+artifacts/results/reports/<report_label>/kv_block_gap_summary.csv
+```
+
+New master report section:
+
+```text
+KV Block Ledger
+  Block Ledger Summary
+  Per-Gap Block Summary
+  Per-Block Ledger Rows
+```
+
+Validate the ledger without running SGLang:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/validate_kv_block_ledger.py
+```
+
+Expected output:
+
+```text
+KV block ledger validation passed.
+```
+
+Rebuild the latest report with block ledger outputs:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/build_milestone27_controlled_replay_report.py \
+  --root artifacts/results/runs/controlled/quick_hicache_lifecycle_probe \
+  --out-dir artifacts/results/reports/quick_hicache_lifecycle_probe \
+  --latest-root artifacts/results \
+  --max-timeline-gaps 16
+```
+
+Important interpretation:
+
+```text
+This is logical block tracking, not a physical GPU page snooper.
+
+The ledger uses:
+  node_id when SGLang exposes it
+  token range when node_id is missing
+  nearby-range matching when SGLang reports shifted ranges for the same block
+
+That gives us a strong per-block lifecycle ledger while keeping the add-on
+infrastructure reusable across future SGLang versions.
+```
+
 ## Directory Layout
 
 ```text
 sglang_direct_kv/
   README.md
+  KV_BLOCK_LEDGER.md
   pyproject.toml
   requirements.txt
 
@@ -5741,6 +5856,7 @@ sglang_direct_kv/
     summarize_milestone12_paired_evidence.py
     plot_design_space.py
     build_session_cache_map.py
+    validate_kv_block_ledger.py
     extract_hicache_call_report.py
     map_session_host_indices.py
     summarize_kv_trace.py
@@ -5760,6 +5876,12 @@ sglang_direct_kv/
       sglang_client.py
       sglang_trace_patch.py
       torch_cuda_profiler.py
+      block_ledger/
+        events.py
+        normalizer.py
+        block_id.py
+        ledger.py
+        report.py
 ```
 
 ## Recommended EC2 Machine
