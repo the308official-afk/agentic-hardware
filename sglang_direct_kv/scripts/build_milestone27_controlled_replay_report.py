@@ -1454,6 +1454,46 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
     ) + "</div>"
 
 
+def timeline_model_table_html() -> str:
+    rows = [
+        ("Initial model turn", "#2563eb", "First model request before tool wait"),
+        ("Tool wait", "#d1d5db", "Agent/tool pause where prefetch could happen"),
+        ("Direct prefetch attempt", "#a855f7", "Our hint/direct-load path tried to prepare KV"),
+        ("Hint-side KV HtoD", "#16a34a", "Prefetch path actually loaded KV from host to GPU"),
+        ("Replay-side KV HtoD", "#06b6d4", "Replay itself loaded KV from host to GPU"),
+        ("Replay recompute", "#db2777", "Replay rebuilt missing old KV/prefix tokens"),
+        ("Normal replay prefill", "#eab308", "Small remaining prefill/new-token processing before first token"),
+        ("Replay decode", "#ef4444", "Generation after first token"),
+        ("Replay due", "#111827", "Deadline when KV should ideally already be ready"),
+    ]
+    out = [
+        '<div class="table-wrap"><table>',
+        "<thead><tr><th>Timeline Element</th><th>Color Strip</th><th>Meaning</th></tr></thead><tbody>",
+    ]
+    for element, color, meaning in rows:
+        if element == "Replay due":
+            swatch = (
+                '<span style="display:inline-block;width:76px;height:18px;background:#f8fafc;'
+                'border:1px solid #cbd5e1;vertical-align:middle;position:relative;">'
+                f'<span style="display:block;width:5px;height:18px;background:{color};margin:0 auto;"></span>'
+                "</span>"
+            )
+        else:
+            swatch = (
+                f'<span style="display:inline-block;width:76px;height:18px;background:{color};'
+                'border:1px solid rgba(15,23,42,0.22);border-radius:3px;vertical-align:middle;"></span>'
+            )
+        out.append(
+            "<tr>"
+            f"<td>{html.escape(element)}</td>"
+            f"<td>{swatch}</td>"
+            f"<td>{html.escape(meaning)}</td>"
+            "</tr>"
+        )
+    out.append("</tbody></table></div>")
+    return "\n".join(out)
+
+
 def code_block(text: str) -> str:
     return f"<pre><code>{html.escape(text.strip())}</code></pre>"
 
@@ -1608,6 +1648,7 @@ def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps
     {global_prefetch_margin_html(gaps)}
     <h3>Live Direct-Prefetch Timeline</h3>
     <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence; cyan is replay-side HtoD evidence from the real resume request.</p>
+    {timeline_model_table_html()}
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
     <h3>Live Row Map</h3>
     {table_html(timeline_mapping_rows(interesting))}
@@ -1778,6 +1819,8 @@ def render_html(
   <details id="timelines" class="section-card theme-clean">
     <summary><h2>Mixed Timeline Sample / Deadline Timeline</h2></summary>
     <p class="note">This is the deadline view. The black line is when replay was due. This view is best for seeing whether the purple prefetch attempt finished before the deadline.</p>
+    <h3>Timeline Model</h3>
+    {timeline_model_table_html()}
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
     <h3>KV Outcome For Timeline Rows</h3>
     <p>This table uses the same row names as the timeline. It explains whether replay reused KV, loaded KV from host, recomputed missing prefix tokens, or had a late/wasted prefetch.</p>
@@ -1791,9 +1834,9 @@ def render_html(
     <summary><h2>Readable Phase Timeline</h2></summary>
     <p class="note">This view removes the global time axis. Each phase gets a fixed readable column, and each bar prints the true measured duration. Use it to explain what happened in each tool gap without squinting at compressed far-right bars.</p>
     <p class="note">Replay work is split into separate rows: cyan means replay-side KV HtoD, magenta means recompute/rebuild, gold means remaining before-first-token work, and red means decode after first token.</p>
+    <h3>Timeline Model</h3>
+    {timeline_model_table_html()}
     {build_readable_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
-    <h3>Readable Phase Row Map</h3>
-    {table_html(timeline_kv_outcome_rows(interesting))}
   </details>
 
   <details id="kv-lifecycle" class="section-card theme-directkv">
@@ -1828,6 +1871,8 @@ def render_html(
   <details id="replay-execution-timeline" class="section-card theme-clean">
     <summary><h2>Replay Execution Timeline</h2></summary>
     <p class="note">This is the replay view. Each row is aligned at the actual resume request start. Cyan, magenta, and gold show the before-first-token work; red shows decode after first token.</p>
+    <h3>Timeline Model</h3>
+    {timeline_model_table_html()}
     {build_replay_execution_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
     <h3>Replay Timeline Row Map</h3>
     {table_html(timeline_mapping_rows(interesting))}
