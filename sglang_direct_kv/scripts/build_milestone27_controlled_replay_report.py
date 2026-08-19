@@ -284,25 +284,36 @@ def _agent_sessions_for_event(row: dict[str, Any]) -> list[str]:
 def telemetry_events_by_session(
     trace_rows: list[dict[str, Any]],
     base_ts: float,
-    event_name: str,
+    event_name: str | set[str],
 ) -> dict[str, list[dict[str, Any]]]:
+    event_names = {event_name} if isinstance(event_name, str) else event_name
     by_session: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in trace_rows:
-        if row.get("event") != event_name:
+        if row.get("event") not in event_names:
             continue
         for session_id in _agent_sessions_for_event(row):
             if "::live_prefetch::" in session_id:
                 continue
+            source_event = str(row.get("source_event") or "")
+            phase = str(row.get("event") or "").rsplit(".", 1)[-1]
             by_session[session_id].append(
                 {
                     "event": row.get("event", ""),
-                    "source_event": row.get("source_event", ""),
+                    "source_event": source_event,
+                    "phase": phase,
+                    "call_id": row.get("call_id", ""),
                     "category": row.get("category", ""),
                     "method": row.get("method", ""),
                     "duration_ms": row.get("duration_ms", ""),
                     "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
                     "request_count": row.get("request_count", ""),
                     "request_id": row.get("request_id", ""),
+                    "scheduler_waiting_queue_len": row.get("scheduler_waiting_queue_len", ""),
+                    "scheduler_running_queue_len": row.get("scheduler_running_queue_len", ""),
+                    "scheduler_running_batch_request_count": row.get("scheduler_running_batch_request_count", ""),
+                    "scheduler_running_batch_extend_num_tokens": row.get("scheduler_running_batch_extend_num_tokens", ""),
+                    "scheduler_cur_batch_request_count": row.get("scheduler_cur_batch_request_count", ""),
+                    "scheduler_cur_batch_extend_num_tokens": row.get("scheduler_cur_batch_extend_num_tokens", ""),
                     "forward_mode": row.get("forward_mode", ""),
                     "extend_num_tokens": row.get("extend_num_tokens", ""),
                     "seq_lens_sum": row.get("seq_lens_sum", ""),
@@ -348,9 +359,46 @@ def summarize_timed_events(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def first_category_window(events: list[dict[str, Any]], categories: set[str]) -> dict[str, Any]:
-    candidates: list[dict[str, Any]] = []
+    grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for event in events:
         if str(event.get("category") or "") not in categories:
+            continue
+        call_id = str(event.get("call_id") or "")
+        phase = str(event.get("phase") or "")
+        if call_id and phase in {"start", "end"}:
+            grouped[call_id][phase] = event
+
+    candidates: list[dict[str, Any]] = []
+    for pair in grouped.values():
+        start_event = pair.get("start")
+        end_event = pair.get("end")
+        if not start_event and not end_event:
+            continue
+        start = as_float((start_event or {}).get("start_or_end_ms"))
+        end = as_float((end_event or {}).get("start_or_end_ms"))
+        duration = as_float((end_event or {}).get("duration_ms"))
+        if start is None and end is not None and duration is not None:
+            start = end - duration
+        if end is None and start is not None and duration is not None:
+            end = start + duration
+        if start is None and end is None:
+            continue
+        source = end_event or start_event or {}
+        item = dict(source)
+        item["start_ms"] = round(start if start is not None else end or 0.0, 3)
+        item["end_ms"] = round(end if end is not None else start or 0.0, 3)
+        item["duration_ms"] = duration if duration is not None else (
+            round(item["end_ms"] - item["start_ms"], 3) if start is not None and end is not None else ""
+        )
+        item["timing_source"] = "explicit_start_end"
+        candidates.append(item)
+
+    for event in events:
+        if str(event.get("category") or "") not in categories:
+            continue
+        if str(event.get("phase") or "") == "start":
+            continue
+        if str(event.get("call_id") or "") and str(event.get("call_id") or "") in grouped:
             continue
         end = as_float(event.get("start_or_end_ms"))
         if end is None:
@@ -359,9 +407,10 @@ def first_category_window(events: list[dict[str, Any]], categories: set[str]) ->
         item = dict(event)
         item["start_ms"] = round(end - duration, 3)
         item["end_ms"] = round(end, 3)
+        item["timing_source"] = "end_minus_duration"
         candidates.append(item)
     if not candidates:
-        return {"start_ms": "", "end_ms": "", "category": "", "duration_ms": "", "request_count": "", "request_id": ""}
+        return {"start_ms": "", "end_ms": "", "category": "", "duration_ms": "", "request_count": "", "request_id": "", "timing_source": ""}
     candidates.sort(key=lambda item: (as_float(item.get("start_ms")) or 0.0, as_float(item.get("end_ms")) or 0.0))
     first = candidates[0]
     return {
@@ -371,6 +420,13 @@ def first_category_window(events: list[dict[str, Any]], categories: set[str]) ->
         "duration_ms": first.get("duration_ms", ""),
         "request_count": first.get("request_count", ""),
         "request_id": first.get("request_id", ""),
+        "timing_source": first.get("timing_source", ""),
+        "waiting_queue_len": first.get("scheduler_waiting_queue_len", ""),
+        "running_queue_len": first.get("scheduler_running_queue_len", ""),
+        "running_batch_request_count": first.get("scheduler_running_batch_request_count", ""),
+        "running_batch_extend_num_tokens": first.get("scheduler_running_batch_extend_num_tokens", ""),
+        "cur_batch_request_count": first.get("scheduler_cur_batch_request_count", ""),
+        "cur_batch_extend_num_tokens": first.get("scheduler_cur_batch_extend_num_tokens", ""),
     }
 
 
@@ -397,6 +453,12 @@ def summarize_scheduler_queue_path(events: list[dict[str, Any]], replay_start_ms
         "admit_start_ms": admitted["start_ms"],
         "admit_end_ms": admitted["end_ms"],
         "admit_category": admitted["category"],
+        "admit_timing_source": admitted.get("timing_source", ""),
+        "queue_waiting_len": queued.get("waiting_queue_len", ""),
+        "queue_running_len": queued.get("running_queue_len", ""),
+        "admit_running_batch_requests": admitted.get("running_batch_request_count", "") or admitted.get("cur_batch_request_count", ""),
+        "admit_running_batch_extend_tokens": admitted.get("running_batch_extend_num_tokens", "")
+        or admitted.get("cur_batch_extend_num_tokens", ""),
         "request_start_lateness_ms": round(request_start - due, 3) if request_start is not None and due is not None else "",
         "submit_to_scheduler_queue_ms": submit_to_queue,
         "scheduler_queue_to_admit_ms": queue_to_admit,
@@ -782,7 +844,11 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
     movement_by_session = movement_events_by_session(trace_rows, telemetry_rows, base_ts)
     cache_by_session = cache_events_by_session(trace_rows, base_ts)
     lifecycle_by_session = lifecycle_events_by_session(trace_rows, base_ts)
-    scheduler_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.scheduler.end")
+    scheduler_by_session = telemetry_events_by_session(
+        trace_rows,
+        base_ts,
+        {"kv_telemetry.scheduler.start", "kv_telemetry.scheduler.end"},
+    )
     prefill_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.prefill.end")
     sessions = sorted(session_meta)
     gaps: list[dict[str, Any]] = []
@@ -925,6 +991,11 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_scheduler_admit_start_ms": replay_queue_summary["admit_start_ms"],
             "replay_scheduler_admit_end_ms": replay_queue_summary["admit_end_ms"],
             "replay_scheduler_admit_category": replay_queue_summary["admit_category"],
+            "replay_scheduler_admit_timing_source": replay_queue_summary["admit_timing_source"],
+            "replay_scheduler_queue_waiting_len": replay_queue_summary["queue_waiting_len"],
+            "replay_scheduler_queue_running_len": replay_queue_summary["queue_running_len"],
+            "replay_scheduler_admit_running_batch_requests": replay_queue_summary["admit_running_batch_requests"],
+            "replay_scheduler_admit_running_batch_extend_tokens": replay_queue_summary["admit_running_batch_extend_tokens"],
             "replay_request_start_lateness_ms": replay_queue_summary["request_start_lateness_ms"],
             "replay_submit_to_scheduler_queue_ms": replay_queue_summary["submit_to_scheduler_queue_ms"],
             "replay_scheduler_queue_to_admit_ms": replay_queue_summary["scheduler_queue_to_admit_ms"],
@@ -1771,6 +1842,10 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
                 "replay_due_to_sglang_receive_ms": relative_to_due(row.get("replay_sglang_receive_start_ms"), due),
                 "replay_due_to_scheduler_queue_ms": relative_to_due(row.get("replay_scheduler_queue_enter_start_ms"), due),
                 "replay_due_to_scheduler_admit_ms": relative_to_due(row.get("replay_scheduler_admit_start_ms"), due),
+                "scheduler_queue_waiting_len": row.get("replay_scheduler_queue_waiting_len", ""),
+                "scheduler_queue_running_len": row.get("replay_scheduler_queue_running_len", ""),
+                "scheduler_admit_running_batch_requests": row.get("replay_scheduler_admit_running_batch_requests", ""),
+                "scheduler_admit_running_batch_extend_tokens": row.get("replay_scheduler_admit_running_batch_extend_tokens", ""),
                 "replay_due_to_h2d_start_ms": start_delay,
                 "scheduler_queue_to_admit_ms": row.get("replay_scheduler_queue_to_admit_ms", ""),
                 "scheduler_admit_to_h2d_ms": row.get("replay_scheduler_admit_to_h2d_ms", ""),
@@ -1842,6 +1917,10 @@ def replay_queue_timing_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "replay_due_to_sglang_receive_ms": relative_to_due(row.get("replay_sglang_receive_start_ms"), due),
                 "replay_due_to_scheduler_queue_ms": relative_to_due(row.get("replay_scheduler_queue_enter_start_ms"), due),
                 "replay_due_to_scheduler_admit_ms": relative_to_due(row.get("replay_scheduler_admit_start_ms"), due),
+                "scheduler_queue_waiting_len": row.get("replay_scheduler_queue_waiting_len", ""),
+                "scheduler_queue_running_len": row.get("replay_scheduler_queue_running_len", ""),
+                "scheduler_admit_running_batch_requests": row.get("replay_scheduler_admit_running_batch_requests", ""),
+                "scheduler_admit_running_batch_extend_tokens": row.get("replay_scheduler_admit_running_batch_extend_tokens", ""),
                 "scheduler_queue_to_admit_ms": row.get("replay_scheduler_queue_to_admit_ms", ""),
                 "scheduler_admit_to_h2d_ms": row.get("replay_scheduler_admit_to_h2d_ms", ""),
                 "replay_due_to_h2d_start_ms": h2d_start_delay,
@@ -2256,7 +2335,7 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
     <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot(queue_rows)}</div>
     {h2d_plot_html}
     <h3>Timing Split Behind The Plot</h3>
-    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_client_submit_ms", "replay_due_to_request_start_ms", "client_submit_to_request_start_ms", "replay_due_to_sglang_receive_ms", "replay_due_to_scheduler_queue_ms", "replay_due_to_scheduler_admit_ms", "scheduler_queue_to_admit_ms", "replay_due_to_h2d_start_ms", "scheduler_admit_to_h2d_ms", "request_start_to_h2d_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "request_start_to_h2d_end_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
+    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_client_submit_ms", "replay_due_to_request_start_ms", "client_submit_to_request_start_ms", "replay_due_to_sglang_receive_ms", "replay_due_to_scheduler_queue_ms", "replay_due_to_scheduler_admit_ms", "scheduler_queue_waiting_len", "scheduler_queue_running_len", "scheduler_admit_running_batch_requests", "scheduler_admit_running_batch_extend_tokens", "scheduler_queue_to_admit_ms", "replay_due_to_h2d_start_ms", "scheduler_admit_to_h2d_ms", "request_start_to_h2d_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "request_start_to_h2d_end_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
     """
 
 

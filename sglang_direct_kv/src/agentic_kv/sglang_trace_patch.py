@@ -462,6 +462,68 @@ def _batch_context(batch: Any) -> dict[str, Any]:
     return {key: value for key, value in out.items() if value not in (None, "", [], {})}
 
 
+def _safe_queue_len(obj: Any, attr: str) -> int | str:
+    try:
+        value = getattr(obj, attr)
+    except Exception:
+        return ""
+    try:
+        return len(value)
+    except Exception:
+        return ""
+
+
+def _scheduler_state_summary(obj: Any) -> dict[str, Any]:
+    """Collect scheduler queue state without depending on one exact SGLang release."""
+
+    out: dict[str, Any] = {}
+    for attr in (
+        "waiting_queue",
+        "running_queue",
+        "new_token_ratio",
+        "max_running_requests",
+        "max_total_num_tokens",
+        "max_prefill_tokens",
+        "chunked_prefill_size",
+    ):
+        if not hasattr(obj, attr):
+            continue
+        try:
+            value = getattr(obj, attr)
+        except Exception:
+            continue
+        if attr.endswith("_queue"):
+            out[f"{attr}_len"] = _safe_queue_len(obj, attr)
+        else:
+            out[attr] = _safe_summary(value)
+
+    for attr in ("running_batch", "cur_batch", "last_batch", "grammar_queue"):
+        if not hasattr(obj, attr):
+            continue
+        try:
+            value = getattr(obj, attr)
+        except Exception:
+            continue
+        if attr == "grammar_queue":
+            out["grammar_queue_len"] = _safe_queue_len(obj, attr)
+            continue
+        batch = _batch_context(value)
+        if batch:
+            out[attr] = batch
+
+    for attr in ("chunked_req",):
+        if not hasattr(obj, attr):
+            continue
+        try:
+            value = getattr(obj, attr)
+        except Exception:
+            continue
+        if value is not None:
+            out[attr] = _request_like_context(value)
+
+    return {key: value for key, value in out.items() if value not in (None, "", [], {})}
+
+
 def _residency_snapshot_for_context(context: dict[str, Any]) -> dict[str, Any]:
     node_ids: list[str] = []
     node_id = context.get("node_id")
@@ -690,11 +752,17 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
     }:
         context["direction"] = "scheduler_request"
         context["request"] = _request_like_context(_arg_value(args, kwargs, 0, "req") or _arg_value(args, kwargs, 0, "recv_req"))
+        scheduler_state = _scheduler_state_summary(self_obj)
+        if scheduler_state:
+            context["scheduler_state"] = scheduler_state
     elif method_name in {
         "process_input_requests",
     }:
         context["direction"] = "scheduler_input"
         context["requests"] = _requests_from_value(_arg_value(args, kwargs, 0, "recv_reqs"))
+        scheduler_state = _scheduler_state_summary(self_obj)
+        if scheduler_state:
+            context["scheduler_state"] = scheduler_state
     elif method_name in {
         "get_new_batch_prefill",
         "get_next_batch_to_run",
@@ -710,6 +778,9 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         requests = context["batch"].get("requests") if isinstance(context.get("batch"), dict) else None
         if isinstance(requests, list):
             context["requests"] = requests
+        scheduler_state = _scheduler_state_summary(self_obj)
+        if scheduler_state:
+            context["scheduler_state"] = scheduler_state
     elif method_name in {
         "forward_batch_generation",
         "forward_batch_split_prefill",
@@ -1106,6 +1177,7 @@ def _first_request_id(context: dict[str, Any]) -> Any:
 
 def _scheduler_telemetry_event(
     *,
+    phase: str,
     call_id: str,
     event_name: str,
     method_name: str,
@@ -1130,9 +1202,9 @@ def _scheduler_telemetry_event(
     if category is None:
         return None
     event: dict[str, Any] = {
-        "event": "kv_telemetry.scheduler.end",
+        "event": f"kv_telemetry.scheduler.{phase}",
         "call_id": call_id,
-        "source_event": f"{event_name}.end",
+        "source_event": f"{event_name}.{phase}",
         "class": class_name,
         "method": method_name,
         "category": category,
@@ -1146,6 +1218,28 @@ def _scheduler_telemetry_event(
     snapshot = context.get("residency_snapshot")
     if isinstance(snapshot, dict):
         event.update({f"residency_{key}": value for key, value in snapshot.items()})
+    state = context.get("scheduler_state")
+    if isinstance(state, dict):
+        for key in (
+            "waiting_queue_len",
+            "running_queue_len",
+            "grammar_queue_len",
+            "new_token_ratio",
+            "max_running_requests",
+            "max_total_num_tokens",
+            "max_prefill_tokens",
+            "chunked_prefill_size",
+        ):
+            if state.get(key) not in (None, "", [], {}):
+                event[f"scheduler_{key}"] = state[key]
+        for key in ("running_batch", "cur_batch", "last_batch"):
+            batch = state.get(key)
+            if not isinstance(batch, dict):
+                continue
+            prefix = f"scheduler_{key}"
+            for batch_key in ("request_count", "forward_mode", "extend_num_tokens", "seq_lens_sum", "bs", "batch_size"):
+                if batch.get(batch_key) not in (None, "", [], {}):
+                    event[f"{prefix}_{batch_key}"] = batch[batch_key]
     if duration_ms is not None:
         event["duration_ms"] = duration_ms
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}
@@ -1270,6 +1364,16 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                 context=start_kv_context,
             )
         )
+        scheduler_start_event = _scheduler_telemetry_event(
+            phase="start",
+            call_id=call_id,
+            event_name=event_name,
+            method_name=method_name,
+            class_name=cls.__name__,
+            context=start_kv_context,
+        )
+        if scheduler_start_event:
+            _write_event(scheduler_start_event)
         if _should_start_torch_profiler(event_name, start_kv_context):
             maybe_start_torch_profiler(nvtx_name)
         try:
@@ -1344,6 +1448,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             if cache_event:
                 _write_event(cache_event)
             scheduler_event = _scheduler_telemetry_event(
+                phase="end",
                 call_id=call_id,
                 event_name=event_name,
                 method_name=method_name,
