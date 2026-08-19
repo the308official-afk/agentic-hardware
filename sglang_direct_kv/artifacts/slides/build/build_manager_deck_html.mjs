@@ -99,28 +99,18 @@ async function main() {
     }),
     slide({
       number: 3,
-      title: "The prototype runs real prompts through SGLang",
-      subtitle: "Concrete setup behind the charts: traffic source, serving stack, one GPU, model, and host-side KV cache.",
+      title: "Experiment Testbed Setup",
+      subtitle: "Real software-engineering traces flow through DeepAgents into SGLang, where we observe tool gaps, replay requests, and KV behavior.",
       body: `
-        ${flow([
-          { title: "Synthetic request generator", className: "gray" },
-          { title: "SWE-bench / DeepAgents traces", className: "blue" },
-          { title: "SGLang OpenAI server", className: "purple" },
-          { title: "Qwen Coder 7B Instruct", className: "cyan" },
-          { title: "GPU KV cache + HiCache", className: "green" },
-        ])}
-        <div class="config-grid">
-          ${configCell("GPU", "NVIDIA A10G class")}
-          ${configCell("GPU memory", "24 GB GDDR6")}
-          ${configCell("HiCache host KV shelf", "16 GB configured", "warm")}
-          ${configCell("Context length", "32,768 tokens")}
-          ${configCell("Max total tokens", "12,288")}
-          ${configCell("Memory fraction static", "0.72")}
-          ${configCell("Tensor parallel", "TP = 1")}
-          ${configCell("HiCache policy", "direct + write-through", "warm")}
+        <div class="simple-testbed">
+          ${flow([
+            { title: "SWE-bench traces", className: "blue" },
+            { title: "DeepAgents", className: "purple" },
+            { title: "SGLang server", className: "cyan" },
+          ])}
         </div>
       `,
-      source: "Source: latest_master_report.html setup section and run configuration",
+      source: "Source: latest_master_report.html, Experiment Setup And Manager Summary",
     }),
     slide({
       number: 4,
@@ -465,6 +455,31 @@ async function main() {
       color: var(--body);
       font-size: 18px;
       line-height: 1.28;
+    }
+    .simple-testbed .flow {
+      justify-content: center;
+      gap: 28px;
+      margin-top: 96px;
+    }
+    .simple-testbed .flow-node {
+      width: 230px;
+      min-height: 112px;
+    }
+    .simple-testbed .flow-node strong {
+      font-size: 24px;
+    }
+    .signal-box {
+      max-width: 820px;
+      margin: 74px auto 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 22px 28px;
+      color: var(--ink);
+      font-size: 21px;
+      line-height: 1.24;
+      font-weight: 800;
+      text-align: center;
     }
     .config-grid {
       display: grid;

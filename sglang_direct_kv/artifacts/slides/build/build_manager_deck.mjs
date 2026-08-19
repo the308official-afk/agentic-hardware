@@ -198,36 +198,24 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
-    addTitle(slide, "The prototype runs real prompts through SGLang", "Concrete setup behind the charts: traffic source, serving stack, one GPU, model, and host-side KV cache.");
+    addTitle(slide, "Experiment Testbed Setup", "Real software-engineering traces flow through DeepAgents into SGLang, where we observe tool gaps, replay requests, and KV behavior.");
 
-    const y = 184;
+    const y = 236;
     const nodes = [
-      ["Synthetic\nrequest generator", 54, "#f8fafc", C.rule],
-      ["SWE-bench /\nDeepAgents traces", 286, "#eff6ff", "#bfdbfe"],
-      ["SGLang\nOpenAI server", 518, "#f5f3ff", "#c4b5fd"],
-      ["Qwen Coder\n7B Instruct", 750, "#ecfeff", "#67e8f9"],
-      ["GPU KV cache\n+ HiCache", 982, "#f0fdf4", "#86efac"],
+      ["SWE-bench\ntraces", 158, "#eff6ff", "#bfdbfe"],
+      ["DeepAgents", 530, "#f5f3ff", "#c4b5fd"],
+      ["SGLang\nserver", 902, "#ecfeff", "#67e8f9"],
     ];
     nodes.forEach(([text, x, fill, line], idx) => {
-      addFlowNode(slide, text, x, y, 178, 96, fill, line);
-      if (idx < nodes.length - 1) addText(slide, "→", x + 186, y + 30, 40, 36, { size: 30, bold: true, color: C.muted, align: "center" });
+      addFlowNode(slide, text, x, y, 220, 118, fill, line);
+      if (idx < nodes.length - 1) addText(slide, "→", x + 246, y + 38, 78, 44, { size: 38, bold: true, color: C.muted, align: "center" });
     });
 
-    addConfigCell(slide, "GPU", "NVIDIA A10G class", 70, 356, 246, 94, "#f8fafc");
-    addConfigCell(slide, "GPU memory", "24 GB GDDR6", 340, 356, 246, 94, "#f8fafc");
-    addConfigCell(slide, "HiCache host KV shelf", "16 GB configured", 610, 356, 246, 94, "#fff7ed", "#fed7aa");
-    addConfigCell(slide, "Context length", "32,768 tokens", 880, 356, 246, 94, "#f8fafc");
-
-    addConfigCell(slide, "Max total tokens", "12,288", 70, 480, 246, 94, "#f8fafc");
-    addConfigCell(slide, "Memory fraction static", "0.72", 340, 480, 246, 94, "#f8fafc");
-    addConfigCell(slide, "Tensor parallel", "TP = 1", 610, 480, 246, 94, "#f8fafc");
-    addConfigCell(slide, "HiCache policy", "direct + write-through", 880, 480, 246, 94, "#fff7ed", "#fed7aa");
-
-    addSource(slide, "Source: latest_master_report.html setup section and run configuration");
+    addSource(slide, "Source: latest_master_report.html, Experiment Setup And Manager Summary");
     addFooter(slide, 3);
     addNotes(slide, [
-      "This slide summarizes the concrete prototype setup used for the current manager report.",
-      "Hardware/runtime values are from the latest master report setup section and the project run configuration: Qwen2.5-Coder-7B, A10G-class single GPU, 24 GB GDDR6 GPU memory, 16 GB HiCache host KV shelf, context length 32768, max total tokens 12288, mem fraction static 0.72, tensor parallel size 1.",
+      "This slide intentionally keeps the testbed setup simple: real software-engineering traces flow into DeepAgents and then into SGLang.",
+      "Detailed hardware/runtime values are not shown on this slide to keep the experiment components clear.",
     ]);
   }
 

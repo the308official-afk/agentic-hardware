@@ -213,6 +213,31 @@
       font-size: 18px;
       line-height: 1.28;
     }
+    .simple-testbed .flow {
+      justify-content: center;
+      gap: 28px;
+      margin-top: 96px;
+    }
+    .simple-testbed .flow-node {
+      width: 230px;
+      min-height: 112px;
+    }
+    .simple-testbed .flow-node strong {
+      font-size: 24px;
+    }
+    .signal-box {
+      max-width: 820px;
+      margin: 74px auto 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 22px 28px;
+      color: var(--ink);
+      font-size: 21px;
+      line-height: 1.24;
+      font-weight: 800;
+      text-align: center;
+    }
     .config-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -425,22 +450,14 @@
   </section>
 <section class="slide" id="slide-3">
     <div class="slide-eyebrow">Agent-aware KV movement</div>
-    <h1>The prototype runs real prompts through SGLang</h1>
-    <p class="subtitle">Concrete setup behind the charts: traffic source, serving stack, one GPU, model, and host-side KV cache.</p>
+    <h1>Experiment Testbed Setup</h1>
+    <p class="subtitle">Real software-engineering traces flow through DeepAgents into SGLang, where we observe tool gaps, replay requests, and KV behavior.</p>
     <div class="slide-body">
-        <div class="flow"><div class="flow-node gray"><strong>Synthetic request generator</strong></div><div class="arrow">-&gt;</div><div class="flow-node blue"><strong>SWE-bench / DeepAgents traces</strong></div><div class="arrow">-&gt;</div><div class="flow-node purple"><strong>SGLang OpenAI server</strong></div><div class="arrow">-&gt;</div><div class="flow-node cyan"><strong>Qwen Coder 7B Instruct</strong></div><div class="arrow">-&gt;</div><div class="flow-node green"><strong>GPU KV cache + HiCache</strong></div></div>
-        <div class="config-grid">
-          <div class="config-cell "><div>GPU</div><strong>NVIDIA A10G class</strong></div>
-          <div class="config-cell "><div>GPU memory</div><strong>24 GB GDDR6</strong></div>
-          <div class="config-cell warm"><div>HiCache host KV shelf</div><strong>16 GB configured</strong></div>
-          <div class="config-cell "><div>Context length</div><strong>32,768 tokens</strong></div>
-          <div class="config-cell "><div>Max total tokens</div><strong>12,288</strong></div>
-          <div class="config-cell "><div>Memory fraction static</div><strong>0.72</strong></div>
-          <div class="config-cell "><div>Tensor parallel</div><strong>TP = 1</strong></div>
-          <div class="config-cell warm"><div>HiCache policy</div><strong>direct + write-through</strong></div>
+        <div class="simple-testbed">
+          <div class="flow"><div class="flow-node blue"><strong>SWE-bench traces</strong></div><div class="arrow">-&gt;</div><div class="flow-node purple"><strong>DeepAgents</strong></div><div class="arrow">-&gt;</div><div class="flow-node cyan"><strong>SGLang server</strong></div></div>
         </div>
       </div>
-    <div class="source">Source: latest_master_report.html setup section and run configuration</div>
+    <div class="source">Source: latest_master_report.html, Experiment Setup And Manager Summary</div>
     <div class="slide-number">03</div>
   </section>
 <section class="slide" id="slide-4">
