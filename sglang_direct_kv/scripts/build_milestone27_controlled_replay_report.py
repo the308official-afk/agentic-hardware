@@ -347,6 +347,63 @@ def summarize_timed_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def first_category_window(events: list[dict[str, Any]], categories: set[str]) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for event in events:
+        if str(event.get("category") or "") not in categories:
+            continue
+        end = as_float(event.get("start_or_end_ms"))
+        if end is None:
+            continue
+        duration = as_float(event.get("duration_ms")) or 0.0
+        item = dict(event)
+        item["start_ms"] = round(end - duration, 3)
+        item["end_ms"] = round(end, 3)
+        candidates.append(item)
+    if not candidates:
+        return {"start_ms": "", "end_ms": "", "category": "", "duration_ms": "", "request_count": "", "request_id": ""}
+    candidates.sort(key=lambda item: (as_float(item.get("start_ms")) or 0.0, as_float(item.get("end_ms")) or 0.0))
+    first = candidates[0]
+    return {
+        "start_ms": first.get("start_ms", ""),
+        "end_ms": first.get("end_ms", ""),
+        "category": first.get("category", ""),
+        "duration_ms": first.get("duration_ms", ""),
+        "request_count": first.get("request_count", ""),
+        "request_id": first.get("request_id", ""),
+    }
+
+
+def summarize_scheduler_queue_path(events: list[dict[str, Any]], replay_start_ms: Any, replay_due_ms: Any) -> dict[str, Any]:
+    received = first_category_window(events, {"request_received"})
+    queued = first_category_window(events, {"entered_scheduler_queue"})
+    admitted = first_category_window(events, {"selected_for_prefill", "selected_to_run", "run_batch", "run_prebuilt_batch"})
+    request_start = as_float(replay_start_ms)
+    due = as_float(replay_due_ms)
+    submit_to_queue = ""
+    queue_to_admit = ""
+    admit_to_h2d = ""
+    if request_start is not None and as_float(queued.get("start_ms")) is not None:
+        submit_to_queue = round(float(queued["start_ms"]) - request_start, 3)
+    if as_float(queued.get("end_ms")) is not None and as_float(admitted.get("start_ms")) is not None:
+        queue_to_admit = round(float(admitted["start_ms"]) - float(queued["end_ms"]), 3)
+    if as_float(admitted.get("start_ms")) is not None:
+        admit_to_h2d = ""
+    return {
+        "received_start_ms": received["start_ms"],
+        "received_end_ms": received["end_ms"],
+        "queue_enter_start_ms": queued["start_ms"],
+        "queue_enter_end_ms": queued["end_ms"],
+        "admit_start_ms": admitted["start_ms"],
+        "admit_end_ms": admitted["end_ms"],
+        "admit_category": admitted["category"],
+        "request_start_lateness_ms": round(request_start - due, 3) if request_start is not None and due is not None else "",
+        "submit_to_scheduler_queue_ms": submit_to_queue,
+        "scheduler_queue_to_admit_ms": queue_to_admit,
+        "admit_to_h2d_ms": admit_to_h2d,
+    }
+
+
 def max_numeric(events: list[dict[str, Any]], key: str) -> int | None:
     values: list[int] = []
     for event in events:
@@ -635,7 +692,7 @@ def per_gap_verdict(row: dict[str, Any]) -> str:
 def trace_request_windows(trace_rows: list[dict[str, Any]], base_ts: float) -> dict[tuple[str, str], dict[str, Any]]:
     windows: dict[tuple[str, str], dict[str, Any]] = {}
     for row in trace_rows:
-        if row.get("event") not in {"m27.request.start", "m27.request.end"}:
+        if row.get("event") not in {"m27.request.submitted", "m27.request.start", "m27.request.end"}:
             continue
         session = str(row.get("session_id") or "")
         phase = str(row.get("phase") or "")
@@ -651,7 +708,9 @@ def trace_request_windows(trace_rows: list[dict[str, Any]], base_ts: float) -> d
                 "prompt_hash": row.get("prompt_hash", ""),
             },
         )
-        if row.get("event") == "m27.request.start":
+        if row.get("event") == "m27.request.submitted":
+            item["submitted_ms"] = rel_ms(row.get("ts_ns"), base_ts)
+        elif row.get("event") == "m27.request.start":
             item["start_ms"] = rel_ms(row.get("ts_ns"), base_ts)
         else:
             item["end_ms"] = rel_ms(row.get("ts_ns"), base_ts)
@@ -739,6 +798,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         p_end = prefetch_ends.get(session, {})
         if not current or not replay:
             continue
+        due_ms = due.get("ms", "")
         prefetch_start_ms = p_start.get("ms", "")
         prefetch_end_ms = p_end.get("ms", "")
         hint_events = events_in_window(movement_by_session, session, prefetch_start_ms, prefetch_end_ms)
@@ -753,14 +813,19 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         replay_cache_summary = summarize_cache_path(replay_cache_events, replay.get("start_ms"), replay.get("ttft_ms", ""))
         lifecycle_summary = summarize_kv_lifecycle(lifecycle_by_session.get(session, []))
         replay_scheduler_summary = summarize_timed_events(replay_scheduler_events)
+        replay_queue_summary = summarize_scheduler_queue_path(replay_scheduler_events, replay.get("start_ms", ""), due_ms)
         replay_prefill_summary = summarize_timed_events(replay_prefill_events)
         replay_prefill_end_ms = ""
         replay_ttft_ms = as_float(replay.get("ttft_ms", ""))
         replay_start_ms = as_float(replay.get("start_ms", ""))
         if replay_start_ms is not None and replay_ttft_ms is not None:
             replay_prefill_end_ms = round(replay_start_ms + replay_ttft_ms, 3)
+        admit_to_h2d_ms = ""
+        admit_start = as_float(replay_queue_summary.get("admit_start_ms"))
+        replay_h2d_start = as_float(replay_summary.get("start_ms"))
+        if admit_start is not None and replay_h2d_start is not None:
+            admit_to_h2d_ms = round(replay_h2d_start - admit_start, 3)
         margin = ""
-        due_ms = due.get("ms", "")
         if prefetch_end_ms not in ("", None) and due_ms not in ("", None):
             margin = round(float(due_ms) - float(prefetch_end_ms), 3)
         gap = {
@@ -788,6 +853,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "prefetch_done_before_resume": 1 if isinstance(margin, (int, float)) and margin >= 0 else 0 if margin != "" else "",
             "prefetch_status": "done" if prefetch_end_ms not in ("", None) else "no_hint",
             "resume_start_ms": replay.get("start_ms", ""),
+            "resume_submitted_ms": replay.get("submitted_ms", ""),
             "resume_end_ms": replay.get("end_ms", ""),
             "resume_latency_ms": replay.get("total_latency_ms", ""),
             "resume_ttft_ms": replay.get("ttft_ms", ""),
@@ -852,6 +918,17 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_scheduler_end_ms": replay_scheduler_summary["end_ms"],
             "replay_scheduler_total_ms": replay_scheduler_summary["duration_ms"],
             "replay_scheduler_categories": replay_scheduler_summary["categories"],
+            "replay_sglang_receive_start_ms": replay_queue_summary["received_start_ms"],
+            "replay_sglang_receive_end_ms": replay_queue_summary["received_end_ms"],
+            "replay_scheduler_queue_enter_start_ms": replay_queue_summary["queue_enter_start_ms"],
+            "replay_scheduler_queue_enter_end_ms": replay_queue_summary["queue_enter_end_ms"],
+            "replay_scheduler_admit_start_ms": replay_queue_summary["admit_start_ms"],
+            "replay_scheduler_admit_end_ms": replay_queue_summary["admit_end_ms"],
+            "replay_scheduler_admit_category": replay_queue_summary["admit_category"],
+            "replay_request_start_lateness_ms": replay_queue_summary["request_start_lateness_ms"],
+            "replay_submit_to_scheduler_queue_ms": replay_queue_summary["submit_to_scheduler_queue_ms"],
+            "replay_scheduler_queue_to_admit_ms": replay_queue_summary["scheduler_queue_to_admit_ms"],
+            "replay_scheduler_admit_to_h2d_ms": admit_to_h2d_ms,
             "replay_model_forward_event_count": replay_prefill_summary["event_count"],
             "replay_model_forward_start_ms": replay_prefill_summary["start_ms"],
             "replay_model_forward_end_ms": replay_prefill_summary["end_ms"],
@@ -1649,6 +1726,13 @@ def h2d_finish_margin(row: dict[str, Any]) -> float | None:
     return round(due - h2d_end, 3)
 
 
+def relative_to_due(value: Any, due: float) -> float | str:
+    numeric = as_float(value)
+    if numeric is None:
+        return ""
+    return round(numeric - due, 3)
+
+
 def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for idx, row in enumerate(gaps):
@@ -1660,6 +1744,7 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
         if due is None or h2d_start is None or h2d_end is None or not has_events(row.get("replay_kv_h2d_events")):
             continue
         resume_start = as_float(row.get("resume_start_ms"))
+        resume_submitted = as_float(row.get("resume_submitted_ms"))
         event_duration = as_float(row.get("replay_kv_h2d_duration_ms"))
         start_delay = round(h2d_start - due, 3)
         wall_window = round(h2d_end - h2d_start, 3)
@@ -1678,8 +1763,17 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
                 "fillers": filler_count,
                 "tool_gap_ms": row.get("tool_gap_ms", ""),
                 "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "replay_due_to_client_submit_ms": round(resume_submitted - due, 3) if resume_submitted is not None else "",
                 "replay_due_to_request_start_ms": request_start_delay,
+                "client_submit_to_request_start_ms": (
+                    round(resume_start - resume_submitted, 3) if resume_start is not None and resume_submitted is not None else ""
+                ),
+                "replay_due_to_sglang_receive_ms": relative_to_due(row.get("replay_sglang_receive_start_ms"), due),
+                "replay_due_to_scheduler_queue_ms": relative_to_due(row.get("replay_scheduler_queue_enter_start_ms"), due),
+                "replay_due_to_scheduler_admit_ms": relative_to_due(row.get("replay_scheduler_admit_start_ms"), due),
                 "replay_due_to_h2d_start_ms": start_delay,
+                "scheduler_queue_to_admit_ms": row.get("replay_scheduler_queue_to_admit_ms", ""),
+                "scheduler_admit_to_h2d_ms": row.get("replay_scheduler_admit_to_h2d_ms", ""),
                 "request_start_to_h2d_start_ms": after_resume_start,
                 "h2d_visible_wall_window_ms": wall_window,
                 "h2d_event_duration_sum_ms": event_duration if event_duration is not None else "",
@@ -1700,11 +1794,83 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
     return rows
 
 
+def replay_queue_timing_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(gaps):
+        if str(row.get("mode") or "") != "no_prefetch":
+            continue
+        due = as_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        resume_submitted = as_float(row.get("resume_submitted_ms"))
+        resume_start = as_float(row.get("resume_start_ms"))
+        h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+        h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+        h2d_finish_margin_value = round(due - h2d_end, 3) if h2d_end is not None else ""
+        h2d_start_delay = round(h2d_start - due, 3) if h2d_start is not None else ""
+        h2d_end_delay = round(h2d_end - due, 3) if h2d_end is not None else ""
+        request_start_to_h2d_start = round(h2d_start - resume_start, 3) if h2d_start is not None and resume_start is not None else ""
+        request_start_to_h2d_end = round(h2d_end - resume_start, 3) if h2d_end is not None and resume_start is not None else ""
+        simple_bits: list[str] = []
+        if resume_submitted is not None:
+            simple_bits.append(f"client submitted replay {resume_submitted - due:.1f} ms after due")
+        if resume_start is not None:
+            simple_bits.append(f"client request call started {resume_start - due:.1f} ms after due")
+        queue_delay = row.get("replay_scheduler_queue_to_admit_ms", "")
+        if queue_delay not in ("", None):
+            simple_bits.append(f"SGLang queue-to-admit was {queue_delay} ms")
+        if h2d_end is not None:
+            simple_bits.append(f"H2D finished {h2d_end - due:.1f} ms after due")
+        elif has_events(row.get("replay_kv_h2d_events")):
+            simple_bits.append("H2D was observed but timing was incomplete")
+        else:
+            simple_bits.append("no replay-side H2D was observed")
+        rows.append(
+            {
+                "order": len(rows),
+                "session_id": row.get("session_id", ""),
+                "task_index": row.get("task_index", ""),
+                "gap_order_in_task": row.get("gap_order_in_task", idx),
+                "fillers": case_fillers(row),
+                "tool_gap_ms": row.get("tool_gap_ms", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "replay_due_to_client_submit_ms": round(resume_submitted - due, 3) if resume_submitted is not None else "",
+                "replay_due_to_request_start_ms": round(resume_start - due, 3) if resume_start is not None else "",
+                "client_submit_to_request_start_ms": (
+                    round(resume_start - resume_submitted, 3) if resume_start is not None and resume_submitted is not None else ""
+                ),
+                "replay_due_to_sglang_receive_ms": relative_to_due(row.get("replay_sglang_receive_start_ms"), due),
+                "replay_due_to_scheduler_queue_ms": relative_to_due(row.get("replay_scheduler_queue_enter_start_ms"), due),
+                "replay_due_to_scheduler_admit_ms": relative_to_due(row.get("replay_scheduler_admit_start_ms"), due),
+                "scheduler_queue_to_admit_ms": row.get("replay_scheduler_queue_to_admit_ms", ""),
+                "scheduler_admit_to_h2d_ms": row.get("replay_scheduler_admit_to_h2d_ms", ""),
+                "replay_due_to_h2d_start_ms": h2d_start_delay,
+                "request_start_to_h2d_start_ms": request_start_to_h2d_start,
+                "replay_due_to_h2d_end_ms": h2d_end_delay,
+                "h2d_finish_margin_ms": h2d_finish_margin_value,
+                "h2d_visible_wall_window_ms": round(h2d_end - h2d_start, 3) if h2d_start is not None and h2d_end is not None else "",
+                "h2d_event_duration_sum_ms": row.get("replay_kv_h2d_duration_ms", ""),
+                "request_start_to_h2d_end_ms": request_start_to_h2d_end,
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "replay_h2d_tokens": row.get("lifecycle_replay_h2d_tokens") or row.get("replay_host_load_tokens", ""),
+                "final_path": row.get("final_path", ""),
+                "simple_meaning": "; ".join(simple_bits),
+            }
+        )
+    return rows
+
+
 def replay_h2d_readiness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     margins = [float(row["h2d_finish_margin_ms"]) for row in rows if row.get("h2d_finish_margin_ms") not in ("", None)]
+    client_submit_delays = [float(row["replay_due_to_client_submit_ms"]) for row in rows if row.get("replay_due_to_client_submit_ms") not in ("", None)]
     request_start_delays = [float(row["replay_due_to_request_start_ms"]) for row in rows if row.get("replay_due_to_request_start_ms") not in ("", None)]
+    sglang_receive_delays = [float(row["replay_due_to_sglang_receive_ms"]) for row in rows if row.get("replay_due_to_sglang_receive_ms") not in ("", None)]
+    scheduler_queue_delays = [float(row["replay_due_to_scheduler_queue_ms"]) for row in rows if row.get("replay_due_to_scheduler_queue_ms") not in ("", None)]
+    scheduler_admit_delays = [float(row["replay_due_to_scheduler_admit_ms"]) for row in rows if row.get("replay_due_to_scheduler_admit_ms") not in ("", None)]
     start_delays = [float(row["replay_due_to_h2d_start_ms"]) for row in rows if row.get("replay_due_to_h2d_start_ms") not in ("", None)]
     request_to_h2d_start = [float(row["request_start_to_h2d_start_ms"]) for row in rows if row.get("request_start_to_h2d_start_ms") not in ("", None)]
+    queue_to_admit = [float(row["scheduler_queue_to_admit_ms"]) for row in rows if row.get("scheduler_queue_to_admit_ms") not in ("", None)]
+    admit_to_h2d = [float(row["scheduler_admit_to_h2d_ms"]) for row in rows if row.get("scheduler_admit_to_h2d_ms") not in ("", None)]
     wall_windows = [float(row["h2d_visible_wall_window_ms"]) for row in rows if row.get("h2d_visible_wall_window_ms") not in ("", None)]
     event_durations = [float(row["h2d_event_duration_sum_ms"]) for row in rows if row.get("h2d_event_duration_sum_ms") not in ("", None)]
     late = [value for value in margins if value < 0]
@@ -1717,9 +1883,15 @@ def replay_h2d_readiness_summary(rows: list[dict[str, Any]]) -> list[dict[str, A
             "median_h2d_finish_margin_ms": round(median(margins), 3) if margins else "",
             "worst_h2d_lateness_ms": round(abs(min(late)), 3) if late else "",
             "best_early_margin_ms": round(max(early), 3) if early else "",
+            "avg_due_to_client_submit_ms": avg(client_submit_delays),
             "avg_due_to_request_start_ms": avg(request_start_delays),
+            "avg_due_to_sglang_receive_ms": avg(sglang_receive_delays),
+            "avg_due_to_scheduler_queue_ms": avg(scheduler_queue_delays),
+            "avg_due_to_scheduler_admit_ms": avg(scheduler_admit_delays),
             "avg_due_to_h2d_start_ms": avg(start_delays),
             "avg_request_start_to_h2d_start_ms": avg(request_to_h2d_start),
+            "avg_scheduler_queue_to_admit_ms": avg(queue_to_admit),
+            "avg_scheduler_admit_to_h2d_ms": avg(admit_to_h2d),
             "avg_h2d_visible_wall_window_ms": avg(wall_windows),
             "avg_h2d_event_duration_sum_ms": avg(event_durations),
         }
@@ -1895,7 +2067,11 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
     plot_w = width - left - right
     plot_h = height - top - bottom
     numeric_keys = [
+        "replay_due_to_client_submit_ms",
         "replay_due_to_request_start_ms",
+        "replay_due_to_sglang_receive_ms",
+        "replay_due_to_scheduler_queue_ms",
+        "replay_due_to_scheduler_admit_ms",
         "replay_due_to_h2d_start_ms",
         "replay_due_to_h2d_end_ms",
     ]
@@ -1943,6 +2119,13 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
             f'stroke-width="2"><title>{html.escape(title)}</title></polygon>'
         )
 
+    def diamond(x: float, y: float, color: str, title: str) -> str:
+        points = f"{x:.1f},{y - 8:.1f} {x + 8:.1f},{y:.1f} {x:.1f},{y + 8:.1f} {x - 8:.1f},{y:.1f}"
+        return (
+            f'<polygon points="{points}" fill="{color}" opacity="0.95" stroke="#ffffff" '
+            f'stroke-width="2"><title>{html.escape(title)}</title></polygon>'
+        )
+
     zero_y = y_pos(0.0)
     parts = [
         '<svg viewBox="0 0 1480 560" width="100%" role="img" aria-label="Replay request versus H2D start timeline plot">',
@@ -1972,39 +2155,51 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
 
     for index, row in enumerate(rows):
         x = x_pos(index)
-        # The three events often happen very close together. Draw them with a
-        # small horizontal dodge so the square marker cannot hide the triangle.
-        request_x = x - 16
-        h2d_start_x = x
-        h2d_end_x = x + 16
-        request_start = as_float(row.get("replay_due_to_request_start_ms"))
-        h2d_start = as_float(row.get("replay_due_to_h2d_start_ms"))
-        h2d_end = as_float(row.get("replay_due_to_h2d_end_ms"))
-        if request_start is not None and h2d_start is not None:
-            y1 = y_pos(request_start)
-            y2 = y_pos(h2d_start)
-            parts.append(f'<line x1="{request_x:.1f}" y1="{y1:.1f}" x2="{h2d_start_x:.1f}" y2="{y2:.1f}" stroke="#94a3b8" stroke-width="2" opacity="0.75"/>')
-        if h2d_start is not None and h2d_end is not None:
-            y1 = y_pos(h2d_start)
-            y2 = y_pos(h2d_end)
-            parts.append(f'<line x1="{h2d_start_x:.1f}" y1="{y1:.1f}" x2="{h2d_end_x:.1f}" y2="{y2:.1f}" stroke="#06b6d4" stroke-width="4" opacity="0.75"/>')
         title_prefix = (
             f"{row.get('session_id')} | fillers={row.get('fillers')} | tool_gap={row.get('tool_gap_ms')} ms | "
             f"TTFT={row.get('resume_ttft_ms')} ms"
         )
-        if request_start is not None:
-            parts.append(circle(request_x, y_pos(request_start), "#2563eb", f"{title_prefix} | replay request start={request_start:.3f} ms after due"))
-        if h2d_start is not None:
-            parts.append(triangle(h2d_start_x, y_pos(h2d_start), "#0f766e", f"{title_prefix} | H2D start={h2d_start:.3f} ms after due"))
-        if h2d_end is not None:
-            parts.append(square(h2d_end_x, y_pos(h2d_end), "#06b6d4", f"{title_prefix} | H2D finish={h2d_end:.3f} ms after due"))
+        marker_specs = [
+            ("client submit", "replay_due_to_client_submit_ms", -42, "#7c3aed", "diamond"),
+            ("client request call start", "replay_due_to_request_start_ms", -28, "#2563eb", "circle"),
+            ("SGLang receive", "replay_due_to_sglang_receive_ms", -14, "#f97316", "diamond"),
+            ("scheduler queue", "replay_due_to_scheduler_queue_ms", 0, "#ca8a04", "square"),
+            ("scheduler admit", "replay_due_to_scheduler_admit_ms", 14, "#db2777", "triangle"),
+            ("H2D start", "replay_due_to_h2d_start_ms", 28, "#0f766e", "triangle"),
+            ("H2D finish", "replay_due_to_h2d_end_ms", 42, "#06b6d4", "square"),
+        ]
+        visible_points: list[tuple[float, float, str]] = []
+        for label, key, offset, color, shape in marker_specs:
+            value = as_float(row.get(key))
+            if value is None:
+                continue
+            marker_x = x + offset
+            marker_y = y_pos(value)
+            visible_points.append((marker_x, marker_y, color))
+            timing = f"{value:.3f} ms after due" if value >= 0 else f"{abs(value):.3f} ms before due"
+            title = f"{title_prefix} | {label}={timing}"
+            if shape == "circle":
+                parts.append(circle(marker_x, marker_y, color, title))
+            elif shape == "triangle":
+                parts.append(triangle(marker_x, marker_y, color, title))
+            elif shape == "square":
+                parts.append(square(marker_x, marker_y, color, title))
+            else:
+                parts.append(diamond(marker_x, marker_y, color, title))
+        for (x1, y1, _), (x2, y2, _) in zip(visible_points, visible_points[1:]):
+            parts.insert(
+                -len(visible_points),
+                f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#94a3b8" stroke-width="1.5" opacity="0.55"/>',
+            )
 
     legend = [
-        ("replay request start", "#2563eb", "circle"),
+        ("client submit", "#7c3aed", "diamond"),
+        ("request call start", "#2563eb", "circle"),
+        ("SGLang receive", "#f97316", "diamond"),
+        ("scheduler queue", "#ca8a04", "square"),
+        ("scheduler admit", "#db2777", "triangle"),
         ("H2D start", "#0f766e", "triangle"),
         ("H2D finish", "#06b6d4", "square"),
-        ("request-to-H2D wait", "#94a3b8", "line"),
-        ("visible H2D window", "#06b6d4", "line"),
     ]
     lx = left
     ly = height - 68
@@ -2016,39 +2211,52 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
             parts.append(f'<polygon points="{points}" fill="{color}"/>')
         elif kind == "square":
             parts.append(f'<rect x="{lx - 6}" y="{ly - 6}" width="12" height="12" rx="2" fill="{color}"/>')
+        elif kind == "diamond":
+            points = f"{lx},{ly - 7} {lx + 7},{ly} {lx},{ly + 7} {lx - 7},{ly}"
+            parts.append(f'<polygon points="{points}" fill="{color}"/>')
         else:
             parts.append(f'<line x1="{lx - 8}" y1="{ly}" x2="{lx + 8}" y2="{ly}" stroke="{color}" stroke-width="4"/>')
         parts.append(f'<text x="{lx + 14}" y="{ly + 4}" font-size="12">{html.escape(label)}</text>')
-        lx += 205
+        lx += 188
     parts.append("</svg>")
     return "\n".join(parts)
 
 
 def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
-    rows = replay_h2d_readiness_rows(gaps)
-    if not rows:
+    h2d_rows = replay_h2d_readiness_rows(gaps)
+    queue_rows = replay_queue_timing_rows(gaps)
+    if not h2d_rows and not queue_rows:
         return """
-        <p>No no-prefetch replay-side H2D movement was observed in this report.</p>
-        <p class="note">That can mean the KV was still resident, replay recomputed instead of loading from host, or this run did not include no-prefetch rows with attributed H2D telemetry.</p>
+        <p>No no-prefetch replay rows were available for queue/H2D timing in this report.</p>
         """
-    summary = replay_h2d_readiness_summary(rows)
-    buckets = replay_h2d_readiness_bucket_rows(rows)
-    detail = rows[:80]
+    summary = replay_h2d_readiness_summary(h2d_rows) if h2d_rows else []
+    buckets = replay_h2d_readiness_bucket_rows(h2d_rows) if h2d_rows else []
+    detail = queue_rows[:80]
+    h2d_plot_html = (
+        f"""
+    <h3>Replay H2D Readiness Dot Plot</h3>
+    <div class="setup-diagram">{build_replay_h2d_readiness_dot_plot(h2d_rows)}</div>
+    <h3>Readiness Buckets</h3>
+    {table_html(buckets)}
+        """
+        if h2d_rows
+        else """
+    <h3>Replay H2D Readiness Dot Plot</h3>
+    <p>No replay-side H2D movement was observed in these no-prefetch rows. The queue timeline above still shows replay submission and scheduler timing where available.</p>
+        """
+    )
     return f"""
     <p>This no-prefetch chart answers a different question from prefetch margin: when replay needed KV, how late did the replay-side host-to-device KV load finish?</p>
     <p class="note">The dot value is <code>replay_due_time - replay_h2d_finish_time</code>. Positive means the KV load finished before the replay deadline. Negative means the replay deadline passed first, so the model turn had to wait for KV readiness.</p>
-    <p class="note">The timing is split into three concrete pieces: <code>replay due -> H2D start</code>, <code>H2D start -> H2D end</code>, and <code>replay due -> H2D end</code>. This separates waiting before movement from the visible host-to-device movement window.</p>
+    <p class="note">The timing is split into concrete queue stages: replay due, client submit, SGLang receive, scheduler queue, scheduler admit, H2D start, and H2D finish. This separates queue delay from the visible host-to-device movement window.</p>
     {table_html(summary)}
-    <h3>Replay Request vs H2D Start</h3>
-    <p>This chart checks whether the replay request itself was issued late, or whether the request arrived and then waited before visible KV H2D movement began.</p>
-    <p class="note">Each gap has three markers drawn side-by-side so they do not hide each other: blue circle = replay request start, green triangle = H2D start, cyan square = H2D finish. Their vertical position still shows the real timing relative to replay due.</p>
-    <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot(rows)}</div>
-    <h3>Replay H2D Readiness Dot Plot</h3>
-    <div class="setup-diagram">{build_replay_h2d_readiness_dot_plot(rows)}</div>
-    <h3>Readiness Buckets</h3>
-    {table_html(buckets)}
+    <h3>Replay Queue Timeline vs H2D Start</h3>
+    <p>This chart checks whether the replay request was submitted late, queued inside SGLang, delayed before scheduler admission, or delayed before visible KV H2D movement began.</p>
+    <p class="note">Each gap has stage markers drawn side-by-side so they do not hide each other. Their vertical position still shows the real timing relative to replay due. Missing markers mean that stage was not present in the trace, usually because the run was generated before scheduler tracing was enabled.</p>
+    <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot(queue_rows)}</div>
+    {h2d_plot_html}
     <h3>Timing Split Behind The Plot</h3>
-    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_request_start_ms", "replay_due_to_h2d_start_ms", "request_start_to_h2d_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "request_start_to_h2d_end_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
+    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_client_submit_ms", "replay_due_to_request_start_ms", "client_submit_to_request_start_ms", "replay_due_to_sglang_receive_ms", "replay_due_to_scheduler_queue_ms", "replay_due_to_scheduler_admit_ms", "scheduler_queue_to_admit_ms", "replay_due_to_h2d_start_ms", "scheduler_admit_to_h2d_ms", "request_start_to_h2d_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "request_start_to_h2d_end_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
     """
 
 
@@ -2280,6 +2488,15 @@ def render_html(
         "bottleneck_label",
         "path_confidence",
         "prefetch_outcome",
+        "resume_submitted_ms",
+        "resume_start_ms",
+        "replay_sglang_receive_start_ms",
+        "replay_scheduler_queue_enter_start_ms",
+        "replay_scheduler_admit_start_ms",
+        "replay_request_start_lateness_ms",
+        "replay_submit_to_scheduler_queue_ms",
+        "replay_scheduler_queue_to_admit_ms",
+        "replay_scheduler_admit_to_h2d_ms",
         "scheduler_wait_ms",
         "kv_prepare_ms",
         "host_load_ms",
@@ -2549,9 +2766,11 @@ def main() -> None:
     kv_block_rows = block_ledger_rows(kv_ledger)
     request_coverage = request_id_coverage_rows(all_trace_rows)
     h2d_readiness = replay_h2d_readiness_rows(all_gaps)
+    queue_timing = replay_queue_timing_rows(all_gaps)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "replay_h2d_readiness.csv", h2d_readiness)
+    write_csv(args.out_dir / "replay_queue_timing.csv", queue_timing)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -2563,6 +2782,7 @@ def main() -> None:
             "summary": mode_summary_rows(all_gaps),
             "replay_path_ledger": ledger,
             "replay_h2d_readiness": h2d_readiness,
+            "replay_queue_timing": queue_timing,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "kv_block_ledger": kv_block_rows,
             "kv_block_lifecycle_summary": ledger_summary_rows(kv_block_rows),

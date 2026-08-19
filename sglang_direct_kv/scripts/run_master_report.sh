@@ -278,6 +278,7 @@ write_run_config() {
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
     echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}"
     echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
+    echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER:-}"
   } > "${RUN_CONFIG_ENV}"
 }
 
@@ -327,6 +328,7 @@ write_manifest() {
   MAX_TOTAL_TOKENS_VALUE="${MAX_TOTAL_TOKENS:-}" \
   HICACHE_SIZE_GB_VALUE="${HICACHE_SIZE_GB:-}" \
   MEM_FRACTION_STATIC_VALUE="${MEM_FRACTION_STATIC:-}" \
+  AGENTIC_KV_TRACE_SCHEDULER_VALUE="${AGENTIC_KV_TRACE_SCHEDULER:-}" \
   UPDATE_LATEST="${UPDATE_LATEST}" \
   MANIFEST_PATH="${manifest_path}" \
   LATEST_MANIFEST_PATH="${latest_manifest_path}" \
@@ -365,6 +367,7 @@ manifest = {
         "max_total_tokens": os.environ.get("MAX_TOTAL_TOKENS_VALUE", ""),
         "hicache_size_gb": os.environ.get("HICACHE_SIZE_GB_VALUE", ""),
         "mem_fraction_static": os.environ.get("MEM_FRACTION_STATIC_VALUE", ""),
+        "agentic_kv_trace_scheduler": os.environ.get("AGENTIC_KV_TRACE_SCHEDULER_VALUE", ""),
     },
 }
 
@@ -410,6 +413,7 @@ AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}
 MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}
 HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}
 MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}
+AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER:-}
 EOF
 }
 

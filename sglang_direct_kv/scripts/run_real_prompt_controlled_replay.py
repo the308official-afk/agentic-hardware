@@ -347,8 +347,19 @@ async def main_async() -> None:
                 await asyncio.sleep(delay)
 
         async def run_request(pair: ReplayPair, prompt: str, phase: str, label: str, max_tokens: int) -> dict[str, Any]:
+            p_hash = prompt_hash(prompt)
+            write_trace_event(
+                {
+                    "event": "m27.request.submitted",
+                    "session_id": pair.session_id,
+                    "phase": phase,
+                    "mode": args.mode,
+                    "label": label,
+                    "prompt_hash": p_hash,
+                    "prompt_chars": len(prompt),
+                }
+            )
             async with sem:
-                p_hash = prompt_hash(prompt)
                 write_trace_event(
                     {
                         "event": "m27.request.start",
