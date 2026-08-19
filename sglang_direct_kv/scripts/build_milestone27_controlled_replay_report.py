@@ -27,7 +27,6 @@ from agentic_kv.block_ledger import (
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
     build_local_timing_phase_timeline_svg,
-    build_readable_phase_timeline_svg,
     build_replay_execution_timeline_svg,
     read_jsonl,
     table_html,
@@ -1743,7 +1742,6 @@ def render_html(
         ("replay-attribution", "Replay Path Attribution"),
         ("timelines", "Mixed Timeline Sample"),
         ("readable-phase-timeline", "Readable Phase Timeline"),
-        ("local-timing-phase-timeline", "Local Timing Phase Timeline"),
         ("kv-lifecycle", "KV Lifecycle Evidence"),
         ("kv-block-ledger", "KV Block Ledger"),
         ("replay-execution-timeline", "Replay Execution Timeline"),
@@ -1852,17 +1850,8 @@ def render_html(
 
   <details id="readable-phase-timeline" class="section-card theme-clean">
     <summary><h2>Readable Phase Timeline</h2></summary>
-    <p class="note">This view removes the global time axis. Each phase gets a fixed readable column, and each bar prints the true measured duration. Use it to explain what happened in each tool gap without squinting at compressed far-right bars.</p>
-    <p class="note">Replay work is split into separate rows: cyan means replay-side KV HtoD, magenta means recompute/rebuild, gold means remaining before-first-token work, and red means decode after first token.</p>
-    <h3>Timeline Model</h3>
-    {timeline_model_table_html()}
-    {build_readable_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
-  </details>
-
-  <details id="local-timing-phase-timeline" class="section-card theme-clean">
-    <summary><h2>Local Timing Phase Timeline</h2></summary>
-    <p class="note">This experimental view keeps the same readable columns, but each column has its own local timing. In simple words: the bars inside <code>prefetch</code> are positioned relative to the prefetch attempt, and the bars inside <code>replay path</code> are positioned relative to the replay request.</p>
-    <p class="note">This is useful when bars overlap or get compressed in the global timeline. It shows sequence inside each phase without forcing tiny HtoD events to disappear beside long decode times.</p>
+    <p class="note">This view keeps readable phase columns, but each column has its own local timing. In simple words: the bars inside <code>prefetch</code> are positioned relative to the prefetch attempt, and the bars inside <code>replay path</code> are positioned relative to the replay request.</p>
+    <p class="note">Replay work is split into separate lanes: cyan means replay-side KV HtoD, magenta means recompute/rebuild, gold means remaining before-first-token work, and red means decode after first token.</p>
     <h3>Timeline Model</h3>
     {timeline_model_table_html()}
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
