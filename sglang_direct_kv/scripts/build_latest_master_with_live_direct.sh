@@ -5,6 +5,7 @@ CONTROLLED_ROOT="${CONTROLLED_ROOT:-}"
 LIVE_DIRECT_ROOT="${LIVE_DIRECT_ROOT:-}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-18}"
+RUN_ENV_JSON="${RUN_ENV_JSON:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -83,12 +84,18 @@ echo "CONTROLLED_ROOT=${CONTROLLED_ROOT}"
 echo "LIVE_DIRECT_ROOT=${LIVE_DIRECT_ROOT}"
 echo "LATEST_REPORT_ROOT=${LATEST_REPORT_ROOT}"
 
+extra_args=()
+if [[ -n "${RUN_ENV_JSON}" ]]; then
+  extra_args+=(--run-environment-json "${RUN_ENV_JSON}")
+fi
+
 "${PYTHON_BIN}" scripts/build_milestone27_controlled_replay_report.py \
   --root "${CONTROLLED_ROOT}" \
   --out-dir "${CONTROLLED_ROOT}/controlled_replay_report" \
   --latest-root "${LATEST_REPORT_ROOT}" \
   --live-direct-root "${LIVE_DIRECT_ROOT}" \
-  --max-timeline-gaps "${MAX_TIMELINE_GAPS}"
+  --max-timeline-gaps "${MAX_TIMELINE_GAPS}" \
+  "${extra_args[@]}"
 
 echo
 echo "Latest master report: ${LATEST_REPORT_ROOT}/latest_master_report.html"

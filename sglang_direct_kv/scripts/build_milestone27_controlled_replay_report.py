@@ -1429,7 +1429,130 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def manager_setup_html() -> str:
+def load_json(path: Path | None) -> dict[str, Any]:
+    if not path or not path.exists() or path.stat().st_size == 0:
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def env_value(env: dict[str, Any], *keys: str) -> str:
+    current: Any = env
+    for key in keys:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    if current in (None, ""):
+        return ""
+    return str(current)
+
+
+def first_gpu(env: dict[str, Any]) -> dict[str, Any]:
+    gpus = env.get("gpu", {}).get("gpus", []) if isinstance(env.get("gpu"), dict) else []
+    if isinstance(gpus, list) and gpus and isinstance(gpus[0], dict):
+        return gpus[0]
+    return {}
+
+
+def mib_to_gib(value: Any) -> str:
+    try:
+        return f"{float(value) / 1024.0:.2f} GiB"
+    except (TypeError, ValueError):
+        return ""
+
+
+def runtime_config_rows(run_env: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    gpu = first_gpu(run_env)
+    run_config = run_env.get("run_config", {}) if isinstance(run_env.get("run_config"), dict) else {}
+    sglang_args = run_env.get("sglang", {}).get("server_args", {}) if isinstance(run_env.get("sglang"), dict) else {}
+    sglang_runtime = run_env.get("sglang", {}).get("runtime", {}) if isinstance(run_env.get("sglang"), dict) else {}
+    if not isinstance(sglang_args, dict):
+        sglang_args = {}
+    if not isinstance(sglang_runtime, dict):
+        sglang_runtime = {}
+
+    machine_rows = [
+        {"item": "machine / cloud instance", "value": env_value(run_env, "cloud", "instance_type") or "not detected", "why it matters": "Tells us whether this is a small EC2 GPU box or a Grace Hopper-class machine."},
+        {"item": "host RAM total", "value": env_value(run_env, "host_memory", "total_gib"), "why it matters": "Physical CPU memory available on the machine."},
+        {"item": "host RAM available at capture", "value": env_value(run_env, "host_memory", "available_gib"), "why it matters": "Shows whether the machine itself was near RAM exhaustion."},
+        {"item": "CPU", "value": env_value(run_env, "cpu", "Model name"), "why it matters": "Host-side KV movement and Python/SGLang control work run through this system."},
+        {"item": "CPU cores", "value": env_value(run_env, "cpu", "CPU(s)"), "why it matters": "Useful context for scheduler/control-path overhead."},
+    ]
+    gpu_rows = [
+        {"item": "GPU", "value": str(gpu.get("name") or ""), "why it matters": "The fast memory tier used by SGLang for active KV."},
+        {"item": "GPU memory", "value": mib_to_gib(gpu.get("memory_total_mib")), "why it matters": "This is the device KV capacity before offload pressure starts."},
+        {"item": "GPU memory type", "value": str(gpu.get("memory_type") or "unknown"), "why it matters": "A10G uses GDDR6; GH200/H100-class systems use HBM-class GPU memory."},
+        {"item": "CUDA version", "value": env_value(run_env, "gpu", "cuda_version_from_nvidia_smi"), "why it matters": "CUDA/runtime version can affect copy and kernel behavior."},
+        {"item": "driver version", "value": str(gpu.get("driver_version") or ""), "why it matters": "GPU software stack version used in the run."},
+    ]
+    model_rows = [
+        {"item": "model", "value": env_value(run_env, "model") or str(run_config.get("MODEL") or ""), "why it matters": "Model size changes KV size and memory pressure."},
+        {"item": "SGLang package", "value": env_value(run_env, "software", "sglang"), "why it matters": "Hooks and cache internals are version-sensitive."},
+        {"item": "PyTorch package", "value": env_value(run_env, "software", "torch"), "why it matters": "Runtime and CUDA event behavior depends on the torch stack."},
+        {"item": "dtype", "value": str(sglang_args.get("dtype") or ""), "why it matters": "Model dtype affects GPU memory use."},
+        {"item": "KV cache dtype", "value": str(sglang_args.get("kv_cache_dtype") or ""), "why it matters": "KV dtype affects KV cache capacity and transfer size."},
+        {"item": "context length", "value": str(sglang_runtime.get("context_len") or sglang_args.get("context_length") or ""), "why it matters": "Upper bound on prompt/history length in this run."},
+        {"item": "tensor parallel size", "value": str(sglang_args.get("tp_size") or ""), "why it matters": "This run is usually single-GPU TP=1 on g5.2xlarge."},
+    ]
+    hicache_rows = [
+        {"item": "HiCache enabled", "value": str(sglang_args.get("enable_hierarchical_cache") or ""), "why it matters": "Must be enabled for host-side KV caching."},
+        {"item": "configured HiCache host KV shelf", "value": f"{run_config.get('HICACHE_SIZE_GB') or sglang_args.get('hicache_size') or ''} GB", "why it matters": "This is the host KV cache allocation, not the full physical RAM."},
+        {"item": "physical host RAM", "value": env_value(run_env, "host_memory", "total_gib"), "why it matters": "The full machine RAM may be much larger than the HiCache shelf SGLang is allowed to use."},
+        {"item": "HiCache backend", "value": str(sglang_args.get("hicache_io_backend") or ""), "why it matters": "Shows which host-cache movement backend SGLang used."},
+        {"item": "HiCache write policy", "value": str(sglang_args.get("hicache_write_policy") or ""), "why it matters": "Controls how KV is written from GPU-side cache into host cache."},
+        {"item": "HiCache memory layout", "value": str(sglang_args.get("hicache_mem_layout") or ""), "why it matters": "Relevant to how SGLang stores host-side KV."},
+        {"item": "radix eviction policy", "value": str(sglang_args.get("radix_eviction_policy") or ""), "why it matters": "Explains why pressure tends to evict older/unprotected KV."},
+        {"item": "max total tokens", "value": str(run_config.get("MAX_TOTAL_TOKENS") or sglang_args.get("max_total_tokens") or ""), "why it matters": "Caps how much token/KV capacity SGLang exposes to the run."},
+        {"item": "mem fraction static", "value": str(run_config.get("MEM_FRACTION_STATIC") or sglang_args.get("mem_fraction_static") or ""), "why it matters": "Controls how much GPU memory SGLang reserves for static pools."},
+    ]
+    knob_rows = [
+        {"item": "workload source", "value": str(run_config.get("WORKLOAD_SOURCE") or ""), "why it matters": "Synthetic is easier to reason about; real uses AgentBench/SWE-bench traces."},
+        {"item": "modes", "value": str(run_config.get("MODES") or ""), "why it matters": "Shows whether this report includes no-prefetch, direct-prefetch, or both."},
+        {"item": "filler list", "value": str(run_config.get("FILLER_LIST") or ""), "why it matters": "Filler requests create cache pressure during the tool-wait window."},
+        {"item": "tool wait list", "value": str(run_config.get("TOOL_WAIT_LIST_MS") or ""), "why it matters": "How long the agent pauses before replay/resume arrives."},
+        {"item": "target prompt tokens", "value": str(run_config.get("SYNTHETIC_PROMPT_TOKENS") or run_config.get("TARGET_PROMPT_TOKENS") or ""), "why it matters": "Approximate size of the KV we want to preserve or reload."},
+        {"item": "filler prompt tokens", "value": str(run_config.get("FILLER_PROMPT_TOKENS") or ""), "why it matters": "Bigger filler prompts create more KV pressure."},
+        {"item": "request concurrency", "value": str(run_config.get("REQUEST_CONCURRENCY") or ""), "why it matters": "Higher concurrency can increase scheduler and memory pressure."},
+        {"item": "max prompt pairs", "value": str(run_config.get("MAX_PAIRS") or ""), "why it matters": "Controls the number of target first/replay pairs."},
+    ]
+    return {
+        "machine": machine_rows,
+        "gpu": gpu_rows,
+        "model": model_rows,
+        "hicache": hicache_rows,
+        "knobs": knob_rows,
+    }
+
+
+def environment_html(run_env: dict[str, Any]) -> str:
+    if not run_env:
+        return """
+        <h3>Machine And Runtime Configuration</h3>
+        <p class="note">No <code>run_environment.json</code> file was attached to this report. Rebuild with <code>scripts/run_master_report.sh</code> to collect machine, GPU, model, and HiCache details automatically.</p>
+        """
+    rows = runtime_config_rows(run_env)
+    return "\n".join(
+        [
+            "<h3>Machine And Runtime Configuration</h3>",
+            "<p class=\"note\">Important: host memory in this report has two meanings. Physical host RAM is the machine's CPU memory. The HiCache host KV shelf is the smaller amount SGLang was configured to use for host-side KV cache.</p>",
+            "<h4>Machine</h4>",
+            table_html(rows["machine"], ["item", "value", "why it matters"]),
+            "<h4>GPU</h4>",
+            table_html(rows["gpu"], ["item", "value", "why it matters"]),
+            "<h4>Model And Runtime</h4>",
+            table_html(rows["model"], ["item", "value", "why it matters"]),
+            "<h4>SGLang HiCache And Memory Knobs</h4>",
+            table_html(rows["hicache"], ["item", "value", "why it matters"]),
+            "<h4>Experiment Knobs</h4>",
+            table_html(rows["knobs"], ["item", "value", "why it matters"]),
+        ]
+    )
+
+
+def manager_setup_html(run_env: dict[str, Any] | None = None) -> str:
     setup_rows = [
         {"part": "1. Real prompt pair", "simple meaning": "Use two adjacent model turns from real AgentBench/DeepAgents traces."},
         {"part": "2. Controlled wait", "simple meaning": "Replay Turn A, then impose a chosen tool-wait window such as 100 ms or 500 ms."},
@@ -1441,6 +1564,7 @@ def manager_setup_html() -> str:
     <div class="setup-diagram">{setup_diagram_svg()}</div>
     <p>This milestone keeps real SWE-bench/DeepAgents prompt content, but controls the timing. That gives us a cleaner hardware-style experiment: same kind of agent text, known wait windows, known cache pressure, and direct SGLang KV-hook attempts.</p>
     {table_html(setup_rows, ["part", "simple meaning"])}
+    {environment_html(run_env or {})}
     """
 
 
@@ -1685,11 +1809,13 @@ def render_html(
     live_run: dict[str, Any] | None = None,
     request_coverage: list[dict[str, Any]] | None = None,
     kv_block_rows: list[dict[str, Any]] | None = None,
+    run_environment: dict[str, Any] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
     ledger = build_replay_path_ledger(gaps)
     request_coverage = request_coverage or []
     kv_block_rows = kv_block_rows or []
+    run_environment = run_environment or {}
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     gap_columns = [
         "session_id",
@@ -1779,7 +1905,7 @@ def render_html(
 
   <details id="setup" class="section-card theme-setup">
     <summary><h2>Experiment Setup And Manager Summary</h2></summary>
-    {manager_setup_html()}
+    {manager_setup_html(run_environment)}
   </details>
 
   <details id="global-prefetch" class="section-card theme-global">
@@ -1956,6 +2082,7 @@ def main() -> None:
     parser.add_argument("--latest-root", type=Path)
     parser.add_argument("--live-direct-root", type=Path)
     parser.add_argument("--max-timeline-gaps", type=int, default=18)
+    parser.add_argument("--run-environment-json", type=Path)
     args = parser.parse_args()
 
     all_gaps: list[dict[str, Any]] = []
@@ -2006,6 +2133,7 @@ def main() -> None:
         live_run=live_run,
         request_coverage=request_coverage,
         kv_block_rows=kv_block_rows,
+        run_environment=load_json(args.run_environment_json),
     )
     report_path = args.out_dir / "controlled_replay_report.html"
     report_path.write_text(html_text, encoding="utf-8")

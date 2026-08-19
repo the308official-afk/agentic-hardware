@@ -146,6 +146,8 @@ REPORT_DIR="${REPORTS_ROOT}/${REPORT_LABEL}"
 CONTROLLED_RUN_ROOT="${CONTROLLED_ROOT:-${RUNS_ROOT}/controlled/${REPORT_LABEL}}"
 LIVE_DIRECT_RUN_ROOT="${LIVE_DIRECT_ROOT:-${RUNS_ROOT}/live/${REPORT_LABEL}}"
 SCRATCH_LATEST_ROOT="${REPORT_DIR}/_latest_scratch"
+RUN_CONFIG_ENV="${REPORT_DIR}/run_config.env"
+RUN_ENV_JSON="${REPORT_DIR}/run_environment.json"
 
 discover_controlled_root() {
   if [[ -n "${CONTROLLED_ROOT:-}" ]]; then
@@ -240,6 +242,55 @@ clean_toplevel() {
   if [[ "${moved}" == "1" ]]; then
     echo "Archived loose top-level result files under: ${archive_dir}"
   fi
+}
+
+write_run_config() {
+  mkdir -p "${REPORT_DIR}"
+  {
+    echo "REPORT_LABEL=${REPORT_LABEL}"
+    echo "MODEL=${MODEL}"
+    echo "EXPERIMENT_KIND=${EXPERIMENT_KIND}"
+    echo "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
+    echo "RESULTS_ROOT=${RESULTS_ROOT}"
+    echo "REPORT_DIR=${REPORT_DIR}"
+    echo "CONTROLLED_ROOT=${CONTROLLED_RUN_ROOT}"
+    echo "LIVE_DIRECT_ROOT=${LIVE_DIRECT_RUN_ROOT}"
+    echo "UPDATE_LATEST=${UPDATE_LATEST}"
+    echo "BUILD_ONLY=${BUILD_ONLY}"
+    echo "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
+    echo "PRESSURE_PROFILE=${PRESSURE_PROFILE}"
+    echo "MAX_PAIRS=${MAX_PAIRS:-}"
+    echo "MODES=${MODES:-}"
+    echo "FILLER_LIST=${FILLER_LIST:-}"
+    echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}"
+    echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}"
+    echo "TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS:-}"
+    echo "SYNTHETIC_PROMPT_TOKENS=${SYNTHETIC_PROMPT_TOKENS:-}"
+    echo "SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS:-}"
+    echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY:-}"
+    echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}"
+    echo "START_INDEX=${START_INDEX:-}"
+    echo "END_INDEX=${END_INDEX:-}"
+    echo "TRACE_INDEX_CSV=${TRACE_INDEX_CSV:-}"
+    echo "WORKLOAD_JSONL=${WORKLOAD_JSONL:-}"
+    echo "AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}"
+    echo "AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=${AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS:-}"
+    echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
+    echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}"
+    echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
+  } > "${RUN_CONFIG_ENV}"
+}
+
+collect_run_environment() {
+  if [[ ! -f scripts/collect_run_environment.py ]]; then
+    return
+  fi
+  "${PYTHON_BIN}" scripts/collect_run_environment.py \
+    --out "${RUN_ENV_JSON}" \
+    --model "${MODEL}" \
+    --run-config-env "${RUN_CONFIG_ENV}" \
+    --controlled-root "${CONTROLLED_RUN_ROOT}" \
+    --live-root "${LIVE_DIRECT_RUN_ROOT}" || true
 }
 
 write_manifest() {
@@ -416,6 +467,9 @@ build_report() {
     build_latest_root="${RESULTS_ROOT}"
   fi
 
+  write_run_config
+  collect_run_environment
+
   case "${EXPERIMENT_KIND}" in
     controlled)
       if [[ -z "${CONTROLLED_RUN_ROOT}" || ! -d "${CONTROLLED_RUN_ROOT}" ]]; then
@@ -426,7 +480,8 @@ build_report() {
         --root "${CONTROLLED_RUN_ROOT}" \
         --out-dir "${REPORT_DIR}/report" \
         --latest-root "${build_latest_root}" \
-        --max-timeline-gaps "${MAX_TIMELINE_GAPS}"
+        --max-timeline-gaps "${MAX_TIMELINE_GAPS}" \
+        --run-environment-json "${RUN_ENV_JSON}"
       ;;
     live)
       CONTROLLED_RUN_ROOT="$(discover_controlled_root)"
@@ -443,6 +498,7 @@ build_report() {
       LIVE_DIRECT_ROOT="${LIVE_DIRECT_RUN_ROOT}" \
       LATEST_REPORT_ROOT="${build_latest_root}" \
       MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS}" \
+      RUN_ENV_JSON="${RUN_ENV_JSON}" \
       bash scripts/build_latest_master_with_live_direct.sh
       mkdir -p "${REPORT_DIR}/report"
       cp -f "${build_latest_root}/latest_master_report.html" "${REPORT_DIR}/report/controlled_replay_report.html"
@@ -460,6 +516,7 @@ build_report() {
       LIVE_DIRECT_ROOT="${LIVE_DIRECT_RUN_ROOT}" \
       LATEST_REPORT_ROOT="${build_latest_root}" \
       MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS}" \
+      RUN_ENV_JSON="${RUN_ENV_JSON}" \
       bash scripts/build_latest_master_with_live_direct.sh
       mkdir -p "${REPORT_DIR}/report"
       cp -f "${build_latest_root}/latest_master_report.html" "${REPORT_DIR}/report/controlled_replay_report.html"
@@ -481,37 +538,6 @@ build_report() {
       cp -f "${REPORT_DIR}/report/${artifact}" "${REPORT_DIR}/${artifact}"
     fi
   done
-
-  {
-    echo "REPORT_LABEL=${REPORT_LABEL}"
-    echo "MODEL=${MODEL}"
-    echo "EXPERIMENT_KIND=${EXPERIMENT_KIND}"
-    echo "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
-    echo "RESULTS_ROOT=${RESULTS_ROOT}"
-    echo "REPORT_DIR=${REPORT_DIR}"
-    echo "CONTROLLED_ROOT=${CONTROLLED_RUN_ROOT}"
-    echo "LIVE_DIRECT_ROOT=${LIVE_DIRECT_RUN_ROOT}"
-    echo "UPDATE_LATEST=${UPDATE_LATEST}"
-    echo "BUILD_ONLY=${BUILD_ONLY}"
-    echo "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
-    echo "PRESSURE_PROFILE=${PRESSURE_PROFILE}"
-    echo "MAX_PAIRS=${MAX_PAIRS:-}"
-    echo "FILLER_LIST=${FILLER_LIST:-}"
-    echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY:-}"
-    echo "FILLER_PROMPT_TOKENS=${FILLER_PROMPT_TOKENS:-}"
-    echo "TARGET_PROMPT_TOKENS=${TARGET_PROMPT_TOKENS:-}"
-    echo "SYNTHETIC_PROMPT_TOKENS=${SYNTHETIC_PROMPT_TOKENS:-}"
-    echo "SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS:-}"
-    echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY:-}"
-    echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS:-}"
-    echo "START_INDEX=${START_INDEX:-}"
-    echo "END_INDEX=${END_INDEX:-}"
-    echo "AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=${AGENTBENCH_EXECUTION_LOOP_MAX_STEPS:-}"
-    echo "AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS=${AGENTBENCH_DIRECT_SGLANG_MAX_TOKENS:-}"
-    echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
-    echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}"
-    echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
-  } > "${REPORT_DIR}/run_config.env"
 
   write_manifest "${RESULTS_ROOT}/latest_master_report.html" "${REPORT_DIR}/master_report.html" "${CONTROLLED_RUN_ROOT}" "${LIVE_DIRECT_RUN_ROOT}"
 }

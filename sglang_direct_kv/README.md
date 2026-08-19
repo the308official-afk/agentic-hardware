@@ -4786,6 +4786,12 @@ The generated HTML reports also include a "Reproduce This Report" section
 with these same copy-paste commands.
 ```
 
+The standard master report also includes an **Experiment Machine And Runtime
+Configuration** subsection near the top. It records the EC2 instance, GPU name,
+GPU memory size/type, host RAM, model, SGLang version, context length, and the
+configured HiCache host KV shelf. This is important because physical host RAM
+and the SGLang HiCache allocation are not the same thing.
+
 ### Milestone 26: Live Direct KV Load Intervention
 
 Status: ready.
