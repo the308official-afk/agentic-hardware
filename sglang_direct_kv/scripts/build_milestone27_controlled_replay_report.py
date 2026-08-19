@@ -1028,6 +1028,8 @@ def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
             {
                 "row": row.get("timeline_label") or f"G{idx:02d}",
                 "mode": row.get("mode", ""),
+                "lifecycle_verdict": row.get("lifecycle_verdict", ""),
+                "lifecycle_explanation": row.get("lifecycle_explanation", ""),
                 "fillers": case_fillers(row),
                 "tool_wait_ms": row.get("tool_gap_ms", ""),
                 "simple_meaning": kv_lifecycle_simple_meaning(row),
@@ -1039,8 +1041,6 @@ def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
                 "replay_initial_match_tokens": row.get("replay_initial_cached_prefix_tokens", ""),
                 "replay_final_cached_tokens": row.get("replay_final_cached_prefix_tokens", ""),
                 "replay_new_prefill_tokens": row.get("replay_new_prefill_tokens_est", ""),
-                "lifecycle_verdict": row.get("lifecycle_verdict", ""),
-                "lifecycle_explanation": row.get("lifecycle_explanation", ""),
             }
         )
     return output
