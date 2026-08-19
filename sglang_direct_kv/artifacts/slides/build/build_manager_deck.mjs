@@ -237,9 +237,8 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
-    addTitle(slide, "The replay path exposes the bottleneck", "One tool-gap row shows where replay spends time before the first useful token.");
-    await addImage(slide, "readable_phase_timeline_2rows.png", 42, 152, 1160, 450, "Readable phase timeline crop from latest master report", "contain");
-    addText(slide, "Read left to right: model turn → tool wait → replay path. Cyan is host-to-device KV load; magenta/gold are work before first token.", 72, 612, 1030, 24, { size: 17, color: C.body });
+    addTitle(slide, "The replay path exposes the bottleneck", "Several tool-gap sessions show where replay spends time before the first useful token.");
+    await addImage(slide, "readable_phase_timeline_8rows_wide.png", 32, 132, 1216, 506, "Readable phase timeline crop showing several gap sessions", "contain");
     addSource(slide);
     addFooter(slide, 4);
     addNotes(slide, [

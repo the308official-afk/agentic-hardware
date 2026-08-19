@@ -50,7 +50,7 @@ function slide({ eyebrow = "Agent-aware KV movement", title, subtitle = "", body
 
 async function main() {
   const setupFlow = await dataUrl("simple_experiment_setup_flow.png");
-  const readable = await dataUrl("readable_phase_timeline_2rows.png");
+  const readable = await dataUrl("readable_phase_timeline_8rows_wide.png");
   const globalPrefetch = await dataUrl("global_prefetch_margin_backup.png");
   const h2dReadiness = await dataUrl("global_h2d_readiness.png");
   const queueTimeline = await dataUrl("replay_queue_timeline.png");
@@ -118,10 +118,9 @@ async function main() {
     slide({
       number: 4,
       title: "The replay path exposes the bottleneck",
-      subtitle: "One tool-gap row shows where replay spends time before the first useful token.",
+      subtitle: "Several tool-gap sessions show where replay spends time before the first useful token.",
       body: `
         <img class="chart-img wide" src="${readable}" alt="Readable phase timeline crop from latest master report">
-        <p class="caption">Read left to right: model turn -> tool wait -> replay path. Cyan is host-to-device KV load; magenta/gold are work before first token.</p>
       `,
       source: "Source: latest_master_report.html controlled run",
     }),
@@ -410,7 +409,7 @@ async function main() {
       background: #fff;
     }
     .chart-img.wide {
-      height: 450px;
+      height: 470px;
     }
     .chart-with-callouts {
       display: grid;
