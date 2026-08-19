@@ -9,6 +9,10 @@ const outDir = path.join(repoRoot, "sglang_direct_kv/artifacts/slides/images");
 
 const charts = [
   {
+    name: "simple_experiment_setup_flow.png",
+    selector: 'svg[aria-label="Simple experiment setup flow diagram"]',
+  },
+  {
     name: "readable_phase_timeline.png",
     selector: 'svg[aria-label="Readable phase timeline with local timing inside each column"]',
   },

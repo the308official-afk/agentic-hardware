@@ -7,6 +7,8 @@ const repoRoot = path.resolve(scriptDir, "../../../..");
 const slidesDir = path.join(repoRoot, "sglang_direct_kv/artifacts/slides");
 const imgDir = path.join(slidesDir, "images");
 const outPath = path.join(slidesDir, "agent_aware_kv_movement_manager_deck.html");
+const PROJECT_GOAL =
+  "Coding agents naturally pause during tool calls, then resume with tight latency expectations. Current memory movement paths are largely context-agnostic: they can move KV pages, but they do not know which agent needs them, when they are needed, or whether missing the deadline will stall replay. This project aims to quantify that gap and prototype hint-guided KV movement as a path toward smarter DMA engines, KV-aware memory scheduling, and hardware/runtime co-design.";
 
 async function dataUrl(name) {
   const filePath = path.join(imgDir, name);
@@ -47,6 +49,7 @@ function slide({ eyebrow = "Agent-aware KV movement", title, subtitle = "", body
 }
 
 async function main() {
+  const setupFlow = await dataUrl("simple_experiment_setup_flow.png");
   const readable = await dataUrl("readable_phase_timeline_2rows.png");
   const globalPrefetch = await dataUrl("global_prefetch_margin_backup.png");
   const h2dReadiness = await dataUrl("global_h2d_readiness.png");
@@ -56,8 +59,7 @@ async function main() {
     slide({
       number: 1,
       title: "Making KV Movement Agent-Aware",
-      subtitle:
-        "Coding agents pause during tool calls, then resume with tight latency expectations. The question is whether the memory system can move the right KV before replay arrives.",
+      subtitle: PROJECT_GOAL,
       body: `
         ${flow([
           { title: "model turn", className: "blue" },
@@ -65,14 +67,29 @@ async function main() {
           { title: "replay request", className: "red" },
           { title: "KV ready?", className: "green" },
         ])}
-        <div class="goal-box">
-          <h2>Project goal</h2>
-          <p>Quantify the gap and prototype hint-guided KV movement as a path toward smarter DMA engines and runtime co-design.</p>
-        </div>
       `,
     }),
     slide({
       number: 2,
+      title: "The testbed uses both controlled and real agent traffic",
+      subtitle: "Synthetic request generators give clean knobs; SWE-bench/DeepAgents traces give realistic coding-agent behavior.",
+      body: `
+        <img class="setup-flow-img" src="${setupFlow}" alt="Experiment setup flow chart from latest master report">
+        <div class="testbed-grid">
+          <div class="panel">
+            <h2>Controlled synthetic path</h2>
+            <p>Synthetic request generator creates known prompt sizes, tool-wait windows, filler pressure, and replay deadlines.</p>
+          </div>
+          <div class="panel blue-panel">
+            <h2>Real coding-agent path</h2>
+            <p>SWE-bench / AgentBench tasks feed DeepAgents, which emits model turns and tool-call gaps into SGLang.</p>
+          </div>
+        </div>
+      `,
+      source: "Source: latest_master_report.html, Experiment Setup And Manager Summary",
+    }),
+    slide({
+      number: 3,
       title: "Today's DMA engines move bytes, not intent",
       subtitle: "The hardware path is fast, but it usually lacks agent/session semantics.",
       body: `
@@ -99,7 +116,7 @@ async function main() {
       `,
     }),
     slide({
-      number: 3,
+      number: 4,
       title: "The replay path exposes the bottleneck",
       subtitle: "One tool-gap row shows where replay spends time before the first useful token.",
       body: `
@@ -109,7 +126,7 @@ async function main() {
       source: "Source: latest_master_report.html controlled run",
     }),
     slide({
-      number: 4,
+      number: 5,
       title: "Software prefetch often missed the agent replay deadline",
       subtitle: "Across live prefetch attempts, nearly every hint completed after the agent had already resumed.",
       body: `
@@ -125,7 +142,7 @@ async function main() {
       source: "Source: backups/latest_master_report-1.html, Global Prefetch Margin",
     }),
     slide({
-      number: 5,
+      number: 6,
       title: "Replay-side KV loads missed the deadline in this run",
       subtitle: "The aggregate view shows whether KV H2D finished before or after replay was due.",
       body: `
@@ -140,7 +157,7 @@ async function main() {
       source: "Source: latest_master_report.html, Global Replay H2D Readiness",
     }),
     slide({
-      number: 6,
+      number: 7,
       title: "The delay is not just copy time",
       subtitle: "The request enters normal software/runtime scheduling before visible KV H2D begins.",
       body: `
@@ -150,7 +167,7 @@ async function main() {
       source: "Source: latest_master_report.html, Replay Queue Timeline vs H2D Start",
     }),
     slide({
-      number: 7,
+      number: 8,
       title: "Hardware support can make hints enforceable",
       subtitle: "The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.",
       body: `
@@ -263,10 +280,10 @@ async function main() {
     }
     .subtitle {
       margin: 18px 0 0;
-      max-width: 1020px;
+      max-width: 1110px;
       color: var(--muted);
-      font-size: clamp(17px, 1.8vw, 24px);
-      line-height: 1.34;
+      font-size: clamp(16px, 1.55vw, 21px);
+      line-height: 1.32;
     }
     .slide-body {
       margin-top: 28px;
@@ -276,7 +293,7 @@ async function main() {
       display: flex;
       align-items: center;
       gap: 14px;
-      margin-top: 62px;
+      margin-top: 58px;
     }
     .flow-node {
       min-height: 82px;
@@ -351,6 +368,39 @@ async function main() {
     }
     .blue-panel { background: #eff6ff; border-color: #bfdbfe; }
     .panel ul { margin: 20px 0 0; padding-left: 22px; font-size: 22px; line-height: 1.75; }
+    .panel p {
+      margin: 12px 0 0;
+      font-size: 19px;
+      line-height: 1.35;
+      color: var(--body);
+    }
+    .setup-flow-img {
+      display: block;
+      width: 100%;
+      height: 174px;
+      object-fit: contain;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #fff;
+    }
+    .testbed-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 76px;
+      margin: 36px 48px 0;
+    }
+    .testbed-grid .panel {
+      min-height: 132px;
+      padding: 22px 30px;
+    }
+    .center-note {
+      margin: 14px auto 0;
+      max-width: 1000px;
+      text-align: center;
+      color: var(--body);
+      font-size: 18px;
+      line-height: 1.28;
+    }
     .chart-img {
       width: 100%;
       height: 100%;
