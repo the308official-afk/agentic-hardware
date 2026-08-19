@@ -5687,7 +5687,8 @@ Report output must include:
 ```text
 Summary
 Experiment Setup
-Global Prefetch Margin dot chart
+Global Replay H2D Readiness dot chart, for no-prefetch replay-H2D runs
+Global Prefetch Margin dot chart, for direct-prefetch runs
 How To Read Timelines
 Controlled Replay Timeline, if controlled/both
 Live AgentBench Direct Prefetch Timeline, if live/both
@@ -5697,6 +5698,34 @@ Direct KV Evidence
 Gap Details
 Reproduce This Report
 ```
+
+For no-prefetch-only experiments, the global chart answers:
+
+```text
+When replay was due, how late did replay-side KV host-to-device movement finish?
+```
+
+The report writes this data to:
+
+```text
+replay_h2d_readiness.csv
+```
+
+The important split is:
+
+```text
+replay due -> H2D start
+  how long the system waited before starting visible KV movement
+
+H2D start -> H2D end
+  the visible host-to-device KV movement window
+
+replay due -> H2D end
+  total KV-readiness lateness
+```
+
+In the dot chart, values below zero mean the replay deadline arrived before KV
+movement finished. Farther below zero means the replay-side H2D load was later.
 
 Important output files:
 

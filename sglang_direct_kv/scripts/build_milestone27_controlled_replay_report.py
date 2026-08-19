@@ -5,6 +5,7 @@ import argparse
 import csv
 import html
 import json
+import math
 import shutil
 import sys
 from collections import Counter, defaultdict
@@ -37,7 +38,7 @@ from build_live_paired_agentbench_report import (
     agent_session_from_context,
     css as master_css,
     context_from_trace_event,
-    global_prefetch_margin_html,
+    global_prefetch_margin_html as live_global_prefetch_margin_html,
     load_live_run as load_live_agentbench_run,
     mode_summary as live_mode_summary,
     movement_events_by_session,
@@ -63,6 +64,10 @@ def as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def avg(values: list[float]) -> float | str:
+    return round(mean(values), 3) if values else ""
 
 
 def rel_ms(ts_ns: Any, base_ts: float) -> float | str:
@@ -1499,7 +1504,7 @@ def runtime_config_rows(run_env: dict[str, Any]) -> dict[str, list[dict[str, str
     ]
     hicache_rows = [
         {"item": "HiCache enabled", "value": str(sglang_args.get("enable_hierarchical_cache") or ""), "why it matters": "Must be enabled for host-side KV caching."},
-        {"item": "configured HiCache host KV shelf", "value": f"{run_config.get('HICACHE_SIZE_GB') or sglang_args.get('hicache_size') or ''} GB", "why it matters": "This is the host KV cache allocation, not the full physical RAM."},
+        {"item": "configured HiCache host KV shelf", "value": f"{sglang_args.get('hicache_size') or run_config.get('HICACHE_SIZE_GB') or ''} GB", "why it matters": "This is the host KV cache allocation, not the full physical RAM."},
         {"item": "physical host RAM", "value": env_value(run_env, "host_memory", "total_gib"), "why it matters": "The full machine RAM may be much larger than the HiCache shelf SGLang is allowed to use."},
         {"item": "HiCache backend", "value": str(sglang_args.get("hicache_io_backend") or ""), "why it matters": "Shows which host-cache movement backend SGLang used."},
         {"item": "HiCache write policy", "value": str(sglang_args.get("hicache_write_policy") or ""), "why it matters": "Controls how KV is written from GPU-side cache into host cache."},
@@ -1634,6 +1639,286 @@ def timeline_model_table_html() -> str:
         )
     out.append("</tbody></table></div>")
     return "\n".join(out)
+
+
+def h2d_finish_margin(row: dict[str, Any]) -> float | None:
+    due = as_float(row.get("tool_gap_end_ms"))
+    h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+    if due is None or h2d_end is None:
+        return None
+    return round(due - h2d_end, 3)
+
+
+def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(gaps):
+        if str(row.get("mode") or "") != "no_prefetch":
+            continue
+        due = as_float(row.get("tool_gap_end_ms"))
+        h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+        h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+        if due is None or h2d_start is None or h2d_end is None or not has_events(row.get("replay_kv_h2d_events")):
+            continue
+        resume_start = as_float(row.get("resume_start_ms"))
+        event_duration = as_float(row.get("replay_kv_h2d_duration_ms"))
+        start_delay = round(h2d_start - due, 3)
+        wall_window = round(h2d_end - h2d_start, 3)
+        finish_lateness = round(h2d_end - due, 3)
+        finish_margin = round(due - h2d_end, 3)
+        after_resume_start = round(h2d_start - resume_start, 3) if resume_start is not None else ""
+        filler_count = case_fillers(row)
+        rows.append(
+            {
+                "order": len(rows),
+                "session_id": row.get("session_id", ""),
+                "task_index": row.get("task_index", ""),
+                "gap_order_in_task": row.get("gap_order_in_task", idx),
+                "fillers": filler_count,
+                "tool_gap_ms": row.get("tool_gap_ms", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "replay_due_to_h2d_start_ms": start_delay,
+                "h2d_start_after_replay_start_ms": after_resume_start,
+                "h2d_visible_wall_window_ms": wall_window,
+                "h2d_event_duration_sum_ms": event_duration if event_duration is not None else "",
+                "replay_due_to_h2d_end_ms": finish_lateness,
+                "h2d_finish_margin_ms": finish_margin,
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "replay_h2d_tokens": row.get("lifecycle_replay_h2d_tokens") or row.get("replay_host_load_tokens", ""),
+                "final_path": row.get("final_path", ""),
+                "simple_meaning": (
+                    f"H2D started {start_delay:.1f} ms after replay was due and finished "
+                    f"{finish_lateness:.1f} ms after replay was due."
+                    if finish_lateness >= 0
+                    else f"H2D finished {abs(finish_lateness):.1f} ms before replay was due."
+                ),
+            }
+        )
+    return rows
+
+
+def replay_h2d_readiness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    margins = [float(row["h2d_finish_margin_ms"]) for row in rows if row.get("h2d_finish_margin_ms") not in ("", None)]
+    start_delays = [float(row["replay_due_to_h2d_start_ms"]) for row in rows if row.get("replay_due_to_h2d_start_ms") not in ("", None)]
+    wall_windows = [float(row["h2d_visible_wall_window_ms"]) for row in rows if row.get("h2d_visible_wall_window_ms") not in ("", None)]
+    event_durations = [float(row["h2d_event_duration_sum_ms"]) for row in rows if row.get("h2d_event_duration_sum_ms") not in ("", None)]
+    late = [value for value in margins if value < 0]
+    early = [value for value in margins if value >= 0]
+    return [
+        {
+            "no_prefetch_replay_h2d_gaps": len(rows),
+            "h2d_finished_after_replay_due": len(late),
+            "late_pct": round(len(late) * 100.0 / len(rows), 2) if rows else "",
+            "median_h2d_finish_margin_ms": round(median(margins), 3) if margins else "",
+            "worst_h2d_lateness_ms": round(abs(min(late)), 3) if late else "",
+            "best_early_margin_ms": round(max(early), 3) if early else "",
+            "avg_due_to_h2d_start_ms": avg(start_delays),
+            "avg_h2d_visible_wall_window_ms": avg(wall_windows),
+            "avg_h2d_event_duration_sum_ms": avg(event_durations),
+        }
+    ]
+
+
+def replay_h2d_readiness_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets = [
+        ("> +500 ms ready early", lambda value: value > 500),
+        ("+100 to +500 ms ready early", lambda value: 100 < value <= 500),
+        ("0 to +100 ms ready early", lambda value: 0 <= value <= 100),
+        ("0 to -100 ms late", lambda value: -100 <= value < 0),
+        ("-100 to -500 ms late", lambda value: -500 <= value < -100),
+        ("< -500 ms late", lambda value: value < -500),
+    ]
+    total = len(rows)
+    output: list[dict[str, Any]] = []
+    for label, predicate in buckets:
+        count = sum(1 for row in rows if predicate(float(row["h2d_finish_margin_ms"])))
+        output.append(
+            {
+                "bucket": label,
+                "replay_h2d_gaps": count,
+                "pct": round(count * 100.0 / total, 2) if total else "",
+            }
+        )
+    return output
+
+
+def h2d_symlog_value(value: float, linear_width: float = 50.0) -> float:
+    if value == 0:
+        return 0.0
+    return math.copysign(math.log1p(abs(value) / linear_width), value)
+
+
+def h2d_symlog_tick_values(min_margin: float, max_margin: float) -> list[float]:
+    candidates = [
+        -100000.0,
+        -50000.0,
+        -10000.0,
+        -5000.0,
+        -1000.0,
+        -500.0,
+        -100.0,
+        -50.0,
+        0.0,
+        50.0,
+        100.0,
+        500.0,
+        1000.0,
+        5000.0,
+        10000.0,
+    ]
+    ticks = [value for value in candidates if min_margin <= value <= max_margin]
+    for value in (min_margin, max_margin):
+        if all(abs(value - tick) > 1 for tick in ticks):
+            ticks.append(value)
+    return sorted(ticks)
+
+
+def filler_palette(rows: list[dict[str, Any]]) -> dict[str, str]:
+    palette = ["#2563eb", "#7c3aed", "#0891b2", "#16a34a", "#f97316", "#dc2626", "#64748b", "#db2777"]
+    fillers = sorted({str(row.get("fillers") or "unknown") for row in rows}, key=lambda value: (as_float(value) is None, as_float(value) or 0.0, value))
+    return {filler: palette[idx % len(palette)] for idx, filler in enumerate(fillers)}
+
+
+def build_replay_h2d_readiness_dot_plot(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No no-prefetch replay-side H2D rows were available for the readiness plot.</p>"
+    width = 1480
+    height = 540
+    left = 96
+    right = 40
+    top = 64
+    bottom = 96
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    margins = [float(row["h2d_finish_margin_ms"]) for row in rows]
+    min_margin = min(margins)
+    max_margin = max(margins)
+    pad = max(50.0, (max_margin - min_margin) * 0.08)
+    y_min = min(min_margin - pad, -50.0)
+    y_max = max(max_margin + pad, 50.0)
+    scaled_min = h2d_symlog_value(y_min)
+    scaled_max = h2d_symlog_value(y_max)
+    colors = filler_palette(rows)
+
+    def x_pos(index: int) -> float:
+        if len(rows) <= 1:
+            return left + plot_w / 2
+        return left + index * plot_w / (len(rows) - 1)
+
+    def y_pos(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
+
+    zero_y = y_pos(0.0)
+    parts = [
+        '<svg viewBox="0 0 1480 540" width="100%" role="img" aria-label="Global replay H2D readiness dot plot">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
+        '<text x="20" y="280" transform="rotate(-90 20 280)" text-anchor="middle" font-size="13" font-weight="700">H2D finish margin ms (symlog)</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 30}" text-anchor="middle" font-size="13" font-weight="700">no-prefetch replay gap order</text>',
+        '<text x="104" y="36" font-size="13" fill="#166534" font-weight="700">above line = replay-side KV H2D finished before due</text>',
+        '<text x="470" y="36" font-size="13" fill="#b91c1c" font-weight="700">below line = replay waited for H2D after due</text>',
+    ]
+
+    seen_ticks: set[int] = set()
+    for value in h2d_symlog_tick_values(y_min, y_max):
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+
+    x_tick_step = max(1, len(rows) // 10)
+    for index in range(0, len(rows), x_tick_step):
+        x = x_pos(index)
+        parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="10">{index}</text>')
+
+    for index, row in enumerate(rows):
+        margin = float(row["h2d_finish_margin_ms"])
+        duration = as_float(row.get("h2d_visible_wall_window_ms"))
+        radius = max(4.5, min(10.0, 4.5 + (duration or 0.0) / 120.0))
+        filler = str(row.get("fillers") or "unknown")
+        color = colors.get(filler, "#64748b")
+        stroke = "#166534" if margin >= 0 else "#991b1b"
+        x = x_pos(index)
+        y = y_pos(margin)
+        title = (
+            f"{row.get('session_id')} | fillers={filler} | tool_gap={row.get('tool_gap_ms')} ms | "
+            f"H2D finish margin={margin:.3f} ms | due->H2D start={row.get('replay_due_to_h2d_start_ms')} ms | "
+            f"H2D wall={row.get('h2d_visible_wall_window_ms')} ms | events={row.get('replay_h2d_events')} | "
+            f"TTFT={row.get('resume_ttft_ms')} ms"
+        )
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="{color}" opacity="0.86" stroke="{stroke}" stroke-width="2">'
+            f'<title>{html.escape(title)}</title></circle>'
+        )
+
+    lx = left
+    ly = height - 62
+    for filler, color in colors.items():
+        parts.append(f'<circle cx="{lx}" cy="{ly}" r="6" fill="{color}" stroke="#334155" stroke-width="1"/>')
+        parts.append(f'<text x="{lx + 12}" y="{ly + 4}" font-size="12">fillers {html.escape(filler)}</text>')
+        lx += 140
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
+    rows = replay_h2d_readiness_rows(gaps)
+    if not rows:
+        return """
+        <p>No no-prefetch replay-side H2D movement was observed in this report.</p>
+        <p class="note">That can mean the KV was still resident, replay recomputed instead of loading from host, or this run did not include no-prefetch rows with attributed H2D telemetry.</p>
+        """
+    summary = replay_h2d_readiness_summary(rows)
+    buckets = replay_h2d_readiness_bucket_rows(rows)
+    detail = rows[:80]
+    return f"""
+    <p>This no-prefetch chart answers a different question from prefetch margin: when replay needed KV, how late did the replay-side host-to-device KV load finish?</p>
+    <p class="note">The dot value is <code>replay_due_time - replay_h2d_finish_time</code>. Positive means the KV load finished before the replay deadline. Negative means the replay deadline passed first, so the model turn had to wait for KV readiness.</p>
+    <p class="note">The timing is split into three concrete pieces: <code>replay due -> H2D start</code>, <code>H2D start -> H2D end</code>, and <code>replay due -> H2D end</code>. This separates waiting before movement from the visible host-to-device movement window.</p>
+    {table_html(summary)}
+    <h3>Replay H2D Readiness Dot Plot</h3>
+    <div class="setup-diagram">{build_replay_h2d_readiness_dot_plot(rows)}</div>
+    <h3>Readiness Buckets</h3>
+    {table_html(buckets)}
+    <h3>Timing Split Behind The Plot</h3>
+    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_h2d_start_ms", "h2d_start_after_replay_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
+    """
+
+
+def global_readiness_section_title(gaps: list[dict[str, Any]]) -> str:
+    has_prefetch_margins = any(as_float(row.get("prefetch_margin_ms")) is not None for row in gaps)
+    has_no_prefetch_h2d = any(
+        str(row.get("mode") or "") == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
+        for row in gaps
+    )
+    if has_no_prefetch_h2d and not has_prefetch_margins:
+        return "Global Replay H2D Readiness"
+    if has_no_prefetch_h2d:
+        return "Global KV Readiness"
+    return "Global Prefetch Margin"
+
+
+def global_readiness_html(gaps: list[dict[str, Any]]) -> str:
+    has_prefetch_margins = any(as_float(row.get("prefetch_margin_ms")) is not None for row in gaps)
+    has_no_prefetch_h2d = any(
+        str(row.get("mode") or "") == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
+        for row in gaps
+    )
+    sections: list[str] = []
+    if has_no_prefetch_h2d:
+        sections.append("<h3>No-Prefetch Replay H2D Readiness</h3>")
+        sections.append(global_replay_h2d_readiness_html(gaps))
+    if has_prefetch_margins:
+        sections.append("<h3>Direct-Prefetch Margin</h3>")
+        sections.append(live_global_prefetch_margin_html(gaps))
+    if not sections:
+        return "<p>No prefetch-margin or replay-side H2D readiness rows were available for this run.</p>"
+    return "\n".join(sections)
 
 
 def code_block(text: str) -> str:
@@ -1787,7 +2072,7 @@ def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps
     {table_html(live_setup_rows, ["part", "simple meaning"])}
     <h3>Global Live Prefetch Margin</h3>
     <p>Positive margin means the live direct-prefetch path finished before the real agent resumed. Negative margin means the agent resumed first.</p>
-    {global_prefetch_margin_html(gaps)}
+    {live_global_prefetch_margin_html(gaps)}
     <h3>Live Direct-Prefetch Timeline</h3>
     <p class="note">Rows with green or cyan bars are shown first. Green is hint-side direct KV HtoD evidence; cyan is replay-side HtoD evidence from the real resume request.</p>
     {timeline_model_table_html()}
@@ -1817,6 +2102,7 @@ def render_html(
     kv_block_rows = kv_block_rows or []
     run_environment = run_environment or {}
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
+    global_title = global_readiness_section_title(gaps)
     gap_columns = [
         "session_id",
         "mode",
@@ -1860,7 +2146,7 @@ def render_html(
     toc = [
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
-        ("global-prefetch", "Global Prefetch Margin"),
+        ("global-prefetch", global_title),
         ("timeline-guide", "How To Read Timelines"),
         ("replay-proof", "Replay Path Proof"),
         ("bottlenecks", "Bottleneck Breakdown"),
@@ -1909,9 +2195,9 @@ def render_html(
   </details>
 
   <details id="global-prefetch" class="section-card theme-global">
-    <summary><h2>Global Prefetch Margin</h2></summary>
-    <p>Positive margin means the hint path finished before replay. Negative margin means replay arrived first.</p>
-    {global_prefetch_margin_html(gaps)}
+    <summary><h2>{html.escape(global_title)}</h2></summary>
+    <p>For no-prefetch rows, this section measures replay-side KV H2D readiness. For direct-prefetch rows, it also reports the normal prefetch margin.</p>
+    {global_readiness_html(gaps)}
   </details>
 
   <details id="timeline-guide" class="section-card theme-guide">
@@ -2100,8 +2386,10 @@ def main() -> None:
     kv_ledger = build_block_ledger(normalized_kv_events)
     kv_block_rows = block_ledger_rows(kv_ledger)
     request_coverage = request_id_coverage_rows(all_trace_rows)
+    h2d_readiness = replay_h2d_readiness_rows(all_gaps)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
+    write_csv(args.out_dir / "replay_h2d_readiness.csv", h2d_readiness)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -2112,6 +2400,8 @@ def main() -> None:
             "gaps": all_gaps,
             "summary": mode_summary_rows(all_gaps),
             "replay_path_ledger": ledger,
+            "replay_h2d_readiness": h2d_readiness,
+            "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "kv_block_ledger": kv_block_rows,
             "kv_block_lifecycle_summary": ledger_summary_rows(kv_block_rows),
             "kv_block_gap_summary": gap_lifecycle_summary_rows(all_gaps, kv_block_rows),
