@@ -2138,13 +2138,16 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
     if not rows:
         return "<p>No no-prefetch replay-side H2D rows were available for the request-vs-H2D plot.</p>"
     width = 1480
-    height = 560
-    left = 96
-    right = 40
-    top = 70
-    bottom = 104
+    height = 690
+    left = 130
+    right = 50
+    top = 108
+    bottom = 166
     plot_w = width - left - right
     plot_h = height - top - bottom
+    marker_group_pad = 72
+    marker_plot_left = left + marker_group_pad
+    marker_plot_w = plot_w - 2 * marker_group_pad
     numeric_keys = [
         "replay_due_to_client_submit_ms",
         "replay_due_to_request_start_ms",
@@ -2172,8 +2175,8 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
 
     def x_pos(index: int) -> float:
         if len(rows) <= 1:
-            return left + plot_w / 2
-        return left + index * plot_w / (len(rows) - 1)
+            return marker_plot_left + marker_plot_w / 2
+        return marker_plot_left + index * marker_plot_w / (len(rows) - 1)
 
     def y_pos(value: float) -> float:
         scaled = h2d_symlog_value(value)
@@ -2207,16 +2210,18 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
 
     zero_y = y_pos(0.0)
     parts = [
-        '<svg viewBox="0 0 1480 560" width="100%" role="img" aria-label="Replay request versus H2D start timeline plot">',
+        '<svg viewBox="0 0 1480 690" width="100%" role="img" aria-label="Replay request versus H2D start timeline plot">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
-        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
-        '<text x="20" y="288" transform="rotate(-90 20 288)" text-anchor="middle" font-size="13" font-weight="700">time relative to replay due ms (symlog)</text>',
-        f'<text x="{left + plot_w / 2:.1f}" y="{height - 30}" text-anchor="middle" font-size="13" font-weight="700">no-prefetch replay gap order</text>',
-        '<text x="104" y="36" font-size="13" fill="#334155" font-weight="700">higher = earlier/before due; lower = later/after due</text>',
+        f'<text x="{left + plot_w - 10}" y="{max(top + 16, zero_y - 10):.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
+        '<text x="30" y="316" transform="rotate(-90 30 316)" text-anchor="middle" font-size="13" font-weight="700">time relative to replay due (symlog)</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 50}" text-anchor="middle" font-size="13" font-weight="700">no-prefetch replay gap order</text>',
+        '<text x="130" y="42" font-size="13" fill="#334155" font-weight="700">top = before replay due; bottom = after replay due</text>',
+        '<text x="130" y="64" font-size="12" fill="#64748b">Marker groups are spread sideways per gap so stages do not cover each other. Gray lines connect the stages in request order.</text>',
     ]
 
     seen_ticks: set[int] = set()
+    labeled_tick_ys: list[float] = []
     for value in h2d_symlog_tick_values(y_min, y_max):
         rounded = int(round(value))
         if rounded in seen_ticks:
@@ -2224,13 +2229,18 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
         seen_ticks.add(rounded)
         y = y_pos(value)
         parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
-        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+        if rounded == 0:
+            continue
+        if any(abs(y - prev_y) < 18 for prev_y in labeled_tick_ys):
+            continue
+        labeled_tick_ys.append(y)
+        parts.append(f'<text x="{left - 14}" y="{y + 4:.1f}" text-anchor="end" font-size="11" fill="#334155">{rounded} ms</text>')
 
     x_tick_step = max(1, len(rows) // 10)
     for index in range(0, len(rows), x_tick_step):
         x = x_pos(index)
         parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
-        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="10">{index}</text>')
+        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" font-size="10" fill="#475569">{index}</text>')
 
     for index, row in enumerate(rows):
         x = x_pos(index)
@@ -2248,6 +2258,8 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
             ("H2D finish", "replay_due_to_h2d_end_ms", 42, "#06b6d4", "square"),
         ]
         visible_points: list[tuple[float, float, str]] = []
+        connectors: list[str] = []
+        markers: list[str] = []
         for label, key, offset, color, shape in marker_specs:
             value = as_float(row.get(key))
             if value is None:
@@ -2258,18 +2270,19 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
             timing = f"{value:.3f} ms after due" if value >= 0 else f"{abs(value):.3f} ms before due"
             title = f"{title_prefix} | {label}={timing}"
             if shape == "circle":
-                parts.append(circle(marker_x, marker_y, color, title))
+                markers.append(circle(marker_x, marker_y, color, title))
             elif shape == "triangle":
-                parts.append(triangle(marker_x, marker_y, color, title))
+                markers.append(triangle(marker_x, marker_y, color, title))
             elif shape == "square":
-                parts.append(square(marker_x, marker_y, color, title))
+                markers.append(square(marker_x, marker_y, color, title))
             else:
-                parts.append(diamond(marker_x, marker_y, color, title))
+                markers.append(diamond(marker_x, marker_y, color, title))
         for (x1, y1, _), (x2, y2, _) in zip(visible_points, visible_points[1:]):
-            parts.insert(
-                -len(visible_points),
+            connectors.append(
                 f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#94a3b8" stroke-width="1.5" opacity="0.55"/>',
             )
+        parts.extend(connectors)
+        parts.extend(markers)
 
     legend = [
         ("client submit", "#7c3aed", "diamond"),
@@ -2281,7 +2294,7 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
         ("H2D finish", "#06b6d4", "square"),
     ]
     lx = left
-    ly = height - 68
+    ly = height - 104
     for label, color, kind in legend:
         if kind == "circle":
             parts.append(f'<circle cx="{lx}" cy="{ly}" r="6" fill="{color}"/>')
@@ -2297,6 +2310,8 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
             parts.append(f'<line x1="{lx - 8}" y1="{ly}" x2="{lx + 8}" y2="{ly}" stroke="{color}" stroke-width="4"/>')
         parts.append(f'<text x="{lx + 14}" y="{ly + 4}" font-size="12">{html.escape(label)}</text>')
         lx += 188
+    parts.append(f'<rect x="{left}" y="{height - 78}" width="{plot_w}" height="44" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>')
+    parts.append(f'<text x="{left + 14}" y="{height - 51}" font-size="12" fill="#475569">Read one gap left to right: client submits replay, Python request begins, SGLang receives it, scheduler queues/admits it, then visible KV H2D starts and finishes.</text>')
     parts.append("</svg>")
     return "\n".join(parts)
 
