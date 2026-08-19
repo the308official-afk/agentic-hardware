@@ -21,6 +21,11 @@ await sharp(path.join(imgDir, "readable_phase_timeline.png"))
   .resize({ width: 3404, height: 1400, fit: "fill" })
   .toFile(path.join(imgDir, "readable_phase_timeline_8rows_wide.png"));
 
+await sharp(path.join(imgDir, "readable_phase_timeline.png"))
+  .extract({ left: 0, top: 0, width: 3404, height: 2160 })
+  .resize({ width: 3404, height: 1400, fit: "fill" })
+  .toFile(path.join(imgDir, "readable_phase_timeline_4rows_wide.png"));
+
 await sharp(path.join(imgDir, "synthetic_profiled_mechanism_timeline.png"))
   .extract({ left: 0, top: 0, width: 3000, height: 1372 })
   .resize({ width: 3000, height: 1100, fit: "fill" })

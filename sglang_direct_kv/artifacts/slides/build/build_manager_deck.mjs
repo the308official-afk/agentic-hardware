@@ -285,13 +285,20 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
-    addTitle(slide, "Replay path exposes the bottleneck", "The timeline shows where replay spends time before the first useful token.");
-    await addImage(slide, "readable_phase_timeline_8rows_wide.png", 36, 136, 1208, 486, "Readable phase timeline crop showing several gap sessions", "contain");
+    addTitle(slide, "Replay path exposes the bottleneck", "Each row is one tool-gap replay; the replay path shows where time goes before the first token.");
+    await addImage(slide, "readable_phase_timeline_4rows_wide.png", 36, 136, 1208, 438, "Readable phase timeline crop showing G00 through G03", "contain");
+    addText(slide, "... more replay gaps observed in the full report", 100, 590, 1080, 28, {
+      size: 23,
+      bold: true,
+      color: C.muted,
+      align: "center",
+    });
     addSource(slide, "Source: latest_master_report.html controlled run");
     addFooter(slide, 5);
     addNotes(slide, [
-      "This is the main timeline slide. It should remain chart-dominant.",
-      "The chart shows initial model turn, tool wait, replay path, H2D, recompute, prefill, and decode.",
+      "This is the main timeline slide. It now shows a readable crop of G00 through G03 instead of compressing all rows.",
+      "The cropped chart shows initial model turn, tool wait, replay path, H2D, recompute, prefill, and decode.",
+      "The full timeline remains available in latest_master_report.html.",
     ]);
   }
 

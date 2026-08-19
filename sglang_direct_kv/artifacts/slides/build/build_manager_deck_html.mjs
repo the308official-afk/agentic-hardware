@@ -60,7 +60,7 @@ function slide({ title, subtitle = "", body, source = "", number }) {
 }
 
 async function main() {
-  const readable = await dataUrl("readable_phase_timeline_8rows_wide.png");
+  const readable = await dataUrl("readable_phase_timeline_4rows_wide.png");
   const globalPrefetch = await dataUrl("global_prefetch_margin_backup.png");
   const syntheticMechanism = await dataUrl("synthetic_profiled_mechanism_timeline_compact.png");
   const h2dReadiness = await dataUrl("global_h2d_readiness.png");
@@ -126,8 +126,11 @@ async function main() {
     slide({
       number: 5,
       title: "Replay path exposes the bottleneck",
-      subtitle: "The timeline shows where replay spends time before the first useful token.",
-      body: `<img class="chart full" src="${readable}" alt="Readable phase timeline crop showing several gap sessions">`,
+      subtitle: "Each row is one tool-gap replay; the replay path shows where time goes before the first token.",
+      body: `
+        <img class="chart full teaser" src="${readable}" alt="Readable phase timeline crop showing G00 through G03">
+        <p class="ellipsis-note">... more replay gaps observed in the full report</p>
+      `,
       source: "Source: latest_master_report.html controlled run",
     }),
     slide({
@@ -414,6 +417,17 @@ async function main() {
       display: block;
       height: 472px;
       width: 100%;
+    }
+    .chart.full.teaser {
+      height: 438px;
+    }
+    .ellipsis-note {
+      margin: 8px 0 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 800;
     }
     .chart-row {
       display: grid;
