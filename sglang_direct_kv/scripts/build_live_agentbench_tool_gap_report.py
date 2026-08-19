@@ -152,6 +152,17 @@ def display_ms(value: Any) -> str:
     return f"{parsed:.0f} ms"
 
 
+def timeline_case_fillers(row: dict[str, Any]) -> str:
+    explicit = row.get("fillers") or row.get("filler_count")
+    if explicit not in ("", None):
+        return str(explicit)
+    case_dir = str(row.get("case_dir") or "")
+    case_name = Path(case_dir).name
+    if "_f" not in case_name:
+        return ""
+    return case_name.rsplit("_f", 1)[-1]
+
+
 def append_timeline_legend(
     svg: list[str],
     legend: list[tuple[str, str]],
@@ -506,10 +517,20 @@ def build_local_timing_phase_timeline_svg(
             timing = f"LATE -{display_ms(abs(margin))}"
             timing_color = "#b91c1c"
         outcome, outcome_color, outcome_title = timeline_kv_outcome(row)
+        fillers = timeline_case_fillers(row)
+        task_index = row.get("task_index", "")
+        gap_index = row.get("gap_order_in_task", "")
+        mode = str(row.get("mode") or "")
         svg.append(f'<text x="12" y="{y + 27}" font-size="16" fill="#0f172a" font-weight="800">{fmt(label)}</text>')
         svg.append(f'<text x="12" y="{y + 49}" font-size="12" fill="{timing_color}" font-weight="800">{fmt(timing)}</text>')
         svg.append(f'<text x="12" y="{y + 70}" font-size="12" fill="{outcome_color}" font-weight="800"><title>{fmt(outcome_title)}</title>{fmt(outcome)}</text>')
         svg.append(f'<text x="12" y="{y + 91}" font-size="10" fill="#64748b">wait {fmt(display_ms(row.get("tool_gap_ms")))}</text>')
+        if fillers:
+            svg.append(f'<text x="12" y="{y + 109}" font-size="10" fill="#64748b">fillers {fmt(fillers)}</text>')
+        if task_index not in ("", None) or gap_index not in ("", None):
+            svg.append(f'<text x="12" y="{y + 127}" font-size="10" fill="#64748b">task {fmt(task_index)} / gap {fmt(gap_index)}</text>')
+        if mode:
+            svg.append(f'<text x="12" y="{y + 145}" font-size="10" fill="#64748b">mode {fmt(mode)}</text>')
 
         lane_h = 22
         lane_step = 38
