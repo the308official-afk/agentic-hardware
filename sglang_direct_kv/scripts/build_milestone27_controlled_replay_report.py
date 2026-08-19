@@ -455,6 +455,110 @@ def summarize_cache_path(events: list[dict[str, Any]], window_start_ms: Any = ""
     }
 
 
+def lifecycle_events_by_session(trace_rows: list[dict[str, Any]], base_ts: float) -> dict[str, list[dict[str, Any]]]:
+    lifecycle_events = {
+        "hicache.write.end": ("d2h_write", "device_to_host", "device_indices"),
+        "hicache.evict_device.end": ("gpu_evict", "device_evict", "device_indices"),
+        "hicache.evict_host.end": ("host_evict", "host_evict", "host_indices"),
+        "hicache.load.end": ("h2d_load", "host_to_device", "host_indices"),
+        "hiradix.init_load_back.end": ("init_load_back", "host_to_device", "host_indices"),
+        "hiradix.load_back.end": ("load_back", "host_to_device", "host_indices"),
+    }
+    by_session: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        category_info = lifecycle_events.get(str(row.get("event") or ""))
+        if not category_info:
+            continue
+        context = context_from_trace_event(row)
+        session_id = agent_session_from_context(context)
+        if not session_id or "::live_prefetch::" in session_id:
+            continue
+        category, direction, primary_index = category_info
+        request = nested_request(context)
+        primary_tokens = index_count(context.get(primary_index))
+        if primary_tokens is None and category in {"init_load_back", "load_back"}:
+            primary_tokens = int(as_float(context.get("host_hit_length")) or 0)
+        if primary_tokens is None:
+            primary_tokens = 0
+        by_session[session_id].append(
+            {
+                "event": row.get("event", ""),
+                "category": category,
+                "direction": direction,
+                "agent_phase": context.get("agent_phase") or request.get("agent_phase", "unknown"),
+                "tokens": primary_tokens,
+                "duration_ms": row.get("duration_ms", ""),
+                "time_ms": rel_ms(row.get("ts_ns"), base_ts),
+                "node_id": context.get("node_id", ""),
+            }
+        )
+    return by_session
+
+
+def summarize_kv_lifecycle(events: list[dict[str, Any]]) -> dict[str, Any]:
+    totals: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    counts: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    for event in events:
+        phase = str(event.get("agent_phase") or "unknown")
+        category = str(event.get("category") or "")
+        tokens = int(as_float(event.get("tokens")) or 0)
+        if category:
+            totals[phase][category] += tokens
+            counts[phase][category] += 1
+
+    all_totals = Counter()
+    for counter in totals.values():
+        all_totals.update(counter)
+
+    initial = totals.get("initial_turn", Counter())
+    hint = totals.get("hint_prefetch", Counter())
+    replay = totals.get("replay", Counter())
+    replay_h2d_tokens = replay.get("h2d_load", 0) + replay.get("init_load_back", 0) + replay.get("load_back", 0)
+    hint_h2d_tokens = hint.get("h2d_load", 0) + hint.get("init_load_back", 0) + hint.get("load_back", 0)
+    host_write_tokens = initial.get("d2h_write", 0)
+    gpu_evict_tokens = initial.get("gpu_evict", 0)
+    host_evict_tokens = initial.get("host_evict", 0)
+
+    if host_write_tokens and host_evict_tokens:
+        verdict = "written_to_host_then_host_evicted"
+        explanation = "KV reached host HiCache, but useful host KV was later evicted before replay could reload it."
+    elif replay_h2d_tokens:
+        verdict = "replay_loaded_from_host"
+        explanation = "Replay used the host-to-device KV load-back path."
+    elif hint_h2d_tokens:
+        verdict = "prefetch_loaded_from_host"
+        explanation = "The hint/prefetch path loaded KV from host before replay."
+    elif host_write_tokens and gpu_evict_tokens:
+        verdict = "written_to_host_gpu_evicted_no_replay_load"
+        explanation = "KV was written to host and evicted from GPU, but replay did not show a load-back."
+    elif host_write_tokens:
+        verdict = "written_to_host_no_eviction"
+        explanation = "KV was written to host; no target eviction/load-back was observed for this row."
+    else:
+        verdict = "no_lifecycle_movement_observed"
+        explanation = "No lifecycle movement events were attributed to this row."
+
+    return {
+        "lifecycle_host_write_tokens": host_write_tokens or "",
+        "lifecycle_gpu_evict_tokens": gpu_evict_tokens or "",
+        "lifecycle_host_evict_tokens": host_evict_tokens or "",
+        "lifecycle_hint_h2d_tokens": hint_h2d_tokens or "",
+        "lifecycle_replay_h2d_tokens": replay_h2d_tokens or "",
+        "lifecycle_total_d2h_write_tokens": all_totals.get("d2h_write", 0) or "",
+        "lifecycle_total_h2d_load_tokens": (
+            all_totals.get("h2d_load", 0) + all_totals.get("init_load_back", 0) + all_totals.get("load_back", 0)
+        )
+        or "",
+        "lifecycle_verdict": verdict,
+        "lifecycle_explanation": explanation,
+        "lifecycle_event_counts": ", ".join(
+            f"{phase}.{category}:{count}"
+            for phase, counter in sorted(counts.items())
+            for category, count in sorted(counter.items())
+        ),
+    }
+
+
 def replay_path_from_evidence(row: dict[str, Any]) -> str:
     if has_events(row.get("replay_kv_h2d_events")):
         return "replay loaded KV"
@@ -598,6 +702,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
     prefetch_ends = latest_event_by_session(trace_rows, "m27.prefetch.end", base_ts)
     movement_by_session = movement_events_by_session(trace_rows, telemetry_rows, base_ts)
     cache_by_session = cache_events_by_session(trace_rows, base_ts)
+    lifecycle_by_session = lifecycle_events_by_session(trace_rows, base_ts)
     scheduler_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.scheduler.end")
     prefill_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.prefill.end")
     sessions = sorted(session_meta)
@@ -626,6 +731,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         replay_summary = summarize_movement(replay_events)
         hint_cache_summary = summarize_cache_path(hint_cache_events, prefetch_start_ms)
         replay_cache_summary = summarize_cache_path(replay_cache_events, replay.get("start_ms"), replay.get("ttft_ms", ""))
+        lifecycle_summary = summarize_kv_lifecycle(lifecycle_by_session.get(session, []))
         replay_scheduler_summary = summarize_timed_events(replay_scheduler_events)
         replay_prefill_summary = summarize_timed_events(replay_prefill_events)
         replay_prefill_end_ms = ""
@@ -737,6 +843,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "pre_replay_host_resident_tokens": checkpoint.get("host_resident_tokens", ""),
             "pre_replay_missing_tokens": checkpoint.get("missing_tokens", ""),
             "pre_replay_protected_tokens": checkpoint.get("protected_tokens", ""),
+            **lifecycle_summary,
         }
         if has_events(gap["direct_kv_h2d_events"]) and has_events(gap["replay_kv_h2d_events"]):
             gap["movement_class"] = "hint and replay both moved KV"
@@ -866,8 +973,36 @@ def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "replay_final_cached_prefix_tokens": row.get("replay_final_cached_prefix_tokens", ""),
                 "replay_progressive_cache_events": row.get("replay_progressive_cache_events", ""),
                 "replay_post_request_cache_write_events": row.get("replay_post_request_cache_write_events", ""),
+                "host_write_tokens": row.get("lifecycle_host_write_tokens", ""),
+                "gpu_evict_tokens": row.get("lifecycle_gpu_evict_tokens", ""),
+                "host_evict_tokens": row.get("lifecycle_host_evict_tokens", ""),
+                "lifecycle": row.get("lifecycle_verdict", ""),
                 "verdict": row.get("per_gap_verdict", ""),
                 "movement": row.get("movement_class", ""),
+            }
+        )
+    return output
+
+
+def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        output.append(
+            {
+                "row": row.get("timeline_label") or f"G{idx:02d}",
+                "mode": row.get("mode", ""),
+                "fillers": case_fillers(row),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "host_write_tokens": row.get("lifecycle_host_write_tokens", ""),
+                "gpu_evict_tokens": row.get("lifecycle_gpu_evict_tokens", ""),
+                "host_evict_tokens": row.get("lifecycle_host_evict_tokens", ""),
+                "hint_h2d_tokens": row.get("lifecycle_hint_h2d_tokens", ""),
+                "replay_h2d_tokens": row.get("lifecycle_replay_h2d_tokens", ""),
+                "replay_initial_match_tokens": row.get("replay_initial_cached_prefix_tokens", ""),
+                "replay_final_cached_tokens": row.get("replay_final_cached_prefix_tokens", ""),
+                "replay_new_prefill_tokens": row.get("replay_new_prefill_tokens_est", ""),
+                "lifecycle_verdict": row.get("lifecycle_verdict", ""),
+                "lifecycle_explanation": row.get("lifecycle_explanation", ""),
             }
         )
     return output
@@ -1072,6 +1207,7 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         path = row.get("replay_path") or replay_path_from_evidence(row)
         verdict = row.get("per_gap_verdict") or per_gap_verdict(row)
         cache_summary = row.get("replay_cache_path_summary") or ""
+        lifecycle_summary = row.get("lifecycle_explanation") or ""
         status, _ = observation_status(row)
         orange_note = (
             f" Replay waited {ttft_ms:.0f} ms before first token."
@@ -1121,7 +1257,15 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "mode": mode,
                 "status": status,
                 "what happened": what,
-                "why it matters": f"{why} Evidence: {cache_summary}" if cache_summary else why,
+                "why it matters": " ".join(
+                    part
+                    for part in (
+                        why,
+                        f"Lifecycle: {lifecycle_summary}" if lifecycle_summary else "",
+                        f"Replay evidence: {cache_summary}" if cache_summary else "",
+                    )
+                    if part
+                ),
                 "tool_wait_ms": round(gap_ms, 3) if gap_ms is not None else "",
                 "resume_ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else "",
                 "replay_path": path,
@@ -1378,6 +1522,12 @@ def render_html(
         "replay_final_cached_prefix_tokens",
         "replay_cache_hit_ratio_pct",
         "replay_new_prefill_tokens_est",
+        "lifecycle_host_write_tokens",
+        "lifecycle_gpu_evict_tokens",
+        "lifecycle_host_evict_tokens",
+        "lifecycle_hint_h2d_tokens",
+        "lifecycle_replay_h2d_tokens",
+        "lifecycle_verdict",
         "replay_progressive_cache_events",
         "replay_post_request_cache_write_events",
         "movement_class",
@@ -1394,6 +1544,7 @@ def render_html(
         ("counterfactual", "Hardware Opportunity"),
         ("replay-attribution", "Replay Path Attribution"),
         ("timelines", "Mixed Timeline Sample"),
+        ("kv-lifecycle", "KV Lifecycle Evidence"),
         ("replay-execution-timeline", "Replay Execution Timeline"),
         ("observations", "Key Observations"),
         ("performance", "Mode Tables"),
@@ -1491,6 +1642,13 @@ def render_html(
     <h3>Timeline Row Map</h3>
     <p>This table maps the compact row names in the chart back to the full experiment details.</p>
     {table_html(timeline_mapping_rows(interesting))}
+  </details>
+
+  <details id="kv-lifecycle" class="section-card theme-directkv" open>
+    <summary><h2>KV Lifecycle Evidence</h2></summary>
+    <p>This section follows the KV lifecycle for the same rows shown in the timeline. It answers: did SGLang write this session's KV to host, evict it from GPU, evict it from host, load it back during prefetch/replay, or rebuild missing KV?</p>
+    <p class="note"><code>host_write_tokens</code> means SGLang wrote KV from GPU to host HiCache. <code>gpu_evict_tokens</code> means the target KV left GPU cache. <code>host_evict_tokens</code> means the host-side copy was also removed. If replay later has zero H2D tokens and a tiny initial prefix match, replay likely had to recompute/prefill.</p>
+    {table_html(kv_lifecycle_evidence_rows(interesting))}
   </details>
 
   <details id="replay-execution-timeline" class="section-card theme-clean">

@@ -128,6 +128,10 @@ But useful target host KV was evicted before replay.
 So replay could not load it back and recomputed instead.
 ```
 
+The master report now includes a `KV Lifecycle Evidence` section under the
+timeline. For each timeline row, it shows host writes, GPU evictions, host
+evictions, replay H2D loads, replay prefix match, and estimated replay prefill.
+
 Open this report first:
 
 ```text
