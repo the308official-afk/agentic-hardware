@@ -1710,7 +1710,7 @@ def render_html(
     {toc_html(toc)}
   </section>
 
-  <details id="summary" class="section-card theme-summary" open>
+  <details id="summary" class="section-card theme-summary">
     <summary><h2>Summary</h2></summary>
     <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is inferred from TTFT and is now split into evidence colors: cyan for replay-side host KV load, magenta for recompute/rebuild, and gold for remaining prefill or wait.</p>
     {metric_cards_html(mode_rows)}
@@ -1732,7 +1732,7 @@ def render_html(
     {timeline_guide_html(profiled_available=True)}
   </details>
 
-  <details id="replay-proof" class="section-card theme-directkv" open>
+  <details id="replay-proof" class="section-card theme-directkv">
     <summary><h2>Replay Path Proof Table</h2></summary>
     <p>This is the main evidence ledger. Each row explains what happened when the replay request resumed: whether it reused cache, loaded KV from host to GPU, recomputed missing tokens, or mostly waited in the scheduler/request path.</p>
     <p class="note">Confidence matters. High confidence means the row has direct SGLang evidence plus HtoD movement evidence. Medium confidence means SGLang counters support the label. Low confidence means the label still depends mostly on TTFT and timeline shape.</p>
@@ -1740,7 +1740,7 @@ def render_html(
     {table_html(replay_path_proof_rows(ledger), limit=250)}
   </details>
 
-  <details id="bottlenecks" class="section-card theme-observations" open>
+  <details id="bottlenecks" class="section-card theme-observations">
     <summary><h2>Bottleneck Breakdown</h2></summary>
     <p>This section groups the replay rows by the bottleneck label used in the proof table.</p>
     <h3>Bottleneck Summary</h3>
@@ -1763,7 +1763,7 @@ def render_html(
     {table_html(hardware_counterfactual_rows(ledger), limit=250)}
   </details>
 
-  <details id="replay-attribution" class="section-card theme-directkv" open>
+  <details id="replay-attribution" class="section-card theme-directkv">
     <summary><h2>Replay Path Attribution</h2></summary>
     <p>This section turns the segmented TTFT window into stronger evidence. For each replay, it reports SGLang prefix/cache counters observed inside the replay window: prompt tokens, cached prefix tokens, estimated new prefill tokens, host-hit tokens, host-load tokens, and replay-side HtoD events.</p>
     <p class="note">The verdict is evidence-backed but still conservative. Initial cached-prefix tokens show what was reusable when replay began. Final cached-prefix tokens show what existed later after replay work. A cyan bar plus host-load tokens is stronger proof that replay loaded KV from host to GPU.</p>
@@ -1773,7 +1773,7 @@ def render_html(
     {table_html(replay_attribution_rows(gaps), limit=200)}
   </details>
 
-  <details id="timelines" class="section-card theme-clean" open>
+  <details id="timelines" class="section-card theme-clean">
     <summary><h2>Mixed Timeline Sample</h2></summary>
     <p class="note">This is the deadline view. The black line is when replay was due. This view is best for seeing whether the purple prefetch attempt finished before the deadline.</p>
     {build_expanded_gap_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, scale="symlog")}
@@ -1785,7 +1785,7 @@ def render_html(
     {table_html(timeline_mapping_rows(interesting))}
   </details>
 
-  <details id="kv-lifecycle" class="section-card theme-directkv" open>
+  <details id="kv-lifecycle" class="section-card theme-directkv">
     <summary><h2>KV Lifecycle Evidence</h2></summary>
     <p>This section follows the KV lifecycle for the same rows shown in the timeline. It answers five simple questions for each tool gap:</p>
     <ol>
@@ -1802,7 +1802,7 @@ def render_html(
     {table_html(kv_lifecycle_evidence_rows(interesting))}
   </details>
 
-  <details id="kv-block-ledger" class="section-card theme-directkv" open>
+  <details id="kv-block-ledger" class="section-card theme-directkv">
     <summary><h2>KV Block Ledger</h2></summary>
     <p>This section tracks logical KV blocks across SGLang cache events. It is more detailed than the timeline: each block has a stable ledger row showing whether it was written to host, evicted from GPU, evicted from host, or loaded back.</p>
     <p class="note">This is logical block tracking, not a physical GPU page snooper. The ledger uses SGLang node IDs when available and nearby token-range matching when node IDs are missing.</p>
