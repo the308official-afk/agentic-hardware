@@ -63,8 +63,9 @@ function addFooter(slide, number) {
 }
 
 function addSource(slide, source) {
-  if (!source) return;
-  addText(slide, source, 44, 644, 980, 20, { size: 11, color: C.muted });
+  // Keep source provenance in speaker notes, not on the slide canvas.
+  void slide;
+  void source;
 }
 
 function addRule(slide, top, color = C.rule) {
@@ -73,6 +74,36 @@ function addRule(slide, top, color = C.rule) {
     position: { left: 44, top, width: 1192, height: 1.2 },
     fill: color,
     line: { style: "solid", fill: "none", width: 0 },
+  });
+}
+
+function addBox(slide, text, left, top, width, height, opts = {}) {
+  slide.shapes.add({
+    geometry: "roundRect",
+    position: { left, top, width, height },
+    fill: opts.fill ?? "#ffffff",
+    line: { style: "solid", fill: opts.line ?? C.rule, width: opts.width ?? 1.4 },
+    borderRadius: "rounded-md",
+  });
+  addText(slide, text, left + 14, top + 18, width - 28, height - 28, {
+    size: opts.size ?? 21,
+    bold: true,
+    color: opts.color ?? C.ink,
+    align: "center",
+    valign: "middle",
+  });
+}
+
+function addFlowDiagram(slide, labels, left, top, width) {
+  const gap = 34;
+  const arrowW = 28;
+  const boxW = (width - gap * (labels.length - 1) - arrowW * (labels.length - 1)) / labels.length;
+  labels.forEach((label, idx) => {
+    const x = left + idx * (boxW + gap + arrowW);
+    addBox(slide, label, x, top, boxW, 104, { line: idx === 0 ? C.blue : idx === 1 ? C.purple : idx === 2 ? C.cyan : C.green });
+    if (idx < labels.length - 1) {
+      addText(slide, "→", x + boxW + 8, top + 28, arrowW + 18, 40, { size: 30, bold: true, color: C.muted, align: "center" });
+    }
   });
 }
 
@@ -194,7 +225,13 @@ async function main() {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
     addTitle(slide, "Experiment Testbed Setup", "The real-request path is intentionally simple.");
-    addPlainFlow(slide, ["SWE-bench traces", "DeepAgents", "SGLang server"], 80, 242, 1120, { size: 38, height: 78 });
+    addFlowDiagram(
+      slide,
+      ["SWE-bench\ntraces", "DeepAgents\ntool loop", "SGLang\nserver", "KV/cache\nobservations"],
+      76,
+      204,
+      1128,
+    );
     addBullets(
       slide,
       [
@@ -380,6 +417,39 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
+    addTitle(slide, "Potential hardware impact", "These are ballpark research targets for tool-heavy agent workloads, not final measured claims.");
+    addBullets(
+      slide,
+      [
+        { text: "10-30% lower post-tool replay latency when urgent KV is ready before replay.", color: C.blue },
+        { text: "20-50% fewer late KV reloads with deadline-aware movement scheduling.", color: C.purple },
+        { text: "Lower tail latency by prioritizing soon-resuming agent sessions.", color: C.red },
+        { text: "Less wasted bandwidth by avoiding too-early or evicted-before-use prefetch.", color: C.cyan },
+        { text: "Better effective HBM use through KV-aware residency and eviction choices.", color: C.green },
+      ],
+      92,
+      166,
+      1050,
+      { size: 25, gap: 72, height: 54 },
+    );
+    addRule(slide, 570, C.rule);
+    addText(slide, "The prototype is designed to turn these targets into measured numbers.", 92, 594, 1040, 30, {
+      size: 23,
+      bold: true,
+      color: C.ink,
+      align: "center",
+    });
+    addFooter(slide, 11);
+    addNotes(slide, [
+      "This slide intentionally frames benefits as ballpark expectations and research targets.",
+      "The user previously asked for impact statements like 20% lower latency. Keep claims conservative until clean manager-grade measurements are available.",
+      "Potential benefit ranges are internal proposal estimates based on observed late prefetch/replay H2D patterns and expected gains from deadline-aware KV movement.",
+    ]);
+  }
+
+  {
+    const slide = deck.slides.add();
+    slide.background.fill = "#ffffff";
     addTitle(slide, "Hardware support can make hints enforceable", "Treat KV as deadline-sensitive memory, not generic bytes.");
     addBullets(
       slide,
@@ -401,7 +471,7 @@ async function main() {
       color: C.ink,
       align: "center",
     });
-    addFooter(slide, 11);
+    addFooter(slide, 12);
     addNotes(slide, [
       "Closing slide. Translate the evidence into concrete hardware support candidates.",
       "These ideas map to the hardware proposal: KV metadata, semantic prefetch queue, priority-aware migration, residency protection, and telemetry.",

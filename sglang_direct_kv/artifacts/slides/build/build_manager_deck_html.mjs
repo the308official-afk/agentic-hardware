@@ -39,12 +39,21 @@ function flow(labels) {
   return `<div class="plain-flow">${labels.map(escapeHtml).join('<span>-&gt;</span>')}</div>`;
 }
 
+function flowDiagram(labels) {
+  return `<div class="flow-diagram">${labels
+    .map((label, index) => {
+      const arrow = index < labels.length - 1 ? '<div class="flow-arrow">-&gt;</div>' : "";
+      return `<div class="flow-step step-${index}">${escapeHtml(label)}</div>${arrow}`;
+    })
+    .join("")}</div>`;
+}
+
 function slide({ title, subtitle = "", body, source = "", number }) {
+  void source;
   return `<section class="slide" id="slide-${number}">
     <h1>${escapeHtml(title)}</h1>
     ${subtitle ? `<p class="subtitle">${escapeHtml(subtitle)}</p>` : ""}
     <div class="slide-body">${body}</div>
-    ${source ? `<div class="source">${escapeHtml(source)}</div>` : ""}
     <div class="footer">Agent-aware KV movement</div>
     <div class="slide-number">${String(number).padStart(2, "0")}</div>
   </section>`;
@@ -90,7 +99,7 @@ async function main() {
       title: "Experiment Testbed Setup",
       subtitle: "The real-request path is intentionally simple.",
       body: `
-        ${flow(["SWE-bench traces", "DeepAgents", "SGLang server"])}
+        ${flowDiagram(["SWE-bench traces", "DeepAgents tool loop", "SGLang server", "KV/cache observations"])}
         ${bullets([
           { text: "DeepAgents produces model turns and tool-call gaps.", color: "#9333ea" },
           { text: "SGLang serves the model and exposes KV/cache behavior through our hooks.", color: "#0891b2" },
@@ -198,6 +207,22 @@ async function main() {
     }),
     slide({
       number: 11,
+      title: "Potential hardware impact",
+      subtitle: "These are ballpark research targets for tool-heavy agent workloads, not final measured claims.",
+      body: `
+        ${bullets([
+          { text: "10-30% lower post-tool replay latency when urgent KV is ready before replay.", color: "#2563eb" },
+          { text: "20-50% fewer late KV reloads with deadline-aware movement scheduling.", color: "#9333ea" },
+          { text: "Lower tail latency by prioritizing soon-resuming agent sessions.", color: "#dc2626" },
+          { text: "Less wasted bandwidth by avoiding too-early or evicted-before-use prefetch.", color: "#0891b2" },
+          { text: "Better effective HBM use through KV-aware residency and eviction choices.", color: "#16a34a" },
+        ])}
+        <hr>
+        <p class="takeaway">The prototype is designed to turn these targets into measured numbers.</p>
+      `,
+    }),
+    slide({
+      number: 12,
       title: "Hardware support can make hints enforceable",
       subtitle: "Treat KV as deadline-sensitive memory, not generic bytes.",
       body: `
@@ -334,6 +359,38 @@ async function main() {
     .plain-flow span {
       color: var(--muted);
       padding: 0 22px;
+    }
+    .flow-diagram {
+      display: grid;
+      grid-template-columns: 1fr 36px 1fr 36px 1fr 36px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin: 54px auto 48px;
+      max-width: 1128px;
+    }
+    .flow-step {
+      min-height: 104px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: var(--ink);
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.16;
+      border: 2px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+    .step-0 { border-color: #2563eb; }
+    .step-1 { border-color: #9333ea; }
+    .step-2 { border-color: #0891b2; }
+    .step-3 { border-color: #16a34a; }
+    .flow-arrow {
+      text-align: center;
+      color: var(--muted);
+      font-size: 30px;
+      font-weight: 800;
     }
     .takeaway {
       margin: 0;
