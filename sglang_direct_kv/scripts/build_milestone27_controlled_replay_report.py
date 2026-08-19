@@ -1926,21 +1926,21 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
 
     def circle(x: float, y: float, color: str, title: str) -> str:
         return (
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="{color}" opacity="0.9" '
-            f'stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></circle>'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="7" fill="{color}" opacity="0.95" '
+            f'stroke="#ffffff" stroke-width="2"><title>{html.escape(title)}</title></circle>'
         )
 
     def square(x: float, y: float, color: str, title: str) -> str:
         return (
-            f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" fill="{color}" '
-            f'opacity="0.92" stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></rect>'
+            f'<rect x="{x - 7:.1f}" y="{y - 7:.1f}" width="14" height="14" rx="2" fill="{color}" '
+            f'opacity="0.95" stroke="#ffffff" stroke-width="2"><title>{html.escape(title)}</title></rect>'
         )
 
     def triangle(x: float, y: float, color: str, title: str) -> str:
-        points = f"{x:.1f},{y - 7:.1f} {x - 7:.1f},{y + 6:.1f} {x + 7:.1f},{y + 6:.1f}"
+        points = f"{x:.1f},{y - 9:.1f} {x - 9:.1f},{y + 8:.1f} {x + 9:.1f},{y + 8:.1f}"
         return (
-            f'<polygon points="{points}" fill="{color}" opacity="0.92" stroke="#ffffff" '
-            f'stroke-width="1.5"><title>{html.escape(title)}</title></polygon>'
+            f'<polygon points="{points}" fill="{color}" opacity="0.95" stroke="#ffffff" '
+            f'stroke-width="2"><title>{html.escape(title)}</title></polygon>'
         )
 
     zero_y = y_pos(0.0)
@@ -1972,31 +1972,36 @@ def build_replay_request_vs_h2d_timeline_plot(rows: list[dict[str, Any]]) -> str
 
     for index, row in enumerate(rows):
         x = x_pos(index)
+        # The three events often happen very close together. Draw them with a
+        # small horizontal dodge so the square marker cannot hide the triangle.
+        request_x = x - 16
+        h2d_start_x = x
+        h2d_end_x = x + 16
         request_start = as_float(row.get("replay_due_to_request_start_ms"))
         h2d_start = as_float(row.get("replay_due_to_h2d_start_ms"))
         h2d_end = as_float(row.get("replay_due_to_h2d_end_ms"))
         if request_start is not None and h2d_start is not None:
             y1 = y_pos(request_start)
             y2 = y_pos(h2d_start)
-            parts.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="#94a3b8" stroke-width="2" opacity="0.75"/>')
+            parts.append(f'<line x1="{request_x:.1f}" y1="{y1:.1f}" x2="{h2d_start_x:.1f}" y2="{y2:.1f}" stroke="#94a3b8" stroke-width="2" opacity="0.75"/>')
         if h2d_start is not None and h2d_end is not None:
             y1 = y_pos(h2d_start)
             y2 = y_pos(h2d_end)
-            parts.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="#06b6d4" stroke-width="4" opacity="0.75"/>')
+            parts.append(f'<line x1="{h2d_start_x:.1f}" y1="{y1:.1f}" x2="{h2d_end_x:.1f}" y2="{y2:.1f}" stroke="#06b6d4" stroke-width="4" opacity="0.75"/>')
         title_prefix = (
             f"{row.get('session_id')} | fillers={row.get('fillers')} | tool_gap={row.get('tool_gap_ms')} ms | "
             f"TTFT={row.get('resume_ttft_ms')} ms"
         )
         if request_start is not None:
-            parts.append(circle(x, y_pos(request_start), "#2563eb", f"{title_prefix} | replay request start={request_start:.3f} ms after due"))
+            parts.append(circle(request_x, y_pos(request_start), "#2563eb", f"{title_prefix} | replay request start={request_start:.3f} ms after due"))
         if h2d_start is not None:
-            parts.append(triangle(x, y_pos(h2d_start), "#0891b2", f"{title_prefix} | H2D start={h2d_start:.3f} ms after due"))
+            parts.append(triangle(h2d_start_x, y_pos(h2d_start), "#0f766e", f"{title_prefix} | H2D start={h2d_start:.3f} ms after due"))
         if h2d_end is not None:
-            parts.append(square(x, y_pos(h2d_end), "#06b6d4", f"{title_prefix} | H2D finish={h2d_end:.3f} ms after due"))
+            parts.append(square(h2d_end_x, y_pos(h2d_end), "#06b6d4", f"{title_prefix} | H2D finish={h2d_end:.3f} ms after due"))
 
     legend = [
         ("replay request start", "#2563eb", "circle"),
-        ("H2D start", "#0891b2", "triangle"),
+        ("H2D start", "#0f766e", "triangle"),
         ("H2D finish", "#06b6d4", "square"),
         ("request-to-H2D wait", "#94a3b8", "line"),
         ("visible H2D window", "#06b6d4", "line"),
@@ -2036,6 +2041,7 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
     {table_html(summary)}
     <h3>Replay Request vs H2D Start</h3>
     <p>This chart checks whether the replay request itself was issued late, or whether the request arrived and then waited before visible KV H2D movement began.</p>
+    <p class="note">Each gap has three markers drawn side-by-side so they do not hide each other: blue circle = replay request start, green triangle = H2D start, cyan square = H2D finish. Their vertical position still shows the real timing relative to replay due.</p>
     <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot(rows)}</div>
     <h3>Replay H2D Readiness Dot Plot</h3>
     <div class="setup-diagram">{build_replay_h2d_readiness_dot_plot(rows)}</div>
