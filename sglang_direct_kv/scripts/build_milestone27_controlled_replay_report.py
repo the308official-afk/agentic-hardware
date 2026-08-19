@@ -993,6 +993,7 @@ def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
                 "mode": row.get("mode", ""),
                 "fillers": case_fillers(row),
                 "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "simple_meaning": kv_lifecycle_simple_meaning(row),
                 "host_write_tokens": row.get("lifecycle_host_write_tokens", ""),
                 "gpu_evict_tokens": row.get("lifecycle_gpu_evict_tokens", ""),
                 "host_evict_tokens": row.get("lifecycle_host_evict_tokens", ""),
@@ -1006,6 +1007,79 @@ def kv_lifecycle_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
             }
         )
     return output
+
+
+def kv_lifecycle_legend_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "field": "host_write_tokens",
+            "simple meaning": "SGLang copied this session's KV from GPU memory into host HiCache.",
+        },
+        {
+            "field": "gpu_evict_tokens",
+            "simple meaning": "SGLang removed this session's KV from GPU memory.",
+        },
+        {
+            "field": "host_evict_tokens",
+            "simple meaning": "SGLang also removed this session's host-side HiCache copy.",
+        },
+        {
+            "field": "hint_h2d_tokens",
+            "simple meaning": "The prefetch attempt loaded KV from host back to GPU.",
+        },
+        {
+            "field": "replay_h2d_tokens",
+            "simple meaning": "The real replay request loaded KV from host back to GPU.",
+        },
+        {
+            "field": "replay_initial_match_tokens",
+            "simple meaning": "How much prefix/KV SGLang could reuse when replay first arrived.",
+        },
+        {
+            "field": "replay_new_prefill_tokens",
+            "simple meaning": "Estimated tokens replay had to rebuild/prefill because they were not immediately reusable.",
+        },
+    ]
+
+
+def kv_lifecycle_simple_meaning(row: dict[str, Any]) -> str:
+    host_write = as_float(row.get("lifecycle_host_write_tokens")) or 0
+    gpu_evict = as_float(row.get("lifecycle_gpu_evict_tokens")) or 0
+    host_evict = as_float(row.get("lifecycle_host_evict_tokens")) or 0
+    hint_h2d = as_float(row.get("lifecycle_hint_h2d_tokens")) or 0
+    replay_h2d = as_float(row.get("lifecycle_replay_h2d_tokens")) or 0
+    initial_match = as_float(row.get("replay_initial_cached_prefix_tokens")) or 0
+    new_prefill = as_float(row.get("replay_new_prefill_tokens_est")) or 0
+
+    if host_write and gpu_evict and host_evict and not replay_h2d and new_prefill >= 128:
+        return (
+            "The target KV existed and was written to host, but pressure evicted it from both GPU and host. "
+            "Replay could not reload the old KV, matched only a small prefix, and rebuilt/prefilled the missing tokens."
+        )
+    if replay_h2d:
+        return (
+            "Replay found useful KV in the host tier and loaded it back to GPU. "
+            "This is the clean host-to-device load-back path."
+        )
+    if hint_h2d and not replay_h2d and initial_match >= 128:
+        return (
+            "The prefetch path loaded KV from host before replay. Replay did not need its own visible H2D load."
+        )
+    if host_write and gpu_evict and not host_evict and not replay_h2d:
+        return (
+            "The target KV was written to host and evicted from GPU, but replay did not show a host load-back. "
+            "This means the host-backed path was not used for this replay."
+        )
+    if host_write and not gpu_evict and not host_evict and initial_match >= 128:
+        return (
+            "The target KV was written to host, but it also appears to have stayed reusable for replay. "
+            "Replay mostly reused existing KV instead of loading or recomputing a large prefix."
+        )
+    if new_prefill >= 128:
+        return (
+            "Replay had to build many missing prefix tokens. No useful host-to-device load was visible for this row."
+        )
+    return str(row.get("lifecycle_explanation") or "No clear KV lifecycle path was visible for this row.")
 
 
 def replay_attribution_rows(rows: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
@@ -1646,8 +1720,18 @@ def render_html(
 
   <details id="kv-lifecycle" class="section-card theme-directkv" open>
     <summary><h2>KV Lifecycle Evidence</h2></summary>
-    <p>This section follows the KV lifecycle for the same rows shown in the timeline. It answers: did SGLang write this session's KV to host, evict it from GPU, evict it from host, load it back during prefetch/replay, or rebuild missing KV?</p>
-    <p class="note"><code>host_write_tokens</code> means SGLang wrote KV from GPU to host HiCache. <code>gpu_evict_tokens</code> means the target KV left GPU cache. <code>host_evict_tokens</code> means the host-side copy was also removed. If replay later has zero H2D tokens and a tiny initial prefix match, replay likely had to recompute/prefill.</p>
+    <p>This section follows the KV lifecycle for the same rows shown in the timeline. It answers five simple questions for each tool gap:</p>
+    <ol>
+      <li>Did SGLang write this session's KV to host HiCache?</li>
+      <li>Was that KV evicted from GPU memory?</li>
+      <li>Was the host copy also evicted?</li>
+      <li>Did prefetch or replay load the old KV back from host to GPU?</li>
+      <li>If not, did replay have to rebuild/prefill missing KV?</li>
+    </ol>
+    <p class="note">The <code>simple_meaning</code> column is the fastest way to read this table. Example: if host write, GPU eviction, and host eviction are all nonzero, but replay H2D is zero and replay only matched a tiny prefix, then the old KV was lost and replay rebuilt/prefilled.</p>
+    <h3>Column Legend</h3>
+    {table_html(kv_lifecycle_legend_rows())}
+    <h3>Per-Row KV Lifecycle</h3>
     {table_html(kv_lifecycle_evidence_rows(interesting))}
   </details>
 
