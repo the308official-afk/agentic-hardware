@@ -352,7 +352,7 @@ def build_local_timing_phase_timeline_svg(
     left = 215
     right = 40
     top = 116
-    row_h = 190
+    row_h = 214
     header_h = 42
     gap = 16
     turn_w = 220
@@ -391,21 +391,32 @@ def build_local_timing_phase_timeline_svg(
         text_color: str = "#ffffff",
         dashed: bool = False,
         min_w: float = 12.0,
+        max_x: float | None = None,
     ) -> None:
         stroke = ' stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4"' if dashed else ""
         display_w = max(min_w, w)
+        if max_x is not None and x + display_w > max_x:
+            x = max(x, max_x - display_w)
         svg.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{display_w:.1f}" height="{h:.1f}" rx="4" '
             f'fill="{color}" opacity="{opacity}"{stroke}><title>{fmt(title)}</title></rect>'
         )
-        if label and display_w >= 42:
+        if label and display_w >= 64:
             svg.append(
                 f'<text x="{x + display_w / 2:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" '
                 f'font-size="10" fill="{text_color}" font-weight="700">{fmt(label)}</text>'
             )
 
     def missing(svg: list[str], x: float, y: float, w: float, h: float, label: str) -> None:
-        rect(svg, x, y, w, h, "#f8fafc", label, label, 1.0, "#64748b", True, 40.0)
+        svg.append(
+            f'<rect x="{x:.1f}" y="{y + h / 2 - 2:.1f}" width="{w:.1f}" height="4" rx="2" '
+            f'fill="#cbd5e1" opacity="0.45"><title>{fmt(label)}</title></rect>'
+        )
+        if w >= 110:
+            svg.append(
+                f'<text x="{x + w / 2:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" '
+                f'font-size="9" fill="#64748b">{fmt(label)}</text>'
+            )
 
     def local_x(value: float, start: float, end: float, x: float, w: float) -> float:
         span = max(1e-6, end - start)
@@ -436,8 +447,8 @@ def build_local_timing_phase_timeline_svg(
         x1 = local_x(start_value, local_start, local_end, x, w)
         x2 = local_x(end_value, local_start, local_end, x, w)
         duration_label = display_ms(duration)
-        label = f"{name}: {duration_label}" if duration_label else name
-        rect(svg, x1, y, max(0.0, x2 - x1), h, color, label, title, opacity, text_color, dashed)
+        label = duration_label if duration_label else name
+        rect(svg, x1, y, max(0.0, x2 - x1), h, color, label, title, opacity, text_color, dashed, 12.0, x + w)
 
     def bounds(*pairs: tuple[float | None, float | None]) -> tuple[float, float] | None:
         values: list[float] = []
@@ -460,6 +471,12 @@ def build_local_timing_phase_timeline_svg(
         '<text x="10" y="48" font-size="12" fill="#475569">Each big column has its own local timing. Bars keep left-to-right order inside that phase, but columns do not share one global time scale.</text>',
     ]
     append_timeline_legend(svg, legend, left, 78, 160)
+    prefetch_label_w = 58
+    replay_label_w = 78
+    prefetch_bar_x = x_prefetch + prefetch_label_w + 14
+    prefetch_bar_w = prefetch_w - prefetch_label_w - 26
+    replay_bar_x = x_replay + replay_label_w + 14
+    replay_bar_w = replay_w - replay_label_w - 26
 
     headers = [
         ("initial turn", x_turn, turn_w),
@@ -494,13 +511,21 @@ def build_local_timing_phase_timeline_svg(
         svg.append(f'<text x="12" y="{y + 70}" font-size="12" fill="{outcome_color}" font-weight="800"><title>{fmt(outcome_title)}</title>{fmt(outcome)}</text>')
         svg.append(f'<text x="12" y="{y + 91}" font-size="10" fill="#64748b">wait {fmt(display_ms(row.get("tool_gap_ms")))}</text>')
 
+        lane_h = 22
+        lane_step = 38
         for lane_idx, lane in enumerate(["attempt", "HtoD"] if show_prefetch_legend else [""]):
             if lane:
-                svg.append(f'<text x="{x_prefetch - 8:.1f}" y="{y + 28 + lane_idx * 34:.1f}" font-size="9" fill="#64748b" text-anchor="end">{lane}</text>')
+                svg.append(
+                    f'<text x="{x_prefetch + prefetch_label_w:.1f}" y="{y + 29 + lane_idx * lane_step:.1f}" '
+                    f'font-size="9" fill="#475569" text-anchor="end" font-weight="700">{lane}</text>'
+                )
         for lane_idx, lane in enumerate(["HtoD", "recompute", "prefill", "decode"]):
-            svg.append(f'<text x="{x_replay - 8:.1f}" y="{y + 28 + lane_idx * 34:.1f}" font-size="9" fill="#64748b" text-anchor="end">{lane}</text>')
+            svg.append(
+                f'<text x="{x_replay + replay_label_w:.1f}" y="{y + 29 + lane_idx * lane_step:.1f}" '
+                f'font-size="9" fill="#475569" text-anchor="end" font-weight="700">{lane}</text>'
+            )
 
-        bar_h = 22
+        bar_h = lane_h
         current_start = maybe_float(row.get("current_start_ms"))
         current_end = maybe_float(row.get("current_end_ms"))
         current_bounds = bounds((current_start, current_end)) or (0.0, 1.0)
@@ -553,9 +578,9 @@ def build_local_timing_phase_timeline_svg(
                 prefetch_end,
                 prefetch_bounds[0],
                 prefetch_bounds[1],
-                x_prefetch + 12,
+                prefetch_bar_x,
                 y + 14,
-                prefetch_w - 24,
+                prefetch_bar_w,
                 bar_h,
                 "#a855f7",
                 "attempt",
@@ -571,9 +596,9 @@ def build_local_timing_phase_timeline_svg(
                     h2d_end,
                     prefetch_bounds[0],
                     prefetch_bounds[1],
-                    x_prefetch + 12,
-                    y + 48,
-                    prefetch_w - 24,
+                    prefetch_bar_x,
+                    y + 14 + lane_step,
+                    prefetch_bar_w,
                     bar_h,
                     "#16a34a",
                     "hint HtoD",
@@ -583,7 +608,7 @@ def build_local_timing_phase_timeline_svg(
                     0.94,
                 )
             else:
-                missing(svg, x_prefetch + 12, y + 48, prefetch_w - 24, bar_h, "no hint HtoD")
+                missing(svg, prefetch_bar_x, y + 14 + lane_step, prefetch_bar_w, bar_h, "no hint HtoD")
 
         replay_start = maybe_float(row.get("resume_start_ms"))
         replay_end = maybe_float(row.get("resume_end_ms"))
@@ -596,8 +621,6 @@ def build_local_timing_phase_timeline_svg(
             (replay_prefill_start, replay_prefill_end),
             (replay_h2d_start, replay_h2d_end),
         ) or (0.0, 1.0)
-        replay_x = x_replay + 12
-        replay_bar_w = replay_w - 24
         replay_h2d_duration = maybe_float(row.get("replay_kv_h2d_duration_ms")) or maybe_float(row.get("host_load_ms"))
         if replay_h2d_start is not None and replay_h2d_end is not None:
             local_bar(
@@ -606,7 +629,7 @@ def build_local_timing_phase_timeline_svg(
                 replay_h2d_end,
                 replay_bounds[0],
                 replay_bounds[1],
-                replay_x,
+                replay_bar_x,
                 y + 14,
                 replay_bar_w,
                 bar_h,
@@ -616,7 +639,7 @@ def build_local_timing_phase_timeline_svg(
                 "replay-side KV host-to-device load; locally positioned inside replay request time",
             )
         else:
-            missing(svg, replay_x, y + 14, replay_bar_w, bar_h, "no replay HtoD")
+            missing(svg, replay_bar_x, y + 14, replay_bar_w, bar_h, "no replay HtoD")
 
         segments = replay_phase_segments(row)
         ttft = segments["ttft"]
@@ -635,8 +658,8 @@ def build_local_timing_phase_timeline_svg(
                 recompute_end,
                 replay_bounds[0],
                 replay_bounds[1],
-                replay_x,
-                y + 48,
+                replay_bar_x,
+                y + 14 + lane_step,
                 replay_bar_w,
                 bar_h,
                 "#db2777",
@@ -646,7 +669,7 @@ def build_local_timing_phase_timeline_svg(
             )
             cursor = recompute_end
         else:
-            missing(svg, replay_x, y + 48, replay_bar_w, bar_h, "no recompute")
+            missing(svg, replay_bar_x, y + 14 + lane_step, replay_bar_w, bar_h, "no recompute")
 
         if cursor is None:
             cursor = replay_prefill_start
@@ -658,8 +681,8 @@ def build_local_timing_phase_timeline_svg(
                 prefill_end,
                 replay_bounds[0],
                 replay_bounds[1],
-                replay_x,
-                y + 82,
+                replay_bar_x,
+                y + 14 + 2 * lane_step,
                 replay_bar_w,
                 bar_h,
                 "#eab308",
@@ -670,7 +693,7 @@ def build_local_timing_phase_timeline_svg(
                 0.9,
             )
         else:
-            missing(svg, replay_x, y + 82, replay_bar_w, bar_h, "no extra prefill")
+            missing(svg, replay_bar_x, y + 14 + 2 * lane_step, replay_bar_w, bar_h, "no extra prefill")
 
         decode_start = first_token
         if decode_start is not None and replay_end is not None and replay_end > decode_start:
@@ -680,8 +703,8 @@ def build_local_timing_phase_timeline_svg(
                 replay_end,
                 replay_bounds[0],
                 replay_bounds[1],
-                replay_x,
-                y + 116,
+                replay_bar_x,
+                y + 14 + 3 * lane_step,
                 replay_bar_w,
                 bar_h,
                 "#ef4444",
@@ -692,7 +715,7 @@ def build_local_timing_phase_timeline_svg(
                 0.72,
             )
         else:
-            missing(svg, replay_x, y + 116, replay_bar_w, bar_h, "no decode")
+            missing(svg, replay_bar_x, y + 14 + 3 * lane_step, replay_bar_w, bar_h, "no decode")
 
     svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#cbd5e1"/>')
     append_timeline_legend(svg, legend, left, legend_y, 160)
