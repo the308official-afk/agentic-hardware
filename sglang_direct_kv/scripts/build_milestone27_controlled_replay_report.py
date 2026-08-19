@@ -26,6 +26,7 @@ from agentic_kv.block_ledger import (
 )
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
+    build_local_timing_phase_timeline_svg,
     build_readable_phase_timeline_svg,
     build_replay_execution_timeline_svg,
     read_jsonl,
@@ -1742,6 +1743,7 @@ def render_html(
         ("replay-attribution", "Replay Path Attribution"),
         ("timelines", "Mixed Timeline Sample"),
         ("readable-phase-timeline", "Readable Phase Timeline"),
+        ("local-timing-phase-timeline", "Local Timing Phase Timeline"),
         ("kv-lifecycle", "KV Lifecycle Evidence"),
         ("kv-block-ledger", "KV Block Ledger"),
         ("replay-execution-timeline", "Replay Execution Timeline"),
@@ -1855,6 +1857,15 @@ def render_html(
     <h3>Timeline Model</h3>
     {timeline_model_table_html()}
     {build_readable_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
+  </details>
+
+  <details id="local-timing-phase-timeline" class="section-card theme-clean">
+    <summary><h2>Local Timing Phase Timeline</h2></summary>
+    <p class="note">This experimental view keeps the same readable columns, but each column has its own local timing. In simple words: the bars inside <code>prefetch</code> are positioned relative to the prefetch attempt, and the bars inside <code>replay path</code> are positioned relative to the replay request.</p>
+    <p class="note">This is useful when bars overlap or get compressed in the global timeline. It shows sequence inside each phase without forcing tiny HtoD events to disappear beside long decode times.</p>
+    <h3>Timeline Model</h3>
+    {timeline_model_table_html()}
+    {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True)}
   </details>
 
   <details id="kv-lifecycle" class="section-card theme-directkv">
