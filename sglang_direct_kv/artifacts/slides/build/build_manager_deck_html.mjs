@@ -7,8 +7,9 @@ const repoRoot = path.resolve(scriptDir, "../../../..");
 const slidesDir = path.join(repoRoot, "sglang_direct_kv/artifacts/slides");
 const imgDir = path.join(slidesDir, "images");
 const outPath = path.join(slidesDir, "agent_aware_kv_movement_manager_deck.html");
+
 const PROJECT_GOAL =
-  "Coding agents naturally pause during tool calls, then resume with tight latency expectations. Current memory movement paths are largely context-agnostic: they can move KV pages, but they do not know which agent needs them, when they are needed, or whether missing the deadline will stall replay. This project aims to quantify that gap and prototype hint-guided KV movement as a path toward smarter DMA engines, KV-aware memory scheduling, and hardware/runtime co-design.";
+  "Coding agents naturally pause during tool calls, then resume with tight latency expectations. Current memory movement paths are largely context-agnostic: they can move KV pages, but they do not know which agent needs them, when they are needed, or whether missing the deadline will stall replay. This project quantifies that gap and prototypes hint-guided KV movement as a path toward smarter DMA engines, KV-aware memory scheduling, and hardware/runtime co-design.";
 
 async function dataUrl(name) {
   const filePath = path.join(imgDir, name);
@@ -24,40 +25,32 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function flow(nodes) {
-  return `<div class="flow">${nodes
-    .map((node, index) => {
-      const arrow = index < nodes.length - 1 ? '<div class="arrow">-&gt;</div>' : "";
-      return `<div class="flow-node ${node.className || ""}"><strong>${escapeHtml(node.title)}</strong>${node.body ? `<span>${escapeHtml(node.body)}</span>` : ""}</div>${arrow}`;
-    })
-    .join("")}</div>`;
+function bullets(items) {
+  return `<ul class="bullets">${items
+    .map((item) => `<li style="--dot:${item.color || "#2563eb"}">${escapeHtml(item.text)}</li>`)
+    .join("")}</ul>`;
 }
 
-function evidenceCard(value, label, className = "") {
-  return `<div class="evidence-card ${className}"><div class="evidence-value">${escapeHtml(value)}</div><div class="evidence-label">${escapeHtml(label)}</div></div>`;
+function stat(value, label, className = "") {
+  return `<div class="stat ${className}"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
 }
 
-function configCell(label, value, className = "") {
-  return `<div class="config-cell ${className}"><div>${escapeHtml(label)}</div><strong>${escapeHtml(value)}</strong></div>`;
+function flow(labels) {
+  return `<div class="plain-flow">${labels.map(escapeHtml).join('<span>-&gt;</span>')}</div>`;
 }
 
-function findingCard(title, body, className = "") {
-  return `<div class="finding-card ${className}"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(body)}</p></div>`;
-}
-
-function slide({ eyebrow = "Agent-aware KV movement", title, subtitle = "", body, source = "", number }) {
+function slide({ title, subtitle = "", body, source = "", number }) {
   return `<section class="slide" id="slide-${number}">
-    <div class="slide-eyebrow">${escapeHtml(eyebrow)}</div>
     <h1>${escapeHtml(title)}</h1>
     ${subtitle ? `<p class="subtitle">${escapeHtml(subtitle)}</p>` : ""}
     <div class="slide-body">${body}</div>
     ${source ? `<div class="source">${escapeHtml(source)}</div>` : ""}
+    <div class="footer">Agent-aware KV movement</div>
     <div class="slide-number">${String(number).padStart(2, "0")}</div>
   </section>`;
 }
 
 async function main() {
-  const setupFlow = await dataUrl("simple_experiment_setup_flow.png");
   const readable = await dataUrl("readable_phase_timeline_8rows_wide.png");
   const globalPrefetch = await dataUrl("global_prefetch_margin_backup.png");
   const syntheticMechanism = await dataUrl("synthetic_profiled_mechanism_timeline_compact.png");
@@ -70,95 +63,75 @@ async function main() {
       title: "Making KV Movement Agent-Aware",
       subtitle: PROJECT_GOAL,
       body: `
-        ${flow([
-          { title: "model turn", className: "blue" },
-          { title: "tool wait", className: "gray" },
-          { title: "replay request", className: "red" },
-          { title: "KV ready?", className: "green" },
+        <hr>
+        ${bullets([
+          { text: "Core problem: memory movement sees bytes, not agent deadlines.", color: "#dc2626" },
+          { text: "Research target: make KV movement deadline-aware and session-aware.", color: "#2563eb" },
+          { text: "Hardware angle: smarter DMA queues, KV metadata, residency protection, and telemetry.", color: "#16a34a" },
         ])}
       `,
     }),
     slide({
       number: 2,
-      title: "The testbed uses both controlled and real agent traffic",
-      subtitle: "Synthetic request generators give clean knobs; SWE-bench/DeepAgents traces give realistic coding-agent behavior.",
+      title: "The testbed has controlled and real traffic",
+      subtitle: "Controlled runs expose mechanisms; real traces keep the workload credible.",
       body: `
-        <img class="setup-flow-img" src="${setupFlow}" alt="Experiment setup flow chart from latest master report">
-        <div class="testbed-grid">
-          <div class="panel">
-            <h2>Controlled synthetic path</h2>
-            <p>Synthetic request generator creates known prompt sizes, tool-wait windows, filler pressure, and replay deadlines.</p>
-          </div>
-          <div class="panel blue-panel">
-            <h2>Real coding-agent path</h2>
-            <p>SWE-bench / AgentBench tasks feed DeepAgents, which emits model turns and tool-call gaps into SGLang.</p>
-          </div>
-        </div>
+        ${bullets([
+          { text: "Controlled synthetic path: prompt size, tool wait, filler pressure, and replay deadline are known.", color: "#2563eb" },
+          { text: "Real coding-agent path: SWE-bench / AgentBench traces feed DeepAgents and SGLang.", color: "#9333ea" },
+          { text: "Both paths measure the same question: was useful KV ready before replay?", color: "#16a34a" },
+        ])}
+        ${flow(["agent task", "tool wait", "replay", "KV ready?"])}
       `,
       source: "Source: latest_master_report.html, Experiment Setup And Manager Summary",
     }),
     slide({
       number: 3,
       title: "Experiment Testbed Setup",
-      subtitle: "Real software-engineering traces flow through DeepAgents into SGLang, where we observe tool gaps, replay requests, and KV behavior.",
+      subtitle: "The real-request path is intentionally simple.",
       body: `
-        <div class="simple-testbed">
-          ${flow([
-            { title: "SWE-bench traces", className: "blue" },
-            { title: "DeepAgents", className: "purple" },
-            { title: "SGLang server", className: "cyan" },
-          ])}
-        </div>
+        ${flow(["SWE-bench traces", "DeepAgents", "SGLang server"])}
+        ${bullets([
+          { text: "DeepAgents produces model turns and tool-call gaps.", color: "#9333ea" },
+          { text: "SGLang serves the model and exposes KV/cache behavior through our hooks.", color: "#0891b2" },
+          { text: "Reports compare replay timing, H2D movement, recompute, and prefetch readiness.", color: "#16a34a" },
+        ])}
       `,
       source: "Source: latest_master_report.html, Experiment Setup And Manager Summary",
     }),
     slide({
       number: 4,
-      title: "Today's DMA engines move bytes, not intent",
-      subtitle: "The hardware path is fast, but it usually lacks agent/session semantics.",
+      title: "Today’s DMA engines move bytes, not intent",
+      subtitle: "That limits how well software hints can be enforced.",
       body: `
-        <div class="two-col">
-          <div class="panel">
-            <h2>Context-agnostic movement</h2>
-            <ul>
-              <li>sees memory ranges</li>
-              <li>does not know the agent session</li>
-              <li>does not know replay deadline</li>
-              <li>does not protect useful prefetched KV</li>
-            </ul>
-          </div>
-          <div class="panel blue-panel">
-            <h2>Hint-aware movement</h2>
-            <ul>
-              <li>tags KV by session and priority</li>
-              <li>schedules against replay deadlines</li>
-              <li>moves hot KV before replay</li>
-              <li>reports late, useful, and wasted movement</li>
-            </ul>
-          </div>
-        </div>
+        ${bullets([
+          { text: "They do not know which KV belongs to which agent session.", color: "#2563eb" },
+          { text: "They do not know when the agent will replay after a tool call.", color: "#9333ea" },
+          { text: "They do not know whether evicting prefetched KV wastes the hint.", color: "#dc2626" },
+          { text: "They do not expose enough semantic telemetry: useful, late, wasted, or evicted-before-use.", color: "#16a34a" },
+        ])}
+        <hr>
+        <p class="takeaway">Hardware opportunity: add KV/session context to the memory movement path.</p>
       `,
     }),
     slide({
       number: 5,
-      title: "The replay path exposes the bottleneck",
-      subtitle: "Several tool-gap sessions show where replay spends time before the first useful token.",
-      body: `
-        <img class="chart-img wide" src="${readable}" alt="Readable phase timeline crop from latest master report">
-      `,
+      title: "Replay path exposes the bottleneck",
+      subtitle: "The timeline shows where replay spends time before the first useful token.",
+      body: `<img class="chart full" src="${readable}" alt="Readable phase timeline crop showing several gap sessions">`,
       source: "Source: latest_master_report.html controlled run",
     }),
     slide({
       number: 6,
-      title: "Software prefetch often missed the agent replay deadline",
-      subtitle: "Across live prefetch attempts, nearly every hint completed after the agent had already resumed.",
+      title: "Software prefetch often missed replay",
+      subtitle: "In the live prefetch-margin run, almost every hint completed after replay was due.",
       body: `
-        <div class="chart-with-callouts">
-          <img class="chart-img" src="${globalPrefetch}" alt="Global prefetch margin dot chart from backup report">
-          <div class="callout-stack">
-            ${evidenceCard("112 of 114", "prefetch attempts were late", "danger")}
-            ${evidenceCard("98.25%", "missed replay due deadline", "warning")}
-            <p class="manager-note">Semantic knowledge alone is not enough if the movement path cannot act on hints predictably.</p>
+        <div class="chart-row">
+          <img class="chart" src="${globalPrefetch}" alt="Global prefetch margin dot chart from backup report">
+          <div class="stats">
+            ${stat("112 / 114", "prefetch attempts were late", "danger")}
+            ${stat("98.25%", "missed the replay deadline", "warn")}
+            <p class="takeaway small">Meaning: hints alone are not enough when the movement path cannot act predictably.</p>
           </div>
         </div>
       `,
@@ -166,30 +139,31 @@ async function main() {
     }),
     slide({
       number: 7,
-      title: "Mechanism traces show why prefetch misses",
-      subtitle: "In the profiled synthetic run, the hint path existed, but KV copy/readiness still landed too late for replay.",
+      title: "Mechanism traces explain the miss",
+      subtitle: "The hint existed, but KV readiness still landed too late for replay.",
       body: `
-        <div class="chart-with-callouts">
-          <img class="chart-img" src="${syntheticMechanism}" alt="Synthetic profiled mechanism timeline showing hint, HtoD copy, replay due, and replay reload behavior">
-          <div class="callout-stack">
-            ${evidenceCard("0 / 6", "ready before replay", "danger")}
-            ${evidenceCard("3 / 6", "visible CUDA HtoD", "cyan-card")}
-            ${evidenceCard("6 / 6", "replay reloaded KV", "warning")}
+        <div class="chart-row">
+          <img class="chart" src="${syntheticMechanism}" alt="Synthetic profiled mechanism timeline">
+          <div class="stats">
+            ${stat("0 / 6", "ready before replay", "danger")}
+            ${stat("3 / 6", "visible CUDA HtoD", "cyan")}
+            ${stat("6 / 6", "replay reloaded KV", "warn")}
           </div>
         </div>
+        <p class="note">Use this as mechanism evidence, not clean TTFT evidence.</p>
       `,
-      source: "Source: latest_synthetic_master_report.html, Profiled Mechanism Timelines; mechanism evidence, not clean TTFT claims",
+      source: "Source: latest_synthetic_master_report.html, Profiled Mechanism Timelines",
     }),
     slide({
       number: 8,
-      title: "Replay-side KV loads missed the deadline in this run",
-      subtitle: "The aggregate view shows whether KV H2D finished before or after replay was due.",
+      title: "Replay-side KV loads missed the deadline",
+      subtitle: "For this controlled no-prefetch run, visible H2D loads finished after replay was due.",
       body: `
-        <div class="chart-with-callouts">
-          <img class="chart-img" src="${h2dReadiness}" alt="Global replay H2D readiness dot chart">
-          <div class="callout-stack">
-            ${evidenceCard("8 / 8", "H2D loads finished late", "danger")}
-            <p class="manager-note">All visible replay-side KV loads finished below the 0 ms deadline line.</p>
+        <div class="chart-row">
+          <img class="chart" src="${h2dReadiness}" alt="Global replay H2D readiness dot chart">
+          <div class="stats">
+            ${stat("8 / 8", "visible replay-side H2D loads finished late", "danger")}
+            <p class="takeaway small">Meaning: memory movement happened, but not early enough for the replay deadline.</p>
           </div>
         </div>
       `,
@@ -198,45 +172,43 @@ async function main() {
     slide({
       number: 9,
       title: "The delay is not just copy time",
-      subtitle: "The request enters normal software/runtime scheduling before visible KV H2D begins.",
+      subtitle: "The request passes through normal runtime scheduling before visible KV H2D begins.",
       body: `
-        <img class="chart-img wide" src="${queueTimeline}" alt="Replay queue timeline versus H2D start chart">
-        <p class="caption">The stage markers separate submission, SGLang receive, scheduler queue/admit, and visible KV H2D movement.</p>
+        <img class="chart full" src="${queueTimeline}" alt="Replay queue timeline versus H2D start chart">
+        <p class="note">Stage markers separate client submit, SGLang receive, scheduler queue/admit, H2D start, and H2D finish.</p>
       `,
       source: "Source: latest_master_report.html, Replay Queue Timeline vs H2D Start",
     }),
     slide({
       number: 10,
       title: "Key findings make the hardware case",
-      subtitle: "The recurring pattern is not just missing bandwidth; it is missing context, deadlines, residency control, and telemetry.",
+      subtitle: "The pattern points to missing context, deadlines, residency control, and telemetry.",
       body: `
-        <div class="findings-grid">
-          ${findingCard("Agent gaps can be short", "Real coding-agent tool gaps can be only tens of milliseconds, leaving little room for slow software paths.", "blue-line")}
-          ${findingCard("Correct hints can still be late", "The hint path can exist, but KV readiness can still miss replay deadlines in profiled traces.", "purple-line")}
-          ${findingCard("Copy time is not the whole delay", "Visible H2D copy can be short while end-to-end request/prefetch latency is much longer.", "cyan-line")}
-          ${findingCard("KV can be lost before replay", "Lifecycle traces show KV written to host, evicted from GPU, then sometimes evicted from host before replay.", "orange-line")}
-          ${findingCard("Replay loads can miss the deadline", "Replay-side H2D movement often starts or finishes after the agent already needed KV ready.", "red-line")}
-        </div>
-        <div class="implication-box">Implication: smarter DMA needs KV/session metadata, deadline-aware scheduling, residency protection, and useful telemetry.</div>
+        ${bullets([
+          { text: "Agent tool gaps can be very short.", color: "#2563eb" },
+          { text: "Correct hints can still finish late.", color: "#9333ea" },
+          { text: "Visible copy time is only part of end-to-end delay.", color: "#0891b2" },
+          { text: "KV can be written to host, evicted from GPU, then lost from host before replay.", color: "#ca8a04" },
+          { text: "Replay-side H2D movement can miss the deadline even when the replay request exists.", color: "#dc2626" },
+        ])}
+        <hr>
+        <p class="takeaway">Conclusion: this is a scheduling and enforceability problem, not just a bandwidth problem.</p>
       `,
       source: "Source: project traces and latest master/synthetic report observations",
     }),
     slide({
       number: 11,
       title: "Hardware support can make hints enforceable",
-      subtitle: "The opportunity is to treat KV as deadline-sensitive memory, not generic bytes.",
+      subtitle: "Treat KV as deadline-sensitive memory, not generic bytes.",
       body: `
-        ${flow([
-          { title: "Runtime hint", body: "session, priority, deadline", className: "blue" },
-          { title: "KV-aware queue", body: "order urgent KV first", className: "purple" },
-          { title: "DMA / copy engine", body: "throttle and prioritize", className: "cyan" },
-          { title: "Residency control", body: "protect useful KV", className: "green" },
-          { title: "Telemetry", body: "late / useful / wasted", className: "gold" },
+        ${bullets([
+          { text: "KV page/session metadata: which agent owns this KV and how urgent is it?", color: "#2563eb" },
+          { text: "Deadline-aware migration queue: move urgent KV before less urgent traffic.", color: "#9333ea" },
+          { text: "Residency protection: keep useful prefetched KV from being evicted too early.", color: "#16a34a" },
+          { text: "Telemetry: count useful, late, wasted, and evicted-before-use movement.", color: "#0891b2" },
         ])}
-        <div class="research-question">
-          <h2>Resulting research question</h2>
-          <p>How much replay latency and wasted movement can be avoided when KV movement has session context, priority, deadline, protection, and telemetry?</p>
-        </div>
+        <hr>
+        <p class="takeaway">Research question: how much replay latency and wasted movement can be avoided when KV movement has session context, priority, deadline, protection, and telemetry?</p>
       `,
     }),
   ];
@@ -256,12 +228,6 @@ async function main() {
       --line: #cbd5e1;
       --paper: #ffffff;
       --bg: #eef2f7;
-      --blue: #2563eb;
-      --purple: #a855f7;
-      --cyan: #06b6d4;
-      --green: #16a34a;
-      --red: #ef4444;
-      --gold: #eab308;
     }
     * { box-sizing: border-box; }
     body {
@@ -279,7 +245,7 @@ async function main() {
       justify-content: space-between;
       gap: 16px;
       padding: 12px 22px;
-      background: rgba(255, 255, 255, 0.92);
+      background: rgba(255, 255, 255, 0.94);
       border-bottom: 1px solid #dbe3ee;
       backdrop-filter: blur(8px);
     }
@@ -289,11 +255,9 @@ async function main() {
     .toolbar a {
       color: var(--body);
       text-decoration: none;
-      border: 1px solid #dbe3ee;
-      border-radius: 999px;
-      padding: 5px 10px;
+      border-bottom: 2px solid #cbd5e1;
+      padding: 3px 5px;
       font-size: 13px;
-      background: #fff;
     }
     main {
       width: min(1280px, 96vw);
@@ -305,337 +269,148 @@ async function main() {
       position: relative;
       width: 100%;
       aspect-ratio: 16 / 9;
-      padding: 38px 42px;
+      padding: 38px 44px;
       background: var(--paper);
       border: 1px solid #d5dde8;
       box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
       overflow: hidden;
     }
-    .slide-eyebrow {
+    h1 {
+      margin: 0;
+      max-width: 1128px;
+      color: var(--ink);
+      font-size: clamp(34px, 4.0vw, 54px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin: 14px 0 0;
+      max-width: 1110px;
+      color: var(--muted);
+      font-size: clamp(16px, 1.55vw, 21px);
+      line-height: 1.35;
+    }
+    .slide-body {
+      margin-top: 34px;
+      height: calc(100% - 194px);
+    }
+    hr {
+      border: 0;
+      border-top: 1px solid var(--line);
+      margin: 28px 0;
+    }
+    .bullets {
+      list-style: none;
+      margin: 0;
+      padding: 0 0 0 38px;
+      display: grid;
+      gap: 28px;
+      max-width: 1080px;
+      font-size: 25px;
+      line-height: 1.28;
+    }
+    .bullets li {
+      position: relative;
+    }
+    .bullets li::before {
+      content: "•";
       position: absolute;
-      left: 42px;
+      left: -34px;
+      top: -2px;
+      color: var(--dot);
+      font-size: 32px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .plain-flow {
+      margin: 44px auto 0;
+      max-width: 1120px;
+      text-align: center;
+      color: var(--ink);
+      font-size: clamp(26px, 3.2vw, 40px);
+      font-weight: 800;
+      line-height: 1.35;
+    }
+    .plain-flow span {
+      color: var(--muted);
+      padding: 0 22px;
+    }
+    .takeaway {
+      margin: 0;
+      color: var(--ink);
+      font-size: 24px;
+      line-height: 1.28;
+      font-weight: 800;
+      text-align: center;
+    }
+    .takeaway.small {
+      text-align: left;
+      font-size: 21px;
+      margin-top: 8px;
+    }
+    .chart {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .chart.full {
+      display: block;
+      height: 472px;
+      width: 100%;
+    }
+    .chart-row {
+      display: grid;
+      grid-template-columns: 1fr 270px;
+      gap: 34px;
+      height: 410px;
+      align-items: center;
+    }
+    .stats {
+      display: grid;
+      gap: 26px;
+      align-content: center;
+    }
+    .stat strong {
+      display: block;
+      color: #dc2626;
+      font-size: 45px;
+      line-height: 1;
+    }
+    .stat.warn strong { color: #c2410c; }
+    .stat.cyan strong { color: #0891b2; }
+    .stat span {
+      display: block;
+      margin-top: 10px;
+      color: var(--body);
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    .note {
+      margin: 12px 0 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .source {
+      position: absolute;
+      left: 44px;
+      bottom: 74px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .footer {
+      position: absolute;
+      left: 44px;
       bottom: 42px;
       color: var(--muted);
       font-size: 14px;
     }
     .slide-number {
       position: absolute;
-      right: 42px;
+      right: 44px;
       bottom: 42px;
       color: var(--muted);
       font-size: 14px;
-    }
-    h1 {
-      margin: 0;
-      max-width: 1110px;
-      color: var(--ink);
-      font-size: clamp(34px, 4.2vw, 56px);
-      line-height: 0.98;
-      letter-spacing: 0;
-    }
-    .subtitle {
-      margin: 18px 0 0;
-      max-width: 1110px;
-      color: var(--muted);
-      font-size: clamp(16px, 1.55vw, 21px);
-      line-height: 1.32;
-    }
-    .slide-body {
-      margin-top: 28px;
-      height: calc(100% - 188px);
-    }
-    .flow {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      margin-top: 58px;
-    }
-    .flow-node {
-      min-height: 82px;
-      width: 170px;
-      display: grid;
-      place-items: center;
-      text-align: center;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #f8fafc;
-      padding: 12px;
-    }
-    .flow-node strong {
-      display: block;
-      color: var(--ink);
-      font-size: 18px;
-      line-height: 1.15;
-    }
-    .flow-node span {
-      display: block;
-      margin-top: 7px;
-      color: var(--body);
-      font-size: 14px;
-      line-height: 1.2;
-    }
-    .arrow { color: var(--muted); font-size: 30px; font-weight: 800; }
-    .blue { background: #dbeafe; border-color: #93c5fd; }
-    .purple { background: #f5f3ff; border-color: #c4b5fd; }
-    .cyan { background: #ecfeff; border-color: #67e8f9; }
-    .green { background: #dcfce7; border-color: #86efac; }
-    .gray { background: #f1f5f9; border-color: #cbd5e1; }
-    .red { background: #fee2e2; border-color: #fca5a5; }
-    .gold { background: #fff7ed; border-color: #fed7aa; }
-    .goal-box {
-      position: absolute;
-      right: 74px;
-      top: 326px;
-      width: 292px;
-      min-height: 194px;
-      border: 1px solid var(--line);
-      background: #f8fafc;
-      border-radius: 10px;
-      padding: 24px;
-    }
-    .goal-box h2,
-    .research-question h2,
-    .panel h2 {
-      margin: 0 0 14px;
-      color: var(--ink);
-      font-size: 25px;
-      line-height: 1.1;
-    }
-    .goal-box p,
-    .research-question p {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.35;
-    }
-    .two-col {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 60px;
-      height: 360px;
-      margin-top: 34px;
-      padding: 0 16px;
-    }
-    .panel {
-      border: 1px solid var(--line);
-      background: #f8fafc;
-      border-radius: 10px;
-      padding: 34px 40px;
-    }
-    .blue-panel { background: #eff6ff; border-color: #bfdbfe; }
-    .panel ul { margin: 20px 0 0; padding-left: 22px; font-size: 22px; line-height: 1.75; }
-    .panel p {
-      margin: 12px 0 0;
-      font-size: 19px;
-      line-height: 1.35;
-      color: var(--body);
-    }
-    .setup-flow-img {
-      display: block;
-      width: 100%;
-      height: 174px;
-      object-fit: contain;
-      border: 1px solid #e5e7eb;
-      border-radius: 10px;
-      background: #fff;
-    }
-    .testbed-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 76px;
-      margin: 36px 48px 0;
-    }
-    .testbed-grid .panel {
-      min-height: 132px;
-      padding: 22px 30px;
-    }
-    .center-note {
-      margin: 14px auto 0;
-      max-width: 1000px;
-      text-align: center;
-      color: var(--body);
-      font-size: 18px;
-      line-height: 1.28;
-    }
-    .simple-testbed .flow {
-      justify-content: center;
-      gap: 28px;
-      margin-top: 96px;
-    }
-    .simple-testbed .flow-node {
-      width: 230px;
-      min-height: 112px;
-    }
-    .simple-testbed .flow-node strong {
-      font-size: 24px;
-    }
-    .signal-box {
-      max-width: 820px;
-      margin: 74px auto 0;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #f8fafc;
-      padding: 22px 28px;
-      color: var(--ink);
-      font-size: 21px;
-      line-height: 1.24;
-      font-weight: 800;
-      text-align: center;
-    }
-    .config-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 22px;
-      margin: 70px 26px 0;
-    }
-    .config-cell {
-      min-height: 96px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #f8fafc;
-      padding: 18px;
-    }
-    .config-cell.warm {
-      background: #fff7ed;
-      border-color: #fed7aa;
-    }
-    .config-cell div {
-      color: var(--muted);
-      font-size: 15px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-    .config-cell strong {
-      display: block;
-      color: var(--ink);
-      font-size: 21px;
-      line-height: 1.12;
-    }
-    .findings-grid {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 20px;
-      margin: 34px 18px 0;
-    }
-    .finding-card {
-      min-height: 132px;
-      grid-column: span 2;
-      border: 1px solid var(--line);
-      border-left-width: 7px;
-      border-radius: 10px;
-      background: #f8fafc;
-      padding: 18px 22px 16px;
-    }
-    .finding-card:nth-child(4) {
-      grid-column: 2 / span 2;
-    }
-    .finding-card:nth-child(5) {
-      grid-column: 4 / span 2;
-    }
-    .finding-card h2 {
-      margin: 0 0 12px;
-      color: var(--ink);
-      font-size: 21px;
-      line-height: 1.12;
-    }
-    .finding-card p {
-      margin: 0;
-      color: var(--body);
-      font-size: 15.5px;
-      line-height: 1.32;
-    }
-    .blue-line { border-left-color: var(--blue); background: #eff6ff; }
-    .purple-line { border-left-color: var(--purple); background: #f5f3ff; }
-    .cyan-line { border-left-color: var(--cyan); background: #ecfeff; }
-    .orange-line { border-left-color: #c2410c; background: #fff7ed; }
-    .red-line { border-left-color: #b91c1c; background: #fef2f2; }
-    .implication-box {
-      margin: 24px auto 0;
-      max-width: 930px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #ffffff;
-      padding: 18px 28px;
-      color: var(--ink);
-      font-size: 20px;
-      line-height: 1.28;
-      font-weight: 800;
-      text-align: center;
-    }
-    .chart-img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      border: 1px solid #e5e7eb;
-      border-radius: 10px;
-      background: #fff;
-    }
-    .chart-img.wide {
-      height: 470px;
-    }
-    .chart-with-callouts {
-      display: grid;
-      grid-template-columns: 1fr 270px;
-      gap: 30px;
-      height: 412px;
-      align-items: center;
-    }
-    .callout-stack { display: grid; gap: 24px; align-content: start; }
-    .evidence-card {
-      min-height: 118px;
-      border: 1px solid #fed7aa;
-      border-radius: 10px;
-      background: #fff7ed;
-      display: grid;
-      place-items: center;
-      text-align: center;
-      padding: 18px;
-    }
-    .evidence-card.danger { background: #fef2f2; border-color: #fecaca; }
-    .evidence-card.cyan-card { background: #ecfeff; border-color: #67e8f9; }
-    .evidence-value {
-      color: #b91c1c;
-      font-size: 44px;
-      font-weight: 800;
-      line-height: 1;
-    }
-    .evidence-card.warning .evidence-value { color: #c2410c; }
-    .evidence-card.cyan-card .evidence-value { color: #0e7490; }
-    .evidence-label {
-      margin-top: 12px;
-      color: var(--body);
-      font-size: 19px;
-      line-height: 1.2;
-    }
-    .manager-note {
-      margin: 0;
-      color: var(--body);
-      font-size: 22px;
-      line-height: 1.22;
-    }
-    .caption {
-      margin: 14px 30px 0;
-      color: var(--body);
-      font-size: 18px;
-    }
-    .source {
-      position: absolute;
-      left: 42px;
-      bottom: 74px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .research-question {
-      margin: 72px auto 0;
-      width: 860px;
-      min-height: 84px;
-      background: #f8fafc;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      display: grid;
-      grid-template-columns: 290px 1fr;
-      gap: 24px;
-      align-items: center;
-      padding: 20px 26px;
     }
     @media print {
       body { background: #fff; }
@@ -656,7 +431,7 @@ async function main() {
   <div class="toolbar">
     <div>
       <strong>Agent-aware KV Movement</strong>
-      <span>HTML slide deck. Refresh after rebuilding from latest report charts.</span>
+      <span>HTML slide deck. Same content as the PowerPoint deck.</span>
     </div>
     <nav>${slides.map((_, index) => `<a href="#slide-${index + 1}">${index + 1}</a>`).join("")}</nav>
   </div>
