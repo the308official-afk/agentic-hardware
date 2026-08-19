@@ -219,6 +219,63 @@
       color: var(--muted);
       font-size: 18px;
     }
+    .impact-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      color: var(--body);
+      font-size: 16px;
+      line-height: 1.18;
+    }
+    .impact-table th {
+      background: #eef2ff;
+      color: var(--ink);
+      text-align: left;
+      font-size: 15px;
+      line-height: 1.1;
+      padding: 11px 12px;
+      border: 1px solid #cbd5e1;
+    }
+    .impact-table td {
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      vertical-align: middle;
+    }
+    .impact-table tbody tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    .impact-table.compact {
+      margin-top: 6px;
+      font-size: 15px;
+    }
+    .impact-table.compact th {
+      background: #f1f5f9;
+      padding: 9px 12px;
+      font-size: 14px;
+    }
+    .impact-table.compact td {
+      padding: 9px 12px;
+    }
+    .impact-table .strong {
+      font-weight: 800;
+      color: var(--ink);
+    }
+    .impact-table .blue { color: #2563eb; }
+    .impact-table .red { color: #dc2626; }
+    .impact-table .purple { color: #9333ea; }
+    .impact-table .green { color: #16a34a; }
+    .impact-table .cyan { color: #0891b2; }
+    .impact-table .gold { color: #ca8a04; }
+    .mini-heading {
+      margin: 18px 0 8px;
+      color: var(--ink);
+      font-size: 22px;
+      line-height: 1;
+    }
+    .table-note {
+      margin-top: 16px;
+      font-size: 20px;
+    }
     .source {
       position: absolute;
       left: 44px;
@@ -386,11 +443,18 @@
   </section>
 <section class="slide" id="slide-11">
     <h1>Potential hardware impact</h1>
-    <p class="subtitle">These are ballpark research targets for tool-heavy agent workloads, not final measured claims.</p>
+    <p class="subtitle">The ranges are tied to observed failure modes, not standalone guesses.</p>
     <div class="slide-body">
-        <ul class="bullets"><li style="--dot:#2563eb">10-30% lower post-tool replay latency when urgent KV is ready before replay.</li><li style="--dot:#9333ea">20-50% fewer late KV reloads with deadline-aware movement scheduling.</li><li style="--dot:#dc2626">Lower tail latency by prioritizing soon-resuming agent sessions.</li><li style="--dot:#0891b2">Less wasted bandwidth by avoiding too-early or evicted-before-use prefetch.</li><li style="--dot:#16a34a">Better effective HBM use through KV-aware residency and eviction choices.</li></ul>
-        <hr>
-        <p class="takeaway">The prototype is designed to turn these targets into measured numbers.</p>
+        <table class="impact-table ">
+    <thead><tr><th>Observed in our traces</th><th>Hardware assist</th><th>Why it moves the number</th><th>Target impact</th></tr></thead>
+    <tbody><tr><td class="red strong">Late replay H2D</td><td>deadline-aware KV queue</td><td>cuts time spent waiting for urgent KV</td><td class="blue strong">10-20% replay latency</td></tr><tr><td class="gold strong">Replay recomputes old prefix</td><td>residency protection</td><td>keeps useful KV available until reuse</td><td class="purple strong">up to 20-30%</td></tr><tr><td class="purple strong">Hints finish after deadline</td><td>session priority metadata</td><td>lets urgent agents preempt low-value movement</td><td class="green strong">20-50% fewer late reloads</td></tr><tr><td class="cyan strong">Useful prefetch is wasted</td><td>KV-aware telemetry</td><td>detects late, wasted, and evicted-before-use KV</td><td class="cyan strong">less bandwidth waste</td></tr></tbody>
+  </table>
+        <h2 class="mini-heading">Range rationale</h2>
+        <table class="impact-table compact">
+    <thead><tr><th>Range</th><th>When it applies</th><th>Reason</th></tr></thead>
+    <tbody><tr><td class="blue strong">Low end: 10-15%</td><td>KV is mostly hot, contexts are short, or pressure is light.</td><td>Hardware mainly removes small replay stalls.</td></tr><tr><td class="red strong">High end: 25-30%+</td><td>Long contexts, high pressure, frequent offload/reload, or recompute.</td><td>Hardware avoids the expensive replay path.</td></tr></tbody>
+  </table>
+        <p class="takeaway table-note">Conservative research targets; the prototype is meant to turn them into measured numbers.</p>
       </div>
     <div class="footer">Agent-aware KV movement</div>
     <div class="slide-number">11</div>

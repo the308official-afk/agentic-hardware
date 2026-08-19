@@ -126,6 +126,48 @@ function addNumberLine(slide, value, label, left, top, color) {
   addText(slide, label, left, top + 48, 250, 42, { size: 19, color: C.body });
 }
 
+function addImpactTable(slide, rows, left, top, colWidths, rowHeight, opts = {}) {
+  const headers = opts.headers ?? [];
+  const headerHeight = opts.headerHeight ?? 40;
+  const totalWidth = colWidths.reduce((sum, width) => sum + width, 0);
+  slide.shapes.add({
+    geometry: "rect",
+    position: { left, top, width: totalWidth, height: headerHeight },
+    fill: opts.headerFill ?? "#eef2ff",
+    line: { style: "solid", fill: C.rule, width: 1 },
+  });
+  let x = left;
+  headers.forEach((header, idx) => {
+    addText(slide, header, x + 9, top + 10, colWidths[idx] - 18, headerHeight - 12, {
+      size: opts.headerSize ?? 15,
+      bold: true,
+      color: opts.headerColor ?? C.ink,
+      valign: "middle",
+    });
+    x += colWidths[idx];
+  });
+  rows.forEach((row, rowIdx) => {
+    const y = top + headerHeight + rowIdx * rowHeight;
+    slide.shapes.add({
+      geometry: "rect",
+      position: { left, top: y, width: totalWidth, height: rowHeight },
+      fill: rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc",
+      line: { style: "solid", fill: C.rule, width: 0.8 },
+    });
+    let cellX = left;
+    row.forEach((cell, cellIdx) => {
+      const color = cell.color ?? C.body;
+      addText(slide, cell.text, cellX + 9, y + 9, colWidths[cellIdx] - 18, rowHeight - 14, {
+        size: cell.size ?? opts.size ?? 15,
+        bold: cell.bold ?? false,
+        color,
+        valign: "middle",
+      });
+      cellX += colWidths[cellIdx];
+    });
+  });
+}
+
 async function addImage(slide, name, left, top, width, height, alt, fit = "contain") {
   slide.images.add({
     blob: await imageBytes(name),
@@ -424,24 +466,75 @@ async function main() {
   {
     const slide = deck.slides.add();
     slide.background.fill = "#ffffff";
-    addTitle(slide, "Potential hardware impact", "These are ballpark research targets for tool-heavy agent workloads, not final measured claims.");
-    addBullets(
+    addTitle(slide, "Potential hardware impact", "The ranges are tied to observed failure modes, not standalone guesses.");
+    addImpactTable(
       slide,
       [
-        { text: "10-30% lower post-tool replay latency when urgent KV is ready before replay.", color: C.blue },
-        { text: "20-50% fewer late KV reloads with deadline-aware movement scheduling.", color: C.purple },
-        { text: "Lower tail latency by prioritizing soon-resuming agent sessions.", color: C.red },
-        { text: "Less wasted bandwidth by avoiding too-early or evicted-before-use prefetch.", color: C.cyan },
-        { text: "Better effective HBM use through KV-aware residency and eviction choices.", color: C.green },
+        [
+          { text: "Late replay H2D", bold: true, color: C.red },
+          { text: "deadline-aware KV queue" },
+          { text: "cuts time spent waiting for urgent KV" },
+          { text: "10-20% replay latency", bold: true, color: C.blue },
+        ],
+        [
+          { text: "Replay recomputes old prefix", bold: true, color: C.gold },
+          { text: "residency protection" },
+          { text: "keeps useful KV available until reuse" },
+          { text: "up to 20-30%", bold: true, color: C.purple },
+        ],
+        [
+          { text: "Hints finish after deadline", bold: true, color: C.purple },
+          { text: "session priority metadata" },
+          { text: "lets urgent agents preempt low-value movement" },
+          { text: "20-50% fewer late reloads", bold: true, color: C.green },
+        ],
+        [
+          { text: "Useful prefetch is wasted", bold: true, color: C.cyan },
+          { text: "KV-aware telemetry" },
+          { text: "detects late, wasted, and evicted-before-use KV" },
+          { text: "less bandwidth waste", bold: true, color: C.cyan },
+        ],
       ],
-      92,
-      166,
-      1050,
-      { size: 25, gap: 72, height: 54 },
+      54,
+      156,
+      [260, 250, 385, 250],
+      66,
+      {
+        headers: ["Observed in our traces", "Hardware assist", "Why it moves the number", "Target impact"],
+        headerFill: "#eef2ff",
+        headerSize: 15,
+        size: 15,
+      },
     );
-    addRule(slide, 570, C.rule);
-    addText(slide, "The prototype is designed to turn these targets into measured numbers.", 92, 594, 1040, 30, {
-      size: 23,
+    addText(slide, "Range rationale", 64, 482, 250, 28, { size: 20, bold: true, color: C.ink });
+    addImpactTable(
+      slide,
+      [
+        [
+          { text: "Low end: 10-15%", bold: true, color: C.blue },
+          { text: "KV is mostly hot, contexts are short, or pressure is light." },
+          { text: "Hardware mainly removes small replay stalls." },
+        ],
+        [
+          { text: "High end: 25-30%+", bold: true, color: C.red },
+          { text: "Long contexts, high pressure, frequent offload/reload, or recompute." },
+          { text: "Hardware avoids the expensive replay path." },
+        ],
+      ],
+      64,
+      510,
+      [230, 500, 390],
+      38,
+      {
+        headers: ["Range", "When it applies", "Reason"],
+        headerFill: "#f1f5f9",
+        headerSize: 14,
+        size: 14,
+        headerHeight: 34,
+      },
+    );
+    addText(slide, "Framing: these are conservative research targets; the prototype is meant to turn them into measured numbers.", 92, 633, 1040, 30, {
+      size: 19,
       bold: true,
       color: C.ink,
       align: "center",
@@ -449,7 +542,9 @@ async function main() {
     addFooter(slide, 11);
     addNotes(slide, [
       "This slide intentionally frames benefits as ballpark expectations and research targets.",
-      "The user previously asked for impact statements like 20% lower latency. Keep claims conservative until clean manager-grade measurements are available.",
+      "The table ties each benefit estimate to an observed mechanism: late replay H2D, recompute after KV loss, late hint completion, and wasted prefetch.",
+      "Low-end gains are plausible when KV is already mostly resident and only small stalls remain.",
+      "High-end gains are plausible when contexts are long, cache pressure is high, and replay falls back to H2D reload or recompute.",
       "Potential benefit ranges are internal proposal estimates based on observed late prefetch/replay H2D patterns and expected gains from deadline-aware KV movement.",
     ]);
   }

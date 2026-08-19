@@ -35,6 +35,23 @@ function stat(value, label, className = "") {
   return `<div class="stat ${className}"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
 }
 
+function impactTable(headers, rows, className = "") {
+  return `<table class="impact-table ${className}">
+    <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+    <tbody>${rows
+      .map(
+        (row) =>
+          `<tr>${row
+            .map(
+              (cell) =>
+                `<td${cell.className ? ` class="${escapeHtml(cell.className)}"` : ""}>${escapeHtml(cell.text)}</td>`,
+            )
+            .join("")}</tr>`,
+      )
+      .join("")}</tbody>
+  </table>`;
+}
+
 function flow(labels) {
   return `<div class="plain-flow">${labels.map(escapeHtml).join('<span>-&gt;</span>')}</div>`;
 }
@@ -211,17 +228,55 @@ async function main() {
     slide({
       number: 11,
       title: "Potential hardware impact",
-      subtitle: "These are ballpark research targets for tool-heavy agent workloads, not final measured claims.",
+      subtitle: "The ranges are tied to observed failure modes, not standalone guesses.",
       body: `
-        ${bullets([
-          { text: "10-30% lower post-tool replay latency when urgent KV is ready before replay.", color: "#2563eb" },
-          { text: "20-50% fewer late KV reloads with deadline-aware movement scheduling.", color: "#9333ea" },
-          { text: "Lower tail latency by prioritizing soon-resuming agent sessions.", color: "#dc2626" },
-          { text: "Less wasted bandwidth by avoiding too-early or evicted-before-use prefetch.", color: "#0891b2" },
-          { text: "Better effective HBM use through KV-aware residency and eviction choices.", color: "#16a34a" },
-        ])}
-        <hr>
-        <p class="takeaway">The prototype is designed to turn these targets into measured numbers.</p>
+        ${impactTable(
+          ["Observed in our traces", "Hardware assist", "Why it moves the number", "Target impact"],
+          [
+            [
+              { text: "Late replay H2D", className: "red strong" },
+              { text: "deadline-aware KV queue" },
+              { text: "cuts time spent waiting for urgent KV" },
+              { text: "10-20% replay latency", className: "blue strong" },
+            ],
+            [
+              { text: "Replay recomputes old prefix", className: "gold strong" },
+              { text: "residency protection" },
+              { text: "keeps useful KV available until reuse" },
+              { text: "up to 20-30%", className: "purple strong" },
+            ],
+            [
+              { text: "Hints finish after deadline", className: "purple strong" },
+              { text: "session priority metadata" },
+              { text: "lets urgent agents preempt low-value movement" },
+              { text: "20-50% fewer late reloads", className: "green strong" },
+            ],
+            [
+              { text: "Useful prefetch is wasted", className: "cyan strong" },
+              { text: "KV-aware telemetry" },
+              { text: "detects late, wasted, and evicted-before-use KV" },
+              { text: "less bandwidth waste", className: "cyan strong" },
+            ],
+          ],
+        )}
+        <h2 class="mini-heading">Range rationale</h2>
+        ${impactTable(
+          ["Range", "When it applies", "Reason"],
+          [
+            [
+              { text: "Low end: 10-15%", className: "blue strong" },
+              { text: "KV is mostly hot, contexts are short, or pressure is light." },
+              { text: "Hardware mainly removes small replay stalls." },
+            ],
+            [
+              { text: "High end: 25-30%+", className: "red strong" },
+              { text: "Long contexts, high pressure, frequent offload/reload, or recompute." },
+              { text: "Hardware avoids the expensive replay path." },
+            ],
+          ],
+          "compact",
+        )}
+        <p class="takeaway table-note">Conservative research targets; the prototype is meant to turn them into measured numbers.</p>
       `,
     }),
     slide({
@@ -461,6 +516,63 @@ async function main() {
       text-align: center;
       color: var(--muted);
       font-size: 18px;
+    }
+    .impact-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      color: var(--body);
+      font-size: 16px;
+      line-height: 1.18;
+    }
+    .impact-table th {
+      background: #eef2ff;
+      color: var(--ink);
+      text-align: left;
+      font-size: 15px;
+      line-height: 1.1;
+      padding: 11px 12px;
+      border: 1px solid #cbd5e1;
+    }
+    .impact-table td {
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      vertical-align: middle;
+    }
+    .impact-table tbody tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    .impact-table.compact {
+      margin-top: 6px;
+      font-size: 15px;
+    }
+    .impact-table.compact th {
+      background: #f1f5f9;
+      padding: 9px 12px;
+      font-size: 14px;
+    }
+    .impact-table.compact td {
+      padding: 9px 12px;
+    }
+    .impact-table .strong {
+      font-weight: 800;
+      color: var(--ink);
+    }
+    .impact-table .blue { color: #2563eb; }
+    .impact-table .red { color: #dc2626; }
+    .impact-table .purple { color: #9333ea; }
+    .impact-table .green { color: #16a34a; }
+    .impact-table .cyan { color: #0891b2; }
+    .impact-table .gold { color: #ca8a04; }
+    .mini-heading {
+      margin: 18px 0 8px;
+      color: var(--ink);
+      font-size: 22px;
+      line-height: 1;
+    }
+    .table-note {
+      margin-top: 16px;
+      font-size: 20px;
     }
     .source {
       position: absolute;
