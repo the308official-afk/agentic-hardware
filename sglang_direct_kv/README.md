@@ -51,6 +51,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 30: Stable KV Block Ledger | Ready | [Milestone 30](#milestone-30-stable-kv-block-ledger) |
 | Milestone 31: Exact KV Movement Attribution | Ready | [Milestone 31](#milestone-31-exact-kv-movement-attribution) |
 | Milestone 32: KV H2D Bandwidth Pressure | Ready | [Milestone 32](#milestone-32-kv-h2d-bandwidth-pressure) |
+| Milestone 33: Replay Delay Breakdown | Ready | [Milestone 33](#milestone-33-replay-delay-breakdown) |
 
 ## What We Are Testing
 
@@ -6060,6 +6061,59 @@ If G00 is late but the contention timeline says the H2D path was quiet before
 G00's own copy began, the delay likely happened before SGLang reached the
 actual host-to-device copy path. That points to request scheduling / cache-path
 latency, not raw copy bandwidth alone.
+```
+
+### Milestone 33: Replay Delay Breakdown
+
+Status: ready.
+
+Full note:
+
+```text
+REPLAY_DELAY_BREAKDOWN.md
+```
+
+Why this milestone is needed:
+
+```text
+The H2D pressure view can show that a replay-side KV copy started late.
+
+The replay delay breakdown explains why it started late:
+  was the replay submitted late?
+  did it wait in the client/workload driver?
+  did it wait inside SGLang's scheduler?
+  did it reach cache/load-back late?
+  was the actual H2D copy slow?
+```
+
+What it adds to `latest_master_report.html`:
+
+```text
+Replay Delay Breakdown
+  Delay Waterfall Timeline
+  Main Verdicts
+  Stage Duration Table
+  What Was Running Instead
+  Evidence Confidence
+```
+
+New output files:
+
+```text
+artifacts/results/reports/<report_label>/report/replay_delay_breakdown.csv
+artifacts/results/reports/<report_label>/report/replay_delay_verdicts.csv
+artifacts/results/reports/<report_label>/report/replay_delay_running_context.csv
+```
+
+Simple interpretation:
+
+```text
+If G04 says "copy issued late, copy was fast", the real problem was not that
+the H2D copy took 75 seconds. The problem was that the copy was not issued
+until much later than the replay deadline.
+
+If G04 says "copy blocked behind other H2D", then visible H2D work from other
+rows was already happening before G04's own H2D started.
 ```
 
 ## Directory Layout

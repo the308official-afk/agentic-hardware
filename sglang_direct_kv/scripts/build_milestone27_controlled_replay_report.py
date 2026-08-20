@@ -2200,6 +2200,576 @@ def replay_h2d_readiness_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[st
     return output
 
 
+def stage_confidence(value: Any, source: str) -> str:
+    if as_float(value) is None:
+        return "missing"
+    return source
+
+
+def positive_delta(start: Any, end: Any) -> float | str:
+    start_value = as_float(start)
+    end_value = as_float(end)
+    if start_value is None or end_value is None:
+        return ""
+    return round(max(0.0, end_value - start_value), 3)
+
+
+def first_token_ms(row: dict[str, Any]) -> float | None:
+    start = as_float(row.get("resume_start_ms"))
+    ttft = as_float(row.get("resume_ttft_ms"))
+    if start is None or ttft is None:
+        return None
+    return start + ttft
+
+
+def replay_first_cache_event_ms(row: dict[str, Any]) -> float | None:
+    replay_start = as_float(row.get("resume_start_ms"))
+    first_delay = as_float(row.get("replay_first_cache_event_delay_ms"))
+    if replay_start is None or first_delay is None:
+        return None
+    return replay_start + first_delay
+
+
+def replay_delay_segment_values(row: dict[str, Any]) -> dict[str, float]:
+    due = as_float(row.get("tool_gap_end_ms"))
+    submitted = as_float(row.get("resume_submitted_ms"))
+    request_start = as_float(row.get("resume_start_ms"))
+    sglang_receive = as_float(row.get("replay_sglang_receive_start_ms"))
+    scheduler_queue = as_float(row.get("replay_scheduler_queue_enter_start_ms"))
+    scheduler_admit = as_float(row.get("replay_scheduler_admit_start_ms"))
+    cache_first = replay_first_cache_event_ms(row)
+    h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+    h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+    first_token = first_token_ms(row)
+
+    segments: dict[str, float] = {}
+
+    def add(name: str, start: Any, end: Any) -> None:
+        value = positive_delta(start, end)
+        if isinstance(value, (int, float)) and value > 0:
+            segments[name] = float(value)
+
+    add("due_to_client_submit", due, submitted)
+    add("client_submit_to_request_start", submitted, request_start)
+    add("request_start_to_sglang_receive", request_start, sglang_receive)
+    add("sglang_receive_to_scheduler_queue", sglang_receive, scheduler_queue)
+    add("scheduler_queue_wait", scheduler_queue, scheduler_admit)
+    add("scheduler_admit_to_cache_lookup", scheduler_admit, cache_first)
+    add("cache_lookup_to_h2d_start", cache_first, h2d_start)
+    add("scheduler_admit_to_h2d_start", scheduler_admit, h2d_start)
+    add("h2d_copy", h2d_start, h2d_end)
+    add("h2d_end_to_first_token", h2d_end, first_token)
+    if "h2d_end_to_first_token" not in segments:
+        add("request_start_to_first_token", request_start, first_token)
+    return segments
+
+
+def delay_source_name(segment: str) -> str:
+    names = {
+        "due_to_client_submit": "client submitted late",
+        "client_submit_to_request_start": "client/workload dispatch dominated",
+        "request_start_to_sglang_receive": "request transport/server receive dominated",
+        "sglang_receive_to_scheduler_queue": "SGLang receive-to-queue dominated",
+        "scheduler_queue_wait": "scheduler queue dominated",
+        "scheduler_admit_to_cache_lookup": "scheduler/cache lookup dominated",
+        "cache_lookup_to_h2d_start": "cache/load-back path dominated",
+        "scheduler_admit_to_h2d_start": "scheduler admit-to-H2D dominated",
+        "h2d_copy": "H2D copy dominated",
+        "h2d_end_to_first_token": "post-H2D prefill/decode dominated",
+        "request_start_to_first_token": "replay TTFT dominated",
+    }
+    return names.get(segment, segment.replace("_", " "))
+
+
+def copy_verdict_for_delay_row(
+    row: dict[str, Any],
+    segments: dict[str, float],
+    contention_by_row: dict[str, dict[str, Any]],
+) -> tuple[str, str]:
+    label = str(row.get("timeline_label") or "")
+    contention = contention_by_row.get(label, {})
+    if str(contention.get("verdict") or "") == "blocked behind other H2D":
+        return (
+            "copy blocked behind other H2D",
+            "Other exact H2D events were visible between replay due and this row's own H2D start.",
+        )
+
+    h2d_start_delay = None
+    due = as_float(row.get("tool_gap_end_ms"))
+    h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+    h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+    if due is not None and h2d_start is not None:
+        h2d_start_delay = h2d_start - due
+    h2d_duration = segments.get("h2d_copy", 0.0)
+
+    if h2d_start is None or h2d_end is None or not has_events(row.get("replay_kv_h2d_events")):
+        new_prefill = as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
+        if new_prefill >= 128:
+            return (
+                "no replay H2D; recompute/prefill path",
+                "Replay did not show host-to-device KV movement, and cache counters suggest missing prefix work was rebuilt.",
+            )
+        return (
+            "no visible replay H2D",
+            "Replay did not show host-to-device KV movement in this row.",
+        )
+    if h2d_start_delay is not None and h2d_start_delay > 1000 and h2d_duration < max(1000.0, h2d_start_delay * 0.1):
+        return (
+            "copy issued late, copy was fast",
+            "The target H2D request started long after replay due, but the visible copy window itself was short.",
+        )
+    if h2d_duration >= max(1000.0, (h2d_start_delay or 0.0) * 0.5):
+        return (
+            "copy issued on time or near-time, copy was slow",
+            "The visible H2D copy window is a large part of the replay delay.",
+        )
+    return (
+        "target H2D visible",
+        "Replay-side host-to-device KV movement was visible and attributable.",
+    )
+
+
+def replay_delay_breakdown_rows(
+    gaps: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    contention_summary = h2d_contention_summary_rows(select_h2d_contention_targets(gaps, max_targets=len(gaps)), h2d_events)
+    contention_by_row = {str(row.get("target_row") or ""): row for row in contention_summary}
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(gaps):
+        due = as_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        submitted = as_float(row.get("resume_submitted_ms"))
+        request_start = as_float(row.get("resume_start_ms"))
+        sglang_receive = as_float(row.get("replay_sglang_receive_start_ms"))
+        scheduler_queue = as_float(row.get("replay_scheduler_queue_enter_start_ms"))
+        scheduler_admit = as_float(row.get("replay_scheduler_admit_start_ms"))
+        cache_first = replay_first_cache_event_ms(row)
+        h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+        h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+        token_time = first_token_ms(row)
+        segments = replay_delay_segment_values(row)
+        dominant_segment = max(segments, key=segments.get) if segments else ""
+        dominant_ms = round(segments[dominant_segment], 3) if dominant_segment else ""
+        copy_verdict, copy_explanation = copy_verdict_for_delay_row(row, segments, contention_by_row)
+        main_source = delay_source_name(dominant_segment) if dominant_segment else "unknown / missing instrumentation"
+
+        exact_stages = [
+            stage_confidence(sglang_receive, "exact"),
+            stage_confidence(scheduler_queue, "exact"),
+            stage_confidence(scheduler_admit, "exact"),
+            stage_confidence(h2d_start, "exact"),
+            stage_confidence(h2d_end, "exact"),
+        ]
+        measured_stages = [
+            stage_confidence(submitted, "measured"),
+            stage_confidence(request_start, "measured"),
+            stage_confidence(token_time, "measured"),
+        ]
+        inferred_stages = [stage_confidence(cache_first, "inferred")]
+        missing_count = exact_stages.count("missing") + measured_stages.count("missing") + inferred_stages.count("missing")
+        if missing_count <= 1 and h2d_start is not None and h2d_end is not None:
+            confidence = "high"
+        elif h2d_start is not None or scheduler_admit is not None:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+        rows.append(
+            {
+                "row": label,
+                "session_id": row.get("session_id", ""),
+                "case_id": row.get("case_id", ""),
+                "mode": row.get("mode", ""),
+                "fillers": case_fillers(row),
+                "task_index": row.get("task_index", ""),
+                "gap_order_in_task": row.get("gap_order_in_task", ""),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "copy_verdict": copy_verdict,
+                "main_delay_source": main_source,
+                "dominant_delay_stage": dominant_segment,
+                "dominant_delay_ms": dominant_ms,
+                "copy_explanation": copy_explanation,
+                "delay_confidence": confidence,
+                "replay_due_ms": round(due, 3),
+                "client_submit_relative_ms": round(submitted - due, 3) if submitted is not None else "",
+                "request_start_relative_ms": round(request_start - due, 3) if request_start is not None else "",
+                "sglang_receive_relative_ms": round(sglang_receive - due, 3) if sglang_receive is not None else "",
+                "scheduler_queue_relative_ms": round(scheduler_queue - due, 3) if scheduler_queue is not None else "",
+                "scheduler_admit_relative_ms": round(scheduler_admit - due, 3) if scheduler_admit is not None else "",
+                "cache_first_event_relative_ms": round(cache_first - due, 3) if cache_first is not None else "",
+                "h2d_start_relative_ms": round(h2d_start - due, 3) if h2d_start is not None else "",
+                "h2d_end_relative_ms": round(h2d_end - due, 3) if h2d_end is not None else "",
+                "first_token_relative_ms": round(token_time - due, 3) if token_time is not None else "",
+                "due_to_client_submit_ms": segments.get("due_to_client_submit", ""),
+                "client_submit_to_request_start_ms": segments.get("client_submit_to_request_start", ""),
+                "request_start_to_sglang_receive_ms": segments.get("request_start_to_sglang_receive", ""),
+                "sglang_receive_to_scheduler_queue_ms": segments.get("sglang_receive_to_scheduler_queue", ""),
+                "scheduler_queue_wait_ms": segments.get("scheduler_queue_wait", ""),
+                "scheduler_admit_to_cache_lookup_ms": segments.get("scheduler_admit_to_cache_lookup", ""),
+                "cache_lookup_to_h2d_start_ms": segments.get("cache_lookup_to_h2d_start", ""),
+                "scheduler_admit_to_h2d_start_ms": segments.get("scheduler_admit_to_h2d_start", ""),
+                "h2d_duration_ms": segments.get("h2d_copy", ""),
+                "h2d_end_to_first_token_ms": segments.get("h2d_end_to_first_token", ""),
+                "request_start_to_first_token_ms": segments.get("request_start_to_first_token", ""),
+                "scheduler_queue_waiting_len": row.get("replay_scheduler_queue_waiting_len", ""),
+                "scheduler_queue_running_len": row.get("replay_scheduler_queue_running_len", ""),
+                "scheduler_admit_running_batch_requests": row.get("replay_scheduler_admit_running_batch_requests", ""),
+                "scheduler_admit_running_batch_extend_tokens": row.get("replay_scheduler_admit_running_batch_extend_tokens", ""),
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "replay_h2d_tokens": row.get("lifecycle_replay_h2d_tokens") or row.get("replay_host_load_tokens", ""),
+                "recompute_tokens_est": row.get("replay_new_prefill_tokens_est", ""),
+                "stage_confidence_summary": (
+                    "client timestamps=measured; SGLang receive/scheduler/H2D hooks=exact when present; "
+                    "first cache event and recompute windows=inferred; missing stages are left blank"
+                ),
+                "simple_meaning": (
+                    f"{label}: {copy_verdict}. Dominant observed delay: {main_source}"
+                    + (f" ({display_ms(dominant_ms)})." if dominant_ms != "" else ".")
+                ),
+            }
+        )
+    return rows
+
+
+def replay_delay_verdict_rows(delay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    verdict_counts = Counter(str(row.get("copy_verdict") or "") for row in delay_rows)
+    source_counts = Counter(str(row.get("main_delay_source") or "") for row in delay_rows)
+    rows: list[dict[str, Any]] = []
+    for verdict, count in sorted(verdict_counts.items()):
+        if not verdict:
+            continue
+        rows.append(
+            {
+                "type": "copy verdict",
+                "label": verdict,
+                "rows": count,
+                "pct": round(count * 100.0 / len(delay_rows), 2) if delay_rows else "",
+            }
+        )
+    for source, count in sorted(source_counts.items()):
+        if not source:
+            continue
+        rows.append(
+            {
+                "type": "main delay source",
+                "label": source,
+                "rows": count,
+                "pct": round(count * 100.0 / len(delay_rows), 2) if delay_rows else "",
+            }
+        )
+    return rows
+
+
+def trace_base_by_case(trace_rows: list[dict[str, Any]]) -> dict[str, float]:
+    bases: dict[str, float] = {}
+    for row in trace_rows:
+        case_id = str(row.get("ledger_case_id") or "")
+        ts = as_float(row.get("ts_ns"))
+        if not case_id or ts is None:
+            continue
+        seconds = ts / 1_000_000_000.0
+        if case_id not in bases or seconds < bases[case_id]:
+            bases[case_id] = seconds
+    return bases
+
+
+def trace_local_ms(row: dict[str, Any], bases: dict[str, float]) -> float | None:
+    case_id = str(row.get("ledger_case_id") or "")
+    base = bases.get(case_id)
+    ts = as_float(row.get("ts_ns"))
+    if base is None or ts is None:
+        return None
+    return (ts / 1_000_000_000.0 - base) * 1000.0
+
+
+def trace_scheduler_metric(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = as_float(row.get(key))
+        if value is not None:
+            return value
+    context = row.get("kv_context")
+    if isinstance(context, dict):
+        state = context.get("scheduler_state")
+        if isinstance(state, dict):
+            for key in keys:
+                value = as_float(state.get(key))
+                if value is not None:
+                    return value
+    return None
+
+
+def replay_delay_running_context_rows(
+    gaps: list[dict[str, Any]],
+    trace_rows: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    bases = trace_base_by_case(trace_rows)
+    by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        case_id = str(row.get("ledger_case_id") or "")
+        if case_id:
+            by_case[case_id].append(row)
+
+    output: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        label = str(gap.get("timeline_label") or f"G{idx:02d}")
+        case_id = str(gap.get("case_id") or "")
+        target_h2d_start = as_float(gap.get("replay_kv_h2d_start_ms"))
+        token_time = first_token_ms(gap)
+        window_end = target_h2d_start or token_time
+        if window_end is None:
+            continue
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        exact_h2d_in_window = h2d_events_overlap_window(h2d_events, due, window_end, case_id=case_id)
+        other_h2d = [
+            event for event in exact_h2d_in_window if str(event.get("ledger_session_id") or "") != target_session
+        ]
+        target_h2d = [
+            event for event in exact_h2d_in_window if str(event.get("ledger_session_id") or "") == target_session
+        ]
+
+        counts: Counter[str] = Counter()
+        max_waiting: float | str = ""
+        max_running: float | str = ""
+        max_extend_tokens: float | str = ""
+        max_request_count: float | str = ""
+        for event in by_case.get(case_id, []):
+            t = trace_local_ms(event, bases)
+            if t is None or not (due <= t <= window_end):
+                continue
+            name = str(event.get("event") or "")
+            if name.startswith("kv_telemetry.scheduler") or name.startswith("scheduler."):
+                counts["scheduler_events"] += 1
+            if name == "kv_telemetry.prefill.end" or name.startswith("worker.forward"):
+                counts["model_forward_events"] += 1
+            if name.endswith("process_batch_result_prefill.end"):
+                counts["prefill_batch_events"] += 1
+            if name.endswith("process_batch_result_decode.end"):
+                counts["decode_batch_events"] += 1
+            if (
+                name.startswith("kv_telemetry.cache")
+                or name.startswith("hiradix.")
+                or name.startswith("hicache.")
+            ):
+                counts["cache_hicache_events"] += 1
+            if name.startswith("hostpool.load_to_device_per_layer"):
+                counts["raw_hostpool_h2d_events"] += 1
+            if name.startswith("m27.request"):
+                counts["client_request_events"] += 1
+
+            waiting = trace_scheduler_metric(event, "scheduler_waiting_queue_len", "waiting_queue_len")
+            running = trace_scheduler_metric(event, "scheduler_running_batch_request_count", "scheduler_cur_batch_request_count")
+            extend_tokens = trace_scheduler_metric(event, "scheduler_running_batch_extend_num_tokens", "scheduler_cur_batch_extend_num_tokens")
+            request_count = trace_scheduler_metric(event, "request_count")
+            if waiting is not None:
+                max_waiting = max(float(max_waiting or 0), waiting)
+            if running is not None:
+                max_running = max(float(max_running or 0), running)
+            if extend_tokens is not None:
+                max_extend_tokens = max(float(max_extend_tokens or 0), extend_tokens)
+            if request_count is not None:
+                max_request_count = max(float(max_request_count or 0), request_count)
+
+        output.append(
+            {
+                "row": label,
+                "case_id": case_id,
+                "mode": gap.get("mode", ""),
+                "fillers": case_fillers(gap),
+                "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                "delay_window_start": "replay due",
+                "delay_window_end": "target H2D start" if target_h2d_start is not None else "first token",
+                "delay_window_ms": round(window_end - due, 3),
+                "scheduler_events": counts["scheduler_events"],
+                "model_forward_events": counts["model_forward_events"],
+                "prefill_batch_events": counts["prefill_batch_events"],
+                "decode_batch_events": counts["decode_batch_events"],
+                "cache_hicache_events": counts["cache_hicache_events"],
+                "raw_hostpool_h2d_events": counts["raw_hostpool_h2d_events"],
+                "client_request_events": counts["client_request_events"],
+                "exact_target_h2d_events_before_target_start": len(target_h2d),
+                "exact_other_h2d_events_before_target_start": len(other_h2d),
+                "max_scheduler_waiting_queue_len": int(max_waiting) if max_waiting != "" else "",
+                "max_running_batch_requests": int(max_running) if max_running != "" else "",
+                "max_running_batch_extend_tokens": int(max_extend_tokens) if max_extend_tokens != "" else "",
+                "max_request_count_seen": int(max_request_count) if max_request_count != "" else "",
+                "simple_meaning": (
+                    f"Between replay due and the target H2D start, trace saw "
+                    f"{counts['model_forward_events']} model-forward events, "
+                    f"{counts['cache_hicache_events']} cache/HiCache events, "
+                    f"{counts['scheduler_events']} scheduler events, and "
+                    f"{len(other_h2d)} exact other H2D events in the same case."
+                ),
+            }
+        )
+    return output
+
+
+def build_replay_delay_waterfall_svg(rows: list[dict[str, Any]], max_rows: int = 12) -> str:
+    selected = rows[:max_rows]
+    if not selected:
+        return "<p>No replay delay rows were available for the waterfall.</p>"
+    width = 1480
+    left = 230
+    right = 40
+    top = 64
+    row_h = 56
+    legend_h = 72
+    height = top + row_h * len(selected) + legend_h
+    plot_w = width - left - right
+    stages = [
+        ("due_to_client_submit_ms", "submit", "#94a3b8"),
+        ("client_submit_to_request_start_ms", "client dispatch", "#2563eb"),
+        ("request_start_to_sglang_receive_ms", "receive", "#f97316"),
+        ("sglang_receive_to_scheduler_queue_ms", "queue enter", "#ca8a04"),
+        ("scheduler_queue_wait_ms", "sched wait", "#db2777"),
+        ("scheduler_admit_to_cache_lookup_ms", "cache lookup", "#8b5cf6"),
+        ("cache_lookup_to_h2d_start_ms", "load path", "#7c3aed"),
+        ("h2d_duration_ms", "H2D", "#06b6d4"),
+        ("h2d_end_to_first_token_ms", "post-H2D", "#eab308"),
+        ("request_start_to_first_token_ms", "TTFT", "#eab308"),
+    ]
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Replay delay waterfall">',
+        '<text x="12" y="26" font-size="18" font-weight="800" fill="#0f172a">Replay delay waterfall</text>',
+        '<text x="12" y="46" font-size="12" fill="#475569">Each row uses its own local scale. Segment widths show what consumed that row&apos;s observed delay.</text>',
+    ]
+    for idx, row in enumerate(selected):
+        y = top + idx * row_h
+        band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
+        parts.append(f'<rect x="0" y="{y - 10}" width="{width}" height="{row_h}" fill="{band}"/>')
+        label = str(row.get("row") or f"G{idx:02d}")
+        verdict = str(row.get("copy_verdict") or "")
+        source = str(row.get("main_delay_source") or "")
+        parts.append(f'<text x="12" y="{y + 8}" font-size="15" font-weight="800" fill="#0f172a">{html.escape(label)}</text>')
+        parts.append(f'<text x="12" y="{y + 25}" font-size="10" font-weight="800" fill="#b91c1c">{html.escape(verdict)}</text>')
+        parts.append(f'<text x="12" y="{y + 41}" font-size="10" fill="#475569">{html.escape(source)}</text>')
+        values = [(key, label_text, color, as_float(row.get(key)) or 0.0) for key, label_text, color in stages]
+        # If we have a decomposed post-H2D segment, hide the coarse TTFT fallback.
+        if any(key == "h2d_end_to_first_token_ms" and value > 0 for key, _, _, value in values):
+            values = [item for item in values if item[0] != "request_start_to_first_token_ms"]
+        values = [item for item in values if item[3] > 0]
+        total = sum(value for _, _, _, value in values) or 1.0
+        x = left
+        for key, label_text, color, value in values:
+            w = max(3.0, value / total * plot_w)
+            title = f"{label} | {label_text}: {display_ms(value)} | {row.get('simple_meaning', '')}"
+            parts.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="22" rx="4" fill="{color}" opacity="0.88">'
+                f'<title>{html.escape(title)}</title></rect>'
+            )
+            if w > 76:
+                parts.append(
+                    f'<text x="{x + w / 2:.1f}" y="{y + 15:.1f}" text-anchor="middle" font-size="10" '
+                    f'fill="#ffffff" font-weight="800">{html.escape(label_text)} {html.escape(display_ms(value))}</text>'
+                )
+            x += w
+        parts.append(
+            f'<text x="{left + plot_w + 8}" y="{y + 15}" font-size="10" fill="#475569">{html.escape(display_ms(total))} total shown</text>'
+        )
+    legend_y = height - 44
+    lx = left
+    for _key, label_text, color in stages[:9]:
+        parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="14" height="14" rx="3" fill="{color}" opacity="0.88"/>')
+        parts.append(f'<text x="{lx + 20:.1f}" y="{legend_y + 12:.1f}" font-size="11" fill="#334155">{html.escape(label_text)}</text>')
+        lx += 132
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def replay_delay_breakdown_html(
+    gaps: list[dict[str, Any]],
+    trace_rows: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+    max_rows: int = 18,
+) -> str:
+    delay_rows = replay_delay_breakdown_rows(gaps, h2d_events)
+    if not delay_rows:
+        return """
+        <p>No replay delay breakdown rows were available for this report.</p>
+        <p class="note">This usually means the selected run did not include replay due timestamps or replay requests.</p>
+        """
+    running_rows = replay_delay_running_context_rows(gaps, trace_rows, h2d_events)
+    shown = delay_rows[:max_rows]
+    shown_labels = {str(row.get("row") or "") for row in shown}
+    running_shown = [row for row in running_rows if str(row.get("row") or "") in shown_labels]
+    verdict_rows = replay_delay_verdict_rows(delay_rows)
+    stage_columns = [
+        "row",
+        "mode",
+        "fillers",
+        "tool_wait_ms",
+        "resume_ttft_ms",
+        "copy_verdict",
+        "main_delay_source",
+        "dominant_delay_ms",
+        "delay_confidence",
+        "client_submit_relative_ms",
+        "request_start_relative_ms",
+        "sglang_receive_relative_ms",
+        "scheduler_queue_relative_ms",
+        "scheduler_admit_relative_ms",
+        "cache_first_event_relative_ms",
+        "h2d_start_relative_ms",
+        "h2d_end_relative_ms",
+        "first_token_relative_ms",
+        "due_to_client_submit_ms",
+        "client_submit_to_request_start_ms",
+        "request_start_to_sglang_receive_ms",
+        "sglang_receive_to_scheduler_queue_ms",
+        "scheduler_queue_wait_ms",
+        "scheduler_admit_to_cache_lookup_ms",
+        "cache_lookup_to_h2d_start_ms",
+        "h2d_duration_ms",
+        "h2d_end_to_first_token_ms",
+        "scheduler_queue_waiting_len",
+        "scheduler_admit_running_batch_requests",
+        "scheduler_admit_running_batch_extend_tokens",
+        "simple_meaning",
+    ]
+    running_columns = [
+        "row",
+        "fillers",
+        "tool_wait_ms",
+        "delay_window_end",
+        "delay_window_ms",
+        "scheduler_events",
+        "model_forward_events",
+        "prefill_batch_events",
+        "decode_batch_events",
+        "cache_hicache_events",
+        "raw_hostpool_h2d_events",
+        "exact_target_h2d_events_before_target_start",
+        "exact_other_h2d_events_before_target_start",
+        "max_scheduler_waiting_queue_len",
+        "max_running_batch_requests",
+        "max_running_batch_extend_tokens",
+        "simple_meaning",
+    ]
+    return f"""
+    <p>This section explains the missing time between replay due and replay-side KV readiness. It separates client dispatch, SGLang receive, scheduler queue/admit, cache lookup/load-back, H2D copy, and post-H2D first-token work.</p>
+    <p class="note">The waterfall uses a local scale per row so long waits are readable. The tables below keep the exact measured millisecond values. Blank cells mean the stage was not observed in the trace.</p>
+    <h3>Delay Waterfall Timeline</h3>
+    <div class="setup-diagram">{build_replay_delay_waterfall_svg(shown, max_rows=max_rows)}</div>
+    <h3>Main Verdicts</h3>
+    {table_html(verdict_rows)}
+    <h3>Stage Duration Table</h3>
+    {table_html(shown, stage_columns)}
+    <h3>What Was Running Instead</h3>
+    <p class="note">This scans the same controlled case from replay due until the target H2D starts. It counts scheduler/model/cache activity and exact H2D events visible in that interval.</p>
+    {table_html(running_shown, running_columns)}
+    <h3>Evidence Confidence</h3>
+    <p class="note">Client submit/request/first-token timestamps are measured by the driver. SGLang receive/scheduler/H2D timestamps are exact when hooks emitted them. First cache-event and recompute timing are inferred from surrounding SGLang cache/TTFT evidence.</p>
+    """
+
+
 def exact_h2d_source_rank(row: dict[str, Any]) -> int:
     source = str(row.get("source_event") or "")
     if "hostpool.load_to_device_per_layer" in source:
@@ -3621,6 +4191,7 @@ def render_html(
     request_coverage: list[dict[str, Any]] | None = None,
     kv_block_rows: list[dict[str, Any]] | None = None,
     exact_kv_movement_rows: list[dict[str, Any]] | None = None,
+    trace_rows: list[dict[str, Any]] | None = None,
     run_environment: dict[str, Any] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
@@ -3628,6 +4199,7 @@ def render_html(
     request_coverage = request_coverage or []
     kv_block_rows = kv_block_rows or []
     exact_kv_movement_rows = exact_kv_movement_rows or []
+    trace_rows = trace_rows or []
     run_environment = run_environment or {}
     all_timeline_rows = timeline_rows_with_labels(selected_timeline_gaps(gaps, len(gaps)))
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
@@ -3693,6 +4265,7 @@ def render_html(
         ("setup", "Experiment Setup"),
         ("global-prefetch", global_title),
         ("h2d-pressure", "KV H2D Bandwidth Pressure"),
+        ("delay-breakdown", "Replay Delay Breakdown"),
         ("timeline-guide", "How To Read Timelines"),
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
         ("exact-block-lifecycle", "Detailed KV Block Lifecycle Table"),
@@ -3741,6 +4314,12 @@ def render_html(
     <summary><h2>KV H2D Bandwidth Pressure</h2></summary>
     <p>This section shows how much host-to-device KV movement was happening near replay deadlines. It helps explain whether a late replay was isolated or happened while the KV movement path was already busy.</p>
     {h2d_bandwidth_pressure_html(gaps, exact_kv_movement_rows)}
+  </details>
+
+  <details id="delay-breakdown" class="section-card theme-profiled">
+    <summary><h2>Replay Delay Breakdown</h2></summary>
+    <p>This section answers the next question: if replay-side H2D started late, where did the time go before the copy began?</p>
+    {replay_delay_breakdown_html(all_timeline_rows, trace_rows, all_h2d_activity_events, max_rows=max_timeline_gaps)}
   </details>
 
   <details id="timeline-guide" class="section-card theme-guide">
@@ -3872,10 +4451,16 @@ def main() -> None:
     h2d_contention_targets = select_h2d_contention_targets(all_labeled_gaps)
     h2d_contention_summary = h2d_contention_summary_rows(h2d_contention_targets, h2d_activity_events)
     h2d_contention_events = h2d_contention_event_rows(h2d_contention_targets, h2d_activity_events)
+    replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
+    replay_delay_verdicts = replay_delay_verdict_rows(replay_delay_breakdown)
+    replay_delay_running_context = replay_delay_running_context_rows(all_labeled_gaps, all_trace_rows, h2d_activity_events)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "replay_h2d_readiness.csv", h2d_readiness)
     write_csv(args.out_dir / "replay_queue_timing.csv", queue_timing)
+    write_csv(args.out_dir / "replay_delay_breakdown.csv", replay_delay_breakdown)
+    write_csv(args.out_dir / "replay_delay_verdicts.csv", replay_delay_verdicts)
+    write_csv(args.out_dir / "replay_delay_running_context.csv", replay_delay_running_context)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "h2d_pressure_by_gap.csv", h2d_pressure_rows)
     write_csv(args.out_dir / "h2d_activity_windows.csv", h2d_activity_windows)
@@ -3897,6 +4482,9 @@ def main() -> None:
             "replay_path_ledger": ledger,
             "replay_h2d_readiness": h2d_readiness,
             "replay_queue_timing": queue_timing,
+            "replay_delay_breakdown": replay_delay_breakdown,
+            "replay_delay_verdicts": replay_delay_verdicts,
+            "replay_delay_running_context": replay_delay_running_context,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
             "h2d_pressure_by_gap": h2d_pressure_rows,
@@ -3929,6 +4517,7 @@ def main() -> None:
         request_coverage=request_coverage,
         kv_block_rows=kv_block_rows,
         exact_kv_movement_rows=exact_kv_rows,
+        trace_rows=all_trace_rows,
         run_environment=load_json(args.run_environment_json),
     )
     report_path = args.out_dir / "controlled_replay_report.html"
