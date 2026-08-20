@@ -152,6 +152,17 @@ def display_ms(value: Any) -> str:
     return f"{parsed:.0f} ms"
 
 
+def display_count(value: Any) -> str:
+    parsed = maybe_float(value)
+    if parsed is None:
+        return ""
+    if abs(parsed) >= 1_000_000:
+        return f"{parsed / 1_000_000.0:.1f}M"
+    if abs(parsed) >= 1000:
+        return f"{parsed / 1000.0:.1f}k"
+    return str(int(parsed))
+
+
 def timeline_case_fillers(row: dict[str, Any]) -> str:
     explicit = row.get("fillers") or row.get("filler_count")
     if explicit not in ("", None):
@@ -354,6 +365,8 @@ def build_local_timing_phase_timeline_svg(
     gaps: list[dict[str, Any]],
     max_rows: int,
     show_prefetch_legend: bool = True,
+    kv_block_lifecycle_rows: list[dict[str, Any]] | None = None,
+    h2d_pressure_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     rows = gaps[:max_rows]
     if not rows:
@@ -363,7 +376,7 @@ def build_local_timing_phase_timeline_svg(
     left = 215
     right = 40
     top = 116
-    row_h = 214
+    row_h = 274
     header_h = 42
     gap = 16
     turn_w = 220
@@ -387,7 +400,210 @@ def build_local_timing_phase_timeline_svg(
         ("recompute/rebuild", "#db2777"),
         ("remaining TTFT", "#eab308"),
         ("decode", "#ef4444"),
+        ("block lifecycle strip", "#475569"),
+        ("nearby H2D pressure", "#b91c1c"),
     ]
+
+    block_rows_by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for block_row in kv_block_lifecycle_rows or []:
+        label = str(block_row.get("row") or "")
+        if label:
+            block_rows_by_label[label].append(block_row)
+
+    h2d_pressure_by_label: dict[str, dict[str, Any]] = {
+        str(row.get("row") or ""): row for row in h2d_pressure_rows or [] if str(row.get("row") or "")
+    }
+
+    def block_token_count(block_row: dict[str, Any]) -> int:
+        return maybe_int(block_row.get("token_count")) or maybe_int(block_row.get("tokens")) or 0
+
+    def block_summary_for_label(label: str) -> dict[str, Any]:
+        block_rows = block_rows_by_label.get(label, [])
+        replay_loaded = [
+            block
+            for block in block_rows
+            if str(block.get("loaded_by_replay") or "") in {"1", "true", "True"}
+            or str(block.get("lifecycle_verdict") or "") == "replay_loaded_from_host"
+        ]
+        hint_loaded = [
+            block
+            for block in block_rows
+            if str(block.get("loaded_by_hint") or "") in {"1", "true", "True"}
+        ]
+        host_resident = [
+            block
+            for block in block_rows
+            if str(block.get("lifecycle_verdict") or "") == "host_resident_after_gpu_eviction"
+        ]
+        gpu_host_resident = [
+            block
+            for block in block_rows
+            if str(block.get("lifecycle_verdict") or "") == "gpu_and_host_resident"
+        ]
+        lost = [
+            block
+            for block in block_rows
+            if str(block.get("lost_before_replay") or "") in {"1", "true", "True"}
+            or str(block.get("lifecycle_verdict") or "") in {"lost_before_replay", "missing_before_replay"}
+        ]
+        exact = [
+            block
+            for block in block_rows
+            if str(block.get("confidence") or "").lower() == "high"
+            or str(block.get("exact_attribution") or "")
+        ]
+
+        return {
+            "rows": block_rows,
+            "replay_loaded": replay_loaded,
+            "hint_loaded": hint_loaded,
+            "host_resident": host_resident,
+            "gpu_host_resident": gpu_host_resident,
+            "lost": lost,
+            "exact": exact,
+            "replay_loaded_tokens": sum(block_token_count(block) for block in replay_loaded),
+            "hint_loaded_tokens": sum(block_token_count(block) for block in hint_loaded),
+            "host_resident_tokens": sum(block_token_count(block) for block in host_resident),
+            "gpu_host_resident_tokens": sum(block_token_count(block) for block in gpu_host_resident),
+            "lost_tokens": sum(block_token_count(block) for block in lost),
+        }
+
+    def block_detail_title(blocks: list[dict[str, Any]], heading: str, limit: int = 5) -> str:
+        if not blocks:
+            return f"{heading}: no logical KV blocks attributed."
+        lines = [heading]
+        for block in blocks[:limit]:
+            lines.append(
+                " | ".join(
+                    part
+                    for part in [
+                        f"block={block.get('block_id', '')}",
+                        f"node={block.get('node_id', '')}",
+                        f"tokens={block.get('token_range', '')}",
+                        f"count={block.get('token_count', '')}",
+                        f"H2D={block.get('h2d_start_ms', '')}->{block.get('h2d_end_ms', '')} ms",
+                        f"duration={block.get('h2d_duration_ms', '')} ms",
+                        f"evidence={block.get('exact_attribution', '')}",
+                        f"confidence={block.get('confidence', '')}",
+                    ]
+                    if str(part).split("=", 1)[-1] not in {"", "None"}
+                )
+            )
+        if len(blocks) > limit:
+            lines.append(f"... plus {len(blocks) - limit} more block(s)")
+        return "\n".join(lines)
+
+    def h2d_bar_label(prefix: str, blocks: list[dict[str, Any]], tokens: Any, duration: Any) -> str:
+        block_count = len(blocks)
+        token_label = display_count(tokens)
+        duration_label = display_ms(duration)
+        if block_count and token_label and duration_label:
+            return f"{prefix}: {block_count} blk / {token_label} tok / {duration_label}"
+        if block_count and duration_label:
+            return f"{prefix}: {block_count} blk / {duration_label}"
+        if duration_label:
+            return f"{prefix}: {duration_label}"
+        return prefix
+
+    def block_strip(svg: list[str], x: float, y: float, w: float, summary: dict[str, Any], row: dict[str, Any]) -> None:
+        segments = [
+            ("replay H2D", "#06b6d4", len(summary["replay_loaded"]), summary["replay_loaded_tokens"], "exact replay-side host-to-device block reloads"),
+            ("hint H2D", "#16a34a", len(summary["hint_loaded"]), summary["hint_loaded_tokens"], "exact hint-side host-to-device block reloads"),
+            ("host only", "#f59e0b", len(summary["host_resident"]), summary["host_resident_tokens"], "blocks evicted from GPU but still backed by host cache"),
+            ("GPU+host", "#64748b", len(summary["gpu_host_resident"]), summary["gpu_host_resident_tokens"], "blocks that stayed backed by both GPU and host in the observed trace"),
+            ("lost", "#e11d48", len(summary["lost"]), summary["lost_tokens"], "blocks lost before replay could reuse them"),
+        ]
+        visible = [segment for segment in segments if segment[2] > 0]
+        strip_y = y + 166
+        svg.append(
+            f'<text x="{x:.1f}" y="{strip_y - 8:.1f}" font-size="9" fill="#475569" font-weight="800">block lifecycle</text>'
+        )
+        if not visible:
+            svg.append(
+                f'<rect x="{x:.1f}" y="{strip_y:.1f}" width="{w:.1f}" height="22" rx="4" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="5 4">'
+                f'<title>No exact logical block rows were matched to this timeline row.</title></rect>'
+            )
+            svg.append(
+                f'<text x="{x + w / 2:.1f}" y="{strip_y + 15:.1f}" text-anchor="middle" font-size="10" fill="#64748b">no matched block rows</text>'
+            )
+            return
+        total_weight = sum(max(1, segment[2]) for segment in visible)
+        cursor = x
+        gap_px = 5
+        usable_w = max(1.0, w - gap_px * (len(visible) - 1))
+        for idx, (name, color, count, tokens, title) in enumerate(visible):
+            seg_w = max(80.0, usable_w * max(1, count) / total_weight)
+            if idx == len(visible) - 1:
+                seg_w = max(50.0, x + w - cursor)
+            token_label = display_count(tokens)
+            label = f"{name}: {count}"
+            if token_label:
+                label += f" / {token_label} tok"
+            svg.append(
+                f'<rect x="{cursor:.1f}" y="{strip_y:.1f}" width="{max(8.0, seg_w):.1f}" height="22" rx="4" fill="{color}" opacity="0.88">'
+                f'<title>{fmt(title)}. exact block count={count}; token/index count={tokens}; row verdict={row.get("lifecycle_verdict", "")}</title></rect>'
+            )
+            if seg_w >= 90:
+                svg.append(
+                    f'<text x="{cursor + seg_w / 2:.1f}" y="{strip_y + 15:.1f}" text-anchor="middle" font-size="9" fill="#ffffff" font-weight="800">{fmt(label)}</text>'
+                )
+            cursor += seg_w + gap_px
+
+    def pressure_color(level: str) -> str:
+        if level == "high":
+            return "#b91c1c"
+        if level == "medium":
+            return "#f97316"
+        if level == "low":
+            return "#16a34a"
+        return "#94a3b8"
+
+    def pressure_strip(svg: list[str], x: float, y: float, w: float, pressure: dict[str, Any] | None) -> None:
+        strip_y = y + 202
+        svg.append(
+            f'<text x="{x:.1f}" y="{strip_y - 8:.1f}" font-size="9" fill="#475569" font-weight="800">nearby H2D pressure</text>'
+        )
+        if not pressure:
+            svg.append(
+                f'<rect x="{x:.1f}" y="{strip_y:.1f}" width="{w:.1f}" height="18" rx="4" fill="#f8fafc" '
+                f'stroke="#cbd5e1" stroke-dasharray="5 4"><title>No H2D pressure row was computed for this timeline row.</title></rect>'
+            )
+            svg.append(
+                f'<text x="{x + w / 2:.1f}" y="{strip_y + 13:.1f}" text-anchor="middle" font-size="9" fill="#64748b">not computed</text>'
+            )
+            return
+        level = str(pressure.get("pressure_level") or "none")
+        color = pressure_color(level)
+        nearby_events = maybe_float(pressure.get("nearby_h2d_events")) or 0.0
+        peak = maybe_float(pressure.get("peak_concurrent_h2d_events")) or 0.0
+        nearby_tokens = maybe_float(pressure.get("nearby_h2d_event_tokens")) or 0.0
+        max_events = max(1.0, nearby_events, 80.0)
+        fill_w = max(10.0, min(w, w * nearby_events / max_events))
+        label = (
+            f"{level} pressure: {int(nearby_events)} H2D events"
+            + (f", peak {int(peak)}" if peak else "")
+            + (f", {display_count(nearby_tokens)} tok/idx" if nearby_tokens else "")
+        )
+        title = (
+            f"Nearby H2D pressure around replay due. Window={pressure.get('window_start_relative_ms', '')}.."
+            f"{pressure.get('window_end_relative_ms', '')} ms; events={pressure.get('nearby_h2d_events', '')}; "
+            f"own_events={pressure.get('own_h2d_events', '')}; other_events={pressure.get('other_h2d_events', '')}; "
+            f"peak_concurrent={pressure.get('peak_concurrent_h2d_events', '')}; "
+            f"tokens/indices={pressure.get('nearby_h2d_event_tokens', '')}"
+        )
+        svg.append(
+            f'<rect x="{x:.1f}" y="{strip_y:.1f}" width="{w:.1f}" height="18" rx="4" fill="#f1f5f9" stroke="#cbd5e1">'
+            f'<title>{fmt(title)}</title></rect>'
+        )
+        svg.append(
+            f'<rect x="{x:.1f}" y="{strip_y:.1f}" width="{fill_w:.1f}" height="18" rx="4" fill="{color}" opacity="0.86">'
+            f'<title>{fmt(title)}</title></rect>'
+        )
+        if w >= 180:
+            svg.append(
+                f'<text x="{x + min(w / 2, max(fill_w + 8, 90)):.1f}" y="{strip_y + 13:.1f}" '
+                f'text-anchor="middle" font-size="9" fill="#0f172a" font-weight="800">{fmt(label)}</text>'
+            )
 
     def rect(
         svg: list[str],
@@ -414,9 +630,11 @@ def build_local_timing_phase_timeline_svg(
             f'fill="{color}" opacity="{opacity}"{stroke}><title>{fmt(title)}</title></rect>'
         )
         if label and display_w >= 64:
+            max_chars = max(8, int(display_w / 5.8))
+            visible_label = label if len(label) <= max_chars else label[: max(5, max_chars - 3)] + "..."
             svg.append(
                 f'<text x="{x + display_w / 2:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" '
-                f'font-size="10" fill="{text_color}" font-weight="700">{safe_label}</text>'
+                f'font-size="10" fill="{text_color}" font-weight="700">{fmt(visible_label)}</text>'
             )
         elif label:
             label_w = min(132.0, max(28.0, len(label) * 5.8))
@@ -479,6 +697,7 @@ def build_local_timing_phase_timeline_svg(
         text_color: str = "#ffffff",
         opacity: float = 0.9,
         dashed: bool = False,
+        label_override: str | None = None,
     ) -> None:
         if start_value is None or end_value is None:
             missing(svg, x, y, w, h, f"no {name}")
@@ -486,7 +705,7 @@ def build_local_timing_phase_timeline_svg(
         x1 = local_x(start_value, local_start, local_end, x, w)
         x2 = local_x(end_value, local_start, local_end, x, w)
         duration_label = display_ms(duration)
-        label = duration_label if duration_label else name
+        label = label_override if label_override is not None else duration_label if duration_label else name
         rect(svg, x1, y, max(0.0, x2 - x1), h, color, label, title, opacity, text_color, dashed, 12.0, x + w)
 
     def bounds(*pairs: tuple[float | None, float | None]) -> tuple[float, float] | None:
@@ -534,6 +753,7 @@ def build_local_timing_phase_timeline_svg(
         svg.append(f'<line x1="0" y1="{y:.1f}" x2="{width}" y2="{y:.1f}" stroke="#cbd5e1"/>')
 
         label = str(row.get("timeline_label") or f"G{idx:02d}")
+        block_summary = block_summary_for_label(label)
         margin = maybe_float(row.get("prefetch_margin_ms"))
         if margin is None:
             timing = "NO PREFETCH"
@@ -559,6 +779,22 @@ def build_local_timing_phase_timeline_svg(
             svg.append(f'<text x="12" y="{y + 127}" font-size="10" fill="#64748b">task {fmt(task_index)} / gap {fmt(gap_index)}</text>')
         if mode:
             svg.append(f'<text x="12" y="{y + 145}" font-size="10" fill="#64748b">mode {fmt(mode)}</text>')
+        if block_summary["rows"]:
+            block_line = (
+                f"blocks {len(block_summary['rows'])}; "
+                f"replay H2D {len(block_summary['replay_loaded'])}; "
+                f"host-only {len(block_summary['host_resident'])}; "
+                f"exact {len(block_summary['exact'])}"
+            )
+            svg.append(f'<text x="12" y="{y + 164}" font-size="10" fill="#334155" font-weight="700">{fmt(block_line)}</text>')
+        else:
+            svg.append(f'<text x="12" y="{y + 164}" font-size="10" fill="#64748b">no matched block rows</text>')
+        pressure_row = h2d_pressure_by_label.get(label)
+        if pressure_row:
+            svg.append(
+                f'<text x="12" y="{y + 183}" font-size="10" fill="{pressure_color(str(pressure_row.get("pressure_level") or ""))}" font-weight="800">'
+                f'H2D pressure {fmt(str(pressure_row.get("pressure_level") or "none"))}: {fmt(str(pressure_row.get("nearby_h2d_events") or 0))} events</text>'
+            )
 
         lane_h = 22
         lane_step = 38
@@ -639,6 +875,9 @@ def build_local_timing_phase_timeline_svg(
                 0.82,
             )
             if h2d_start is not None and h2d_end is not None:
+                hint_h2d_blocks = block_summary["hint_loaded"]
+                hint_h2d_duration = row.get("direct_kv_h2d_duration_ms")
+                hint_h2d_tokens = block_summary["hint_loaded_tokens"] or row.get("hint_host_load_tokens")
                 local_bar(
                     svg,
                     h2d_start,
@@ -651,10 +890,15 @@ def build_local_timing_phase_timeline_svg(
                     bar_h,
                     "#16a34a",
                     "hint HtoD",
-                    row.get("direct_kv_h2d_duration_ms"),
-                    "hint-side direct KV host-to-device movement; locally positioned relative to the prefetch attempt",
+                    hint_h2d_duration,
+                    block_detail_title(
+                        hint_h2d_blocks,
+                        "EXACT hint-side KV host-to-device movement from SGLang hooks",
+                    ),
                     "#ffffff",
                     0.94,
+                    False,
+                    h2d_bar_label("hint H2D", hint_h2d_blocks, hint_h2d_tokens, hint_h2d_duration),
                 )
             else:
                 missing(svg, prefetch_bar_x, y + 14 + lane_step, prefetch_bar_w, bar_h, "no hint HtoD")
@@ -672,6 +916,8 @@ def build_local_timing_phase_timeline_svg(
         ) or (0.0, 1.0)
         replay_h2d_duration = maybe_float(row.get("replay_kv_h2d_duration_ms")) or maybe_float(row.get("host_load_ms"))
         if replay_h2d_start is not None and replay_h2d_end is not None:
+            replay_h2d_blocks = block_summary["replay_loaded"]
+            replay_h2d_tokens = block_summary["replay_loaded_tokens"] or row.get("replay_host_load_tokens")
             local_bar(
                 svg,
                 replay_h2d_start,
@@ -685,7 +931,14 @@ def build_local_timing_phase_timeline_svg(
                 "#06b6d4",
                 "replay HtoD",
                 replay_h2d_duration,
-                "replay-side KV host-to-device load; locally positioned inside replay request time",
+                block_detail_title(
+                    replay_h2d_blocks,
+                    "EXACT replay-side KV host-to-device movement from SGLang hooks",
+                ),
+                "#ffffff",
+                0.9,
+                False,
+                h2d_bar_label("replay H2D", replay_h2d_blocks, replay_h2d_tokens, replay_h2d_duration),
             )
         else:
             missing(svg, replay_bar_x, y + 14, replay_bar_w, bar_h, "no replay HtoD")
@@ -714,7 +967,11 @@ def build_local_timing_phase_timeline_svg(
                 "#db2777",
                 "recompute",
                 recompute,
-                "estimated replay recompute / rebuilt missing prefix",
+                f"ESTIMATED replay recompute / rebuilt missing prefix; recomputed_tokens_est={fmt(row.get('recomputed_tokens_est') or row.get('replay_new_prefill_tokens_est') or '')}",
+                "#ffffff",
+                0.9,
+                False,
+                f"recompute est: {display_ms(recompute)}",
             )
             cursor = recompute_end
         else:
@@ -737,9 +994,11 @@ def build_local_timing_phase_timeline_svg(
                 "#eab308",
                 "prefill",
                 normal_prefill,
-                "estimated remaining replay prefill or before-first-token work",
+                "ESTIMATED remaining replay prefill or before-first-token work",
                 "#713f12",
                 0.9,
+                False,
+                f"prefill est: {display_ms(normal_prefill)}",
             )
         else:
             missing(svg, replay_bar_x, y + 14 + 2 * lane_step, replay_bar_w, bar_h, "no extra prefill")
@@ -762,9 +1021,14 @@ def build_local_timing_phase_timeline_svg(
                 "decode/generation after first token",
                 "#ffffff",
                 0.72,
+                False,
+                f"decode: {display_ms(max(0.0, replay_end - decode_start))}",
             )
         else:
             missing(svg, replay_bar_x, y + 14 + 3 * lane_step, replay_bar_w, bar_h, "no decode")
+
+        block_strip(svg, x_turn + 12, y + 0, width - x_turn - right - 24, block_summary, row)
+        pressure_strip(svg, x_turn + 12, y + 0, width - x_turn - right - 24, pressure_row)
 
     svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#cbd5e1"/>')
     append_timeline_legend(svg, legend, left, legend_y, 160)

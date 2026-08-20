@@ -50,6 +50,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 29B: Forced Eviction Sanity Probe | Ready | [Milestone 29B](#milestone-29b-forced-eviction-sanity-probe) |
 | Milestone 30: Stable KV Block Ledger | Ready | [Milestone 30](#milestone-30-stable-kv-block-ledger) |
 | Milestone 31: Exact KV Movement Attribution | Ready | [Milestone 31](#milestone-31-exact-kv-movement-attribution) |
+| Milestone 32: KV H2D Bandwidth Pressure | Ready | [Milestone 32](#milestone-32-kv-h2d-bandwidth-pressure) |
 
 ## What We Are Testing
 
@@ -6000,6 +6001,55 @@ The strongest rows are rows with both:
 
 Those rows can connect the host-side KV block set to the GPU-side destination
 indices, and can be validated with torch.profiler/Nsight on smaller runs.
+```
+
+### Milestone 32: KV H2D Bandwidth Pressure
+
+Status: ready.
+
+Full note:
+
+```text
+KV_H2D_BANDWIDTH_PRESSURE.md
+```
+
+Why this milestone is needed:
+
+```text
+The lifecycle timeline can say what happened to one replay gap.
+
+The bandwidth-pressure view adds surrounding context:
+  how many KV H2D copies were happening near the replay deadline?
+  how many blocks/tokens were being moved?
+  was this replay late while the H2D path was already busy?
+```
+
+What it adds to `latest_master_report.html`:
+
+```text
+KV H2D Bandwidth Pressure
+  H2D Activity By Time Window
+  Per-Gap Deadline-To-Ready H2D Pressure
+  Aligned H2D Event Samples
+
+Readable KV Lifecycle Timeline
+  nearby H2D pressure strip per row
+```
+
+New output files:
+
+```text
+artifacts/results/reports/<report_label>/report/h2d_activity_events.csv
+artifacts/results/reports/<report_label>/report/h2d_pressure_by_gap.csv
+artifacts/results/reports/<report_label>/report/h2d_activity_windows.csv
+```
+
+Simple interpretation:
+
+```text
+If G00 is late and nearby H2D pressure is high, the replay did not miss its
+deadline in isolation. It missed while the exact SGLang-visible H2D movement
+path was already busy with KV movement.
 ```
 
 ## Directory Layout

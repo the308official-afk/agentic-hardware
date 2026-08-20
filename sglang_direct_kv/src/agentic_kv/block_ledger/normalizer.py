@@ -32,6 +32,9 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
         session_id = agent_session_from_context(context)
         if not session_id or "::live_prefetch::" in session_id:
             continue
+        case_id = str(context.get("ledger_case_id") or row.get("ledger_case_id") or "")
+        if case_id:
+            session_id = f"{case_id}::{session_id}"
         phase = agent_phase_from_context(context)
         token_start, token_end, token_count = event_range(event_type, context, row)
         duration = as_float(row.get("duration_ms"))
