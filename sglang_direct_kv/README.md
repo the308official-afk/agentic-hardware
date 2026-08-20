@@ -6030,6 +6030,9 @@ What it adds to `latest_master_report.html`:
 KV H2D Bandwidth Pressure
   H2D Activity By Time Window
   Per-Gap Deadline-To-Ready H2D Pressure
+  Per-Gap H2D Contention Timeline
+  Per-Gap Contention Verdicts
+  Per-Gap Contention Event Rows
   Aligned H2D Event Samples
 
 Readable KV Lifecycle Timeline
@@ -6042,6 +6045,8 @@ New output files:
 artifacts/results/reports/<report_label>/report/h2d_activity_events.csv
 artifacts/results/reports/<report_label>/report/h2d_pressure_by_gap.csv
 artifacts/results/reports/<report_label>/report/h2d_activity_windows.csv
+artifacts/results/reports/<report_label>/report/h2d_contention_by_gap.csv
+artifacts/results/reports/<report_label>/report/h2d_contention_events.csv
 ```
 
 Simple interpretation:
@@ -6050,6 +6055,11 @@ Simple interpretation:
 If G00 is late and nearby H2D pressure is high, the replay did not miss its
 deadline in isolation. It missed while the exact SGLang-visible H2D movement
 path was already busy with KV movement.
+
+If G00 is late but the contention timeline says the H2D path was quiet before
+G00's own copy began, the delay likely happened before SGLang reached the
+actual host-to-device copy path. That points to request scheduling / cache-path
+latency, not raw copy bandwidth alone.
 ```
 
 ## Directory Layout

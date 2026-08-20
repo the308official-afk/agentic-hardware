@@ -34,6 +34,7 @@ from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
     build_local_timing_phase_timeline_svg,
     build_replay_execution_timeline_svg,
+    display_ms,
     read_jsonl,
     table_html,
     timeline_kv_outcome,
@@ -2548,6 +2549,327 @@ def h2d_activity_window_bar_chart(rows: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def select_h2d_contention_targets(
+    gaps: list[dict[str, Any]],
+    max_targets: int = 6,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        h2d_end = as_float(gap.get("replay_kv_h2d_end_ms")) or as_float(gap.get("direct_kv_h2d_end_ms"))
+        if due is None or h2d_end is None:
+            continue
+        copied = dict(gap)
+        copied.setdefault("timeline_label", f"G{idx:02d}")
+        copied["_contention_lateness_ms"] = h2d_end - due
+        candidates.append(copied)
+    candidates.sort(key=lambda row: as_float(row.get("_contention_lateness_ms")) or 0.0, reverse=True)
+    return candidates[:max_targets]
+
+
+def h2d_contention_event_rows(
+    target_gaps: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+    before_ms: float = 500.0,
+    after_finish_ms: float = 500.0,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for target_index, gap in enumerate(target_gaps):
+        target_row = str(gap.get("timeline_label") or f"C{target_index:02d}")
+        due = as_float(gap.get("tool_gap_end_ms"))
+        h2d_start = as_float(gap.get("replay_kv_h2d_start_ms")) or as_float(gap.get("direct_kv_h2d_start_ms"))
+        h2d_end = as_float(gap.get("replay_kv_h2d_end_ms")) or as_float(gap.get("direct_kv_h2d_end_ms"))
+        if due is None or h2d_end is None:
+            continue
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        case_id = str(gap.get("case_id") or "")
+        window_start = due - before_ms
+        window_end = max(due + 1000.0, h2d_end + after_finish_ms)
+        window_events = h2d_events_overlap_window(h2d_events, window_start, window_end, case_id=case_id)
+        window_events.sort(
+            key=lambda event: (
+                as_float(event.get("aligned_h2d_start_ms")) or 0.0,
+                as_float(event.get("aligned_h2d_end_ms")) or 0.0,
+                str(event.get("ledger_session_id") or ""),
+            )
+        )
+        for order, event in enumerate(window_events):
+            owner_session = str(event.get("ledger_session_id") or "")
+            is_target = owner_session == target_session
+            start = as_float(event.get("aligned_h2d_start_ms"))
+            end = as_float(event.get("aligned_h2d_end_ms"))
+            rows.append(
+                {
+                    "target_row": target_row,
+                    "event_order": order,
+                    "owner_row": event.get("row", ""),
+                    "same_as_target": "yes" if is_target else "no",
+                    "owner_kind": "target replay H2D" if is_target else "other H2D in same case",
+                    "phase": event.get("phase", ""),
+                    "source_event": event.get("source_event", ""),
+                    "node_id": event.get("node_id", ""),
+                    "layer_id": event.get("layer_id", ""),
+                    "token_or_index_count": event.get("token_or_index_count", ""),
+                    "start_relative_to_target_due_ms": round(start - due, 3) if start is not None else "",
+                    "end_relative_to_target_due_ms": round(end - due, 3) if end is not None else "",
+                    "duration_ms": event.get("h2d_duration_ms", ""),
+                    "block_key": event.get("block_key", ""),
+                    "confidence": event.get("confidence", ""),
+                    "target_replay_due_ms": round(due, 3),
+                    "target_h2d_start_relative_ms": round(h2d_start - due, 3) if h2d_start is not None else "",
+                    "target_h2d_end_relative_ms": round(h2d_end - due, 3),
+                    "case_id": case_id,
+                    "target_session_id": gap.get("session_id", ""),
+                    "owner_session_id": event.get("session_id", ""),
+                }
+            )
+    return rows
+
+
+def h2d_contention_summary_rows(
+    target_gaps: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+    before_ms: float = 500.0,
+    after_finish_ms: float = 500.0,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for target_index, gap in enumerate(target_gaps):
+        target_row = str(gap.get("timeline_label") or f"C{target_index:02d}")
+        due = as_float(gap.get("tool_gap_end_ms"))
+        h2d_start = as_float(gap.get("replay_kv_h2d_start_ms")) or as_float(gap.get("direct_kv_h2d_start_ms"))
+        h2d_end = as_float(gap.get("replay_kv_h2d_end_ms")) or as_float(gap.get("direct_kv_h2d_end_ms"))
+        if due is None or h2d_end is None:
+            continue
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        case_id = str(gap.get("case_id") or "")
+        window_start = due - before_ms
+        window_end = max(due + 1000.0, h2d_end + after_finish_ms)
+        window_events = h2d_events_overlap_window(h2d_events, window_start, window_end, case_id=case_id)
+        own = [event for event in window_events if str(event.get("ledger_session_id") or "") == target_session]
+        other = [event for event in window_events if str(event.get("ledger_session_id") or "") != target_session]
+        before_target = []
+        if h2d_start is not None:
+            before_target = [
+                event
+                for event in window_events
+                if (as_float(event.get("aligned_h2d_end_ms")) or 0.0) > due
+                and (as_float(event.get("aligned_h2d_start_ms")) or 0.0) < h2d_start
+            ]
+        other_before_target = [
+            event for event in before_target if str(event.get("ledger_session_id") or "") != target_session
+        ]
+        if other_before_target:
+            verdict = "blocked behind other H2D"
+            explanation = (
+                f"{len(other_before_target)} other H2D events overlapped the interval after replay due "
+                "and before this row's own H2D started."
+            )
+        elif h2d_start is not None and h2d_start - due > 1000:
+            verdict = "H2D path quiet before target"
+            explanation = (
+                "No other H2D events were visible before this row's own H2D started. "
+                "The delay likely happened before SGLang reached the H2D copy path."
+            )
+        elif own:
+            verdict = "target H2D visible"
+            explanation = "The row's own H2D events were visible in the contention window."
+        else:
+            verdict = "no visible contention"
+            explanation = "No H2D events were visible in the contention window."
+        rows.append(
+            {
+                "target_row": target_row,
+                "case_id": case_id,
+                "mode": gap.get("mode", ""),
+                "fillers": case_fillers(gap),
+                "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                "target_h2d_lateness_ms": round(h2d_end - due, 3),
+                "target_h2d_start_relative_ms": round(h2d_start - due, 3) if h2d_start is not None else "",
+                "target_h2d_end_relative_ms": round(h2d_end - due, 3),
+                "contention_window_start_ms": -before_ms,
+                "contention_window_end_ms": round(window_end - due, 3),
+                "all_h2d_events_in_window": len(window_events),
+                "target_h2d_events": len(own),
+                "other_h2d_events": len(other),
+                "other_h2d_before_target_start": len(other_before_target),
+                "peak_concurrent_h2d_events": peak_concurrent_h2d_events(window_events),
+                "h2d_token_or_index_sum": round(sum(as_float(event.get("token_or_index_count")) or 0.0 for event in window_events), 3),
+                "verdict": verdict,
+                "simple_explanation": explanation,
+            }
+        )
+    return rows
+
+
+def build_per_gap_h2d_contention_svg(
+    target_gaps: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+    max_targets: int = 6,
+) -> str:
+    targets = target_gaps[:max_targets]
+    if not targets:
+        return "<p>No replay-H2D targets were available for the contention timeline.</p>"
+    width = 1480
+    left = 178
+    right = 34
+    top = 76
+    target_h = 138
+    lane_h = 18
+    gap_h = 16
+    height = top + len(targets) * target_h + 96
+    plot_w = width - left - right
+
+    def symlog(value: float, linear_width: float = 50.0) -> float:
+        if value == 0:
+            return 0.0
+        return math.copysign(math.log1p(abs(value) / linear_width), value)
+
+    windows: list[tuple[float, float]] = []
+    target_data: list[tuple[dict[str, Any], float, float, list[dict[str, Any]]]] = []
+    for gap in targets:
+        due = as_float(gap.get("tool_gap_end_ms"))
+        h2d_end = as_float(gap.get("replay_kv_h2d_end_ms")) or as_float(gap.get("direct_kv_h2d_end_ms"))
+        if due is None or h2d_end is None:
+            continue
+        case_id = str(gap.get("case_id") or "")
+        window_start = due - 500.0
+        window_end = max(due + 1000.0, h2d_end + 500.0)
+        events = h2d_events_overlap_window(h2d_events, window_start, window_end, case_id=case_id)
+        events.sort(key=lambda event: as_float(event.get("aligned_h2d_start_ms")) or 0.0)
+        rel_start = window_start - due
+        rel_end = window_end - due
+        windows.append((rel_start, rel_end))
+        target_data.append((gap, rel_start, rel_end, events))
+    if not target_data:
+        return "<p>No contention windows could be built for the selected H2D targets.</p>"
+
+    x_min = min(start for start, _ in windows)
+    x_max = max(end for _, end in windows)
+    x_min = min(x_min, -500.0)
+    x_max = max(x_max, 1000.0)
+    scaled_min = symlog(x_min)
+    scaled_max = symlog(x_max)
+
+    def x_pos(relative_ms: float) -> float:
+        scaled = symlog(relative_ms)
+        return left + (scaled - scaled_min) * plot_w / max(1e-9, scaled_max - scaled_min)
+
+    def draw_bar(parts: list[str], x1: float, x2: float, y: float, color: str, label: str, title: str, opacity: float = 0.86) -> None:
+        w = max(3.0, x2 - x1)
+        parts.append(
+            f'<rect x="{x1:.1f}" y="{y:.1f}" width="{w:.1f}" height="{lane_h:.1f}" rx="4" '
+            f'fill="{color}" opacity="{opacity}"><title>{html.escape(title)}</title></rect>'
+        )
+        if w >= 48 and label:
+            visible = label if len(label) <= int(w / 5.8) else label[: max(5, int(w / 5.8) - 3)] + "..."
+            parts.append(
+                f'<text x="{x1 + w / 2:.1f}" y="{y + 12.5:.1f}" text-anchor="middle" font-size="9" '
+                f'fill="#ffffff" font-weight="800">{html.escape(visible)}</text>'
+            )
+
+    zero_x = x_pos(0.0)
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Per-gap H2D contention timeline">',
+        '<text x="12" y="26" font-size="18" font-weight="700" fill="#0f172a">Per-gap H2D contention timeline</text>',
+        '<text x="12" y="48" font-size="12" fill="#475569">Each target row shows all exact H2D events in the same controlled case from replay due through the target KV-ready time.</text>',
+        f'<line x1="{zero_x:.1f}" y1="{top - 20}" x2="{zero_x:.1f}" y2="{height - 64}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{zero_x + 4:.1f}" y="{top - 28}" font-size="11" font-weight="800">0 ms replay due</text>',
+    ]
+    ticks = [-500.0, -100.0, -10.0, 0.0, 10.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0, 30000.0, 60000.0, 120000.0]
+    for tick in ticks:
+        if x_min <= tick <= x_max:
+            x = x_pos(tick)
+            parts.append(f'<line x1="{x:.1f}" y1="{top - 12}" x2="{x:.1f}" y2="{height - 70}" stroke="#e5e7eb"/>')
+            label = f"{int(tick)} ms" if abs(tick) < 1000 else f"{tick / 1000:.0f} s"
+            parts.append(f'<text x="{x:.1f}" y="{top - 18}" text-anchor="middle" font-size="10" fill="#475569">{html.escape(label)}</text>')
+
+    for idx, (gap, rel_start, rel_end, events) in enumerate(target_data):
+        y = top + idx * target_h
+        band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
+        parts.append(f'<rect x="0" y="{y - 4:.1f}" width="{width}" height="{target_h - gap_h:.1f}" fill="{band}"/>')
+        label = str(gap.get("timeline_label") or f"C{idx:02d}")
+        due = as_float(gap.get("tool_gap_end_ms")) or 0.0
+        h2d_start = as_float(gap.get("replay_kv_h2d_start_ms")) or as_float(gap.get("direct_kv_h2d_start_ms"))
+        h2d_end = as_float(gap.get("replay_kv_h2d_end_ms")) or as_float(gap.get("direct_kv_h2d_end_ms"))
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        summaries = h2d_contention_summary_rows([gap], h2d_events)
+        verdict = summaries[0].get("verdict", "") if summaries else ""
+        lateness = h2d_end - due if h2d_end is not None else 0.0
+        parts.append(f'<text x="12" y="{y + 19:.1f}" font-size="15" font-weight="800" fill="#0f172a">{html.escape(label)}</text>')
+        parts.append(f'<text x="12" y="{y + 39:.1f}" font-size="11" font-weight="800" fill="#b91c1c">late {display_ms(lateness)}</text>')
+        parts.append(f'<text x="12" y="{y + 58:.1f}" font-size="10" fill="#475569">{html.escape(str(verdict))}</text>')
+        parts.append(f'<text x="12" y="{y + 76:.1f}" font-size="10" fill="#475569">fillers {html.escape(case_fillers(gap))}; wait {html.escape(display_ms(gap.get("tool_gap_ms")))}</text>')
+
+        lane_target_y = y + 18
+        lane_other_y = y + 48
+        lane_span_y = y + 78
+        parts.append(f'<text x="{left - 12}" y="{lane_target_y + 13:.1f}" text-anchor="end" font-size="10" font-weight="700" fill="#334155">target H2D</text>')
+        parts.append(f'<text x="{left - 12}" y="{lane_other_y + 13:.1f}" text-anchor="end" font-size="10" font-weight="700" fill="#334155">other H2D</text>')
+        parts.append(f'<text x="{left - 12}" y="{lane_span_y + 13:.1f}" text-anchor="end" font-size="10" font-weight="700" fill="#334155">wait span</text>')
+        parts.append(f'<line x1="{left}" y1="{lane_target_y + lane_h / 2:.1f}" x2="{left + plot_w}" y2="{lane_target_y + lane_h / 2:.1f}" stroke="#e2e8f0"/>')
+        parts.append(f'<line x1="{left}" y1="{lane_other_y + lane_h / 2:.1f}" x2="{left + plot_w}" y2="{lane_other_y + lane_h / 2:.1f}" stroke="#e2e8f0"/>')
+        parts.append(f'<line x1="{left}" y1="{lane_span_y + lane_h / 2:.1f}" x2="{left + plot_w}" y2="{lane_span_y + lane_h / 2:.1f}" stroke="#e2e8f0"/>')
+
+        if h2d_start is not None and h2d_end is not None:
+            draw_bar(
+                parts,
+                x_pos(h2d_start - due),
+                x_pos(h2d_end - due),
+                lane_span_y,
+                "#f97316",
+                "target wait",
+                f"Target replay due to H2D finish: {h2d_end - due:.3f} ms",
+                0.35,
+            )
+
+        other_lane_count = 0
+        for event in events:
+            start = as_float(event.get("aligned_h2d_start_ms"))
+            end = as_float(event.get("aligned_h2d_end_ms"))
+            if start is None or end is None:
+                continue
+            is_target = str(event.get("ledger_session_id") or "") == target_session
+            rel_event_start = start - due
+            rel_event_end = end - due
+            y_event = lane_target_y if is_target else lane_other_y + (other_lane_count % 2) * 20
+            if not is_target:
+                other_lane_count += 1
+            color = "#06b6d4" if is_target else "#64748b"
+            if str(event.get("phase") or "") == "hint":
+                color = "#16a34a"
+            title = (
+                f"{'target' if is_target else 'other'} H2D | owner={event.get('row', '')} | "
+                f"phase={event.get('phase', '')} | source={event.get('source_event', '')} | "
+                f"start={rel_event_start:.3f} ms | end={rel_event_end:.3f} ms | "
+                f"duration={event.get('h2d_duration_ms', '')} ms | tokens={event.get('token_or_index_count', '')}"
+            )
+            draw_bar(
+                parts,
+                x_pos(rel_event_start),
+                x_pos(rel_event_end),
+                y_event,
+                color,
+                "target" if is_target else str(event.get("row") or "other"),
+                title,
+                0.88,
+            )
+
+    legend_y = height - 42
+    legend = [
+        ("target replay H2D", "#06b6d4"),
+        ("other replay H2D", "#64748b"),
+        ("hint/prefetch H2D", "#16a34a"),
+        ("deadline-to-ready span", "#f97316"),
+    ]
+    lx = left
+    for label, color in legend:
+        parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="14" height="14" rx="3" fill="{color}" opacity="0.85"/>')
+        parts.append(f'<text x="{lx + 20:.1f}" y="{legend_y + 12:.1f}" font-size="12" fill="#334155">{html.escape(label)}</text>')
+        lx += 210
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
 def h2d_bandwidth_pressure_html(
     gaps: list[dict[str, Any]],
     exact_rows: list[dict[str, Any]],
@@ -2557,6 +2879,9 @@ def h2d_bandwidth_pressure_html(
     h2d_events = aligned_h2d_activity_events(all_labeled, exact_rows)
     pressure_rows = h2d_pressure_by_gap_rows(all_labeled, h2d_events)
     window_rows = h2d_activity_window_rows(h2d_events)
+    contention_targets = select_h2d_contention_targets(all_labeled)
+    contention_summary = h2d_contention_summary_rows(contention_targets, h2d_events)
+    contention_events = h2d_contention_event_rows(contention_targets, h2d_events)
     if not h2d_events:
         return """
         <p>No exact H2D copy activity was available for the bandwidth-pressure section.</p>
@@ -2610,6 +2935,37 @@ def h2d_bandwidth_pressure_html(
         "h2d_duration_ms",
         "confidence",
     ]
+    contention_columns = [
+        "target_row",
+        "case_id",
+        "fillers",
+        "tool_wait_ms",
+        "target_h2d_lateness_ms",
+        "all_h2d_events_in_window",
+        "target_h2d_events",
+        "other_h2d_events",
+        "other_h2d_before_target_start",
+        "peak_concurrent_h2d_events",
+        "h2d_token_or_index_sum",
+        "verdict",
+        "simple_explanation",
+    ]
+    contention_event_columns = [
+        "target_row",
+        "event_order",
+        "owner_row",
+        "same_as_target",
+        "owner_kind",
+        "phase",
+        "source_event",
+        "node_id",
+        "layer_id",
+        "token_or_index_count",
+        "start_relative_to_target_due_ms",
+        "end_relative_to_target_due_ms",
+        "duration_ms",
+        "confidence",
+    ]
     return f"""
     <p>This section answers: near each replay deadline, how busy was the KV host-to-device movement path?</p>
     <p class="note">The view is relative to replay due time. That avoids mixing separate controlled cases on one misleading absolute clock. Negative means before replay was due; positive means after replay was due.</p>
@@ -2622,6 +2978,14 @@ def h2d_bandwidth_pressure_html(
     <p>The pressure window starts at <code>replay_due - 500 ms</code> and extends until either <code>replay_due + 1000 ms</code> or the observed H2D finish time, whichever is later. This shows the H2D traffic seen while the replay was waiting for KV readiness.</p>
     <p class="note"><code>deadline_window_h2d_events</code> keeps the original fixed near-deadline count from <code>-500 ms</code> to <code>+1000 ms</code>. <code>nearby_h2d_events</code> uses the wider deadline-to-ready window.</p>
     {table_html(pressure_rows, pressure_columns, limit=max_detail_rows)}
+    <h3>Per-Gap H2D Contention Timeline</h3>
+    <p>This view picks the latest H2D rows and shows all exact H2D events in the same controlled case while that row was waiting for KV readiness.</p>
+    <p class="note">If other H2D bars appear before the target row's own H2D starts, the target likely waited behind other movement. If the H2D lanes are quiet until the target starts, the delay likely happened before SGLang reached the copy path.</p>
+    <div class="setup-diagram">{build_per_gap_h2d_contention_svg(contention_targets, h2d_events)}</div>
+    <h3>Per-Gap Contention Verdicts</h3>
+    {table_html(contention_summary, contention_columns, limit=max_detail_rows)}
+    <h3>Per-Gap Contention Event Rows</h3>
+    {table_html(contention_events, contention_event_columns, limit=max_detail_rows)}
     <h3>Aligned H2D Event Samples</h3>
     <p class="note">These are exact lower-level H2D movement rows after aligning them to the same local clock as each replay gap. The report prefers <code>hostpool.load_to_device_per_layer</code> rows when available to avoid double-counting wrapper events.</p>
     {table_html(h2d_events, event_columns, limit=max_detail_rows)}
@@ -3505,6 +3869,9 @@ def main() -> None:
     h2d_activity_events = aligned_h2d_activity_events(all_labeled_gaps, exact_kv_rows)
     h2d_pressure_rows = h2d_pressure_by_gap_rows(all_labeled_gaps, h2d_activity_events)
     h2d_activity_windows = h2d_activity_window_rows(h2d_activity_events)
+    h2d_contention_targets = select_h2d_contention_targets(all_labeled_gaps)
+    h2d_contention_summary = h2d_contention_summary_rows(h2d_contention_targets, h2d_activity_events)
+    h2d_contention_events = h2d_contention_event_rows(h2d_contention_targets, h2d_activity_events)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "replay_h2d_readiness.csv", h2d_readiness)
@@ -3512,6 +3879,8 @@ def main() -> None:
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "h2d_pressure_by_gap.csv", h2d_pressure_rows)
     write_csv(args.out_dir / "h2d_activity_windows.csv", h2d_activity_windows)
+    write_csv(args.out_dir / "h2d_contention_by_gap.csv", h2d_contention_summary)
+    write_csv(args.out_dir / "h2d_contention_events.csv", h2d_contention_events)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -3532,6 +3901,8 @@ def main() -> None:
             "h2d_activity_events": h2d_activity_events,
             "h2d_pressure_by_gap": h2d_pressure_rows,
             "h2d_activity_windows": h2d_activity_windows,
+            "h2d_contention_by_gap": h2d_contention_summary,
+            "h2d_contention_events": h2d_contention_events,
             "exact_kv_movement_attribution": exact_kv_rows,
             "exact_kv_movement_summary": exact_movement_summary_rows(exact_kv_rows),
             "kv_block_ledger": kv_block_rows,

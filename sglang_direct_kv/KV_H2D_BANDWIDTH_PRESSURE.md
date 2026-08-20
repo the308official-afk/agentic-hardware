@@ -58,6 +58,15 @@ Per-Gap Nearby H2D Pressure
     through
     max(replay_due + 1000 ms, observed H2D finish time)
 
+Per-Gap H2D Contention Timeline
+  Picks the latest replay-H2D rows and shows all exact H2D events in the same
+  controlled case while that row was waiting for KV readiness.
+
+Per-Gap Contention Verdicts
+  Separates two causes of lateness:
+    blocked behind other H2D
+    H2D path quiet before target
+
 Aligned H2D Event Samples
   Shows exact lower-level H2D events after aligning them to the replay-gap clock.
 ```
@@ -88,6 +97,31 @@ window may correctly say there was no H2D near the deadline, while the wider
 deadline-to-ready window shows the actual H2D work the replay eventually waited
 for.
 
+The contention timeline goes one level deeper. For a target replay row, it keeps
+the target row fixed and asks:
+
+```text
+While this row was waiting for its KV H2D to finish, were other KV H2D copies
+already running in the same controlled case?
+```
+
+Simple verdicts:
+
+```text
+blocked behind other H2D
+  Other H2D events were visible after replay due and before the target H2D began.
+
+H2D path quiet before target
+  No other H2D events were visible before the target H2D began. The delay likely
+  happened before SGLang reached the H2D copy path.
+
+target H2D visible
+  The target row's own H2D movement was visible in the window.
+
+no visible contention
+  The report did not see H2D movement in that contention window.
+```
+
 ## Important Nuance
 
 This is not raw Nsight/CUPTI hardware DMA-lane telemetry.
@@ -116,6 +150,8 @@ The report builder writes:
 artifacts/results/reports/<report_label>/report/h2d_activity_events.csv
 artifacts/results/reports/<report_label>/report/h2d_pressure_by_gap.csv
 artifacts/results/reports/<report_label>/report/h2d_activity_windows.csv
+artifacts/results/reports/<report_label>/report/h2d_contention_by_gap.csv
+artifacts/results/reports/<report_label>/report/h2d_contention_events.csv
 ```
 
 ## Manager-Facing Interpretation
