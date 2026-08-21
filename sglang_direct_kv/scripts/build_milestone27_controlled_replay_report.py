@@ -6181,6 +6181,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 "host evict": (zoom_title_y + 132, unified_stack_color("host_evict")),
             }
             hint_h2d_relative_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
+            drew_hint_h2d_in_kv_zoom = False
             for lane_name, (lane_y, _) in zoom_lanes.items():
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name.replace("GPU ", ""))}</text>')
                 parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
@@ -6203,6 +6204,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 )
                 if hint_side_target_h2d:
                     color = unified_stack_color("hint_h2d")
+                    drew_hint_h2d_in_kv_zoom = True
                 title = kv_event_tooltip(label, event, span, target)
                 event_label = ""
                 if target and kind == "H2D":
@@ -6227,6 +6229,39 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     event_label,
                     title,
                     opacity=0.94 if target else 0.48,
+                    min_w=min_visible_event_w,
+                    label_min_w=88.0,
+                    font_size=9,
+                )
+            if hint_h2d_relative_span and not drew_hint_h2d_in_kv_zoom:
+                hint_duration = hint_h2d_relative_span[1] - hint_h2d_relative_span[0]
+                fallback_label = short_bar_label(
+                    [
+                        "hint H2D",
+                        f"{row.get('direct_kv_h2d_events', '')} evt" if row.get("direct_kv_h2d_events", "") not in ("", None) else "",
+                        display_ms(hint_duration),
+                    ],
+                    max_chars=30,
+                )
+                fallback_title = (
+                    f"{label} | hint-side direct KV H2D from row-level summary | "
+                    f"events={row.get('direct_kv_h2d_events', '')} | duration={display_ms(hint_duration)} | "
+                    f"start={display_ms(hint_h2d_relative_span[0])} relative to due | "
+                    f"end={display_ms(hint_h2d_relative_span[1])} relative to due"
+                )
+                draw_span(
+                    parts,
+                    lambda value, z_min=z_min, z_max=z_max: zoom_x(value, z_min, z_max),
+                    z_min,
+                    z_max,
+                    hint_h2d_relative_span[0],
+                    hint_h2d_relative_span[1],
+                    zoom_lanes["H2D"][0] - kv_target_bar_h / 2 + 5,
+                    kv_target_bar_h,
+                    unified_stack_color("hint_h2d"),
+                    fallback_label,
+                    fallback_title,
+                    opacity=0.96,
                     min_w=min_visible_event_w,
                     label_min_w=88.0,
                     font_size=9,
@@ -6373,6 +6408,21 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     label_min_w=82.0,
                     font_size=9,
                 )
+                hint_x1 = prefetch_replay_x(max(hz_min, min(hz_max, hint_h2d_span[0])))
+                hint_x2 = prefetch_replay_x(max(hz_min, min(hz_max, hint_h2d_span[1])))
+                if max(min_visible_bar_w, hint_x2 - hint_x1) < 82.0:
+                    draw_small_bar_callout(
+                        parts,
+                        hint_x1,
+                        hint_x2,
+                        replay_zoom_title_y + 79,
+                        main_bar_h,
+                        hint_label,
+                        hint_title,
+                        unified_stack_color("hint_h2d"),
+                        fill_color="#f0fdf4",
+                        text_color="#166534",
+                    )
 
             replay_request_span = _relative_span(row, "resume_start_ms", "resume_end_ms", due)
             if replay_request_span:
