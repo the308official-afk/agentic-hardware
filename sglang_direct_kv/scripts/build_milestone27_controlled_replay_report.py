@@ -5397,20 +5397,19 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             f'<rect x="{x1:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" fill="{color}" opacity="{opacity}">'
             f'<title>{html.escape(title)}</title></rect>'
         )
-        if break_long and w >= 220:
-            bx = x1 + w * 0.52
-            parts.append(
-                f'<rect x="{bx - 18:.1f}" y="{y - 1:.1f}" width="36" height="{h + 2:.1f}" rx="5" fill="#ffffff" opacity="0.86"/>'
-            )
-            parts.append(
-                f'<text x="{bx:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="11" '
-                f'font-weight="900" fill="{color}">...</text>'
-            )
         if label and w >= 118:
             text_x = x1 + w / 2
+            text_fill = "#0f172a" if color in {
+                unified_stack_color("tool_wait"),
+                unified_stack_color("h2d"),
+                unified_stack_color("prefill"),
+                unified_stack_color("sglang_receive"),
+            } else "#ffffff"
+            if opacity < 0.74:
+                text_fill = "#0f172a"
             parts.append(
-                f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="9" '
-                f'font-weight="800" fill="#0f172a">{html.escape(label)}</text>'
+                f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="10" '
+                f'font-weight="900" fill="{text_fill}">{html.escape(label)}</text>'
             )
 
     def draw_overview_marker(parts: list[str], value: float, y1: float, y2: float, color: str, title: str) -> None:
@@ -5503,7 +5502,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             (_relative_span(row, "resume_start_ms", "resume_end_ms", due), unified_stack_color("decode"), "resume", "resume request wall time", 0.70),
         ]:
             if span:
-                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], overview_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity, break_long=True)
+                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], overview_y - 4, 22, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity, break_long=True)
 
         request_y = y + 64
         request_spans = [
@@ -5514,12 +5513,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ]
         for span, color, span_label, title in request_spans:
             if span:
-                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], request_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", break_long=True)
+                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], request_y - 4, 22, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", break_long=True)
 
         replay_y = y + 100
         replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
         if replay_h2d:
-            draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 2, 9, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=7)
+            draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 4, 12, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=7)
         first_token = first_token_ms(row)
         replay_start = as_float(row.get("resume_start_ms"))
         if first_token is not None and replay_start is not None:
@@ -5528,12 +5527,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
             replay_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
             replay_label = "recompute/TTFT" if recompute_tokens >= 128 else "TTFT"
-            draw_span(parts, overview_x, x_min, x_max, prefill_start_rel, first_token_rel, replay_y + 11, 10, replay_color, replay_label, f"{label} | replay pre-first-token path: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82, break_long=True)
+            draw_span(parts, overview_x, x_min, x_max, prefill_start_rel, first_token_rel, replay_y + 11, 14, replay_color, replay_label, f"{label} | replay pre-first-token path: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82, break_long=True)
             draw_overview_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
         if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
             decode_span = (first_token - due, (as_float(row.get("resume_end_ms")) or first_token) - due)
             if decode_span[1] > decode_span[0]:
-                draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 25, 9, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
+                draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 29, 12, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
 
         zoom_title_y = y + 150
         parts.append(f'<text x="{left - 10}" y="{zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">KV zoom</text>')
@@ -5585,7 +5584,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     span[0],
                     span[1],
                     lane_y,
-                    8 if target else 6,
+                    10 if target else 8,
                     color,
                     "",
                     title,
@@ -5631,8 +5630,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     rz_max,
                     replay_request_span[0],
                     replay_request_span[1],
-                    replay_zoom_title_y + 32,
-                    10,
+                    replay_zoom_title_y + 30,
+                    16,
                     unified_stack_color("decode"),
                     "replay request",
                     f"{label} | replay request wall time: {display_ms(replay_request_span[1] - replay_request_span[0])}",
@@ -5649,8 +5648,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     rz_max,
                     replay_h2d_span[0],
                     replay_h2d_span[1],
-                    replay_zoom_title_y + 56,
-                    10,
+                    replay_zoom_title_y + 54,
+                    16,
                     unified_stack_color("h2d"),
                     "replay H2D",
                     f"{label} | replay-side KV H2D: {display_ms(replay_h2d_span[1] - replay_h2d_span[0])}",
@@ -5673,8 +5672,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     rz_max,
                     pre_token_start,
                     pre_token_end,
-                    replay_zoom_title_y + 80,
-                    10,
+                    replay_zoom_title_y + 78,
+                    16,
                     pre_token_color,
                     pre_token_label,
                     f"{label} | replay before first token: {display_ms(pre_token_end - pre_token_start)}",
@@ -5696,8 +5695,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         rz_max,
                         decode_start,
                         decode_end,
-                        replay_zoom_title_y + 104,
-                        10,
+                        replay_zoom_title_y + 102,
+                        16,
                         unified_stack_color("decode"),
                         "decode",
                         f"{label} | decode after first token: {display_ms(decode_end - decode_start)}",
