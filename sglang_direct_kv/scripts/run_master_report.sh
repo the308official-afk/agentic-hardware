@@ -23,9 +23,9 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
 fi
 
 case "${EXPERIMENT_KIND}" in
-  controlled|live|both) ;;
+  controlled|live|both|multi_session) ;;
   *)
-    echo "ERROR: EXPERIMENT_KIND must be one of: controlled, live, both" >&2
+    echo "ERROR: EXPERIMENT_KIND must be one of: controlled, live, both, multi_session" >&2
     exit 2
     ;;
 esac
@@ -145,6 +145,7 @@ RUNS_ROOT="${RESULTS_ROOT}/runs"
 REPORT_DIR="${REPORTS_ROOT}/${REPORT_LABEL}"
 CONTROLLED_RUN_ROOT="${CONTROLLED_ROOT:-${RUNS_ROOT}/controlled/${REPORT_LABEL}}"
 LIVE_DIRECT_RUN_ROOT="${LIVE_DIRECT_ROOT:-${RUNS_ROOT}/live/${REPORT_LABEL}}"
+MULTI_SESSION_RUN_ROOT="${MULTI_SESSION_ROOT:-${RUNS_ROOT}/multi_session/${REPORT_LABEL}}"
 SCRATCH_LATEST_ROOT="${REPORT_DIR}/_latest_scratch"
 RUN_CONFIG_ENV="${REPORT_DIR}/run_config.env"
 RUN_ENV_JSON="${REPORT_DIR}/run_environment.json"
@@ -255,6 +256,7 @@ write_run_config() {
     echo "REPORT_DIR=${REPORT_DIR}"
     echo "CONTROLLED_ROOT=${CONTROLLED_RUN_ROOT}"
     echo "LIVE_DIRECT_ROOT=${LIVE_DIRECT_RUN_ROOT}"
+    echo "MULTI_SESSION_ROOT=${MULTI_SESSION_RUN_ROOT}"
     echo "UPDATE_LATEST=${UPDATE_LATEST}"
     echo "BUILD_ONLY=${BUILD_ONLY}"
     echo "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
@@ -279,6 +281,17 @@ write_run_config() {
     echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}"
     echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
     echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER:-}"
+    echo "SESSION_COUNT=${SESSION_COUNT:-}"
+    echo "ARRIVAL_SHAPE=${ARRIVAL_SHAPE:-}"
+    echo "ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS:-}"
+    echo "ARRIVAL_GAP_RANGE_MS=${ARRIVAL_GAP_RANGE_MS:-}"
+    echo "BURST_SIZE=${BURST_SIZE:-}"
+    echo "BURST_GAP_MS=${BURST_GAP_MS:-}"
+    echo "TOOL_WAIT_JITTER_MS=${TOOL_WAIT_JITTER_MS:-}"
+    echo "PREFETCH_TIMING=${PREFETCH_TIMING:-}"
+    echo "HINT_DELAY_MS=${HINT_DELAY_MS:-}"
+    echo "PREFETCH_LEAD_MS=${PREFETCH_LEAD_MS:-}"
+    echo "BACKGROUND_FILLERS_PER_SESSION=${BACKGROUND_FILLERS_PER_SESSION:-}"
   } > "${RUN_CONFIG_ENV}"
 }
 
@@ -299,6 +312,7 @@ write_manifest() {
   local archived_report="${2:-}"
   local controlled_root="${3:-}"
   local live_root="${4:-}"
+  local multi_session_root="${5:-}"
   local manifest_path="${REPORT_DIR}/manifest.json"
   local latest_manifest_path="${RESULTS_ROOT}/latest_manifest.json"
 
@@ -308,6 +322,7 @@ write_manifest() {
   WORKLOAD_SOURCE_VALUE="${WORKLOAD_SOURCE}" \
   CONTROLLED_ROOT_VALUE="${controlled_root}" \
   LIVE_ROOT_VALUE="${live_root}" \
+  MULTI_SESSION_ROOT_VALUE="${multi_session_root}" \
   LATEST_REPORT_VALUE="${latest_report}" \
   ARCHIVED_REPORT_VALUE="${archived_report}" \
   SCRIPT_VALUE="scripts/run_master_report.sh" \
@@ -329,6 +344,17 @@ write_manifest() {
   HICACHE_SIZE_GB_VALUE="${HICACHE_SIZE_GB:-}" \
   MEM_FRACTION_STATIC_VALUE="${MEM_FRACTION_STATIC:-}" \
   AGENTIC_KV_TRACE_SCHEDULER_VALUE="${AGENTIC_KV_TRACE_SCHEDULER:-}" \
+  SESSION_COUNT_VALUE="${SESSION_COUNT:-}" \
+  ARRIVAL_SHAPE_VALUE="${ARRIVAL_SHAPE:-}" \
+  ARRIVAL_GAP_MS_VALUE="${ARRIVAL_GAP_MS:-}" \
+  ARRIVAL_GAP_RANGE_MS_VALUE="${ARRIVAL_GAP_RANGE_MS:-}" \
+  BURST_SIZE_VALUE="${BURST_SIZE:-}" \
+  BURST_GAP_MS_VALUE="${BURST_GAP_MS:-}" \
+  TOOL_WAIT_JITTER_MS_VALUE="${TOOL_WAIT_JITTER_MS:-}" \
+  PREFETCH_TIMING_VALUE="${PREFETCH_TIMING:-}" \
+  HINT_DELAY_MS_VALUE="${HINT_DELAY_MS:-}" \
+  PREFETCH_LEAD_MS_VALUE="${PREFETCH_LEAD_MS:-}" \
+  BACKGROUND_FILLERS_PER_SESSION_VALUE="${BACKGROUND_FILLERS_PER_SESSION:-}" \
   UPDATE_LATEST="${UPDATE_LATEST}" \
   MANIFEST_PATH="${manifest_path}" \
   LATEST_MANIFEST_PATH="${latest_manifest_path}" \
@@ -345,6 +371,7 @@ manifest = {
     "workload_source": os.environ.get("WORKLOAD_SOURCE_VALUE", ""),
     "controlled_root": os.environ.get("CONTROLLED_ROOT_VALUE", ""),
     "live_root": os.environ.get("LIVE_ROOT_VALUE", ""),
+    "multi_session_root": os.environ.get("MULTI_SESSION_ROOT_VALUE", ""),
     "latest_report": os.environ.get("LATEST_REPORT_VALUE", ""),
     "archived_report": os.environ.get("ARCHIVED_REPORT_VALUE", ""),
     "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -368,6 +395,17 @@ manifest = {
         "hicache_size_gb": os.environ.get("HICACHE_SIZE_GB_VALUE", ""),
         "mem_fraction_static": os.environ.get("MEM_FRACTION_STATIC_VALUE", ""),
         "agentic_kv_trace_scheduler": os.environ.get("AGENTIC_KV_TRACE_SCHEDULER_VALUE", ""),
+        "session_count": os.environ.get("SESSION_COUNT_VALUE", ""),
+        "arrival_shape": os.environ.get("ARRIVAL_SHAPE_VALUE", ""),
+        "arrival_gap_ms": os.environ.get("ARRIVAL_GAP_MS_VALUE", ""),
+        "arrival_gap_range_ms": os.environ.get("ARRIVAL_GAP_RANGE_MS_VALUE", ""),
+        "burst_size": os.environ.get("BURST_SIZE_VALUE", ""),
+        "burst_gap_ms": os.environ.get("BURST_GAP_MS_VALUE", ""),
+        "tool_wait_jitter_ms": os.environ.get("TOOL_WAIT_JITTER_MS_VALUE", ""),
+        "prefetch_timing": os.environ.get("PREFETCH_TIMING_VALUE", ""),
+        "hint_delay_ms": os.environ.get("HINT_DELAY_MS_VALUE", ""),
+        "prefetch_lead_ms": os.environ.get("PREFETCH_LEAD_MS_VALUE", ""),
+        "background_fillers_per_session": os.environ.get("BACKGROUND_FILLERS_PER_SESSION_VALUE", ""),
     },
 }
 
@@ -392,6 +430,7 @@ RESULTS_ROOT=${RESULTS_ROOT}
 REPORT_DIR=${REPORT_DIR}
 CONTROLLED_RUN_ROOT=${CONTROLLED_RUN_ROOT}
 LIVE_DIRECT_RUN_ROOT=${LIVE_DIRECT_RUN_ROOT}
+MULTI_SESSION_RUN_ROOT=${MULTI_SESSION_RUN_ROOT}
 UPDATE_LATEST=${UPDATE_LATEST}
 BUILD_ONLY=${BUILD_ONLY}
 DRY_RUN=${DRY_RUN}
@@ -414,6 +453,10 @@ MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}
 HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}
 MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}
 AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER:-}
+SESSION_COUNT=${SESSION_COUNT:-}
+ARRIVAL_SHAPE=${ARRIVAL_SHAPE:-}
+ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS:-}
+BACKGROUND_FILLERS_PER_SESSION=${BACKGROUND_FILLERS_PER_SESSION:-}
 EOF
 }
 
@@ -463,6 +506,32 @@ run_live() {
     fi
   done
   env "${env_args[@]}" bash scripts/run_milestone26_live_direct_kv_load_intervention.sh "${MODEL}"
+}
+
+run_multi_session() {
+  if [[ "${BUILD_ONLY}" == "1" ]]; then
+    if [[ -n "${MULTI_SESSION_ROOT:-}" ]]; then
+      MULTI_SESSION_RUN_ROOT="${MULTI_SESSION_ROOT}"
+    fi
+    echo "Build-only: using multi-session root: ${MULTI_SESSION_RUN_ROOT}"
+    return
+  fi
+
+  echo
+  echo "Running multi-session agentic replay experiment."
+  local env_args=(
+    "RESULT_ROOT=${MULTI_SESSION_RUN_ROOT}"
+    "LATEST_REPORT_ROOT=${MULTI_SESSION_RUN_ROOT}/_latest_scratch"
+    "MAX_TIMELINE_GAPS=${MAX_TIMELINE_GAPS}"
+    "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
+  )
+  local knob
+  for knob in SESSION_COUNT MODES ARRIVAL_SHAPE ARRIVAL_GAP_MS ARRIVAL_GAP_RANGE_MS BURST_SIZE BURST_GAP_MS TOOL_WAIT_LIST_MS TOOL_WAIT_JITTER_MS PREFETCH_TIMING HINT_DELAY_MS PREFETCH_LEAD_MS BACKGROUND_FILLERS_PER_SESSION FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS SYNTHETIC_PROMPT_TOKENS SYNTHETIC_REPLAY_SUFFIX_TOKENS REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC; do
+    if [[ -n "${!knob+x}" ]]; then
+      env_args+=("${knob}=${!knob}")
+    fi
+  done
+  env "${env_args[@]}" bash scripts/run_milestone36_multi_session_agentic_replay.sh "${MODEL}"
 }
 
 build_report() {
@@ -525,6 +594,18 @@ build_report() {
       mkdir -p "${REPORT_DIR}/report"
       cp -f "${build_latest_root}/latest_master_report.html" "${REPORT_DIR}/report/controlled_replay_report.html"
       ;;
+    multi_session)
+      if [[ -z "${MULTI_SESSION_RUN_ROOT}" || ! -d "${MULTI_SESSION_RUN_ROOT}" ]]; then
+        echo "ERROR: multi-session root does not exist: ${MULTI_SESSION_RUN_ROOT}" >&2
+        exit 1
+      fi
+      "${PYTHON_BIN}" scripts/build_milestone27_controlled_replay_report.py \
+        --root "${MULTI_SESSION_RUN_ROOT}" \
+        --out-dir "${REPORT_DIR}/report" \
+        --latest-root "${build_latest_root}" \
+        --max-timeline-gaps "${MAX_TIMELINE_GAPS}" \
+        --run-environment-json "${RUN_ENV_JSON}"
+      ;;
   esac
 
   local built_report="${REPORT_DIR}/report/controlled_replay_report.html"
@@ -543,7 +624,7 @@ build_report() {
     fi
   done
 
-  write_manifest "${RESULTS_ROOT}/latest_master_report.html" "${REPORT_DIR}/master_report.html" "${CONTROLLED_RUN_ROOT}" "${LIVE_DIRECT_RUN_ROOT}"
+  write_manifest "${RESULTS_ROOT}/latest_master_report.html" "${REPORT_DIR}/master_report.html" "${CONTROLLED_RUN_ROOT}" "${LIVE_DIRECT_RUN_ROOT}" "${MULTI_SESSION_RUN_ROOT}"
 }
 
 print_config
@@ -554,7 +635,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   exit 0
 fi
 
-mkdir -p "${REPORT_DIR}" "${RUNS_ROOT}/controlled" "${RUNS_ROOT}/live" "${SCRATCH_LATEST_ROOT}"
+mkdir -p "${REPORT_DIR}" "${RUNS_ROOT}/controlled" "${RUNS_ROOT}/live" "${RUNS_ROOT}/multi_session" "${SCRATCH_LATEST_ROOT}"
 
 case "${EXPERIMENT_KIND}" in
   controlled)
@@ -566,6 +647,9 @@ case "${EXPERIMENT_KIND}" in
   both)
     run_controlled
     run_live
+    ;;
+  multi_session)
+    run_multi_session
     ;;
 esac
 

@@ -54,6 +54,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 33: Replay Delay Breakdown | Ready | [Milestone 33](#milestone-33-replay-delay-breakdown) |
 | Milestone 34: Replay Delay Deep Instrumentation | Ready | [Milestone 34](#milestone-34-replay-delay-deep-instrumentation) |
 | Milestone 35: Instrumentation Evidence Audit | Ready | [Milestone 35](#milestone-35-instrumentation-evidence-audit) |
+| Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
 
 ## What We Are Testing
 
@@ -6261,6 +6262,124 @@ still derived, inferred, or outside the current proof boundary.
 Reports rebuilt from old traces can fix the movement-kind accounting, but
 fresh experiments are needed to populate the newly added request/correlation
 fields in raw SGLang trace events.
+```
+
+### Milestone 36: Multi-Session Agentic Replay Forensics
+
+Why this milestone is needed:
+
+```text
+Earlier controlled experiments used one target request, then fillers, then
+one replay. That is useful for isolating behavior, but real serving traffic
+has many agent sessions overlapping.
+
+Milestone 36 runs many agent-like sessions in the same SGLang server window.
+Each session has:
+  initial model turn
+  tool-wait gap
+  optional direct KV prefetch
+  replay/resume request
+```
+
+What it tests:
+
+```text
+Can the direct KV prefetch path still finish before replay when many sessions
+are active at once?
+
+Do replay-side H2D loads arrive early or late across many sessions?
+
+During a target session's delay window, were other sessions moving KV,
+offloading KV, or evicting KV?
+```
+
+Important design choice:
+
+```text
+This milestone avoids old prompt-based request warming.
+
+Allowed modes:
+  no_prefetch
+  direct_prefetch
+
+direct_prefetch uses the direct SGLang KV load-back trigger path. It does not
+try to warm the cache by asking SGLang to generate from a duplicate prompt.
+```
+
+Run through the master-report script:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+EXPERIMENT_KIND=multi_session \
+REPORT_LABEL=multi_session_agentic_replay_1 \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+WORKLOAD_SOURCE=real \
+SESSION_COUNT=16 \
+MODES="no_prefetch direct_prefetch" \
+ARRIVAL_SHAPE=staggered \
+ARRIVAL_GAP_MS=120 \
+TOOL_WAIT_LIST_MS="100 250 500 1000" \
+TOOL_WAIT_JITTER_MS=50 \
+PREFETCH_TIMING=early \
+HINT_DELAY_MS=20 \
+BACKGROUND_FILLERS_PER_SESSION=0 \
+REQUEST_CONCURRENCY=8 \
+TARGET_PROMPT_TOKENS=4096 \
+MAX_TOTAL_TOKENS=16384 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+MAX_TIMELINE_GAPS=18 \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+For a faster first check:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+EXPERIMENT_KIND=multi_session \
+REPORT_LABEL=multi_session_smoke_1 \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+WORKLOAD_SOURCE=synthetic \
+SESSION_COUNT=4 \
+MODES="no_prefetch direct_prefetch" \
+ARRIVAL_SHAPE=burst \
+ARRIVAL_GAP_MS=40 \
+BURST_SIZE=4 \
+TOOL_WAIT_LIST_MS="100 250" \
+REQUEST_CONCURRENCY=4 \
+TARGET_PROMPT_TOKENS=2048 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+MAX_TIMELINE_GAPS=8 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+What to look for in `latest_master_report.html`:
+
+```text
+Unified Forensic Stack Timeline:
+  rows should include many sessions, not just one target replay case
+
+Global Replay H2D Readiness:
+  shows whether replay-side H2D movements finished late or early
+
+Client Dispatch KV Movement:
+  shows other sessions' H2D/D2H/evict activity during each target delay window
+
+Detailed KV Block Lifecycle Table:
+  shows the block-level evidence behind the visible rows
 ```
 
 ## Directory Layout

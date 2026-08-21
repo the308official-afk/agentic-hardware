@@ -1,0 +1,387 @@
+#!/usr/bin/env python
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import random
+import time
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from run_real_prompt_controlled_replay import (
+    DIRECT_LOAD_TRIGGER,
+    ReplayPair,
+    agentic_params,
+    build_fallback_pairs,
+    chat_once,
+    estimate_tokens,
+    load_workload_jsonl,
+    make_pressure_filler_prompt,
+    pad_pair_with_shared_prefix,
+    parse_int_list,
+    prompt_hash,
+    write_trace_event,
+)
+
+
+def parse_range(raw: str) -> tuple[int, int]:
+    values = parse_int_list(raw)
+    if len(values) != 2:
+        raise ValueError(f"expected exactly two integers, got {raw!r}")
+    lo, hi = values
+    if lo > hi:
+        raise ValueError(f"range lower bound is larger than upper bound: {raw!r}")
+    return lo, hi
+
+
+def bounded_jitter(value: int, jitter: int, rng: random.Random) -> int:
+    if jitter <= 0:
+        return value
+    return max(1, value + rng.randint(-jitter, jitter))
+
+
+def arrival_offset_ms(index: int, args: argparse.Namespace, rng: random.Random) -> int:
+    if args.arrival_shape == "burst":
+        burst = max(1, args.burst_size)
+        return (index // burst) * args.burst_gap_ms + (index % burst) * args.arrival_gap_ms
+    if args.arrival_shape == "random":
+        lo, hi = parse_range(args.arrival_gap_range_ms)
+        if index == 0:
+            return 0
+        return sum(rng.randint(lo, hi) for _ in range(index))
+    return index * args.arrival_gap_ms
+
+
+def normalize_pairs(pairs: list[ReplayPair], session_count: int, target_prompt_tokens: int) -> list[ReplayPair]:
+    selected = pairs[:session_count]
+    if len(selected) < session_count:
+        selected.extend(build_fallback_pairs(session_count - len(selected), target_prompt_tokens or 1024))
+    normalized: list[ReplayPair] = []
+    for idx, pair in enumerate(selected):
+        session_id = f"m36_{idx:03d}_{pair.session_id}"[:96]
+        current = replace(pair, session_id=session_id, task_index=str(pair.task_index or idx))
+        if target_prompt_tokens > 0:
+            current = pad_pair_with_shared_prefix(current, target_prompt_tokens)
+        normalized.append(current)
+    return normalized
+
+
+async def main_async() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run many overlapping agentic sessions with direct KV-prefetch hints."
+    )
+    parser.add_argument("--base-url", default="http://127.0.0.1:30000/v1")
+    parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
+    parser.add_argument("--mode", choices=("no_prefetch", "direct_prefetch"), default="no_prefetch")
+    parser.add_argument("--workload-jsonl", type=Path)
+    parser.add_argument("--session-count", type=int, default=16)
+    parser.add_argument("--arrival-shape", choices=("staggered", "burst", "random"), default="staggered")
+    parser.add_argument("--arrival-gap-ms", type=int, default=120)
+    parser.add_argument("--arrival-gap-range-ms", default="60 240")
+    parser.add_argument("--burst-size", type=int, default=4)
+    parser.add_argument("--burst-gap-ms", type=int, default=800)
+    parser.add_argument("--tool-wait-list-ms", default="100 250 500 1000")
+    parser.add_argument("--tool-wait-jitter-ms", type=int, default=0)
+    parser.add_argument("--prefetch-timing", choices=("early", "near_resume"), default="early")
+    parser.add_argument("--hint-delay-ms", type=int, default=20)
+    parser.add_argument("--prefetch-lead-ms", type=int, default=120)
+    parser.add_argument("--background-fillers-per-session", type=int, default=0)
+    parser.add_argument("--filler-prompt-tokens", type=int, default=1024)
+    parser.add_argument("--target-prompt-tokens", type=int, default=0)
+    parser.add_argument("--max-tokens", type=int, default=8)
+    parser.add_argument("--prefetch-max-tokens", type=int, default=1)
+    parser.add_argument("--filler-max-tokens", type=int, default=2)
+    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--out", type=Path, default=Path("artifacts/results/m36_metrics.jsonl"))
+    args = parser.parse_args()
+
+    pairs = load_workload_jsonl(args.workload_jsonl, args.session_count) if args.workload_jsonl else []
+    if not pairs:
+        pairs = build_fallback_pairs(args.session_count, args.target_prompt_tokens or args.filler_prompt_tokens)
+    pairs = normalize_pairs(pairs, args.session_count, args.target_prompt_tokens)
+
+    rng = random.Random(args.seed)
+    tool_wait_values = parse_int_list(args.tool_wait_list_ms)
+    session_specs: list[dict[str, Any]] = []
+    for idx, pair in enumerate(pairs):
+        tool_wait_ms = bounded_jitter(tool_wait_values[idx % len(tool_wait_values)], args.tool_wait_jitter_ms, rng)
+        session_specs.append(
+            {
+                "pair": pair,
+                "arrival_ms": arrival_offset_ms(idx, args, rng),
+                "tool_wait_ms": tool_wait_ms,
+                "priority": pair.priority or ("high" if idx % 4 == 0 else "normal"),
+            }
+        )
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    sem = asyncio.Semaphore(args.concurrency)
+    workload_start = time.perf_counter()
+
+    write_trace_event(
+        {
+            "event": "m36.workload_start",
+            "mode": args.mode,
+            "model": args.model,
+            "session_count": len(session_specs),
+            "arrival_shape": args.arrival_shape,
+            "arrival_gap_ms": args.arrival_gap_ms,
+            "tool_wait_list_ms": tool_wait_values,
+            "tool_wait_jitter_ms": args.tool_wait_jitter_ms,
+            "prefetch_timing": args.prefetch_timing,
+            "background_fillers_per_session": args.background_fillers_per_session,
+            "sampled_sessions": [
+                {
+                    "session_id": spec["pair"].session_id,
+                    "arrival_ms": spec["arrival_ms"],
+                    "tool_wait_ms": spec["tool_wait_ms"],
+                    "task_index": spec["pair"].task_index,
+                    "tool_names": spec["pair"].tool_names,
+                    "prompt_tokens": spec["pair"].prompt_tokens,
+                }
+                for spec in session_specs
+            ],
+        }
+    )
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        async def sleep_until(offset_ms: float) -> None:
+            target = workload_start + offset_ms / 1000.0
+            delay = target - time.perf_counter()
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        async def run_request(pair: ReplayPair, prompt: str, phase: str, label: str, max_tokens: int) -> dict[str, Any]:
+            p_hash = prompt_hash(prompt)
+            write_trace_event(
+                {
+                    "event": "m27.request.submitted",
+                    "session_id": pair.session_id,
+                    "phase": phase,
+                    "mode": args.mode,
+                    "label": label,
+                    "prompt_hash": p_hash,
+                    "prompt_chars": len(prompt),
+                }
+            )
+            async with sem:
+                write_trace_event(
+                    {
+                        "event": "m27.request.start",
+                        "session_id": pair.session_id,
+                        "phase": phase,
+                        "mode": args.mode,
+                        "label": label,
+                        "prompt_hash": p_hash,
+                        "prompt_chars": len(prompt),
+                    }
+                )
+                row = await chat_once(
+                    client,
+                    args.base_url,
+                    args.model,
+                    prompt,
+                    max_tokens,
+                    label,
+                    agentic_params(pair, phase, args.mode, label, p_hash),
+                )
+                row.update(
+                    {
+                        "session_id": pair.session_id,
+                        "phase": phase,
+                        "mode": args.mode,
+                        "task_index": pair.task_index,
+                        "tool_names": pair.tool_names,
+                        "priority": pair.priority,
+                        "source": pair.source,
+                        "prompt_tokens": pair.prompt_tokens,
+                    }
+                )
+                rows.append(row)
+                write_trace_event(
+                    {
+                        "event": "m27.request.end",
+                        "session_id": pair.session_id,
+                        "phase": phase,
+                        "mode": args.mode,
+                        "label": label,
+                        "prompt_hash": p_hash,
+                        "ttft_ms": row["ttft_ms"],
+                        "total_latency_ms": row["total_latency_ms"],
+                    }
+                )
+                print(json.dumps(row, sort_keys=True), flush=True)
+                return row
+
+        async def run_background_filler(pair: ReplayPair, index: int) -> None:
+            session_id = f"{pair.session_id}_ambient_{index:03d}"
+            prompt = make_pressure_filler_prompt(session_id, args.filler_prompt_tokens)
+            filler = ReplayPair(
+                session_id=session_id,
+                prompt=prompt,
+                replay_prompt=prompt,
+                source="multi_session_background_filler",
+                task_index=pair.task_index,
+                tool_names="ambient_pressure",
+                priority="low",
+                prompt_tokens=estimate_tokens(prompt),
+            )
+            await run_request(filler, prompt, "pressure_filler", f"{session_id}_request", args.filler_max_tokens)
+
+        async def issue_prefetch(pair: ReplayPair, replay_due_ms: float) -> None:
+            base_hash = prompt_hash(pair.prompt)
+            trigger_prompt = pair.prompt + "\n\n" + (
+                f"{DIRECT_LOAD_TRIGGER} session_id={pair.session_id} prompt_hash={base_hash}"
+            )
+            write_trace_event(
+                {
+                    "event": "m27.prefetch.start",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "prefetch_action": "direct_load",
+                    "prompt_hash": base_hash,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                }
+            )
+            await run_request(
+                pair,
+                trigger_prompt,
+                "hint_prefetch",
+                f"{pair.session_id}_direct_prefetch",
+                args.prefetch_max_tokens,
+            )
+            write_trace_event(
+                {
+                    "event": "m27.prefetch.end",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "prefetch_action": "direct_load",
+                    "prompt_hash": base_hash,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                }
+            )
+
+        async def run_session(index: int, spec: dict[str, Any]) -> None:
+            pair: ReplayPair = spec["pair"]
+            await sleep_until(spec["arrival_ms"])
+            write_trace_event(
+                {
+                    "event": "m27.session.start",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "task_index": pair.task_index,
+                    "tool_names": pair.tool_names,
+                    "arrival_offset_ms": round(spec["arrival_ms"], 3),
+                    "tool_wait_ms": spec["tool_wait_ms"],
+                    "prompt_tokens": pair.prompt_tokens,
+                    "traffic_shape": "multi_session",
+                    "traffic_session_index": index,
+                }
+            )
+            await run_request(pair, pair.prompt, "initial_turn", f"{pair.session_id}_initial", args.max_tokens)
+
+            tool_start_offset_ms = (time.perf_counter() - workload_start) * 1000.0
+            replay_due_ms = tool_start_offset_ms + spec["tool_wait_ms"]
+            write_trace_event(
+                {
+                    "event": "m27.tool_wait.start",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "tool_start_offset_ms": round(tool_start_offset_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "tool_wait_ms": spec["tool_wait_ms"],
+                    "prompt_hash": prompt_hash(pair.prompt),
+                }
+            )
+
+            filler_tasks = [
+                asyncio.create_task(run_background_filler(pair, filler_idx))
+                for filler_idx in range(args.background_fillers_per_session)
+            ]
+
+            hint_task: asyncio.Task[None] | None = None
+            if args.mode == "direct_prefetch":
+                if args.prefetch_timing == "near_resume":
+                    hint_offset_ms = max(tool_start_offset_ms, replay_due_ms - args.prefetch_lead_ms)
+                    timing = "near_resume"
+                else:
+                    hint_offset_ms = tool_start_offset_ms + args.hint_delay_ms
+                    timing = "early"
+                write_trace_event(
+                    {
+                        "event": "m27.hint.submitted",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "timing": timing,
+                        "hint_offset_ms": round(hint_offset_ms, 3),
+                        "tool_start_offset_ms": round(tool_start_offset_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "reuse_confidence": 0.82,
+                        "traffic_shape": "multi_session",
+                    }
+                )
+
+                async def run_hint_task() -> None:
+                    await sleep_until(hint_offset_ms)
+                    await issue_prefetch(pair, replay_due_ms)
+
+                hint_task = asyncio.create_task(run_hint_task())
+
+            await sleep_until(replay_due_ms)
+            write_trace_event(
+                {
+                    "event": "m27.pre_replay.checkpoint",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "prefetch_hint_submitted": bool(hint_task is not None),
+                    "expected_reuse": "high" if hint_task is not None else "baseline",
+                    "gpu_resident_tokens": "unknown",
+                    "host_resident_tokens": "unknown",
+                    "missing_tokens": "unknown",
+                    "protected_tokens": "unknown",
+                }
+            )
+            write_trace_event(
+                {
+                    "event": "m27.replay.due",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                }
+            )
+            await run_request(pair, pair.replay_prompt, "replay", f"{pair.session_id}_replay", args.max_tokens)
+            write_trace_event(
+                {
+                    "event": "m27.tool_wait.end",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                }
+            )
+            if hint_task is not None:
+                await hint_task
+            if filler_tasks:
+                await asyncio.gather(*filler_tasks, return_exceptions=True)
+
+        await asyncio.gather(*(run_session(idx, spec) for idx, spec in enumerate(session_specs)))
+
+    write_trace_event({"event": "m36.workload_end", "mode": args.mode, "row_count": len(rows)})
+    with args.out.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    print(f"Wrote multi-session metrics to {args.out}", flush=True)
+
+
+def main() -> None:
+    asyncio.run(main_async())
+
+
+if __name__ == "__main__":
+    main()
