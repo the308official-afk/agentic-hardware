@@ -55,6 +55,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 34: Replay Delay Deep Instrumentation | Ready | [Milestone 34](#milestone-34-replay-delay-deep-instrumentation) |
 | Milestone 35: Instrumentation Evidence Audit | Ready | [Milestone 35](#milestone-35-instrumentation-evidence-audit) |
 | Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
+| Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
 
 ## What We Are Testing
 
@@ -6313,6 +6314,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 AGENTIC_KV_TRACE_SCHEDULER=1 \
+AGENTIC_KV_TRACE_KV_POOL=1 \
 EXPERIMENT_KIND=multi_session \
 REPORT_LABEL=multi_session_agentic_replay_1 \
 PRESSURE_PROFILE=custom \
@@ -6345,6 +6347,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 AGENTIC_KV_TRACE_SCHEDULER=1 \
+AGENTIC_KV_TRACE_KV_POOL=1 \
 EXPERIMENT_KIND=multi_session \
 REPORT_LABEL=multi_session_smoke_1 \
 PRESSURE_PROFILE=custom \
@@ -6380,6 +6383,54 @@ Client Dispatch KV Movement:
 
 Detailed KV Block Lifecycle Table:
   shows the block-level evidence behind the visible rows
+```
+
+### Milestone 37: GPU KV Pool Residency Telemetry
+
+Why this milestone is needed:
+
+```text
+When replay-side H2D starts late, we need to know whether the SGLang GPU KV
+pool was already full or nearly full around that moment.
+
+This should come from SGLang's KV memory-pool state, not from total GPU memory
+reported by nvidia-smi.
+```
+
+What it adds:
+
+```text
+AGENTIC_KV_TRACE_KV_POOL=1 enables direct SGLang KV-pool sampling inside the
+trace hooks.
+
+The report now emits:
+  kv_pool_samples.csv
+  kv_pool_residency_by_gap.csv
+
+The master report now includes:
+  GPU KV Pool Residency
+  per-row GPU KV pool summary inside the Unified Forensic Stack Timeline
+```
+
+Simple meaning:
+
+```text
+If the pool is very full around replay/H2D time, late KV movement may be
+related to residency pressure: there may not be enough room to bring KV back
+without evicting something else.
+
+If the pool is not full, the lateness is more likely coming from another part
+of the path, such as client dispatch, scheduler admission, cache lookup, or
+other runtime work.
+```
+
+Important proof boundary:
+
+```text
+This is direct SGLang KV-pool telemetry. It is stronger than reading logs or
+total GPU memory, but it is still not a physical DMA-engine saturation counter.
+It tells us how SGLang's KV cache pool looked when replay/prefetch/H2D events
+were happening.
 ```
 
 ## Directory Layout

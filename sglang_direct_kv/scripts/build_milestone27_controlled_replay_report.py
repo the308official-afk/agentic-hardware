@@ -3463,6 +3463,340 @@ def all_aligned_kv_movement_events(
     return output
 
 
+def _trace_row_case_id(row: dict[str, Any]) -> str:
+    context = row.get("kv_context")
+    if isinstance(context, dict):
+        nested = context.get("request")
+        if isinstance(nested, dict):
+            return str(
+                row.get("ledger_case_id")
+                or context.get("ledger_case_id")
+                or context.get("agent_case_id")
+                or nested.get("agent_case_id")
+                or ""
+            )
+        return str(row.get("ledger_case_id") or context.get("ledger_case_id") or context.get("agent_case_id") or "")
+    return str(row.get("ledger_case_id") or row.get("agent_case_id") or "")
+
+
+def _trace_row_agent_context(row: dict[str, Any]) -> dict[str, Any]:
+    context = row.get("kv_context")
+    if isinstance(context, dict):
+        request = context.get("request")
+        if isinstance(request, dict):
+            merged = dict(request)
+            merged.update(context)
+            return merged
+        return context
+    return row
+
+
+def _pool_state_from_trace_row(row: dict[str, Any]) -> dict[str, Any]:
+    if row.get("kv_pool_usage_pct") not in (None, "", [], {}):
+        return {
+            "source": row.get("kv_pool_source", ""),
+            "object_type": row.get("kv_pool_object_type", ""),
+            "total_slots": row.get("kv_pool_total_slots", ""),
+            "free_slots": row.get("kv_pool_free_slots", ""),
+            "used_slots": row.get("kv_pool_used_slots", ""),
+            "usage_pct": row.get("kv_pool_usage_pct", ""),
+            "page_size": row.get("kv_pool_page_size", ""),
+        }
+    context = row.get("kv_context")
+    if isinstance(context, dict):
+        state = context.get("kv_pool_state")
+        if isinstance(state, dict):
+            return state
+    return {}
+
+
+def kv_pool_samples_from_trace(gaps: list[dict[str, Any]], trace_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize direct SGLang GPU KV-pool samples into the case clock."""
+
+    base_ns_by_case: dict[str, float] = {}
+    for row in trace_rows:
+        case_id = _trace_row_case_id(row)
+        ts = as_float(row.get("ts_ns"))
+        if not case_id or ts is None:
+            continue
+        base_ns_by_case[case_id] = min(base_ns_by_case.get(case_id, ts), ts)
+
+    output: list[dict[str, Any]] = []
+    for row in trace_rows:
+        state = _pool_state_from_trace_row(row)
+        usage = as_float(state.get("usage_pct"))
+        total = as_float(state.get("total_slots"))
+        if usage is None or total is None:
+            continue
+        case_id = _trace_row_case_id(row)
+        base_ns = base_ns_by_case.get(case_id)
+        ts = as_float(row.get("ts_ns"))
+        if not case_id or base_ns is None or ts is None:
+            continue
+        context = _trace_row_agent_context(row)
+        output.append(
+            {
+                "case_id": case_id,
+                "aligned_ms": round((ts - base_ns) / 1_000_000.0, 3),
+                "event": row.get("event", ""),
+                "source_event": row.get("source_event", ""),
+                "method": row.get("method", ""),
+                "stage": row.get("stage", row.get("category", "")),
+                "phase": row.get("phase", ""),
+                "agent_session_id": context.get("agent_session_id", ""),
+                "agent_phase": context.get("agent_phase", ""),
+                "agent_gap_id": context.get("agent_gap_id", ""),
+                "request_id": row.get("request_id", context.get("request_id", "")),
+                "kv_pool_usage_pct": round(usage, 3),
+                "kv_pool_total_slots": round(total, 3),
+                "kv_pool_used_slots": state.get("used_slots", ""),
+                "kv_pool_free_slots": state.get("free_slots", ""),
+                "kv_pool_page_size": state.get("page_size", ""),
+                "kv_pool_source": state.get("source", ""),
+                "kv_pool_object_type": state.get("object_type", ""),
+                "pool_pressure": kv_pool_pressure_label(usage),
+                "evidence": "direct_sglang_pool_sample",
+            }
+        )
+    output.sort(key=lambda item: (str(item.get("case_id") or ""), as_float(item.get("aligned_ms")) or 0.0))
+    return output
+
+
+def kv_pool_pressure_label(usage_pct: float | None) -> str:
+    if usage_pct is None:
+        return "unknown"
+    if usage_pct >= 95.0:
+        return "very high"
+    if usage_pct >= 85.0:
+        return "high"
+    if usage_pct >= 65.0:
+        return "medium"
+    return "low"
+
+
+def nearest_kv_pool_sample(
+    samples: list[dict[str, Any]],
+    target_ms: Any,
+    max_distance_ms: float = 5000.0,
+) -> dict[str, Any] | None:
+    target = as_float(target_ms)
+    if target is None or not samples:
+        return None
+    best: dict[str, Any] | None = None
+    best_distance = float("inf")
+    for sample in samples:
+        aligned = as_float(sample.get("aligned_ms"))
+        if aligned is None:
+            continue
+        distance = abs(aligned - target)
+        if distance < best_distance:
+            best = sample
+            best_distance = distance
+    if best is None or best_distance > max_distance_ms:
+        return None
+    out = dict(best)
+    out["distance_from_target_ms"] = round(best_distance, 3)
+    return out
+
+
+def kv_pool_window_stats(samples: list[dict[str, Any]], start_ms: Any, end_ms: Any) -> dict[str, Any]:
+    start = as_float(start_ms)
+    end = as_float(end_ms)
+    if start is None or end is None or end < start:
+        return {"samples": 0}
+    values = [
+        as_float(sample.get("kv_pool_usage_pct"))
+        for sample in samples
+        if (as_float(sample.get("aligned_ms")) is not None and start <= (as_float(sample.get("aligned_ms")) or 0.0) <= end)
+    ]
+    values = [value for value in values if value is not None]
+    if not values:
+        return {"samples": 0}
+    return {
+        "samples": len(values),
+        "min_usage_pct": round(min(values), 3),
+        "max_usage_pct": round(max(values), 3),
+        "avg_usage_pct": round(mean(values), 3),
+    }
+
+
+def kv_pool_residency_by_gap_rows(
+    gaps: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    samples_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        samples_by_case[str(sample.get("case_id") or "")].append(sample)
+
+    rows: list[dict[str, Any]] = []
+    for gap in gaps:
+        case_samples = samples_by_case.get(str(gap.get("case_id") or ""), [])
+        due = as_float(gap.get("tool_gap_end_ms"))
+        replay_h2d_start = as_float(gap.get("replay_kv_h2d_start_ms"))
+        direct_h2d_start = as_float(gap.get("direct_kv_h2d_start_ms"))
+        wait_stats = kv_pool_window_stats(case_samples, gap.get("tool_gap_start_ms"), gap.get("tool_gap_end_ms"))
+        before_replay_h2d_stats = kv_pool_window_stats(
+            case_samples,
+            gap.get("tool_gap_end_ms"),
+            replay_h2d_start if replay_h2d_start is not None else gap.get("resume_start_ms"),
+        )
+        dispatch_stats = kv_pool_window_stats(case_samples, gap.get("resume_submitted_ms"), gap.get("resume_start_ms"))
+
+        checkpoint_map = {
+            "at_due": gap.get("tool_gap_end_ms"),
+            "at_prefetch_h2d_start": direct_h2d_start,
+            "at_replay_submit": gap.get("resume_submitted_ms"),
+            "at_replay_start": gap.get("resume_start_ms"),
+            "at_replay_h2d_start": replay_h2d_start,
+            "at_replay_h2d_end": gap.get("replay_kv_h2d_end_ms"),
+            "at_first_token": first_token_ms(gap),
+        }
+        checkpoint_values: dict[str, Any] = {}
+        checkpoint_sources: dict[str, Any] = {}
+        for name, target in checkpoint_map.items():
+            sample = nearest_kv_pool_sample(case_samples, target)
+            checkpoint_values[f"pool_usage_pct_{name}"] = sample.get("kv_pool_usage_pct", "") if sample else ""
+            checkpoint_sources[f"pool_sample_distance_ms_{name}"] = sample.get("distance_from_target_ms", "") if sample else ""
+
+        usage_candidates = [
+            as_float(wait_stats.get("max_usage_pct")),
+            as_float(before_replay_h2d_stats.get("max_usage_pct")),
+            as_float(dispatch_stats.get("max_usage_pct")),
+            *(as_float(value) for value in checkpoint_values.values()),
+        ]
+        max_usage = max([value for value in usage_candidates if value is not None] + [0.0])
+        verdict = kv_pool_pressure_label(max_usage)
+        rows.append(
+            {
+                "row": gap.get("timeline_label", ""),
+                "case_id": gap.get("case_id", ""),
+                "mode": gap.get("mode", ""),
+                "fillers": case_fillers(gap),
+                "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                "replay_path": gap.get("replay_path", ""),
+                "kv_pool_verdict": verdict,
+                "max_observed_usage_pct": round(max_usage, 3) if max_usage else "",
+                "samples_in_case": len(case_samples),
+                "samples_during_tool_wait": wait_stats.get("samples", 0),
+                "max_usage_during_tool_wait_pct": wait_stats.get("max_usage_pct", ""),
+                "samples_during_client_dispatch": dispatch_stats.get("samples", 0),
+                "max_usage_during_client_dispatch_pct": dispatch_stats.get("max_usage_pct", ""),
+                "samples_due_to_replay_h2d": before_replay_h2d_stats.get("samples", 0),
+                "max_usage_due_to_replay_h2d_pct": before_replay_h2d_stats.get("max_usage_pct", ""),
+                **checkpoint_values,
+                **checkpoint_sources,
+                "evidence": "direct_sglang_kv_pool_state" if case_samples else "missing_pool_samples",
+                "simple_meaning": (
+                    f"SGLang KV pool looked {verdict} near this replay."
+                    if case_samples
+                    else "No direct SGLang KV-pool sample was available. Rerun with AGENTIC_KV_TRACE_KV_POOL=1."
+                ),
+            }
+        )
+    return rows
+
+
+def gpu_kv_residency_summary_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No GPU KV residency rows were available.</p>"
+    observed = [row for row in rows if row.get("evidence") == "direct_sglang_kv_pool_state"]
+    counts = Counter(str(row.get("kv_pool_verdict") or "unknown") for row in observed)
+    cards = [
+        ("gaps with pool samples", f"{len(observed)} / {len(rows)}"),
+        ("very high pressure gaps", counts.get("very high", 0)),
+        ("high pressure gaps", counts.get("high", 0)),
+        ("medium pressure gaps", counts.get("medium", 0)),
+    ]
+    cards_html = "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(label)}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+        for label, value in cards
+    ) + "</div>"
+    return f"""
+    <p>This chart uses direct SGLang KV-pool samples. It answers: was the GPU KV pool already full or nearly full around replay/H2D time?</p>
+    {cards_html}
+    <div class="setup-diagram">{build_gpu_kv_residency_svg(rows)}</div>
+    <p class="note">Thresholds: medium is 65-85%, high is 85-95%, very high is 95%+. These are KV-pool occupancy signals from SGLang internals, not total GPU memory from <code>nvidia-smi</code>.</p>
+    """
+
+
+def build_gpu_kv_residency_svg(rows: list[dict[str, Any]], max_rows: int = 48) -> str:
+    plotted = rows[:max_rows]
+    if not plotted:
+        return "<p>No GPU KV residency rows were available.</p>"
+    width = 1500
+    height = 520
+    left = 90
+    right = 40
+    top = 45
+    bottom = 75
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+
+    def x_for(idx: int) -> float:
+        return left + (idx + 0.5) * plot_w / max(1, len(plotted))
+
+    def y_for(value: float) -> float:
+        return top + (100.0 - max(0.0, min(100.0, value))) * plot_h / 100.0
+
+    colors = {
+        "due": "#111827",
+        "replay_start": "#2563eb",
+        "h2d_start": "#0891b2",
+        "h2d_end": "#14b8a6",
+        "prefetch": "#16a34a",
+    }
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="GPU KV pool residency around replay">',
+        '<text x="12" y="24" font-size="18" font-weight="900" fill="#0f172a">GPU KV pool residency around replay</text>',
+    ]
+    for threshold, label, fill in [(95, "very high", "#fee2e2"), (85, "high", "#ffedd5"), (65, "medium", "#fef9c3")]:
+        y = y_for(threshold)
+        parts.append(f'<rect x="{left}" y="{top}" width="{plot_w}" height="{max(0, y - top):.1f}" fill="{fill}" opacity="0.32"/>')
+        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#94a3b8" stroke-dasharray="4 4"/>')
+        parts.append(f'<text x="{left + plot_w + 6}" y="{y + 4:.1f}" font-size="10" fill="#475569">{label} {threshold}%</text>')
+    for tick in [0, 25, 50, 75, 100]:
+        y = y_for(tick)
+        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end" font-size="10" fill="#475569">{tick}%</text>')
+    parts.append(f'<text x="18" y="{top + plot_h / 2:.1f}" transform="rotate(-90 18 {top + plot_h / 2:.1f})" font-size="12" font-weight="800" fill="#0f172a">SGLang KV pool usage</text>')
+    marker_defs = [
+        ("pool_usage_pct_at_due", "due", "circle"),
+        ("pool_usage_pct_at_replay_start", "replay_start", "square"),
+        ("pool_usage_pct_at_prefetch_h2d_start", "prefetch", "diamond"),
+        ("pool_usage_pct_at_replay_h2d_start", "h2d_start", "triangle"),
+        ("pool_usage_pct_at_replay_h2d_end", "h2d_end", "square"),
+    ]
+    for idx, row in enumerate(plotted):
+        x = x_for(idx)
+        parts.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top + plot_h}" stroke="#f1f5f9"/>')
+        for key, name, shape in marker_defs:
+            value = as_float(row.get(key))
+            if value is None:
+                continue
+            y = y_for(value)
+            color = colors[name]
+            title = f"{row.get('row')} | {name}: {value:.1f}% | {row.get('kv_pool_verdict', '')}"
+            if shape == "circle":
+                parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{color}"><title>{html.escape(title)}</title></circle>')
+            elif shape == "triangle":
+                parts.append(f'<path d="M {x:.1f} {y - 6:.1f} L {x - 6:.1f} {y + 5:.1f} L {x + 6:.1f} {y + 5:.1f} Z" fill="{color}"><title>{html.escape(title)}</title></path>')
+            elif shape == "diamond":
+                parts.append(f'<path d="M {x:.1f} {y - 6:.1f} L {x + 6:.1f} {y:.1f} L {x:.1f} {y + 6:.1f} L {x - 6:.1f} {y:.1f} Z" fill="{color}"><title>{html.escape(title)}</title></path>')
+            else:
+                parts.append(f'<rect x="{x - 5:.1f}" y="{y - 5:.1f}" width="10" height="10" rx="2" fill="{color}"><title>{html.escape(title)}</title></rect>')
+        if idx % max(1, len(plotted) // 12) == 0:
+            parts.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" font-size="9" fill="#475569">{html.escape(str(row.get("row") or idx))}</text>')
+    legend_x = left
+    legend_y = height - 28
+    for idx, (_, name, shape) in enumerate(marker_defs):
+        x = legend_x + idx * 230
+        color = colors[name]
+        parts.append(f'<rect x="{x}" y="{legend_y - 10}" width="12" height="12" rx="2" fill="{color}"/>')
+        parts.append(f'<text x="{x + 18}" y="{legend_y}" font-size="11" fill="#334155">{html.escape(name.replace("_", " "))}</text>')
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
 def kv_events_overlap_window(
     events: list[dict[str, Any]],
     start_ms: float,
@@ -4881,6 +5215,7 @@ def reproduce_controlled_replay_html(result_root: Path) -> str:
     run_master = command_block_lines(
         [
             ("AGENTIC_KV_TRACE_SCHEDULER", run_config.get("AGENTIC_KV_TRACE_SCHEDULER") or "1"),
+            ("AGENTIC_KV_TRACE_KV_POOL", run_config.get("AGENTIC_KV_TRACE_KV_POOL") or "1"),
             ("EXPERIMENT_KIND", run_config.get("EXPERIMENT_KIND") or "controlled"),
             ("REPORT_LABEL", label),
             ("PRESSURE_PROFILE", run_config.get("PRESSURE_PROFILE") or "custom"),
@@ -5670,6 +6005,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     gaps: list[dict[str, Any]],
     all_kv_events: list[dict[str, Any]],
     max_rows: int,
+    kv_pool_residency_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     rows = gaps[:max_rows]
     if not rows:
@@ -5700,6 +6036,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     kv_other_bar_h = 12
     min_visible_bar_w = 7.0
     min_visible_event_w = 5.0
+    kv_pool_by_label = {
+        str(row.get("row") or ""): row for row in (kv_pool_residency_rows or []) if str(row.get("row") or "")
+    }
 
     def overview_x(value: float) -> float:
         scaled = h2d_symlog_value(value)
@@ -5922,6 +6261,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         y = top + idx * row_h
         band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
         label = str(row.get("timeline_label") or f"G{idx:02d}")
+        kv_pool_row = kv_pool_by_label.get(label, {})
         status, status_color = observation_status(row)
         row_events = unified_stack_kv_events_for_gap(row, all_kv_events)
         target_session = str(row.get("ledger_session_id") or row.get("session_id") or "")
@@ -5988,8 +6328,25 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<text x="16" y="{y + 156:.1f}" font-size="10" fill="#475569">'
                 f'{html.escape(" | ".join(replay_work_parts)[:56])}</text>'
             )
+        pool_text = ""
+        if kv_pool_row and kv_pool_row.get("evidence") == "direct_sglang_kv_pool_state":
+            max_pool = kv_pool_row.get("max_observed_usage_pct", "")
+            pool_verdict = kv_pool_row.get("kv_pool_verdict", "")
+            h2d_pool = (
+                kv_pool_row.get("pool_usage_pct_at_replay_h2d_start")
+                or kv_pool_row.get("pool_usage_pct_at_prefetch_h2d_start")
+                or ""
+            )
+            pool_text = f"GPU KV pool max {max_pool}%"
+            if h2d_pool not in ("", None):
+                pool_text += f" | H2D {h2d_pool}%"
+            if pool_verdict:
+                pool_text += f" | {pool_verdict}"
+        else:
+            pool_text = "GPU KV pool: no sample"
+        parts.append(f'<text x="16" y="{y + 180:.1f}" font-size="10" fill="#475569">{html.escape(pool_text[:58])}</text>')
         parts.append(
-            f'<text x="16" y="{y + 180:.1f}" font-size="10" fill="#475569">'
+            f'<text x="16" y="{y + 204:.1f}" font-size="10" fill="#475569">'
             f'{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:54])}</text>'
         )
 
@@ -6836,6 +7193,7 @@ def unified_per_gap_forensic_stack_html(
     gaps: list[dict[str, Any]],
     all_kv_events: list[dict[str, Any]],
     max_rows: int,
+    kv_pool_residency_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
@@ -6848,7 +7206,7 @@ def unified_per_gap_forensic_stack_html(
     <p class="note">In the deadline zoom, the dashed line is the readiness gap. Green means KV became ready before replay was due; red means useful KV H2D completed late.</p>
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows, kv_pool_residency_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
 
@@ -6972,6 +7330,11 @@ def render_html(
     replay_delay_stage_rows = request_stage_trace_rows(all_timeline_rows, trace_rows)
     replay_delay_h2d_rows = h2d_activity_during_delay_rows(all_timeline_rows, all_h2d_activity_events)
     replay_delay_running_rows = replay_delay_running_context_rows(all_timeline_rows, trace_rows, all_h2d_activity_events)
+    kv_pool_sample_rows = kv_pool_samples_from_trace(all_timeline_rows, trace_rows)
+    kv_pool_residency_rows = kv_pool_residency_by_gap_rows(all_timeline_rows, kv_pool_sample_rows)
+    interesting_kv_pool_residency_rows = [
+        row for row in kv_pool_residency_rows if str(row.get("row") or "") in interesting_labels
+    ]
     replay_h2d_readiness_table_rows = replay_h2d_readiness_rows(gaps)
     replay_h2d_readiness_bucket_table_rows = replay_h2d_readiness_bucket_rows(replay_h2d_readiness_table_rows)
     replay_queue_table_rows = replay_queue_timing_rows(gaps)
@@ -7049,6 +7412,7 @@ def render_html(
         ("setup", "Experiment Setup"),
         ("global-prefetch", global_title),
         ("h2d-pressure", "KV H2D Bandwidth Pressure"),
+        ("gpu-kv-residency", "GPU KV Pool Residency"),
         ("delay-breakdown", "Replay Delay Breakdown"),
         ("client-dispatch-kv", "Client Dispatch KV Movement"),
         ("timeline-guide", "How To Read Timelines"),
@@ -7102,6 +7466,12 @@ def render_html(
     {h2d_bandwidth_pressure_html(gaps, exact_kv_movement_rows)}
   </details>
 
+  <details id="gpu-kv-residency" class="section-card theme-directkv">
+    <summary><h2>GPU KV Pool Residency</h2></summary>
+    <p>This section uses direct SGLang KV-pool state, not total GPU memory, to show whether the KV cache pool was near full around replay and H2D events.</p>
+    {gpu_kv_residency_summary_html(kv_pool_residency_rows)}
+  </details>
+
   <details id="delay-breakdown" class="section-card theme-profiled">
     <summary><h2>Replay Delay Breakdown</h2></summary>
     <p>This section answers the next question: if replay-side H2D started late, where did the time go before the copy began?</p>
@@ -7128,7 +7498,7 @@ def render_html(
 
   <details id="unified-forensic-stack" class="section-card theme-profiled" open>
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
-    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps)}
+    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows)}
   </details>
 
   {live_section}
@@ -7177,6 +7547,11 @@ def render_html(
     {table_html(replay_delay_h2d_rows, limit=2000)}
     <h3>What Was Running During The Delay</h3>
     {table_html(replay_delay_running_rows)}
+    <h3>GPU KV Pool Residency By Gap</h3>
+    <p class="note">These rows come from direct SGLang KV memory pool samples. They are not derived from <code>nvidia-smi</code>.</p>
+    {table_html(kv_pool_residency_rows, limit=1000)}
+    <h3>Raw GPU KV Pool Samples</h3>
+    {table_html(kv_pool_sample_rows, limit=2000)}
     <h3>All Aligned KV Movement Rows</h3>
     {table_html(all_kv_movement_events, limit=2000)}
     <h3>Client Dispatch KV Movement Summary</h3>
@@ -7296,6 +7671,8 @@ def main() -> None:
     replay_delay_stage_trace = request_stage_trace_rows(all_labeled_gaps, all_trace_rows)
     replay_delay_h2d_activity = h2d_activity_during_delay_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_gap_verdicts = delay_verdicts_by_gap_rows(replay_delay_breakdown)
+    kv_pool_sample_rows = kv_pool_samples_from_trace(all_labeled_gaps, all_trace_rows)
+    kv_pool_residency_rows = kv_pool_residency_by_gap_rows(all_labeled_gaps, kv_pool_sample_rows)
     evidence_audit = audit_report_data(
         {
             "gaps": all_gaps,
@@ -7317,6 +7694,8 @@ def main() -> None:
     write_csv(args.out_dir / "replay_delay_stage_trace.csv", replay_delay_stage_trace)
     write_csv(args.out_dir / "replay_delay_h2d_activity.csv", replay_delay_h2d_activity)
     write_csv(args.out_dir / "replay_delay_gap_verdicts.csv", replay_delay_gap_verdicts)
+    write_csv(args.out_dir / "kv_pool_samples.csv", kv_pool_sample_rows)
+    write_csv(args.out_dir / "kv_pool_residency_by_gap.csv", kv_pool_residency_rows)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "all_aligned_kv_movement_events.csv", all_kv_movement_events)
     write_csv(args.out_dir / "client_dispatch_kv_movement_summary.csv", client_dispatch_kv_summary)
@@ -7355,6 +7734,8 @@ def main() -> None:
             "replay_delay_stage_trace": replay_delay_stage_trace,
             "replay_delay_h2d_activity": replay_delay_h2d_activity,
             "replay_delay_gap_verdicts": replay_delay_gap_verdicts,
+            "kv_pool_samples": kv_pool_sample_rows,
+            "kv_pool_residency_by_gap": kv_pool_residency_rows,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
             "all_aligned_kv_movement_events": all_kv_movement_events,

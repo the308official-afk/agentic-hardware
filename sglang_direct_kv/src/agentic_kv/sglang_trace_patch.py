@@ -687,6 +687,211 @@ def _scheduler_state_summary(obj: Any) -> dict[str, Any]:
     return {key: value for key, value in out.items() if value not in (None, "", [], {})}
 
 
+def _call_or_value(value: Any) -> Any:
+    try:
+        if callable(value):
+            return value()
+        return value
+    except Exception:
+        return None
+
+
+def _numeric_pool_value(obj: Any, names: tuple[str, ...]) -> int | float | None:
+    for name in names:
+        if not hasattr(obj, name):
+            continue
+        try:
+            value = _call_or_value(getattr(obj, name))
+        except Exception:
+            continue
+        try:
+            if value not in (None, ""):
+                return float(value)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _collection_pool_len(obj: Any, names: tuple[str, ...]) -> int | None:
+    for name in names:
+        if not hasattr(obj, name):
+            continue
+        try:
+            value = _call_or_value(getattr(obj, name))
+        except Exception:
+            continue
+        if value is None:
+            continue
+        try:
+            return int(value.numel())
+        except Exception:
+            pass
+        try:
+            return int(len(value))
+        except Exception:
+            pass
+    return None
+
+
+def _kv_pool_candidates(obj: Any) -> list[tuple[str, Any]]:
+    """Find likely SGLang GPU KV pool objects without depending on one release."""
+
+    candidates: list[tuple[str, Any]] = []
+    seen: set[int] = set()
+
+    def add(name: str, value: Any) -> None:
+        if value is None:
+            return
+        try:
+            object_id = id(value)
+        except Exception:
+            return
+        if object_id in seen:
+            return
+        seen.add(object_id)
+        candidates.append((name, value))
+
+    add("self", obj)
+    frontier: list[tuple[str, Any, int]] = [("self", obj, 0)]
+    child_attrs = (
+        "token_to_kv_pool",
+        "token_to_kv_pool_allocator",
+        "req_to_token_pool",
+        "tree_cache",
+        "hicache_controller",
+        "device_pool",
+        "pool",
+        "allocator",
+        "mem_pool",
+        "memory_pool",
+    )
+    while frontier:
+        prefix, current, depth = frontier.pop(0)
+        if depth >= 3:
+            continue
+        for attr in child_attrs:
+            if not hasattr(current, attr):
+                continue
+            try:
+                child = getattr(current, attr)
+            except Exception:
+                continue
+            if child is None:
+                continue
+            name = f"{prefix}.{attr}"
+            add(name, child)
+            frontier.append((name, child, depth + 1))
+    return candidates
+
+
+def _kv_pool_state_summary(obj: Any) -> dict[str, Any]:
+    """Best-effort direct SGLang GPU KV pool occupancy snapshot.
+
+    This intentionally samples SGLang's own pool/allocator objects instead of
+    nvidia-smi. The names vary across SGLang releases, so we reflect over
+    stable-looking size/free fields and report the source object we used.
+    """
+
+    if os.environ.get("AGENTIC_KV_TRACE_KV_POOL", "1") != "1":
+        return {}
+
+    best: dict[str, Any] = {}
+    best_score = -1
+    for source, candidate in _kv_pool_candidates(obj):
+        total = _numeric_pool_value(
+            candidate,
+            (
+                "size",
+                "capacity",
+                "max_size",
+                "total_size",
+                "pool_size",
+                "num_pages",
+                "max_num_pages",
+                "num_tokens",
+                "max_total_num_tokens",
+            ),
+        )
+        free = _numeric_pool_value(
+            candidate,
+            (
+                "available_size",
+                "free_size",
+                "num_free",
+                "free_slots",
+                "available_slots",
+                "free_token_count",
+                "available_token_count",
+            ),
+        )
+        if free is None:
+            free_len = _collection_pool_len(
+                candidate,
+                (
+                    "free_slots",
+                    "free_indices",
+                    "free_list",
+                    "available_indices",
+                    "available_slots",
+                    "free_group",
+                ),
+            )
+            free = float(free_len) if free_len is not None else None
+        used = _numeric_pool_value(
+            candidate,
+            (
+                "used_size",
+                "num_used",
+                "used_slots",
+                "allocated_size",
+                "allocated_slots",
+            ),
+        )
+        if used is None and total is not None and free is not None:
+            used = max(0.0, total - free)
+        if total is None and used is not None and free is not None:
+            total = used + free
+        if total is None or total <= 0:
+            continue
+
+        usage_pct = (float(used or 0.0) / float(total)) * 100.0
+        page_size = _numeric_pool_value(candidate, ("page_size", "page_len", "block_size"))
+        score = 0
+        if "token_to_kv_pool" in source:
+            score += 4
+        if free is not None:
+            score += 3
+        if used is not None:
+            score += 2
+        if page_size is not None:
+            score += 1
+        if score <= best_score:
+            continue
+        best_score = score
+        best = {
+            "source": source,
+            "object_type": type(candidate).__name__,
+            "total_slots": round(float(total), 3),
+            "free_slots": round(float(free), 3) if free is not None else "",
+            "used_slots": round(float(used), 3) if used is not None else "",
+            "usage_pct": round(usage_pct, 3),
+        }
+        if page_size is not None:
+            best["page_size"] = round(float(page_size), 3)
+    return best
+
+
+def _kv_pool_event_fields(context: dict[str, Any]) -> dict[str, Any]:
+    state = context.get("kv_pool_state")
+    if not isinstance(state, dict):
+        return {}
+    return {
+        f"kv_pool_{key}": value
+        for key, value in state.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _residency_snapshot_for_context(context: dict[str, Any]) -> dict[str, Any]:
     node_ids: list[str] = []
     node_id = context.get("node_id")
@@ -975,6 +1180,9 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
 
     context = {key: value for key, value in context.items() if value is not None}
     context = _apply_known_agent_context(context)
+    pool_state = _kv_pool_state_summary(self_obj)
+    if pool_state:
+        context["kv_pool_state"] = pool_state
     snapshot = _residency_snapshot_for_context(context)
     if snapshot:
         context["residency_snapshot"] = snapshot
@@ -1182,6 +1390,7 @@ def _copy_telemetry_event(
         "device_index_sha1_16": device.get("sha1_16", ""),
     }
     event.update(_copy_agent_context(context))
+    event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
     if isinstance(sessions, list) and sessions:
         event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
@@ -1318,6 +1527,7 @@ def _cache_path_telemetry_event(
         "node_id": context.get("node_id", ""),
     }
     event.update(_copy_agent_context(context))
+    event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
     if isinstance(sessions, list) and sessions:
         event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
@@ -1395,6 +1605,7 @@ def _scheduler_telemetry_event(
         "request_id": _first_request_id(context),
     }
     event.update(_copy_agent_context(context))
+    event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
     if isinstance(sessions, list) and sessions:
         event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
@@ -1497,6 +1708,7 @@ def _request_stage_event(
         "exact_sglang_hook": 1,
     }
     event.update(_copy_agent_context(context))
+    event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
     if isinstance(sessions, list) and sessions:
         event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
@@ -1628,6 +1840,7 @@ def _prefill_telemetry_event(
         "batch_uncached_token_ranges_sample": batch.get("uncached_token_ranges_sample", ""),
     }
     event.update(_copy_agent_context(context))
+    event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
     if isinstance(sessions, list) and sessions:
         event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
