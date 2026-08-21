@@ -5935,7 +5935,6 @@ def render_html(
         ("timeline-guide", "How To Read Timelines"),
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
         ("unified-forensic-stack", "Unified Forensic Stack Timeline"),
-        ("per-gap-forensics", "Per-Gap Forensic View"),
         ("observations", "Key Observations"),
         ("evidence-audit", "Instrumentation Evidence Audit"),
         ("appendix", "Evidence Tables / Raw Proof"),
@@ -6011,11 +6010,6 @@ def render_html(
   <details id="unified-forensic-stack" class="section-card theme-profiled">
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
     {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps)}
-  </details>
-
-  <details id="per-gap-forensics" class="section-card theme-profiled">
-    <summary><h2>Per-Gap Forensic View</h2></summary>
-    {per_gap_forensic_view_html(interesting, kv_block_rows, all_h2d_pressure_rows, replay_delay_rows, replay_queue_table_rows, client_dispatch_kv_summary_rows, client_dispatch_kv_event_rows, exact_kv_movement_rows, max_timeline_gaps)}
   </details>
 
   {live_section}
