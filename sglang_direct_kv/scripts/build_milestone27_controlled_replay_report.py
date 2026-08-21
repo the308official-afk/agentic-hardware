@@ -5687,6 +5687,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     main_bar_h = 22
     kv_target_bar_h = 16
     kv_other_bar_h = 12
+    min_visible_bar_w = 7.0
+    min_visible_event_w = 5.0
 
     def overview_x(value: float) -> float:
         scaled = h2d_symlog_value(value)
@@ -5752,7 +5754,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         label: str,
         title: str,
         opacity: float = 0.86,
-        min_w: float = 3.0,
+        min_w: float = min_visible_bar_w,
         break_long: bool = False,
         label_min_w: float = 118.0,
         font_size: int = 10,
@@ -5969,19 +5971,34 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         replay_y = y + 100
         replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
         if replay_h2d:
-            draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 6, main_bar_h, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=7)
+            draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 6, main_bar_h, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=min_visible_bar_w)
         first_token = first_token_ms(row)
         replay_start = as_float(row.get("resume_start_ms"))
         if first_token is not None and replay_start is not None:
             prefill_start_rel = replay_start - due
             first_token_rel = first_token - due
-            recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
+            runtime_attr_tokens = as_float(row.get("replay_runtime_prefill_attributed_tokens"))
+            runtime_attr_start_abs = as_float(row.get("replay_runtime_prefill_attribution_start_ms"))
+            runtime_attr_end_abs = as_float(row.get("replay_runtime_prefill_attribution_end_ms"))
+            runtime_attr_confidence = str(row.get("replay_runtime_prefill_confidence") or "")
+            has_runtime_prefill_timing = (
+                runtime_attr_confidence == "runtime_attributed"
+                and runtime_attr_start_abs is not None
+                and runtime_attr_end_abs is not None
+                and runtime_attr_end_abs > runtime_attr_start_abs
+            )
+            recompute_tokens = runtime_attr_tokens or as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
             segments = replay_phase_segments(row)
             recompute_ms = segments.get("recompute", 0.0)
-            normal_prefill_ms = segments.get("normal_prefill", 0.0)
             cursor_rel = prefill_start_rel
-            if recompute_tokens >= 128 and recompute_ms > 0:
-                recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
+            if (has_runtime_prefill_timing or recompute_tokens > 0) and (recompute_ms > 0 or has_runtime_prefill_timing):
+                if has_runtime_prefill_timing:
+                    cursor_rel = runtime_attr_start_abs - due
+                    recompute_end_rel = runtime_attr_end_abs - due
+                    timing_source = "runtime_attributed_model_forward_batch"
+                else:
+                    recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
+                    timing_source = "fallback_replay_counter_estimate"
                 draw_span(
                     parts,
                     overview_x,
@@ -5993,28 +6010,32 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     main_bar_h,
                     unified_stack_color("recompute"),
                     "prefill/recompute",
-                    f"{label} | replay prefill/recompute estimate: {display_ms(recompute_end_rel - cursor_rel)}",
+                    f"{label} | replay prefill/recompute attribution: {display_ms(recompute_end_rel - cursor_rel)} | tokens={compact_token_count(recompute_tokens)} | timing={timing_source}",
                     opacity=0.82,
                     break_long=True,
+                    min_w=min_visible_bar_w,
                 )
                 cursor_rel = recompute_end_rel
-            if normal_prefill_ms > 0 and first_token_rel > cursor_rel:
+            replay_h2d_end_rel = replay_h2d[1] if replay_h2d else None
+            remaining_start_rel = max(candidate for candidate in [cursor_rel, replay_h2d_end_rel] if candidate is not None)
+            if first_token_rel > remaining_start_rel:
                 draw_span(
                     parts,
                     overview_x,
                     x_min,
                     x_max,
-                    cursor_rel,
+                    remaining_start_rel,
                     first_token_rel,
                     replay_y + 46,
                     main_bar_h,
                     unified_stack_color("prefill"),
                     "remaining TTFT",
-                    f"{label} | remaining before-first-token work: {display_ms(first_token_rel - cursor_rel)}",
+                    f"{label} | remaining before-first-token work: {display_ms(first_token_rel - remaining_start_rel)}",
                     opacity=0.84,
                     break_long=True,
+                    min_w=min_visible_bar_w,
                 )
-            elif recompute_tokens < 128:
+            elif recompute_tokens <= 0 and not has_runtime_prefill_timing:
                 draw_span(
                     parts,
                     overview_x,
@@ -6029,6 +6050,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     f"{label} | time to first token: {display_ms(first_token_rel - prefill_start_rel)}",
                     opacity=0.84,
                     break_long=True,
+                    min_w=min_visible_bar_w,
                 )
             draw_overview_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
         if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
@@ -6097,7 +6119,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     event_label,
                     title,
                     opacity=0.94 if target else 0.48,
-                    min_w=5.0 if target else 3.5,
+                    min_w=min_visible_event_w,
                     label_min_w=88.0,
                     font_size=9,
                 )
@@ -6148,7 +6170,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     short_bar_label(["replay request", display_ms(replay_request_duration)], max_chars=38),
                     f"{label} | replay request wall time: {display_ms(replay_request_duration)} | start={display_ms(replay_request_span[0])} relative to due | end={display_ms(replay_request_span[1])} relative to due",
                     opacity=0.58,
-                    min_w=5.0,
+                    min_w=min_visible_bar_w,
                     label_min_w=118.0,
                 )
 
@@ -6182,7 +6204,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     replay_h2d_label,
                     replay_h2d_title,
                     opacity=0.92,
-                    min_w=6.0,
+                    min_w=min_visible_bar_w,
                     label_min_w=82.0,
                     font_size=9,
                 )
@@ -6227,7 +6249,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 recompute_ms = segments.get("recompute", 0.0)
                 normal_prefill_ms = segments.get("normal_prefill", 0.0)
                 cursor_rel = pre_token_start
-                if (has_runtime_prefill_timing or recompute_tokens >= 128) and (recompute_ms > 0 or has_runtime_prefill_timing):
+                if (has_runtime_prefill_timing or recompute_tokens > 0) and (recompute_ms > 0 or has_runtime_prefill_timing):
                     if has_runtime_prefill_timing:
                         cursor_rel = runtime_attr_start_abs - due
                         recompute_end_rel = runtime_attr_end_abs - due
@@ -6265,7 +6287,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         recompute_label,
                         recompute_title,
                         opacity=0.88,
-                        min_w=6.0,
+                        min_w=min_visible_bar_w,
                         label_min_w=82.0,
                         font_size=9,
                     )
@@ -6285,7 +6307,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         "",
                         missing_title,
                         opacity=0.40,
-                        min_w=3.0,
+                        min_w=min_visible_event_w,
                         label_min_w=9999.0,
                     )
                 replay_h2d_end_rel = None
@@ -6319,7 +6341,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         prefill_label,
                         prefill_title,
                         opacity=0.88,
-                        min_w=6.0,
+                        min_w=min_visible_bar_w,
                         label_min_w=82.0,
                         font_size=9,
                     )
@@ -6337,7 +6359,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         "",
                         f"{label} | no remaining before-first-token TTFT segment after H2D/recompute split",
                         opacity=0.40,
-                        min_w=3.0,
+                        min_w=min_visible_event_w,
                         label_min_w=9999.0,
                     )
                 first_token_x = zoom_x(first_token_rel, rz_min, rz_max)
@@ -6362,7 +6384,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         short_bar_label(["decode", display_ms(decode_duration)], max_chars=36),
                         f"{label} | decode after first token | duration={display_ms(decode_duration)} | start={display_ms(decode_start)} relative to due | end={display_ms(decode_end)} relative to due",
                         opacity=0.86,
-                        min_w=6.0,
+                        min_w=min_visible_bar_w,
                         label_min_w=82.0,
                         font_size=9,
                     )
@@ -6392,6 +6414,7 @@ def unified_per_gap_forensic_stack_html(
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">The magenta <strong>prefill/recompute</strong> bar uses request-attributed SGLang model-forward timing when available; otherwise it is a clearly marked fallback estimate. The gold <strong>remaining TTFT</strong> is the leftover before-first-token work after visible H2D and prefill/recompute attribution are separated out.</p>
+    <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
