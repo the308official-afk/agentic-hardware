@@ -6213,6 +6213,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 runtime_attr_start_abs = as_float(row.get("replay_runtime_prefill_attribution_start_ms"))
                 runtime_attr_end_abs = as_float(row.get("replay_runtime_prefill_attribution_end_ms"))
                 runtime_attr_confidence = str(row.get("replay_runtime_prefill_confidence") or "")
+                has_runtime_prefill_timing = (
+                    runtime_attr_confidence == "runtime_attributed"
+                    and runtime_attr_start_abs is not None
+                    and runtime_attr_end_abs is not None
+                    and runtime_attr_end_abs > runtime_attr_start_abs
+                )
                 recompute_tokens = runtime_attr_tokens or as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
                 cached_prefix = compact_token_count(row.get("replay_cached_prefix_tokens"))
                 input_tokens = compact_token_count(row.get("replay_input_tokens"))
@@ -6221,13 +6227,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 recompute_ms = segments.get("recompute", 0.0)
                 normal_prefill_ms = segments.get("normal_prefill", 0.0)
                 cursor_rel = pre_token_start
-                if recompute_tokens >= 128 and recompute_ms > 0:
-                    if (
-                        runtime_attr_confidence == "runtime_attributed"
-                        and runtime_attr_start_abs is not None
-                        and runtime_attr_end_abs is not None
-                        and runtime_attr_end_abs > runtime_attr_start_abs
-                    ):
+                if (has_runtime_prefill_timing or recompute_tokens >= 128) and (recompute_ms > 0 or has_runtime_prefill_timing):
+                    if has_runtime_prefill_timing:
                         cursor_rel = runtime_attr_start_abs - due
                         recompute_end_rel = runtime_attr_end_abs - due
                         timing_source = "runtime_attributed_model_forward_batch"
@@ -6287,22 +6288,30 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         min_w=3.0,
                         label_min_w=9999.0,
                     )
-                if normal_prefill_ms > 0 and first_token_rel > cursor_rel:
+                replay_h2d_end_rel = None
+                if replay_h2d_span:
+                    replay_h2d_end_rel = replay_h2d_span[1]
+                remaining_start_candidates = [cursor_rel]
+                if replay_h2d_end_rel is not None:
+                    remaining_start_candidates.append(replay_h2d_end_rel)
+                remaining_start_rel = max(remaining_start_candidates)
+                if first_token_rel > remaining_start_rel:
                     prefill_end_rel = first_token_rel
                     prefill_label = short_bar_label(
-                        ["remaining TTFT", display_ms(prefill_end_rel - cursor_rel)],
+                        ["remaining TTFT", display_ms(prefill_end_rel - remaining_start_rel)],
                         max_chars=42,
                     )
                     prefill_title = (
-                        f"{label} | remaining before-first-token replay work | duration={display_ms(prefill_end_rel - cursor_rel)} | "
-                        f"note=leftover TTFT after visible H2D and estimated recompute are separated"
+                        f"{label} | remaining before-first-token replay work | duration={display_ms(prefill_end_rel - remaining_start_rel)} | "
+                        f"start={display_ms(remaining_start_rel)} relative to due | end={display_ms(prefill_end_rel)} relative to due | "
+                        f"note=leftover TTFT after visible H2D and prefill/recompute attribution are separated"
                     )
                     draw_span(
                         parts,
                         lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
                         rz_min,
                         rz_max,
-                        cursor_rel,
+                        remaining_start_rel,
                         prefill_end_rel,
                         replay_zoom_title_y + 151,
                         main_bar_h,
@@ -6320,8 +6329,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
                         rz_min,
                         rz_max,
-                        cursor_rel,
-                        min(first_token_rel, cursor_rel + 1.0),
+                        remaining_start_rel,
+                        min(first_token_rel, remaining_start_rel + 1.0),
                         replay_zoom_title_y + 151,
                         main_bar_h,
                         "#f8fafc",
