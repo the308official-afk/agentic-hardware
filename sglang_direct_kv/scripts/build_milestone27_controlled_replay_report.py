@@ -5368,12 +5368,12 @@ def unified_stack_legend_table_html() -> str:
             "SGLang receive, scheduler queue/admit, cache lookup, or load-back decision work before useful model/KV work.",
         ),
         (
-            "H2D",
+            "Replay KV H2D",
             unified_stack_color("h2d"),
-            "Host-to-device KV movement: KV is loaded from host memory back into GPU memory.",
+            "KV cache data loaded from host memory back into GPU memory. In the replay zoom, this is the replay request's own KV load-back.",
         ),
         (
-            "D2H",
+            "D2H / offload",
             unified_stack_color("d2h"),
             "Device-to-host KV movement: KV is backed up or offloaded from GPU memory to host memory.",
         ),
@@ -5383,17 +5383,17 @@ def unified_stack_legend_table_html() -> str:
             "KV leaves GPU residency. A host copy may still exist unless host eviction also happens.",
         ),
         (
-            "Prefill / recompute attribution",
+            "Prefill / recompute",
             unified_stack_color("recompute"),
-            "Runtime-attributed model-forward work for uncached replay tokens when SGLang exposes the request batch; otherwise a fallback estimate from replay counters.",
+            "Model-forward work before the first output token. This can include recomputing missing KV or processing uncached replay prompt tokens.",
         ),
         (
-            "Remaining prefill / TTFT",
+            "Remaining before-first-token time",
             unified_stack_color("prefill"),
-            "The leftover before-first-token time after visible H2D and estimated recompute are separated out. This can include ordinary prefill, waiting, or other model/runtime work.",
+            "Leftover time before the first output token after visible H2D and prefill/recompute are separated. This can include batching, handoff, runtime overhead, or other unclassified wait.",
         ),
         (
-            "Decode",
+            "Decode / token generation",
             unified_stack_color("decode"),
             "Generation after the first output token is produced.",
         ),
@@ -5640,11 +5640,11 @@ def build_unified_per_gap_stack_timeline_svg(
         ("tool wait", unified_stack_color("tool_wait")),
         ("client dispatch", unified_stack_color("client_dispatch")),
         ("scheduler/load path", unified_stack_color("scheduler")),
-        ("H2D", unified_stack_color("h2d")),
-        ("D2H", unified_stack_color("d2h")),
+        ("KV H2D", unified_stack_color("h2d")),
+        ("D2H/offload", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
         ("prefill/recompute", unified_stack_color("recompute")),
-        ("remaining TTFT", unified_stack_color("prefill")),
+        ("remaining before-token", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
     for legend_label, color in legend:
@@ -5794,6 +5794,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         label: str,
         title: str,
         color: str,
+        fill_color: str = "#ecfeff",
+        text_color: str = "#155e75",
     ) -> None:
         if not label:
             return
@@ -5817,11 +5819,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         )
         parts.append(
             f'<rect x="{rect_x:.1f}" y="{rect_y:.1f}" width="{text_w:.1f}" height="{h + 2:.1f}" rx="5" '
-            f'fill="#ecfeff" stroke="{color}" stroke-width="1.2" opacity="0.96"><title>{html.escape(title)}</title></rect>'
+            f'fill="{fill_color}" stroke="{color}" stroke-width="1.2" opacity="0.96"><title>{html.escape(title)}</title></rect>'
         )
         parts.append(
             f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="9" '
-            f'font-weight="900" fill="#155e75">{html.escape(label)}</text>'
+            f'font-weight="900" fill="{text_color}">{html.escape(label)}</text>'
         )
 
     def draw_overview_marker(parts: list[str], value: float, y1: float, y2: float, color: str, title: str) -> None:
@@ -5839,20 +5841,22 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ("tool wait", unified_stack_color("tool_wait")),
         ("client dispatch", unified_stack_color("client_dispatch")),
         ("scheduler/load path", unified_stack_color("scheduler")),
-        ("H2D", unified_stack_color("h2d")),
-        ("D2H", unified_stack_color("d2h")),
+        ("KV H2D", unified_stack_color("h2d")),
+        ("D2H/offload", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
         ("prefill/recompute", unified_stack_color("recompute")),
-        ("remaining TTFT", unified_stack_color("prefill")),
+        ("remaining before-token", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
 
     def append_legend(parts: list[str], x_start: float, y_pos: float) -> None:
-        lx = x_start
-        for legend_label, color in legend:
-            parts.append(f'<rect x="{lx:.1f}" y="{y_pos:.1f}" width="14" height="14" rx="3" fill="{color}" opacity="0.88"/>')
-            parts.append(f'<text x="{lx + 20:.1f}" y="{y_pos + 12:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
-            lx += 158
+        col_w = 285
+        row_gap = 24
+        for idx, (legend_label, color) in enumerate(legend):
+            lx = x_start + (idx % 5) * col_w
+            ly = y_pos + (idx // 5) * row_gap
+            parts.append(f'<rect x="{lx:.1f}" y="{ly:.1f}" width="14" height="14" rx="3" fill="{color}" opacity="0.88"/>')
+            parts.append(f'<text x="{lx + 20:.1f}" y="{ly + 12:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
 
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
@@ -6029,7 +6033,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     replay_y + 46,
                     main_bar_h,
                     unified_stack_color("prefill"),
-                    "remaining TTFT",
+                    "remaining before-token",
                     f"{label} | remaining before-first-token work: {display_ms(first_token_rel - remaining_start_rel)}",
                     opacity=0.84,
                     break_long=True,
@@ -6145,9 +6149,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
 
             replay_zoom_lanes = [
                 ("replay request", replay_zoom_title_y + 48),
-                ("replay H2D", replay_zoom_title_y + 86),
+                ("replay KV H2D", replay_zoom_title_y + 86),
                 ("prefill/recompute", replay_zoom_title_y + 124),
-                ("remaining TTFT", replay_zoom_title_y + 162),
+                ("remaining before-token", replay_zoom_title_y + 162),
                 ("decode", replay_zoom_title_y + 200),
             ]
             for lane_name, lane_y in replay_zoom_lanes:
@@ -6179,7 +6183,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 replay_h2d_duration = replay_h2d_span[1] - replay_h2d_span[0]
                 replay_h2d_label = short_bar_label(
                     [
-                        f"H2D: {replay_h2d_summary['blocks']} blk" if replay_h2d_summary["events"] else "H2D",
+                        f"replay KV H2D: {replay_h2d_summary['blocks']} blk" if replay_h2d_summary["events"] else "replay KV H2D",
                         compact_tokens(replay_h2d_summary["tokens"]) if replay_h2d_summary["tokens"] else "",
                         display_ms(replay_h2d_duration),
                     ],
@@ -6258,7 +6262,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
                     recompute_label = short_bar_label(
                         [
-                            "runtime prefill" if runtime_attr_confidence == "runtime_attributed" else "prefill est.",
+                            "prefill/recompute" if runtime_attr_confidence == "runtime_attributed" else "prefill/recompute est.",
                             compact_token_count(recompute_tokens),
                             display_ms(recompute_end_rel - cursor_rel),
                         ],
@@ -6320,7 +6324,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 if first_token_rel > remaining_start_rel:
                     prefill_end_rel = first_token_rel
                     prefill_label = short_bar_label(
-                        ["remaining TTFT", display_ms(prefill_end_rel - remaining_start_rel)],
+                        ["remaining before-token", display_ms(prefill_end_rel - remaining_start_rel)],
                         max_chars=42,
                     )
                     prefill_title = (
@@ -6345,6 +6349,24 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         label_min_w=82.0,
                         font_size=9,
                     )
+                    clipped_prefill_start = max(rz_min, min(rz_max, remaining_start_rel))
+                    clipped_prefill_end = max(rz_min, min(rz_max, prefill_end_rel))
+                    if clipped_prefill_end > clipped_prefill_start:
+                        prefill_x1 = zoom_x(clipped_prefill_start, rz_min, rz_max)
+                        prefill_x2 = zoom_x(clipped_prefill_end, rz_min, rz_max)
+                        if max(min_visible_bar_w, prefill_x2 - prefill_x1) < 82.0:
+                            draw_small_bar_callout(
+                                parts,
+                                prefill_x1,
+                                prefill_x2,
+                                replay_zoom_title_y + 151,
+                                main_bar_h,
+                                prefill_label,
+                                prefill_title,
+                                unified_stack_color("prefill"),
+                                fill_color="#fef3c7",
+                                text_color="#78350f",
+                            )
                 else:
                     draw_span(
                         parts,
@@ -6410,10 +6432,10 @@ def unified_per_gap_forensic_stack_html(
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
     <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, and a local zoom of replay execution.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, estimated recompute/rebuild, remaining TTFT, first-token timing, and decode.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
-    <p class="note">The magenta <strong>prefill/recompute</strong> bar uses request-attributed SGLang model-forward timing when available; otherwise it is a clearly marked fallback estimate. The gold <strong>remaining TTFT</strong> is the leftover before-first-token work after visible H2D and prefill/recompute attribution are separated out.</p>
+    <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
