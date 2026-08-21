@@ -3249,7 +3249,18 @@ def all_aligned_kv_movement_events(
                 "source_event": row.get("source_event", ""),
                 "node_id": row.get("node_id", ""),
                 "layer_id": row.get("layer_id", ""),
+                "request_id": row.get("request_id", ""),
+                "agent_request_id": row.get("agent_request_id", ""),
+                "correlation_id": row.get("correlation_id", ""),
                 "block_key": block_key,
+                "host_index_start": row.get("host_index_start", ""),
+                "host_index_end": row.get("host_index_end", ""),
+                "host_index_count": row.get("host_index_count", ""),
+                "host_index_signature": row.get("host_index_signature", ""),
+                "device_index_start": row.get("device_index_start", ""),
+                "device_index_end": row.get("device_index_end", ""),
+                "device_index_count": row.get("device_index_count", ""),
+                "device_index_signature": row.get("device_index_signature", ""),
                 "token_or_index_count": round(token_count, 3),
                 "aligned_start_ms": aligned_start,
                 "aligned_end_ms": aligned_end,
@@ -3259,6 +3270,8 @@ def all_aligned_kv_movement_events(
                 "case_clock_offset_ms": round(offset, 3),
                 "alignment_confidence": "case_h2d_anchor",
                 "evidence_confidence": row.get("confidence", ""),
+                "evidence_level": row.get("evidence_level", ""),
+                "exact_correlation_source": row.get("exact_correlation_source", ""),
                 "simple_meaning": row.get("simple_meaning", ""),
             }
         )
@@ -4954,6 +4967,110 @@ def _event_relative_span(event: dict[str, Any], due: float) -> tuple[float, floa
     return (start - due, end - due)
 
 
+def compact_quantity(value: Any, suffix: str = "") -> str:
+    number = as_float(value)
+    if number is None:
+        return ""
+    abs_number = abs(number)
+    if abs_number >= 1_000_000:
+        text = f"{number / 1_000_000:.1f}M"
+    elif abs_number >= 1_000:
+        text = f"{number / 1_000:.1f}k"
+    elif float(number).is_integer():
+        text = str(int(number))
+    else:
+        text = f"{number:.1f}"
+    text = text.replace(".0M", "M").replace(".0k", "k")
+    return f"{text} {suffix}".strip()
+
+
+def compact_tokens(value: Any) -> str:
+    return compact_quantity(value, "idx")
+
+
+def compact_token_count(value: Any) -> str:
+    return compact_quantity(value, "tok")
+
+
+def short_bar_label(parts: list[str], max_chars: int = 42) -> str:
+    label = " / ".join(part for part in parts if part)
+    if len(label) <= max_chars:
+        return label
+    return label[: max_chars - 1].rstrip() + "..."
+
+
+def target_replay_h2d_summary(
+    row: dict[str, Any],
+    row_events: list[dict[str, Any]],
+    target_session: str,
+) -> dict[str, Any]:
+    replay_start = as_float(row.get("replay_kv_h2d_start_ms"))
+    replay_end = as_float(row.get("replay_kv_h2d_end_ms"))
+    selected: list[dict[str, Any]] = []
+    for event in row_events:
+        if str(event.get("movement_kind") or "") != "H2D":
+            continue
+        if target_session and str(event.get("ledger_session_id") or "") != target_session:
+            continue
+        event_start = as_float(event.get("aligned_start_ms"))
+        event_end = as_float(event.get("aligned_end_ms"))
+        if event_start is None or event_end is None:
+            continue
+        if replay_start is not None and replay_end is not None:
+            if event_end < replay_start - 8.0 or event_start > replay_end + 8.0:
+                continue
+        selected.append(event)
+
+    block_keys = {
+        str(event.get("block_key") or event.get("logical_block_id") or "")
+        for event in selected
+        if str(event.get("block_key") or event.get("logical_block_id") or "")
+    }
+    token_count = sum(as_float(event.get("token_or_index_count")) or 0.0 for event in selected)
+    duration = None
+    if replay_start is not None and replay_end is not None and replay_end > replay_start:
+        duration = replay_end - replay_start
+    elif selected:
+        start_values = [as_float(event.get("aligned_start_ms")) for event in selected]
+        end_values = [as_float(event.get("aligned_end_ms")) for event in selected]
+        start_values = [value for value in start_values if value is not None]
+        end_values = [value for value in end_values if value is not None]
+        if start_values and end_values:
+            duration = max(end_values) - min(start_values)
+    return {
+        "events": len(selected),
+        "blocks": len(block_keys) or len(selected),
+        "tokens": token_count,
+        "duration_ms": duration,
+        "events_rows": selected,
+    }
+
+
+def kv_event_tooltip(label: str, event: dict[str, Any], span: tuple[float, float], target: bool) -> str:
+    fields = [
+        f"{label} expanded KV burst",
+        f"kind={event.get('movement_kind', '')}",
+        f"target_row={'yes' if target else 'no'}",
+        f"owner={event.get('owner_kind', '')}",
+        f"phase={event.get('phase', '')}",
+        f"session={event.get('ledger_session_id', '')}",
+        f"request={event.get('request_id', '')}",
+        f"node={event.get('node_id', '')}",
+        f"host_idx={event.get('host_index_start', '')}..{event.get('host_index_end', '')}",
+        f"device_idx={event.get('device_index_start', '')}..{event.get('device_index_end', '')}",
+        f"count={event.get('token_or_index_count', '')}",
+        f"duration={display_ms(as_float(event.get('duration_ms')) or max(0.0, span[1] - span[0]))}",
+        f"relative={display_ms(span[0])}->{display_ms(span[1])}",
+        f"source={event.get('source_event', '')}",
+        f"evidence={event.get('evidence_level', '') or event.get('evidence_confidence', '')}",
+        f"correlation={event.get('exact_correlation_source', '')}",
+    ]
+    meaning = str(event.get("simple_meaning") or "")
+    if meaning:
+        fields.append(meaning)
+    return " | ".join(part for part in fields if not part.endswith("="))
+
+
 def unified_stack_kv_events_for_gap(
     gap: dict[str, Any],
     all_kv_events: list[dict[str, Any]],
@@ -5388,6 +5505,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         opacity: float = 0.86,
         min_w: float = 3.0,
         break_long: bool = False,
+        label_min_w: float = 118.0,
+        font_size: int = 10,
     ) -> None:
         clipped_start = max(axis_min, min(axis_max, start))
         clipped_end = max(axis_min, min(axis_max, end))
@@ -5400,7 +5519,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             f'<rect x="{x1:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" fill="{color}" opacity="{opacity}">'
             f'<title>{html.escape(title)}</title></rect>'
         )
-        if label and w >= 118:
+        if label and w >= label_min_w:
             text_x = x1 + w / 2
             text_fill = "#0f172a" if color in {
                 unified_stack_color("tool_wait"),
@@ -5411,7 +5530,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if opacity < 0.74:
                 text_fill = "#0f172a"
             parts.append(
-                f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="10" '
+                f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="{font_size}" '
                 f'font-weight="900" fill="{text_fill}">{html.escape(label)}</text>'
             )
 
@@ -5471,6 +5590,25 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         row_events = unified_stack_kv_events_for_gap(row, all_kv_events)
         target_session = str(row.get("ledger_session_id") or row.get("session_id") or "")
         event_counts: Counter[str] = Counter(str(event.get("movement_kind") or "") for event in row_events)
+        replay_h2d_summary = target_replay_h2d_summary(row, row_events, target_session)
+        replay_start_abs_for_summary = as_float(row.get("resume_start_ms"))
+        first_token_abs_for_summary = first_token_ms(row)
+        ttft_ms = (
+            first_token_abs_for_summary - replay_start_abs_for_summary
+            if first_token_abs_for_summary is not None and replay_start_abs_for_summary is not None
+            else None
+        )
+        dispatch_start_abs = as_float(row.get("resume_submitted_ms"))
+        dispatch_ms = (
+            replay_start_abs_for_summary - dispatch_start_abs
+            if replay_start_abs_for_summary is not None and dispatch_start_abs is not None
+            else None
+        )
+        recompute_tokens_for_summary = (
+            as_float(row.get("recomputed_tokens_est"))
+            or as_float(row.get("replay_new_prefill_tokens_est"))
+            or 0.0
+        )
         zoom = zoom_bounds(row, row_events, due)
         replay_zoom = replay_zoom_bounds(row, due)
 
@@ -5487,7 +5625,28 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             f'H2D {event_counts.get("H2D", 0)} | D2H {event_counts.get("D2H", 0)} | evict {event_counts.get("GPU evict", 0)}'
             f'</text>'
         )
-        parts.append(f'<text x="16" y="{y + 132:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:48])}</text>')
+        replay_h2d_left = (
+            f"replay H2D {replay_h2d_summary['blocks']} blk / {compact_tokens(replay_h2d_summary['tokens'])}"
+            if replay_h2d_summary["events"]
+            else "replay H2D none"
+        )
+        parts.append(f'<text x="16" y="{y + 132:.1f}" font-size="10" fill="#475569">{html.escape(replay_h2d_left[:54])}</text>')
+        replay_work_parts = []
+        if recompute_tokens_for_summary >= 128:
+            replay_work_parts.append(f"recompute {compact_token_count(recompute_tokens_for_summary)}")
+        if ttft_ms is not None:
+            replay_work_parts.append(f"TTFT {display_ms(ttft_ms)}")
+        if dispatch_ms is not None:
+            replay_work_parts.append(f"dispatch {display_ms(dispatch_ms)}")
+        if replay_work_parts:
+            parts.append(
+                f'<text x="16" y="{y + 156:.1f}" font-size="10" fill="#475569">'
+                f'{html.escape(" | ".join(replay_work_parts)[:56])}</text>'
+            )
+        parts.append(
+            f'<text x="16" y="{y + 180:.1f}" font-size="10" fill="#475569">'
+            f'{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:54])}</text>'
+        )
 
         overview_lanes = [
             ("overview", y + 28),
@@ -5574,11 +5733,17 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 lane_y, color = zoom_lanes[kind]
                 owner = str(event.get("ledger_session_id") or "")
                 target = owner == target_session
-                title = (
-                    f"{label} | expanded KV burst | {kind} | owner={event.get('owner_kind', '')} | "
-                    f"session={event.get('ledger_session_id', '')} | block={event.get('logical_block_id', '')} | "
-                    f"tokens/idx={event.get('token_or_index_count', '')} | {display_ms(span[0])} -> {display_ms(span[1])} relative to due"
-                )
+                title = kv_event_tooltip(label, event, span, target)
+                event_label = ""
+                if target and kind == "H2D":
+                    event_label = short_bar_label(
+                        [
+                            "H2D",
+                            compact_tokens(event.get("token_or_index_count")),
+                            display_ms(as_float(event.get("duration_ms")) or (span[1] - span[0])),
+                        ],
+                        max_chars=30,
+                    )
                 draw_span(
                     parts,
                     lambda value, z_min=z_min, z_max=z_max: zoom_x(value, z_min, z_max),
@@ -5589,10 +5754,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     lane_y - (kv_target_bar_h if target else kv_other_bar_h) / 2 + 5,
                     kv_target_bar_h if target else kv_other_bar_h,
                     color,
-                    "",
+                    event_label,
                     title,
                     opacity=0.94 if target else 0.48,
                     min_w=5.0 if target else 3.5,
+                    label_min_w=88.0,
+                    font_size=9,
                 )
 
         replay_zoom_title_y = y + 344
@@ -5626,6 +5793,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
 
             replay_request_span = _relative_span(row, "resume_start_ms", "resume_end_ms", due)
             if replay_request_span:
+                replay_request_duration = replay_request_span[1] - replay_request_span[0]
                 draw_span(
                     parts,
                     lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
@@ -5636,14 +5804,31 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     replay_zoom_title_y + 37,
                     main_bar_h,
                     unified_stack_color("decode"),
-                    "replay request",
-                    f"{label} | replay request wall time: {display_ms(replay_request_span[1] - replay_request_span[0])}",
+                    short_bar_label(["replay request", display_ms(replay_request_duration)], max_chars=38),
+                    f"{label} | replay request wall time: {display_ms(replay_request_duration)} | start={display_ms(replay_request_span[0])} relative to due | end={display_ms(replay_request_span[1])} relative to due",
                     opacity=0.58,
                     min_w=5.0,
+                    label_min_w=118.0,
                 )
 
             replay_h2d_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
             if replay_h2d_span:
+                replay_h2d_duration = replay_h2d_span[1] - replay_h2d_span[0]
+                replay_h2d_label = short_bar_label(
+                    [
+                        "H2D",
+                        f"{replay_h2d_summary['blocks']} blk" if replay_h2d_summary["events"] else "",
+                        compact_tokens(replay_h2d_summary["tokens"]) if replay_h2d_summary["tokens"] else "",
+                        display_ms(replay_h2d_duration),
+                    ],
+                    max_chars=42,
+                )
+                replay_h2d_title = (
+                    f"{label} | replay-side KV H2D | events={replay_h2d_summary['events']} | "
+                    f"blocks={replay_h2d_summary['blocks']} | indices={compact_tokens(replay_h2d_summary['tokens'])} | "
+                    f"duration={display_ms(replay_h2d_duration)} | start={display_ms(replay_h2d_span[0])} relative to due | "
+                    f"end={display_ms(replay_h2d_span[1])} relative to due"
+                )
                 draw_span(
                     parts,
                     lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
@@ -5654,10 +5839,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     replay_zoom_title_y + 75,
                     main_bar_h,
                     unified_stack_color("h2d"),
-                    "replay H2D",
-                    f"{label} | replay-side KV H2D: {display_ms(replay_h2d_span[1] - replay_h2d_span[0])}",
+                    replay_h2d_label,
+                    replay_h2d_title,
                     opacity=0.92,
                     min_w=6.0,
+                    label_min_w=82.0,
+                    font_size=9,
                 )
 
             replay_start_abs = as_float(row.get("resume_start_ms"))
@@ -5667,7 +5854,22 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 pre_token_end = first_token_abs - due
                 recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
                 pre_token_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
-                pre_token_label = "recompute/TTFT" if recompute_tokens >= 128 else "TTFT"
+                pre_token_duration = pre_token_end - pre_token_start
+                pre_token_label = short_bar_label(
+                    [
+                        "recompute" if recompute_tokens >= 128 else "TTFT",
+                        compact_token_count(recompute_tokens) if recompute_tokens >= 128 else "",
+                        display_ms(pre_token_duration),
+                    ],
+                    max_chars=42,
+                )
+                cached_prefix = compact_token_count(row.get("replay_cached_prefix_tokens"))
+                input_tokens = compact_token_count(row.get("replay_input_tokens"))
+                pre_token_title = (
+                    f"{label} | replay before first token | duration={display_ms(pre_token_duration)} | "
+                    f"recompute_or_prefill={compact_token_count(recompute_tokens)} | input={input_tokens} | "
+                    f"cached_prefix={cached_prefix} | first_token={display_ms(pre_token_end)} relative to due"
+                )
                 draw_span(
                     parts,
                     lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
@@ -5679,9 +5881,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     main_bar_h,
                     pre_token_color,
                     pre_token_label,
-                    f"{label} | replay before first token: {display_ms(pre_token_end - pre_token_start)}",
+                    pre_token_title,
                     opacity=0.88,
                     min_w=6.0,
+                    label_min_w=82.0,
+                    font_size=9,
                 )
                 first_token_x = zoom_x(pre_token_end, rz_min, rz_max)
                 parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 108:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 184:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(pre_token_end))} relative to due</title></line>')
@@ -5691,6 +5895,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 decode_start = first_token_abs - due
                 decode_end = (as_float(row.get("resume_end_ms")) or first_token_abs) - due
                 if decode_end > decode_start:
+                    decode_duration = decode_end - decode_start
                     draw_span(
                         parts,
                         lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
@@ -5701,10 +5906,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         replay_zoom_title_y + 151,
                         main_bar_h,
                         unified_stack_color("decode"),
-                        "decode",
-                        f"{label} | decode after first token: {display_ms(decode_end - decode_start)}",
+                        short_bar_label(["decode", display_ms(decode_duration)], max_chars=36),
+                        f"{label} | decode after first token | duration={display_ms(decode_duration)} | start={display_ms(decode_start)} relative to due | end={display_ms(decode_end)} relative to due",
                         opacity=0.86,
                         min_w=6.0,
+                        label_min_w=82.0,
+                        font_size=9,
                     )
 
         verdict_y = y + row_h - 28
