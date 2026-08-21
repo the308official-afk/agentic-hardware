@@ -301,7 +301,7 @@ def telemetry_events_by_session(
             if "::live_prefetch::" in session_id:
                 continue
             source_event = str(row.get("source_event") or "")
-            phase = str(row.get("event") or "").rsplit(".", 1)[-1]
+            phase = str(row.get("phase") or "") or str(row.get("event") or "").rsplit(".", 1)[-1]
             by_session[session_id].append(
                 {
                     "event": row.get("event", ""),
@@ -309,6 +309,10 @@ def telemetry_events_by_session(
                     "phase": phase,
                     "call_id": row.get("call_id", ""),
                     "category": row.get("category", ""),
+                    "stage": row.get("stage", ""),
+                    "stage_group": row.get("stage_group", ""),
+                    "stage_order": row.get("stage_order", ""),
+                    "exact_sglang_hook": row.get("exact_sglang_hook", ""),
                     "method": row.get("method", ""),
                     "duration_ms": row.get("duration_ms", ""),
                     "start_or_end_ms": rel_ms(row.get("ts_ns"), base_ts),
@@ -323,6 +327,8 @@ def telemetry_events_by_session(
                     "forward_mode": row.get("forward_mode", ""),
                     "extend_num_tokens": row.get("extend_num_tokens", ""),
                     "seq_lens_sum": row.get("seq_lens_sum", ""),
+                    "host_index_count": row.get("host_index_count", ""),
+                    "device_index_count": row.get("device_index_count", ""),
                 }
             )
     return by_session
@@ -437,9 +443,21 @@ def first_category_window(events: list[dict[str, Any]], categories: set[str]) ->
 
 
 def summarize_scheduler_queue_path(events: list[dict[str, Any]], replay_start_ms: Any, replay_due_ms: Any) -> dict[str, Any]:
-    received = first_category_window(events, {"request_received"})
-    queued = first_category_window(events, {"entered_scheduler_queue"})
-    admitted = first_category_window(events, {"selected_for_prefill", "selected_to_run", "run_batch", "run_prebuilt_batch"})
+    received = first_category_window(events, {"request_received", "sglang_receive"})
+    queued = first_category_window(events, {"entered_scheduler_queue", "scheduler_queue_enter"})
+    admitted = first_category_window(
+        events,
+        {
+            "selected_for_prefill",
+            "selected_to_run",
+            "run_batch",
+            "run_prebuilt_batch",
+            "scheduler_select_prefill",
+            "scheduler_select_run",
+            "scheduler_run_batch",
+            "scheduler_run_prebuilt_batch",
+        },
+    )
     request_start = as_float(replay_start_ms)
     due = as_float(replay_due_ms)
     submit_to_queue = ""
@@ -853,7 +871,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
     scheduler_by_session = telemetry_events_by_session(
         trace_rows,
         base_ts,
-        {"kv_telemetry.scheduler.start", "kv_telemetry.scheduler.end"},
+        {"kv_telemetry.scheduler.start", "kv_telemetry.scheduler.end", "kv_telemetry.request_stage"},
     )
     prefill_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.prefill.end")
     sessions = sorted(session_meta)
@@ -2612,6 +2630,161 @@ def replay_delay_running_context_rows(
     return output
 
 
+def request_stage_trace_rows(
+    gaps: list[dict[str, Any]],
+    trace_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    bases = trace_base_by_case(trace_rows)
+    by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        if row.get("event") != "kv_telemetry.request_stage":
+            continue
+        case_id = str(row.get("ledger_case_id") or "")
+        if case_id:
+            by_case[case_id].append(row)
+
+    output: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        label = str(gap.get("timeline_label") or f"G{idx:02d}")
+        case_id = str(gap.get("case_id") or "")
+        session = str(gap.get("session_id") or "")
+        first_token = first_token_ms(gap)
+        resume_end = as_float(gap.get("resume_end_ms"))
+        h2d_end = as_float(gap.get("replay_kv_h2d_end_ms"))
+        window_end_candidates = [value for value in (first_token, h2d_end, resume_end) if value is not None]
+        window_end = max(window_end_candidates) if window_end_candidates else due
+        for event in by_case.get(case_id, []):
+            t = trace_local_ms(event, bases)
+            if t is None or t < due or t > window_end:
+                continue
+            sessions = _agent_sessions_for_event(event)
+            if session not in sessions:
+                continue
+            output.append(
+                {
+                    "row": label,
+                    "session_id": session,
+                    "case_id": case_id,
+                    "mode": gap.get("mode", ""),
+                    "fillers": case_fillers(gap),
+                    "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                    "stage": event.get("stage") or event.get("category", ""),
+                    "stage_group": event.get("stage_group", ""),
+                    "stage_order": event.get("stage_order", ""),
+                    "phase": event.get("phase", ""),
+                    "method": event.get("method", ""),
+                    "class": event.get("class", ""),
+                    "call_id": event.get("call_id", ""),
+                    "time_relative_to_replay_due_ms": round(t - due, 3),
+                    "absolute_case_ms": round(t, 3),
+                    "duration_ms": event.get("duration_ms", ""),
+                    "request_count": event.get("request_count", ""),
+                    "request_id": event.get("request_id", ""),
+                    "scheduler_waiting_queue_len": event.get("scheduler_waiting_queue_len", ""),
+                    "scheduler_running_queue_len": event.get("scheduler_running_queue_len", ""),
+                    "scheduler_running_batch_request_count": event.get("scheduler_running_batch_request_count", ""),
+                    "scheduler_running_batch_extend_num_tokens": event.get("scheduler_running_batch_extend_num_tokens", ""),
+                    "scheduler_cur_batch_request_count": event.get("scheduler_cur_batch_request_count", ""),
+                    "scheduler_cur_batch_extend_num_tokens": event.get("scheduler_cur_batch_extend_num_tokens", ""),
+                    "host_index_count": event.get("host_index_count", ""),
+                    "device_index_count": event.get("device_index_count", ""),
+                    "exact_sglang_hook": event.get("exact_sglang_hook", ""),
+                    "simple_meaning": (
+                        f"{label}: exact SGLang hook {event.get('stage') or event.get('category', '')} "
+                        f"{event.get('phase', '')} occurred {display_ms(t - due)} after replay due."
+                    ),
+                }
+            )
+    output.sort(
+        key=lambda row: (
+            str(row.get("case_id") or ""),
+            str(row.get("row") or ""),
+            as_float(row.get("time_relative_to_replay_due_ms")) or 0.0,
+            as_float(row.get("stage_order")) or 0.0,
+            str(row.get("phase") or ""),
+        )
+    )
+    return output
+
+
+def h2d_activity_during_delay_rows(
+    gaps: list[dict[str, Any]],
+    h2d_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        label = str(gap.get("timeline_label") or f"G{idx:02d}")
+        case_id = str(gap.get("case_id") or "")
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        h2d_start = as_float(gap.get("replay_kv_h2d_start_ms"))
+        first_token = first_token_ms(gap)
+        window_end = h2d_start or first_token
+        if window_end is None:
+            continue
+        for order, event in enumerate(h2d_events_overlap_window(h2d_events, due, window_end, case_id=case_id)):
+            owner = str(event.get("ledger_session_id") or "")
+            start = as_float(event.get("aligned_h2d_start_ms"))
+            end = as_float(event.get("aligned_h2d_end_ms"))
+            output.append(
+                {
+                    "row": label,
+                    "case_id": case_id,
+                    "mode": gap.get("mode", ""),
+                    "fillers": case_fillers(gap),
+                    "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                    "event_order": order,
+                    "owner_kind": "target replay H2D" if owner == target_session else "other H2D in same case",
+                    "owner_session_id": event.get("session_id", ""),
+                    "owner_row": event.get("row", ""),
+                    "phase": event.get("phase", ""),
+                    "source_event": event.get("source_event", ""),
+                    "node_id": event.get("node_id", ""),
+                    "layer_id": event.get("layer_id", ""),
+                    "block_key": event.get("block_key", ""),
+                    "token_or_index_count": event.get("token_or_index_count", ""),
+                    "start_relative_to_replay_due_ms": round(start - due, 3) if start is not None else "",
+                    "end_relative_to_replay_due_ms": round(end - due, 3) if end is not None else "",
+                    "duration_ms": event.get("h2d_duration_ms", ""),
+                    "confidence": event.get("confidence", ""),
+                    "simple_meaning": (
+                        f"{label}: {event.get('phase', 'H2D')} from "
+                        f"{'this replay' if owner == target_session else 'another session'} "
+                        f"overlapped the delay window before target KV readiness."
+                    ),
+                }
+            )
+    return output
+
+
+def delay_verdicts_by_gap_rows(delay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in delay_rows:
+        rows.append(
+            {
+                "row": row.get("row", ""),
+                "session_id": row.get("session_id", ""),
+                "case_id": row.get("case_id", ""),
+                "mode": row.get("mode", ""),
+                "fillers": row.get("fillers", ""),
+                "tool_wait_ms": row.get("tool_wait_ms", ""),
+                "verdict": row.get("copy_verdict", ""),
+                "main_delay_source": row.get("main_delay_source", ""),
+                "dominant_delay_stage": row.get("dominant_delay_stage", ""),
+                "dominant_delay_ms": row.get("dominant_delay_ms", ""),
+                "delay_confidence": row.get("delay_confidence", ""),
+                "evidence": row.get("copy_explanation", ""),
+                "simple_meaning": row.get("simple_meaning", ""),
+            }
+        )
+    return rows
+
+
 def build_replay_delay_waterfall_svg(rows: list[dict[str, Any]], max_rows: int = 12) -> str:
     selected = rows[:max_rows]
     if not selected:
@@ -2697,11 +2870,15 @@ def replay_delay_breakdown_html(
         <p class="note">This usually means the selected run did not include replay due timestamps or replay requests.</p>
         """
     running_rows = replay_delay_running_context_rows(gaps, trace_rows, h2d_events)
+    stage_rows = request_stage_trace_rows(gaps, trace_rows)
+    h2d_delay_rows = h2d_activity_during_delay_rows(gaps, h2d_events)
     shown = delay_rows[:max_rows]
     shown_labels = {str(row.get("row") or "") for row in shown}
     running_shown = [row for row in running_rows if str(row.get("row") or "") in shown_labels]
+    stage_shown = [row for row in stage_rows if str(row.get("row") or "") in shown_labels][: max_rows * 12]
+    h2d_delay_shown = [row for row in h2d_delay_rows if str(row.get("row") or "") in shown_labels][: max_rows * 12]
     verdict_rows = replay_delay_verdict_rows(delay_rows)
-    stage_columns = [
+    duration_columns = [
         "row",
         "mode",
         "fillers",
@@ -2753,6 +2930,38 @@ def replay_delay_breakdown_html(
         "max_running_batch_extend_tokens",
         "simple_meaning",
     ]
+    request_stage_columns = [
+        "row",
+        "stage",
+        "stage_group",
+        "phase",
+        "time_relative_to_replay_due_ms",
+        "duration_ms",
+        "method",
+        "request_count",
+        "scheduler_waiting_queue_len",
+        "scheduler_running_batch_request_count",
+        "scheduler_running_batch_extend_num_tokens",
+        "host_index_count",
+        "device_index_count",
+        "exact_sglang_hook",
+        "simple_meaning",
+    ]
+    h2d_delay_columns = [
+        "row",
+        "owner_kind",
+        "owner_row",
+        "phase",
+        "source_event",
+        "start_relative_to_replay_due_ms",
+        "end_relative_to_replay_due_ms",
+        "duration_ms",
+        "token_or_index_count",
+        "node_id",
+        "layer_id",
+        "confidence",
+        "simple_meaning",
+    ]
     return f"""
     <p>This section explains the missing time between replay due and replay-side KV readiness. It separates client dispatch, SGLang receive, scheduler queue/admit, cache lookup/load-back, H2D copy, and post-H2D first-token work.</p>
     <p class="note">The waterfall uses a local scale per row so long waits are readable. The tables below keep the exact measured millisecond values. Blank cells mean the stage was not observed in the trace.</p>
@@ -2760,8 +2969,14 @@ def replay_delay_breakdown_html(
     <div class="setup-diagram">{build_replay_delay_waterfall_svg(shown, max_rows=max_rows)}</div>
     <h3>Main Verdicts</h3>
     {table_html(verdict_rows)}
+    <h3>Exact SGLang Request Stage Trace</h3>
+    <p class="note">These rows come from direct SGLang method hooks emitted as <code>kv_telemetry.request_stage</code>. They are not parsed from server logs.</p>
+    {table_html(stage_shown, request_stage_columns)}
     <h3>Stage Duration Table</h3>
-    {table_html(shown, stage_columns)}
+    {table_html(shown, duration_columns)}
+    <h3>H2D Activity During The Delay Window</h3>
+    <p class="note">This shows visible H2D events in the same controlled case between replay due and the target row's KV readiness point.</p>
+    {table_html(h2d_delay_shown, h2d_delay_columns)}
     <h3>What Was Running Instead</h3>
     <p class="note">This scans the same controlled case from replay due until the target H2D starts. It counts scheduler/model/cache activity and exact H2D events visible in that interval.</p>
     {table_html(running_shown, running_columns)}
@@ -4454,6 +4669,9 @@ def main() -> None:
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_verdicts = replay_delay_verdict_rows(replay_delay_breakdown)
     replay_delay_running_context = replay_delay_running_context_rows(all_labeled_gaps, all_trace_rows, h2d_activity_events)
+    replay_delay_stage_trace = request_stage_trace_rows(all_labeled_gaps, all_trace_rows)
+    replay_delay_h2d_activity = h2d_activity_during_delay_rows(all_labeled_gaps, h2d_activity_events)
+    replay_delay_gap_verdicts = delay_verdicts_by_gap_rows(replay_delay_breakdown)
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "replay_h2d_readiness.csv", h2d_readiness)
@@ -4461,6 +4679,9 @@ def main() -> None:
     write_csv(args.out_dir / "replay_delay_breakdown.csv", replay_delay_breakdown)
     write_csv(args.out_dir / "replay_delay_verdicts.csv", replay_delay_verdicts)
     write_csv(args.out_dir / "replay_delay_running_context.csv", replay_delay_running_context)
+    write_csv(args.out_dir / "replay_delay_stage_trace.csv", replay_delay_stage_trace)
+    write_csv(args.out_dir / "replay_delay_h2d_activity.csv", replay_delay_h2d_activity)
+    write_csv(args.out_dir / "replay_delay_gap_verdicts.csv", replay_delay_gap_verdicts)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "h2d_pressure_by_gap.csv", h2d_pressure_rows)
     write_csv(args.out_dir / "h2d_activity_windows.csv", h2d_activity_windows)
@@ -4485,6 +4706,9 @@ def main() -> None:
             "replay_delay_breakdown": replay_delay_breakdown,
             "replay_delay_verdicts": replay_delay_verdicts,
             "replay_delay_running_context": replay_delay_running_context,
+            "replay_delay_stage_trace": replay_delay_stage_trace,
+            "replay_delay_h2d_activity": replay_delay_h2d_activity,
+            "replay_delay_gap_verdicts": replay_delay_gap_verdicts,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
             "h2d_pressure_by_gap": h2d_pressure_rows,

@@ -1269,6 +1269,118 @@ def _scheduler_telemetry_event(
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}
 
 
+def _request_stage_category(method_name: str) -> tuple[str, str, int] | None:
+    """Stable stage names for the replay-delay path.
+
+    These names intentionally hide SGLang version-specific method names from
+    downstream reports. If a later SGLang release renames a method, update this
+    mapping and keep the report layer stable.
+    """
+
+    stage_by_method = {
+        "handle_generate_request": ("sglang_receive", "request ingress", 10),
+        "process_input_requests": ("scheduler_input_batch", "request ingress", 20),
+        "_add_request_to_queue": ("scheduler_queue_enter", "scheduler", 30),
+        "_prefetch_kvcache": ("scheduler_prefetch_kvcache", "scheduler", 35),
+        "get_new_batch_prefill": ("scheduler_select_prefill", "scheduler", 40),
+        "get_next_batch_to_run": ("scheduler_select_run", "scheduler", 45),
+        "run_batch": ("scheduler_run_batch", "scheduler", 50),
+        "_run_batch_prebuilt": ("scheduler_run_prebuilt_batch", "scheduler", 55),
+        "process_batch_result": ("scheduler_process_batch_result", "scheduler", 60),
+        "process_batch_result_prefill": ("scheduler_process_prefill_result", "scheduler", 61),
+        "process_batch_result_decode": ("scheduler_process_decode_result", "scheduler", 62),
+        "match_prefix": ("cache_match_prefix", "cache lookup", 70),
+        "ready_to_load_host_cache": ("cache_host_ready_check", "cache lookup", 72),
+        "init_load_back": ("cache_load_back_plan", "cache lookup", 74),
+        "load_back": ("cache_load_back_node", "cache lookup", 76),
+        "load": ("hicache_load", "memory movement", 80),
+        "load_to_device_per_layer": ("host_to_device_copy", "memory movement", 90),
+        "backup_from_device_all_layer": ("device_to_host_copy", "memory movement", 91),
+        "write": ("hicache_write_host", "memory movement", 92),
+        "evict_device": ("hicache_evict_device", "memory residency", 93),
+        "evict_host": ("hicache_evict_host", "memory residency", 94),
+        "forward_batch_generation": ("model_forward_generation", "model work", 100),
+        "forward_batch_split_prefill": ("model_forward_split_prefill", "model work", 101),
+        "_forward_batch_generation_dllm": ("model_forward_dllm", "model work", 102),
+        "forward_batch_embedding": ("model_forward_embedding", "model work", 103),
+    }
+    return stage_by_method.get(method_name)
+
+
+def _request_stage_event(
+    *,
+    phase: str,
+    call_id: str,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+    duration_ms: float | None = None,
+) -> dict[str, Any] | None:
+    stage_info = _request_stage_category(method_name)
+    if stage_info is None:
+        return None
+    stage, stage_group, stage_order = stage_info
+    event: dict[str, Any] = {
+        "event": "kv_telemetry.request_stage",
+        "phase": phase,
+        "call_id": call_id,
+        "source_event": f"{event_name}.{phase}",
+        "class": class_name,
+        "method": method_name,
+        "category": stage,
+        "stage": stage,
+        "stage_group": stage_group,
+        "stage_order": stage_order,
+        "direction": context.get("direction", ""),
+        "request_count": _request_count(context),
+        "request_id": _first_request_id(context),
+        "exact_sglang_hook": 1,
+    }
+    event.update(_copy_agent_context(context))
+    sessions = context.get("agent_sessions")
+    if isinstance(sessions, list) and sessions:
+        event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
+
+    for key, value in _residency_snapshot_for_context(context).items():
+        event[f"residency_{key}"] = value
+
+    state = context.get("scheduler_state")
+    if isinstance(state, dict):
+        for key in (
+            "waiting_queue_len",
+            "running_queue_len",
+            "grammar_queue_len",
+            "new_token_ratio",
+            "max_running_requests",
+            "max_total_num_tokens",
+            "max_prefill_tokens",
+            "chunked_prefill_size",
+        ):
+            if state.get(key) not in (None, "", [], {}):
+                event[f"scheduler_{key}"] = state[key]
+        for key in ("running_batch", "cur_batch", "last_batch"):
+            batch = state.get(key)
+            if not isinstance(batch, dict):
+                continue
+            prefix = f"scheduler_{key}"
+            for batch_key in ("request_count", "forward_mode", "extend_num_tokens", "seq_lens_sum", "bs", "batch_size"):
+                if batch.get(batch_key) not in (None, "", [], {}):
+                    event[f"{prefix}_{batch_key}"] = batch[batch_key]
+
+    for ctx_key, out_key in (
+        ("host_indices", "host_index_count"),
+        ("device_indices", "device_index_count"),
+    ):
+        count = _count_from_index_summary(context.get(ctx_key))
+        if count is not None:
+            event[out_key] = count
+
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
 def _prefill_telemetry_event(
     *,
     call_id: str,
@@ -1398,6 +1510,16 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         )
         if scheduler_start_event:
             _write_event(scheduler_start_event)
+        request_stage_start_event = _request_stage_event(
+            phase="start",
+            call_id=call_id,
+            event_name=event_name,
+            method_name=method_name,
+            class_name=cls.__name__,
+            context=start_kv_context,
+        )
+        if request_stage_start_event:
+            _write_event(request_stage_start_event)
         if _should_start_torch_profiler(event_name, start_kv_context):
             maybe_start_torch_profiler(nvtx_name)
         try:
@@ -1428,6 +1550,19 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                     error=str(exc),
                 )
             )
+            request_stage_error_event = _request_stage_event(
+                phase="error",
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=error_context,
+                duration_ms=(time.perf_counter_ns() - start_ns) / 1_000_000,
+            )
+            if request_stage_error_event:
+                request_stage_error_event["error_type"] = type(exc).__name__
+                request_stage_error_event["error"] = str(exc)
+                _write_event(request_stage_error_event)
             if context_token is not None:
                 _ACTIVE_AGENT_CONTEXT.reset(context_token)
             raise
@@ -1482,6 +1617,17 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             )
             if scheduler_event:
                 _write_event(scheduler_event)
+            request_stage_end_event = _request_stage_event(
+                phase="end",
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=end_context,
+                duration_ms=duration_ms,
+            )
+            if request_stage_end_event:
+                _write_event(request_stage_end_event)
             prefill_event = _prefill_telemetry_event(
                 call_id=call_id,
                 event_name=event_name,

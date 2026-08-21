@@ -52,6 +52,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 31: Exact KV Movement Attribution | Ready | [Milestone 31](#milestone-31-exact-kv-movement-attribution) |
 | Milestone 32: KV H2D Bandwidth Pressure | Ready | [Milestone 32](#milestone-32-kv-h2d-bandwidth-pressure) |
 | Milestone 33: Replay Delay Breakdown | Ready | [Milestone 33](#milestone-33-replay-delay-breakdown) |
+| Milestone 34: Replay Delay Deep Instrumentation | Ready | [Milestone 34](#milestone-34-replay-delay-deep-instrumentation) |
 
 ## What We Are Testing
 
@@ -6114,6 +6115,73 @@ until much later than the replay deadline.
 
 If G04 says "copy blocked behind other H2D", then visible H2D work from other
 rows was already happening before G04's own H2D started.
+```
+
+### Milestone 34: Replay Delay Deep Instrumentation
+
+Full note:
+
+```text
+REPLAY_DELAY_DEEP_INSTRUMENTATION.md
+```
+
+Why this milestone is needed:
+
+```text
+Milestone 33 explains that replay-side KV H2D started late.
+
+Milestone 34 goes deeper and instruments SGLang itself so we can see the exact
+request-stage path before H2D begins:
+  client/request arrival
+  SGLang receive
+  scheduler queue/admit
+  cache lookup/load-back
+  H2D copy
+  model forward/recompute
+```
+
+What it adds:
+
+```text
+The SGLang trace patch now emits:
+
+kv_telemetry.request_stage
+
+These rows come from direct SGLang method hooks, not server-log parsing.
+```
+
+New output files:
+
+```text
+artifacts/results/reports/<report_label>/report/replay_delay_stage_trace.csv
+artifacts/results/reports/<report_label>/report/replay_delay_h2d_activity.csv
+artifacts/results/reports/<report_label>/report/replay_delay_gap_verdicts.csv
+```
+
+What to look for in `latest_master_report.html`:
+
+```text
+Replay Delay Breakdown
+  Exact SGLang Request Stage Trace
+  H2D Activity During The Delay Window
+  Stage Duration Table
+  What Was Running Instead
+```
+
+Simple interpretation:
+
+```text
+If H2D begins long after replay was due, this milestone helps show whether the
+request waited in the client driver, waited in SGLang's scheduler, reached
+cache/load-back late, or was blocked behind other visible H2D movement.
+```
+
+Important:
+
+```text
+Reports built from old traces will not contain the new request-stage rows.
+Rerun the experiment after this milestone to populate the exact SGLang stage
+trace.
 ```
 
 ## Directory Layout
