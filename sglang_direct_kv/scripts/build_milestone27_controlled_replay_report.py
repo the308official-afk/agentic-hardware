@@ -11,7 +11,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median
-from typing import Any
+from typing import Any, Callable
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
@@ -5289,6 +5289,288 @@ def build_unified_per_gap_stack_timeline_svg(
     return "\n".join(parts)
 
 
+def build_unified_per_gap_stack_timeline_svg_v2(
+    gaps: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+    max_rows: int,
+) -> str:
+    rows = gaps[:max_rows]
+    if not rows:
+        return "<p>No rows were available for the unified forensic stack timeline.</p>"
+    axis_values = unified_stack_axis_values(rows, all_kv_events)
+    x_min = min(axis_values) if axis_values else -1000.0
+    x_max = max(axis_values) if axis_values else 1000.0
+    if x_min >= 0:
+        x_min = -500.0
+    if x_max <= 0:
+        x_max = 1000.0
+    pad = max(50.0, (x_max - x_min) * 0.03)
+    x_min -= pad
+    x_max += pad
+
+    width = 1780
+    left = 280
+    right = 56
+    top = 150
+    row_h = 244
+    bottom = 96
+    plot_w = width - left - right
+    height = top + len(rows) * row_h + bottom
+    scaled_min = h2d_symlog_value(x_min)
+    scaled_max = h2d_symlog_value(x_max)
+
+    def overview_x(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return left + (scaled - scaled_min) * plot_w / max(1e-9, scaled_max - scaled_min)
+
+    def zoom_bounds(row: dict[str, Any], events: list[dict[str, Any]], due: float) -> tuple[float, float] | None:
+        values: list[float] = []
+        for event in events:
+            span = _event_relative_span(event, due)
+            if span:
+                values.extend(span)
+        for span in [
+            _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due),
+            _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due),
+        ]:
+            if span:
+                values.extend(span)
+        if not values:
+            return None
+        start = min(values)
+        end = max(values)
+        span_ms = max(1.0, end - start)
+        padding = max(25.0, span_ms * 0.06)
+        return start - padding, end + padding
+
+    def zoom_x(value: float, z_min: float, z_max: float) -> float:
+        return left + (value - z_min) * plot_w / max(1e-9, z_max - z_min)
+
+    def draw_span(
+        parts: list[str],
+        x_fn: Callable[[float], float],
+        axis_min: float,
+        axis_max: float,
+        start: float,
+        end: float,
+        y: float,
+        h: float,
+        color: str,
+        label: str,
+        title: str,
+        opacity: float = 0.86,
+        min_w: float = 3.0,
+        break_long: bool = False,
+    ) -> None:
+        clipped_start = max(axis_min, min(axis_max, start))
+        clipped_end = max(axis_min, min(axis_max, end))
+        if clipped_end <= clipped_start:
+            return
+        x1 = x_fn(clipped_start)
+        x2 = x_fn(clipped_end)
+        w = max(min_w, x2 - x1)
+        parts.append(
+            f'<rect x="{x1:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" fill="{color}" opacity="{opacity}">'
+            f'<title>{html.escape(title)}</title></rect>'
+        )
+        if break_long and w >= 220:
+            bx = x1 + w * 0.52
+            parts.append(
+                f'<rect x="{bx - 18:.1f}" y="{y - 1:.1f}" width="36" height="{h + 2:.1f}" rx="5" fill="#ffffff" opacity="0.86"/>'
+            )
+            parts.append(
+                f'<text x="{bx:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="11" '
+                f'font-weight="900" fill="{color}">...</text>'
+            )
+        if label and w >= 74:
+            text_x = x1 + w / 2
+            parts.append(
+                f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="9" '
+                f'font-weight="800" fill="#0f172a">{html.escape(label)}</text>'
+            )
+
+    def draw_overview_marker(parts: list[str], value: float, y1: float, y2: float, color: str, title: str) -> None:
+        if value < x_min or value > x_max:
+            return
+        x = overview_x(value)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="{color}" stroke-width="2.2">'
+            f'<title>{html.escape(title)}</title></line>'
+        )
+
+    zero_x = overview_x(0.0)
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
+        '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
+        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview plus an expanded KV activity zoom. The overview uses replay-relative symlog time; each zoom strip uses its own local linear time.</text>',
+        '<text x="12" y="76" font-size="12" fill="#475569">Long overview bars are intentionally compressed and marked with “...” when they would otherwise dominate the row.</text>',
+        f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
+        f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
+    ]
+    ticks = h2d_symlog_tick_values(x_min, x_max)
+    for value in ticks:
+        x = overview_x(value)
+        label = f"{int(value)} ms" if abs(value) < 1000 else f"{value / 1000:.0f} s"
+        parts.append(f'<line x1="{x:.1f}" y1="{top - 24}" x2="{x:.1f}" y2="{height - 70}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top - 30}" text-anchor="middle" font-size="10" fill="#475569">{html.escape(label)}</text>')
+
+    for idx, row in enumerate(rows):
+        due = as_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        y = top + idx * row_h
+        band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        status, status_color = observation_status(row)
+        row_events = unified_stack_kv_events_for_gap(row, all_kv_events)
+        target_session = str(row.get("ledger_session_id") or row.get("session_id") or "")
+        event_counts: Counter[str] = Counter(str(event.get("movement_kind") or "") for event in row_events)
+        zoom = zoom_bounds(row, row_events, due)
+
+        parts.append(f'<rect x="0" y="{y - 8:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
+        parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="900">{html.escape(label)}</text>')
+        parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
+        parts.append(f'<text x="12" y="{y + 52:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}; fillers {html.escape(case_fillers(row))}; wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
+        parts.append(
+            f'<text x="12" y="{y + 70:.1f}" font-size="10" fill="#475569">'
+            f'H2D {event_counts.get("H2D", 0)} | D2H {event_counts.get("D2H", 0)} | evict {event_counts.get("GPU evict", 0)}'
+            f'</text>'
+        )
+        parts.append(f'<text x="12" y="{y + 88:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:48])}</text>')
+
+        overview_lanes = [
+            ("overview", y + 18),
+            ("request", y + 48),
+            ("replay", y + 78),
+        ]
+        for lane_label, lane_y in overview_lanes:
+            parts.append(f'<text x="{left - 10}" y="{lane_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="800" fill="#334155">{html.escape(lane_label)}</text>')
+            parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
+
+        overview_y = y + 18
+        for span, color, span_label, title, opacity in [
+            (_relative_span(row, "current_start_ms", "current_end_ms", due), unified_stack_color("initial"), "initial", "initial model turn", 0.84),
+            (_relative_span(row, "tool_gap_start_ms", "tool_gap_end_ms", due), unified_stack_color("tool_wait"), "tool wait", "agent/tool wait window", 0.78),
+            (_relative_span(row, "resume_start_ms", "resume_end_ms", due), unified_stack_color("decode"), "resume", "resume request wall time", 0.70),
+        ]:
+            if span:
+                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], overview_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity, break_long=True)
+
+        request_y = y + 48
+        request_spans = [
+            (_relative_span(row, "resume_submitted_ms", "resume_start_ms", due), unified_stack_color("client_dispatch"), "client dispatch", "client dispatch: replay submitted but client call had not started"),
+            (_relative_span(row, "replay_sglang_receive_start_ms", "replay_sglang_receive_end_ms", due), unified_stack_color("sglang_receive"), "receive", "SGLang receive stage"),
+            (_relative_span(row, "replay_scheduler_queue_enter_start_ms", "replay_scheduler_admit_start_ms", due), unified_stack_color("scheduler"), "scheduler", "scheduler queue/admit wait"),
+            (_relative_span(row, "replay_scheduler_admit_start_ms", "replay_kv_h2d_start_ms", due), unified_stack_color("load_path"), "load path", "scheduler admit to visible replay H2D start"),
+        ]
+        for span, color, span_label, title in request_spans:
+            if span:
+                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], request_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", break_long=True)
+
+        replay_y = y + 78
+        replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
+        if replay_h2d:
+            draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 2, 9, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=7)
+        first_token = first_token_ms(row)
+        replay_start = as_float(row.get("resume_start_ms"))
+        if first_token is not None and replay_start is not None:
+            prefill_start_rel = replay_start - due
+            first_token_rel = first_token - due
+            recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
+            replay_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
+            replay_label = "recompute/TTFT" if recompute_tokens >= 128 else "TTFT"
+            draw_span(parts, overview_x, x_min, x_max, prefill_start_rel, first_token_rel, replay_y + 11, 10, replay_color, replay_label, f"{label} | replay pre-first-token path: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82, break_long=True)
+            draw_overview_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
+        if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
+            decode_span = (first_token - due, (as_float(row.get("resume_end_ms")) or first_token) - due)
+            if decode_span[1] > decode_span[0]:
+                draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 25, 9, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
+
+        zoom_title_y = y + 116
+        parts.append(f'<text x="{left - 10}" y="{zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">KV zoom</text>')
+        if zoom is None:
+            parts.append(f'<text x="{left + 8}" y="{zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No SGLang-visible KV movement in this gap window.</text>')
+        else:
+            z_min, z_max = zoom
+            z_span = max(1.0, z_max - z_min)
+            zoom_label = f"expanded KV burst: {display_ms(z_min)} -> {display_ms(z_max)} relative to replay due"
+            parts.append(f'<text x="{left + 8}" y="{zoom_title_y - 4:.1f}" font-size="10" font-weight="800" fill="#475569">{html.escape(zoom_label)}</text>')
+            for tick_value in [z_min, z_min + z_span * 0.25, z_min + z_span * 0.5, z_min + z_span * 0.75, z_max]:
+                tx = zoom_x(tick_value, z_min, z_max)
+                parts.append(f'<line x1="{tx:.1f}" y1="{zoom_title_y + 14:.1f}" x2="{tx:.1f}" y2="{zoom_title_y + 91:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{zoom_title_y + 108:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            if z_min <= 0 <= z_max:
+                zx = zoom_x(0.0, z_min, z_max)
+                parts.append(f'<line x1="{zx:.1f}" y1="{zoom_title_y + 14:.1f}" x2="{zx:.1f}" y2="{zoom_title_y + 91:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                parts.append(f'<text x="{zx + 4:.1f}" y="{zoom_title_y + 26:.1f}" font-size="9" font-weight="800">due</text>')
+            zoom_lanes = {
+                "H2D": (zoom_title_y + 20, unified_stack_color("h2d")),
+                "D2H": (zoom_title_y + 42, unified_stack_color("d2h")),
+                "GPU evict": (zoom_title_y + 64, unified_stack_color("evict")),
+                "host evict": (zoom_title_y + 82, unified_stack_color("host_evict")),
+            }
+            for lane_name, (lane_y, _) in zoom_lanes.items():
+                parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name.replace("GPU ", ""))}</text>')
+                parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
+            for event in row_events[:420]:
+                span = _event_relative_span(event, due)
+                if not span:
+                    continue
+                kind = str(event.get("movement_kind") or "")
+                if kind not in zoom_lanes:
+                    continue
+                lane_y, color = zoom_lanes[kind]
+                owner = str(event.get("ledger_session_id") or "")
+                target = owner == target_session
+                title = (
+                    f"{label} | expanded KV burst | {kind} | owner={event.get('owner_kind', '')} | "
+                    f"session={event.get('ledger_session_id', '')} | block={event.get('logical_block_id', '')} | "
+                    f"tokens/idx={event.get('token_or_index_count', '')} | {display_ms(span[0])} -> {display_ms(span[1])} relative to due"
+                )
+                draw_span(
+                    parts,
+                    lambda value, z_min=z_min, z_max=z_max: zoom_x(value, z_min, z_max),
+                    z_min,
+                    z_max,
+                    span[0],
+                    span[1],
+                    lane_y,
+                    8 if target else 6,
+                    color,
+                    "",
+                    title,
+                    opacity=0.94 if target else 0.48,
+                    min_w=5.0 if target else 3.5,
+                )
+
+        verdict_y = y + row_h - 28
+        verdict = str(row.get("lifecycle_verdict") or row.get("final_path") or row.get("per_gap_verdict") or "")
+        explanation = str(row.get("lifecycle_explanation") or row.get("replay_cache_path_summary") or "")
+        parts.append(f'<text x="{left}" y="{verdict_y:.1f}" font-size="10" font-weight="900" fill="#0f172a">verdict: {html.escape(verdict[:92])}</text>')
+        if explanation:
+            parts.append(f'<text x="{left}" y="{verdict_y + 16:.1f}" font-size="9" fill="#475569">{html.escape(explanation[:190])}</text>')
+
+    legend_y = height - 48
+    lx = left
+    legend = [
+        ("initial", unified_stack_color("initial")),
+        ("tool wait", unified_stack_color("tool_wait")),
+        ("client dispatch", unified_stack_color("client_dispatch")),
+        ("scheduler/load path", unified_stack_color("scheduler")),
+        ("H2D", unified_stack_color("h2d")),
+        ("D2H", unified_stack_color("d2h")),
+        ("evict", unified_stack_color("evict")),
+        ("recompute", unified_stack_color("recompute")),
+        ("decode", unified_stack_color("decode")),
+    ]
+    for legend_label, color in legend:
+        parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.86"/>')
+        parts.append(f'<text x="{lx + 18:.1f}" y="{legend_y + 11:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
+        lx += 150
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
 def unified_per_gap_forensic_stack_html(
     gaps: list[dict[str, Any]],
     all_kv_events: list[dict[str, Any]],
@@ -5297,10 +5579,10 @@ def unified_per_gap_forensic_stack_html(
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
-    <p>This is a preview of a merged per-gap view. For each row, the lanes are stacked but share one replay-relative time axis.</p>
-    <p class="note">This view is best for answering: when replay was due, had the replay been submitted, was SGLang already handling it, were KV movements happening, and did replay load KV or rebuild work later?</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg(gaps, all_kv_events, max_rows)}</div>
-    <p class="note">Small KV movement bars are exact SGLang-visible events. Target-row movement is drawn more opaque; pressure/filler or other-session movement is lighter. This is still not a full hardware DMA-lane trace, but it is the strongest merged report-level view from our current SGLang hooks.</p>
+    <p>This is a preview of a merged per-gap view. Each gap has a compact overview plus a local zoom of the dense KV movement burst.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom under each row to inspect the small H2D, D2H, and eviction bars that otherwise get crushed at the far right.</p>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
+    <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
 
 
