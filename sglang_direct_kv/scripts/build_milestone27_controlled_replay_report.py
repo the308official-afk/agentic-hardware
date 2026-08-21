@@ -4928,6 +4928,382 @@ def per_gap_forensic_view_html(
     """
 
 
+def _relative_ms(row: dict[str, Any], key: str, due: float) -> float | None:
+    value = as_float(row.get(key))
+    return value - due if value is not None else None
+
+
+def _relative_span(
+    row: dict[str, Any],
+    start_key: str,
+    end_key: str,
+    due: float,
+) -> tuple[float, float] | None:
+    start = _relative_ms(row, start_key, due)
+    end = _relative_ms(row, end_key, due)
+    if start is None or end is None or end <= start:
+        return None
+    return (start, end)
+
+
+def _event_relative_span(event: dict[str, Any], due: float) -> tuple[float, float] | None:
+    start = as_float(event.get("aligned_start_ms"))
+    end = as_float(event.get("aligned_end_ms"))
+    if start is None or end is None or end <= start:
+        return None
+    return (start - due, end - due)
+
+
+def unified_stack_kv_events_for_gap(
+    gap: dict[str, Any],
+    all_kv_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    due = as_float(gap.get("tool_gap_end_ms"))
+    if due is None:
+        return []
+    case_id = str(gap.get("case_id") or "")
+    window_start = due + min(-500.0, (_relative_ms(gap, "current_start_ms", due) or -500.0))
+    window_end_candidates = [
+        as_float(gap.get("resume_end_ms")),
+        as_float(gap.get("replay_kv_h2d_end_ms")),
+        as_float(gap.get("direct_kv_h2d_end_ms")),
+        as_float(gap.get("resume_start_ms")),
+    ]
+    window_end = max(value for value in window_end_candidates if value is not None) if any(
+        value is not None for value in window_end_candidates
+    ) else due + 1000.0
+    output: list[dict[str, Any]] = []
+    for event in all_kv_events:
+        if case_id and str(event.get("case_id") or "") != case_id:
+            continue
+        start = as_float(event.get("aligned_start_ms"))
+        end = as_float(event.get("aligned_end_ms"))
+        if start is None or end is None:
+            continue
+        if start <= window_end and end >= window_start:
+            output.append(event)
+    return output
+
+
+def unified_stack_axis_values(
+    gaps: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+) -> list[float]:
+    values: list[float] = [0.0]
+    for gap in gaps:
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        for key in [
+            "current_start_ms",
+            "current_end_ms",
+            "tool_gap_start_ms",
+            "tool_gap_end_ms",
+            "hint_submitted_ms",
+            "prefetch_start_ms",
+            "prefetch_end_ms",
+            "resume_submitted_ms",
+            "resume_start_ms",
+            "resume_end_ms",
+            "replay_sglang_receive_start_ms",
+            "replay_sglang_receive_end_ms",
+            "replay_scheduler_queue_enter_start_ms",
+            "replay_scheduler_admit_start_ms",
+            "replay_kv_h2d_start_ms",
+            "replay_kv_h2d_end_ms",
+            "replay_prefill_start_ms",
+            "replay_prefill_end_ms",
+            "replay_model_forward_start_ms",
+            "replay_model_forward_end_ms",
+        ]:
+            value = _relative_ms(gap, key, due)
+            if value is not None:
+                values.append(value)
+        token_time = first_token_ms(gap)
+        if token_time is not None:
+            values.append(token_time - due)
+        for event in unified_stack_kv_events_for_gap(gap, all_kv_events):
+            span = _event_relative_span(event, due)
+            if span:
+                values.extend(span)
+    return values
+
+
+def unified_stack_color(kind: str) -> str:
+    return {
+        "initial": "#2563eb",
+        "tool_wait": "#d1d5db",
+        "deadline": "#111827",
+        "client_dispatch": "#3b82f6",
+        "sglang_receive": "#f97316",
+        "scheduler": "#db2777",
+        "load_path": "#7c3aed",
+        "prefetch": "#a855f7",
+        "hint_h2d": "#16a34a",
+        "h2d": "#06b6d4",
+        "d2h": "#f97316",
+        "evict": "#64748b",
+        "host_evict": "#991b1b",
+        "recompute": "#db2777",
+        "prefill": "#eab308",
+        "decode": "#ef4444",
+        "marker": "#475569",
+    }.get(kind, "#64748b")
+
+
+def build_unified_per_gap_stack_timeline_svg(
+    gaps: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+    max_rows: int,
+) -> str:
+    rows = gaps[:max_rows]
+    if not rows:
+        return "<p>No rows were available for the unified forensic stack timeline.</p>"
+    axis_values = unified_stack_axis_values(rows, all_kv_events)
+    x_min = min(axis_values) if axis_values else -1000.0
+    x_max = max(axis_values) if axis_values else 1000.0
+    if x_min >= 0:
+        x_min = -500.0
+    if x_max <= 0:
+        x_max = 1000.0
+    pad = max(50.0, (x_max - x_min) * 0.03)
+    x_min -= pad
+    x_max += pad
+
+    width = 1680
+    left = 250
+    right = 56
+    top = 132
+    row_h = 166
+    bottom = 96
+    plot_w = width - left - right
+    height = top + len(rows) * row_h + bottom
+    scaled_min = h2d_symlog_value(x_min)
+    scaled_max = h2d_symlog_value(x_max)
+
+    def x_pos(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return left + (scaled - scaled_min) * plot_w / max(1e-9, scaled_max - scaled_min)
+
+    def draw_span(
+        parts: list[str],
+        start: float,
+        end: float,
+        y: float,
+        h: float,
+        color: str,
+        label: str,
+        title: str,
+        opacity: float = 0.86,
+    ) -> None:
+        clipped_start = max(x_min, min(x_max, start))
+        clipped_end = max(x_min, min(x_max, end))
+        if clipped_end <= clipped_start:
+            return
+        x1 = x_pos(clipped_start)
+        x2 = x_pos(clipped_end)
+        w = max(3.0, x2 - x1)
+        parts.append(
+            f'<rect x="{x1:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" fill="{color}" opacity="{opacity}">'
+            f'<title>{html.escape(title)}</title></rect>'
+        )
+        if label and w >= 68:
+            parts.append(
+                f'<text x="{x1 + w / 2:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="9" '
+                f'font-weight="800" fill="#0f172a">{html.escape(label)}</text>'
+            )
+
+    def draw_marker(parts: list[str], value: float, y1: float, y2: float, color: str, title: str) -> None:
+        if value < x_min or value > x_max:
+            return
+        x = x_pos(value)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="{color}" stroke-width="2.2">'
+            f'<title>{html.escape(title)}</title></line>'
+        )
+
+    zero_x = x_pos(0.0)
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline">',
+        '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
+        '<text x="12" y="54" font-size="12" fill="#475569">All lanes use one shared replay-relative time axis. Negative means before replay due; positive means after replay due.</text>',
+        f'<line x1="{zero_x:.1f}" y1="{top - 30}" x2="{zero_x:.1f}" y2="{height - 68}" stroke="#111827" stroke-width="2.5"/>',
+        f'<text x="{zero_x + 6:.1f}" y="{top - 40}" font-size="12" font-weight="800">0 ms replay due</text>',
+    ]
+    ticks = h2d_symlog_tick_values(x_min, x_max)
+    for value in ticks:
+        x = x_pos(value)
+        label = f"{int(value)} ms" if abs(value) < 1000 else f"{value / 1000:.0f} s"
+        parts.append(f'<line x1="{x:.1f}" y1="{top - 22}" x2="{x:.1f}" y2="{height - 70}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top - 28}" text-anchor="middle" font-size="10" fill="#475569">{html.escape(label)}</text>')
+
+    lane_offsets = {
+        "flow": 16,
+        "request": 46,
+        "kv": 78,
+        "replay": 112,
+        "verdict": 142,
+    }
+    lane_names = [
+        ("flow", "flow"),
+        ("request", "request"),
+        ("kv", "KV move"),
+        ("replay", "replay"),
+        ("verdict", "verdict"),
+    ]
+
+    for idx, row in enumerate(rows):
+        due = as_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        y = top + idx * row_h
+        band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        status, status_color = observation_status(row)
+        parts.append(f'<rect x="0" y="{y - 8:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
+        parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="800">{html.escape(label)}</text>')
+        parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="800" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
+        parts.append(f'<text x="12" y="{y + 52:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}; fillers {html.escape(case_fillers(row))}; wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
+        parts.append(f'<text x="12" y="{y + 70:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row)))}</text>')
+        for lane_key, lane_label in lane_names:
+            lane_y = y + lane_offsets[lane_key]
+            parts.append(f'<text x="{left - 10}" y="{lane_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="700" fill="#334155">{html.escape(lane_label)}</text>')
+            parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
+
+        flow_y = y + lane_offsets["flow"]
+        for span, color, span_label, title in [
+            (_relative_span(row, "current_start_ms", "current_end_ms", due), unified_stack_color("initial"), "initial", "initial model turn"),
+            (_relative_span(row, "tool_gap_start_ms", "tool_gap_end_ms", due), unified_stack_color("tool_wait"), "tool wait", "agent/tool wait window"),
+            (_relative_span(row, "resume_start_ms", "resume_end_ms", due), unified_stack_color("decode"), "resume", "resume request wall time"),
+        ]:
+            if span:
+                draw_span(parts, span[0], span[1], flow_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=0.78)
+
+        request_y = y + lane_offsets["request"]
+        request_spans = [
+            (_relative_span(row, "resume_submitted_ms", "resume_start_ms", due), unified_stack_color("client_dispatch"), "client dispatch", "replay submitted but Python/client request call had not started"),
+            (_relative_span(row, "replay_sglang_receive_start_ms", "replay_sglang_receive_end_ms", due), unified_stack_color("sglang_receive"), "receive", "SGLang receive stage"),
+            (_relative_span(row, "replay_scheduler_queue_enter_start_ms", "replay_scheduler_admit_start_ms", due), unified_stack_color("scheduler"), "scheduler", "scheduler queue/admit wait"),
+            (_relative_span(row, "replay_scheduler_admit_start_ms", "replay_kv_h2d_start_ms", due), unified_stack_color("load_path"), "load path", "scheduler admit to visible replay H2D start"),
+        ]
+        for span, color, span_label, title in request_spans:
+            if span:
+                draw_span(parts, span[0], span[1], request_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}")
+        for marker_key, marker_label, color in [
+            ("resume_submitted_ms", "client submit", "#7c3aed"),
+            ("resume_start_ms", "request start", "#2563eb"),
+            ("replay_sglang_receive_start_ms", "SGLang receive", "#f97316"),
+            ("replay_scheduler_admit_start_ms", "scheduler admit", "#db2777"),
+        ]:
+            marker = _relative_ms(row, marker_key, due)
+            if marker is not None:
+                draw_marker(parts, marker, request_y - 4, request_y + 18, color, f"{label} | {marker_label}: {display_ms(marker)} relative to due")
+
+        prefetch_span = _relative_span(row, "prefetch_start_ms", "prefetch_end_ms", due)
+        if prefetch_span:
+            draw_span(parts, prefetch_span[0], prefetch_span[1], request_y + 17, 11, unified_stack_color("prefetch"), "prefetch", f"{label} | direct prefetch attempt: {display_ms(prefetch_span[1] - prefetch_span[0])}", opacity=0.72)
+        hint_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
+        if hint_span:
+            draw_span(parts, hint_span[0], hint_span[1], request_y + 30, 10, unified_stack_color("hint_h2d"), "hint H2D", f"{label} | hint-side KV H2D: {display_ms(hint_span[1] - hint_span[0])}")
+
+        kv_y = y + lane_offsets["kv"]
+        kind_y = {
+            "H2D": kv_y - 2,
+            "D2H": kv_y + 8,
+            "GPU evict": kv_y + 18,
+            "host evict": kv_y + 28,
+        }
+        kind_color = {
+            "H2D": unified_stack_color("h2d"),
+            "D2H": unified_stack_color("d2h"),
+            "GPU evict": unified_stack_color("evict"),
+            "host evict": unified_stack_color("host_evict"),
+        }
+        event_counts: Counter[str] = Counter()
+        target_session = str(row.get("ledger_session_id") or row.get("session_id") or "")
+        for event in unified_stack_kv_events_for_gap(row, all_kv_events)[:260]:
+            span = _event_relative_span(event, due)
+            if not span:
+                continue
+            kind = str(event.get("movement_kind") or "KV movement")
+            if kind not in kind_y:
+                continue
+            event_counts[kind] += 1
+            owner = str(event.get("ledger_session_id") or "")
+            opacity = 0.92 if owner == target_session else 0.52
+            bar_h = 8 if owner == target_session else 6
+            title = (
+                f"{label} | {kind} | owner={event.get('owner_kind', '')} | phase={event.get('phase', '')} | "
+                f"tokens/idx={event.get('token_or_index_count', '')} | {display_ms(span[0])} -> {display_ms(span[1])} relative to due"
+            )
+            draw_span(parts, span[0], span[1], kind_y[kind], bar_h, kind_color[kind], "", title, opacity=opacity)
+        counts_text = " | ".join(f"{kind} {event_counts.get(kind, 0)}" for kind in ["H2D", "D2H", "GPU evict", "host evict"])
+        parts.append(f'<text x="{left + 8}" y="{kv_y + 43:.1f}" font-size="9" fill="#475569">{html.escape(counts_text)}</text>')
+
+        replay_y = y + lane_offsets["replay"]
+        replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
+        if replay_h2d:
+            draw_span(parts, replay_h2d[0], replay_h2d[1], replay_y - 3, 10, unified_stack_color("h2d"), "replay H2D", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}")
+        first_token = first_token_ms(row)
+        replay_start = as_float(row.get("resume_start_ms"))
+        if first_token is not None and replay_start is not None:
+            prefill_start_rel = replay_start - due
+            first_token_rel = first_token - due
+            recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
+            if recompute_tokens >= 128:
+                draw_span(parts, prefill_start_rel, first_token_rel, replay_y + 10, 10, unified_stack_color("recompute"), "recompute/prefill", f"{label} | estimated replay recompute/prefill until first token: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82)
+            else:
+                draw_span(parts, prefill_start_rel, first_token_rel, replay_y + 10, 10, unified_stack_color("prefill"), "TTFT", f"{label} | remaining time to first token: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82)
+            draw_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
+        decode_span = None
+        if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
+            decode_span = (first_token - due, (as_float(row.get("resume_end_ms")) or first_token) - due)
+        if decode_span and decode_span[1] > decode_span[0]:
+            draw_span(parts, decode_span[0], decode_span[1], replay_y + 24, 10, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78)
+
+        verdict_y = y + lane_offsets["verdict"]
+        verdict = str(row.get("lifecycle_verdict") or row.get("final_path") or row.get("per_gap_verdict") or "")
+        explanation = str(row.get("lifecycle_explanation") or row.get("replay_cache_path_summary") or "")
+        parts.append(f'<text x="{left + 6}" y="{verdict_y + 8:.1f}" font-size="10" font-weight="800" fill="#0f172a">{html.escape(verdict[:90])}</text>')
+        if explanation:
+            parts.append(f'<text x="{left + 6}" y="{verdict_y + 24:.1f}" font-size="9" fill="#475569">{html.escape(explanation[:170])}</text>')
+
+    legend_y = height - 48
+    lx = left
+    legend = [
+        ("initial", unified_stack_color("initial")),
+        ("tool wait", unified_stack_color("tool_wait")),
+        ("client dispatch", unified_stack_color("client_dispatch")),
+        ("scheduler/load path", unified_stack_color("scheduler")),
+        ("H2D", unified_stack_color("h2d")),
+        ("D2H", unified_stack_color("d2h")),
+        ("evict", unified_stack_color("evict")),
+        ("recompute", unified_stack_color("recompute")),
+        ("decode", unified_stack_color("decode")),
+    ]
+    for legend_label, color in legend:
+        parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.86"/>')
+        parts.append(f'<text x="{lx + 18:.1f}" y="{legend_y + 11:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
+        lx += 148
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def unified_per_gap_forensic_stack_html(
+    gaps: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+    max_rows: int,
+) -> str:
+    if not gaps:
+        return "<p>No timeline rows were available for the unified forensic stack.</p>"
+    return f"""
+    <p>This is a preview of a merged per-gap view. For each row, the lanes are stacked but share one replay-relative time axis.</p>
+    <p class="note">This view is best for answering: when replay was due, had the replay been submitted, was SGLang already handling it, were KV movements happening, and did replay load KV or rebuild work later?</p>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg(gaps, all_kv_events, max_rows)}</div>
+    <p class="note">Small KV movement bars are exact SGLang-visible events. Target-row movement is drawn more opaque; pressure/filler or other-session movement is lighter. This is still not a full hardware DMA-lane trace, but it is the strongest merged report-level view from our current SGLang hooks.</p>
+    """
+
+
 def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps: int) -> str:
     if not live_run:
         return """
@@ -5128,6 +5504,7 @@ def render_html(
         ("client-dispatch-kv", "Client Dispatch KV Movement"),
         ("timeline-guide", "How To Read Timelines"),
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
+        ("unified-forensic-stack", "Unified Forensic Stack Timeline"),
         ("per-gap-forensics", "Per-Gap Forensic View"),
         ("observations", "Key Observations"),
         ("evidence-audit", "Instrumentation Evidence Audit"),
@@ -5199,6 +5576,11 @@ def render_html(
     <p class="note">Cyan and green bars now carry exact logical KV block attribution from the ledger. Hover over those bars to see block IDs, node IDs, token ranges, H2D start/end times, durations, and evidence confidence. Magenta/gold replay work remains explicitly marked as estimated.</p>
     <p class="note">Detailed block lifecycle counts and nearby H2D pressure rows are kept in <strong>Evidence Tables / Raw Proof</strong> at the bottom so this timeline stays easy to scan.</p>
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}
+  </details>
+
+  <details id="unified-forensic-stack" class="section-card theme-profiled">
+    <summary><h2>Unified Forensic Stack Timeline</h2></summary>
+    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps)}
   </details>
 
   <details id="per-gap-forensics" class="section-card theme-profiled">

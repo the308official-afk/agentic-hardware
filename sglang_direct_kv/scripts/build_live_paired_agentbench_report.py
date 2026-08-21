@@ -1433,6 +1433,7 @@ SECTION_THEMES = {
     "delay-breakdown": "theme-profiled",
     "client-dispatch-kv": "theme-directkv",
     "readable-phase-timeline": "theme-clean",
+    "unified-forensic-stack": "theme-profiled",
     "per-gap-forensics": "theme-profiled",
     "evidence-audit": "theme-profiled",
     "replay-attribution": "theme-directkv",
