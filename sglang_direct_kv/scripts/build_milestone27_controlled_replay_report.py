@@ -5689,7 +5689,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    row_h = 790
+    row_h = 850
     bottom = 116
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
@@ -5751,6 +5751,34 @@ def build_unified_per_gap_stack_timeline_svg_v2(
 
     def zoom_x(value: float, z_min: float, z_max: float) -> float:
         return left + (value - z_min) * plot_w / max(1e-9, z_max - z_min)
+
+    def local_zoom_x(value: float, z_min: float, z_max: float, x0: float, w: float) -> float:
+        return x0 + (value - z_min) * w / max(1e-9, z_max - z_min)
+
+    def draw_axis_break(
+        parts: list[str],
+        x: float,
+        y1: float,
+        y2: float,
+        label_text: str,
+    ) -> None:
+        mid = (y1 + y2) / 2
+        parts.append(
+            f'<path d="M {x - 12:.1f} {y1:.1f} C {x - 18:.1f} {mid - 28:.1f}, {x - 4:.1f} {mid - 16:.1f}, {x - 10:.1f} {mid:.1f} '
+            f'C {x - 16:.1f} {mid + 18:.1f}, {x - 4:.1f} {mid + 30:.1f}, {x - 10:.1f} {y2:.1f}" '
+            f'stroke="#111827" stroke-width="2.4" fill="none" opacity="0.9"/>'
+        )
+        parts.append(
+            f'<path d="M {x + 12:.1f} {y1:.1f} C {x + 6:.1f} {mid - 28:.1f}, {x + 20:.1f} {mid - 16:.1f}, {x + 14:.1f} {mid:.1f} '
+            f'C {x + 8:.1f} {mid + 18:.1f}, {x + 20:.1f} {mid + 30:.1f}, {x + 14:.1f} {y2:.1f}" '
+            f'stroke="#111827" stroke-width="2.4" fill="none" opacity="0.9"/>'
+        )
+        parts.append(f'<text x="{x:.1f}" y="{mid + 4:.1f}" text-anchor="middle" font-size="13" font-weight="900" fill="#111827">...</text>')
+        if label_text:
+            parts.append(
+                f'<text x="{x:.1f}" y="{y2 + 18:.1f}" text-anchor="middle" font-size="8" '
+                f'font-weight="800" fill="#475569">{html.escape(label_text)}</text>'
+            )
 
     def draw_span(
         parts: list[str],
@@ -5923,7 +5951,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" fill="{band}"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="196" rx="8" fill="#ffffff" opacity="0.38"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="288" rx="8" fill="#fff7ed" opacity="0.42"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="344" rx="8" fill="#fff7ed" opacity="0.42"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
         parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
@@ -6211,67 +6239,131 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         else:
             rz_min, rz_max = replay_zoom
             rz_span = max(1.0, rz_max - rz_min)
-            replay_zoom_label = f"expanded replay region: {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
-            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">Replay zoom: expanded replay execution region</text>')
-            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
-            if hint_h2d_span:
-                hint_duration = hint_h2d_span[1] - hint_h2d_span[0]
-                hint_events = row.get("direct_kv_h2d_events", "")
-                hint_note = (
-                    f"prefetch KV H2D happened earlier in KV zoom: "
-                    f"{display_ms(hint_duration)}"
+            has_prefetch_window = hint_h2d_span is not None
+            if has_prefetch_window:
+                prefetch_window_start = hint_h2d_span[0]
+                prefetch_window_end = hint_h2d_span[1]
+                prefetch_window_span = max(1.0, prefetch_window_end - prefetch_window_start)
+                hz_min = prefetch_window_start - max(20.0, prefetch_window_span * 0.10)
+                hz_max = prefetch_window_end + max(20.0, prefetch_window_span * 0.10)
+                left_window_w = plot_w * 0.27
+                break_w = 74.0
+                right_window_x = left + left_window_w + break_w
+                right_window_w = plot_w - left_window_w - break_w
+                break_x = left + left_window_w + break_w / 2
+                skipped_start = hz_max
+                skipped_end = rz_min
+                skipped_text = ""
+                if skipped_end > skipped_start:
+                    skipped_text = f"skipped {display_ms(skipped_end - skipped_start)}"
+                else:
+                    skipped_text = "no skipped gap"
+
+                def prefetch_replay_x(value: float, z_min: float = hz_min, z_max: float = hz_max) -> float:
+                    return local_zoom_x(value, z_min, z_max, left, left_window_w)
+
+                def replay_x(value: float, z_min: float = rz_min, z_max: float = rz_max) -> float:
+                    return local_zoom_x(value, z_min, z_max, right_window_x, right_window_w)
+
+                replay_zoom_label = (
+                    f"two-window replay region: prefetch {display_ms(hz_min)} -> {display_ms(hz_max)}, "
+                    f"then replay {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
                 )
-                if hint_events not in ("", None):
-                    hint_note += f", events={hint_events}"
-                hint_title = (
-                    f"{label} | prefetch-side KV H2D occurred outside or before the replay zoom window | "
-                    f"start={display_ms(hint_h2d_span[0])} relative to replay due | "
-                    f"end={display_ms(hint_h2d_span[1])} relative to replay due | "
-                    f"duration={display_ms(hint_duration)} | see the green H2D bar in the KV zoom"
-                )
-                note_w = min(520.0, max(250.0, len(hint_note) * 5.4 + 26.0))
-                note_x = left + plot_w - note_w - 8.0
-                note_y = replay_zoom_title_y - 16.0
-                parts.append(
-                    f'<rect x="{note_x:.1f}" y="{note_y:.1f}" width="{note_w:.1f}" height="22" rx="6" '
-                    f'fill="#dcfce7" stroke="{unified_stack_color("hint_h2d")}" stroke-width="1.1" opacity="0.96">'
-                    f'<title>{html.escape(hint_title)}</title></rect>'
-                )
-                parts.append(
-                    f'<text x="{note_x + note_w / 2:.1f}" y="{note_y + 15:.1f}" text-anchor="middle" '
-                    f'font-size="9" font-weight="900" fill="#166534">{html.escape(hint_note)}</text>'
-                )
-            for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
-                tx = zoom_x(tick_value, rz_min, rz_max)
-                parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 242:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
-            if rz_min <= 0 <= rz_max:
-                zx = zoom_x(0.0, rz_min, rz_max)
-                parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#111827" stroke-width="1.6"/>')
-                parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 44:.1f}" font-size="9" font-weight="800">due</text>')
+                parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">Replay zoom: broken-axis prefetch + replay execution region</text>')
+                parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
+                parts.append(f'<text x="{left + left_window_w / 2:.1f}" y="{replay_zoom_title_y + 26:.1f}" text-anchor="middle" font-size="9" font-weight="900" fill="#166534">prefetch window</text>')
+                parts.append(f'<text x="{right_window_x + right_window_w / 2:.1f}" y="{replay_zoom_title_y + 26:.1f}" text-anchor="middle" font-size="9" font-weight="900" fill="#334155">replay window</text>')
+                draw_axis_break(parts, break_x, replay_zoom_title_y + 36, replay_zoom_title_y + 276, skipped_text)
+                for tick_value in [hz_min, (hz_min + hz_max) / 2, hz_max]:
+                    tx = prefetch_replay_x(tick_value)
+                    parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 260:.1f}" stroke="#e5e7eb"/>')
+                    parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 280:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+                for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
+                    tx = replay_x(tick_value)
+                    parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 260:.1f}" stroke="#e5e7eb"/>')
+                    parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 280:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+                if rz_min <= 0 <= rz_max:
+                    zx = replay_x(0.0)
+                    parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 260:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                    parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 44:.1f}" font-size="9" font-weight="800">due</text>')
+            else:
+                right_window_x = left
+                right_window_w = plot_w
+
+                def replay_x(value: float, z_min: float = rz_min, z_max: float = rz_max) -> float:
+                    return local_zoom_x(value, z_min, z_max, right_window_x, right_window_w)
+
+                prefetch_replay_x = replay_x
+                hz_min = rz_min
+                hz_max = rz_max
+                replay_zoom_label = f"expanded replay region: {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
+                parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">Replay zoom: expanded replay execution region</text>')
+                parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
+                for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
+                    tx = replay_x(tick_value)
+                    parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 260:.1f}" stroke="#e5e7eb"/>')
+                    parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 280:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+                if rz_min <= 0 <= rz_max:
+                    zx = replay_x(0.0)
+                    parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 260:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                    parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 44:.1f}" font-size="9" font-weight="800">due</text>')
 
             replay_zoom_lanes = [
-                ("replay request", replay_zoom_title_y + 48),
-                ("replay KV H2D", replay_zoom_title_y + 86),
-                ("prefill/recompute", replay_zoom_title_y + 124),
-                ("remaining before-token", replay_zoom_title_y + 162),
-                ("decode", replay_zoom_title_y + 200),
+                ("replay request", replay_zoom_title_y + 52),
+                ("prefetch KV H2D", replay_zoom_title_y + 90),
+                ("replay KV H2D", replay_zoom_title_y + 128),
+                ("prefill/recompute", replay_zoom_title_y + 166),
+                ("remaining before-token", replay_zoom_title_y + 204),
+                ("decode", replay_zoom_title_y + 242),
             ]
             for lane_name, lane_y in replay_zoom_lanes:
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name)}</text>')
                 parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
+
+            if hint_h2d_span:
+                hint_duration = hint_h2d_span[1] - hint_h2d_span[0]
+                hint_label = short_bar_label(
+                    [
+                        "prefetch KV H2D",
+                        f"{row.get('direct_kv_h2d_events', '')} evt" if row.get("direct_kv_h2d_events", "") not in ("", None) else "",
+                        display_ms(hint_duration),
+                    ],
+                    max_chars=42,
+                )
+                hint_title = (
+                    f"{label} | prefetch-side KV H2D shown in the replay zoom's left window | "
+                    f"events={row.get('direct_kv_h2d_events', '')} | duration={display_ms(hint_duration)} | "
+                    f"start={display_ms(hint_h2d_span[0])} relative to due | end={display_ms(hint_h2d_span[1])} relative to due"
+                )
+                draw_span(
+                    parts,
+                    prefetch_replay_x,
+                    hz_min,
+                    hz_max,
+                    hint_h2d_span[0],
+                    hint_h2d_span[1],
+                    replay_zoom_title_y + 79,
+                    main_bar_h,
+                    unified_stack_color("hint_h2d"),
+                    hint_label,
+                    hint_title,
+                    opacity=0.92,
+                    min_w=min_visible_bar_w,
+                    label_min_w=82.0,
+                    font_size=9,
+                )
 
             replay_request_span = _relative_span(row, "resume_start_ms", "resume_end_ms", due)
             if replay_request_span:
                 replay_request_duration = replay_request_span[1] - replay_request_span[0]
                 draw_span(
                     parts,
-                    lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                    replay_x,
                     rz_min,
                     rz_max,
                     replay_request_span[0],
                     replay_request_span[1],
-                    replay_zoom_title_y + 37,
+                    replay_zoom_title_y + 41,
                     main_bar_h,
                     unified_stack_color("decode"),
                     short_bar_label(["replay request", display_ms(replay_request_duration)], max_chars=38),
@@ -6300,12 +6392,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 )
                 draw_span(
                     parts,
-                    lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                    replay_x,
                     rz_min,
                     rz_max,
                     replay_h2d_span[0],
                     replay_h2d_span[1],
-                    replay_zoom_title_y + 75,
+                    replay_zoom_title_y + 117,
                     main_bar_h,
                     unified_stack_color("h2d"),
                     replay_h2d_label,
@@ -6318,14 +6410,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 clipped_h2d_start = max(rz_min, min(rz_max, replay_h2d_span[0]))
                 clipped_h2d_end = max(rz_min, min(rz_max, replay_h2d_span[1]))
                 if clipped_h2d_end > clipped_h2d_start:
-                    h2d_x1 = zoom_x(clipped_h2d_start, rz_min, rz_max)
-                    h2d_x2 = zoom_x(clipped_h2d_end, rz_min, rz_max)
+                    h2d_x1 = replay_x(clipped_h2d_start)
+                    h2d_x2 = replay_x(clipped_h2d_end)
                     if max(6.0, h2d_x2 - h2d_x1) < 82.0:
                         draw_small_bar_callout(
                             parts,
                             h2d_x1,
                             h2d_x2,
-                            replay_zoom_title_y + 75,
+                            replay_zoom_title_y + 117,
                             main_bar_h,
                             replay_h2d_label,
                             replay_h2d_title,
@@ -6383,12 +6475,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     )
                     draw_span(
                         parts,
-                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        replay_x,
                         rz_min,
                         rz_max,
                         cursor_rel,
                         recompute_end_rel,
-                        replay_zoom_title_y + 113,
+                        replay_zoom_title_y + 155,
                         main_bar_h,
                         unified_stack_color("recompute"),
                         recompute_label,
@@ -6403,12 +6495,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     missing_title = f"{label} | no visible prefill/recompute attribution segment"
                     draw_span(
                         parts,
-                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        replay_x,
                         rz_min,
                         rz_max,
                         pre_token_start,
                         min(first_token_rel, pre_token_start + 1.0),
-                        replay_zoom_title_y + 113,
+                        replay_zoom_title_y + 155,
                         main_bar_h,
                         "#f8fafc",
                         "",
@@ -6437,12 +6529,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     )
                     draw_span(
                         parts,
-                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        replay_x,
                         rz_min,
                         rz_max,
                         remaining_start_rel,
                         prefill_end_rel,
-                        replay_zoom_title_y + 151,
+                        replay_zoom_title_y + 193,
                         main_bar_h,
                         unified_stack_color("prefill"),
                         prefill_label,
@@ -6455,14 +6547,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     clipped_prefill_start = max(rz_min, min(rz_max, remaining_start_rel))
                     clipped_prefill_end = max(rz_min, min(rz_max, prefill_end_rel))
                     if clipped_prefill_end > clipped_prefill_start:
-                        prefill_x1 = zoom_x(clipped_prefill_start, rz_min, rz_max)
-                        prefill_x2 = zoom_x(clipped_prefill_end, rz_min, rz_max)
+                        prefill_x1 = replay_x(clipped_prefill_start)
+                        prefill_x2 = replay_x(clipped_prefill_end)
                         if max(min_visible_bar_w, prefill_x2 - prefill_x1) < 82.0:
                             draw_small_bar_callout(
                                 parts,
                                 prefill_x1,
                                 prefill_x2,
-                                replay_zoom_title_y + 151,
+                                replay_zoom_title_y + 193,
                                 main_bar_h,
                                 prefill_label,
                                 prefill_title,
@@ -6473,12 +6565,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 else:
                     draw_span(
                         parts,
-                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        replay_x,
                         rz_min,
                         rz_max,
                         remaining_start_rel,
                         min(first_token_rel, remaining_start_rel + 1.0),
-                        replay_zoom_title_y + 151,
+                        replay_zoom_title_y + 193,
                         main_bar_h,
                         "#f8fafc",
                         "",
@@ -6487,9 +6579,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         min_w=min_visible_event_w,
                         label_min_w=9999.0,
                     )
-                first_token_x = zoom_x(first_token_rel, rz_min, rz_max)
-                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 108:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(first_token_rel))} relative to due</title></line>')
-                parts.append(f'<text x="{first_token_x + 5:.1f}" y="{replay_zoom_title_y + 112:.1f}" font-size="8" font-weight="800" fill="#92400e">first token</text>')
+                first_token_x = replay_x(first_token_rel)
+                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 150:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 260:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(first_token_rel))} relative to due</title></line>')
+                parts.append(f'<text x="{first_token_x + 5:.1f}" y="{replay_zoom_title_y + 154:.1f}" font-size="8" font-weight="800" fill="#92400e">first token</text>')
 
             if first_token_abs is not None and as_float(row.get("resume_end_ms")) is not None:
                 decode_start = first_token_abs - due
@@ -6498,12 +6590,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     decode_duration = decode_end - decode_start
                     draw_span(
                         parts,
-                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        replay_x,
                         rz_min,
                         rz_max,
                         decode_start,
                         decode_end,
-                        replay_zoom_title_y + 189,
+                        replay_zoom_title_y + 231,
                         main_bar_h,
                         unified_stack_color("decode"),
                         short_bar_label(["decode", display_ms(decode_duration)], max_chars=36),
@@ -6535,9 +6627,10 @@ def unified_per_gap_forensic_stack_html(
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
     <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, and a local zoom of replay execution.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
+    <p class="note">When prefetch-side H2D exists, the replay zoom becomes a two-window broken-axis view: the left window shows the earlier green prefetch KV H2D, the right window shows replay execution, and the break marker shows the long elapsed time compressed between them.</p>
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
