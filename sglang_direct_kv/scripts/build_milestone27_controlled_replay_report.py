@@ -5312,7 +5312,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 280
     right = 56
     top = 150
-    row_h = 244
+    row_h = 404
     bottom = 96
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
@@ -5341,6 +5341,30 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         end = max(values)
         span_ms = max(1.0, end - start)
         padding = max(25.0, span_ms * 0.06)
+        return start - padding, end + padding
+
+    def replay_zoom_bounds(row: dict[str, Any], due: float) -> tuple[float, float] | None:
+        values: list[float] = []
+        for span in [
+            _relative_span(row, "resume_start_ms", "resume_end_ms", due),
+            _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due),
+            _relative_span(row, "replay_prefill_start_ms", "replay_prefill_end_ms", due),
+            _relative_span(row, "replay_model_forward_start_ms", "replay_model_forward_end_ms", due),
+        ]:
+            if span:
+                values.extend(span)
+        first_token = first_token_ms(row)
+        if first_token is not None:
+            values.append(first_token - due)
+        replay_start = _relative_ms(row, "resume_start_ms", due)
+        if replay_start is not None:
+            values.append(replay_start)
+        if not values:
+            return None
+        start = min(values)
+        end = max(values)
+        span_ms = max(1.0, end - start)
+        padding = max(20.0, span_ms * 0.08)
         return start - padding, end + padding
 
     def zoom_x(value: float, z_min: float, z_max: float) -> float:
@@ -5402,7 +5426,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
         '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
-        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview plus an expanded KV activity zoom. The overview uses replay-relative symlog time; each zoom strip uses its own local linear time.</text>',
+        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, and an expanded replay zoom. The overview uses replay-relative symlog time; each zoom strip uses local linear time.</text>',
         '<text x="12" y="76" font-size="12" fill="#475569">Long overview bars are intentionally compressed and marked with “...” when they would otherwise dominate the row.</text>',
         f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
         f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
@@ -5426,6 +5450,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         target_session = str(row.get("ledger_session_id") or row.get("session_id") or "")
         event_counts: Counter[str] = Counter(str(event.get("movement_kind") or "") for event in row_events)
         zoom = zoom_bounds(row, row_events, due)
+        replay_zoom = replay_zoom_bounds(row, due)
 
         parts.append(f'<rect x="0" y="{y - 8:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
         parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="900">{html.escape(label)}</text>')
@@ -5543,6 +5568,117 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     min_w=5.0 if target else 3.5,
                 )
 
+        replay_zoom_title_y = y + 244
+        parts.append(f'<text x="{left - 10}" y="{replay_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">replay zoom</text>')
+        if replay_zoom is None:
+            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No replay timing was available for this gap.</text>')
+        else:
+            rz_min, rz_max = replay_zoom
+            rz_span = max(1.0, rz_max - rz_min)
+            replay_zoom_label = f"expanded replay region: {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
+            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 4:.1f}" font-size="10" font-weight="800" fill="#475569">{html.escape(replay_zoom_label)}</text>')
+            for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
+                tx = zoom_x(tick_value, rz_min, rz_max)
+                parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 14:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 90:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 107:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            if rz_min <= 0 <= rz_max:
+                zx = zoom_x(0.0, rz_min, rz_max)
+                parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 14:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 90:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 26:.1f}" font-size="9" font-weight="800">due</text>')
+
+            replay_zoom_lanes = [
+                ("request", replay_zoom_title_y + 20),
+                ("H2D", replay_zoom_title_y + 42),
+                ("pre-token", replay_zoom_title_y + 64),
+                ("decode", replay_zoom_title_y + 86),
+            ]
+            for lane_name, lane_y in replay_zoom_lanes:
+                parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name)}</text>')
+                parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
+
+            replay_request_span = _relative_span(row, "resume_start_ms", "resume_end_ms", due)
+            if replay_request_span:
+                draw_span(
+                    parts,
+                    lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                    rz_min,
+                    rz_max,
+                    replay_request_span[0],
+                    replay_request_span[1],
+                    replay_zoom_title_y + 18,
+                    10,
+                    unified_stack_color("decode"),
+                    "request",
+                    f"{label} | replay request wall time: {display_ms(replay_request_span[1] - replay_request_span[0])}",
+                    opacity=0.58,
+                    min_w=5.0,
+                )
+
+            replay_h2d_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
+            if replay_h2d_span:
+                draw_span(
+                    parts,
+                    lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                    rz_min,
+                    rz_max,
+                    replay_h2d_span[0],
+                    replay_h2d_span[1],
+                    replay_zoom_title_y + 40,
+                    10,
+                    unified_stack_color("h2d"),
+                    "H2D",
+                    f"{label} | replay-side KV H2D: {display_ms(replay_h2d_span[1] - replay_h2d_span[0])}",
+                    opacity=0.92,
+                    min_w=6.0,
+                )
+
+            replay_start_abs = as_float(row.get("resume_start_ms"))
+            first_token_abs = first_token_ms(row)
+            if replay_start_abs is not None and first_token_abs is not None:
+                pre_token_start = replay_start_abs - due
+                pre_token_end = first_token_abs - due
+                recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
+                pre_token_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
+                pre_token_label = "recompute/TTFT" if recompute_tokens >= 128 else "TTFT"
+                draw_span(
+                    parts,
+                    lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                    rz_min,
+                    rz_max,
+                    pre_token_start,
+                    pre_token_end,
+                    replay_zoom_title_y + 62,
+                    10,
+                    pre_token_color,
+                    pre_token_label,
+                    f"{label} | replay before first token: {display_ms(pre_token_end - pre_token_start)}",
+                    opacity=0.88,
+                    min_w=6.0,
+                )
+                first_token_x = zoom_x(pre_token_end, rz_min, rz_max)
+                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 56:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 98:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(pre_token_end))} relative to due</title></line>')
+                parts.append(f'<text x="{first_token_x + 4:.1f}" y="{replay_zoom_title_y + 60:.1f}" font-size="8" font-weight="800" fill="#92400e">first token</text>')
+
+            if first_token_abs is not None and as_float(row.get("resume_end_ms")) is not None:
+                decode_start = first_token_abs - due
+                decode_end = (as_float(row.get("resume_end_ms")) or first_token_abs) - due
+                if decode_end > decode_start:
+                    draw_span(
+                        parts,
+                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        rz_min,
+                        rz_max,
+                        decode_start,
+                        decode_end,
+                        replay_zoom_title_y + 84,
+                        10,
+                        unified_stack_color("decode"),
+                        "decode",
+                        f"{label} | decode after first token: {display_ms(decode_end - decode_start)}",
+                        opacity=0.86,
+                        min_w=6.0,
+                    )
+
         verdict_y = y + row_h - 28
         verdict = str(row.get("lifecycle_verdict") or row.get("final_path") or row.get("per_gap_verdict") or "")
         explanation = str(row.get("lifecycle_explanation") or row.get("replay_cache_path_summary") or "")
@@ -5579,8 +5715,8 @@ def unified_per_gap_forensic_stack_html(
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
-    <p>This is a preview of a merged per-gap view. Each gap has a compact overview plus a local zoom of the dense KV movement burst.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom under each row to inspect the small H2D, D2H, and eviction bars that otherwise get crushed at the far right.</p>
+    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, and a local zoom of replay execution.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, recompute/prefill, first-token timing, and decode.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
