@@ -6214,6 +6214,33 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             replay_zoom_label = f"expanded replay region: {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
             parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">Replay zoom: expanded replay execution region</text>')
             parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
+            if hint_h2d_span:
+                hint_duration = hint_h2d_span[1] - hint_h2d_span[0]
+                hint_events = row.get("direct_kv_h2d_events", "")
+                hint_note = (
+                    f"prefetch KV H2D happened earlier in KV zoom: "
+                    f"{display_ms(hint_duration)}"
+                )
+                if hint_events not in ("", None):
+                    hint_note += f", events={hint_events}"
+                hint_title = (
+                    f"{label} | prefetch-side KV H2D occurred outside or before the replay zoom window | "
+                    f"start={display_ms(hint_h2d_span[0])} relative to replay due | "
+                    f"end={display_ms(hint_h2d_span[1])} relative to replay due | "
+                    f"duration={display_ms(hint_duration)} | see the green H2D bar in the KV zoom"
+                )
+                note_w = min(520.0, max(250.0, len(hint_note) * 5.4 + 26.0))
+                note_x = left + plot_w - note_w - 8.0
+                note_y = replay_zoom_title_y - 16.0
+                parts.append(
+                    f'<rect x="{note_x:.1f}" y="{note_y:.1f}" width="{note_w:.1f}" height="22" rx="6" '
+                    f'fill="#dcfce7" stroke="{unified_stack_color("hint_h2d")}" stroke-width="1.1" opacity="0.96">'
+                    f'<title>{html.escape(hint_title)}</title></rect>'
+                )
+                parts.append(
+                    f'<text x="{note_x + note_w / 2:.1f}" y="{note_y + 15:.1f}" text-anchor="middle" '
+                    f'font-size="9" font-weight="900" fill="#166534">{html.escape(hint_note)}</text>'
+                )
             for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
                 tx = zoom_x(tick_value, rz_min, rz_max)
                 parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#e5e7eb"/>')
