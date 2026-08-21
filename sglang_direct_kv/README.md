@@ -53,6 +53,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 32: KV H2D Bandwidth Pressure | Ready | [Milestone 32](#milestone-32-kv-h2d-bandwidth-pressure) |
 | Milestone 33: Replay Delay Breakdown | Ready | [Milestone 33](#milestone-33-replay-delay-breakdown) |
 | Milestone 34: Replay Delay Deep Instrumentation | Ready | [Milestone 34](#milestone-34-replay-delay-deep-instrumentation) |
+| Milestone 35: Instrumentation Evidence Audit | Ready | [Milestone 35](#milestone-35-instrumentation-evidence-audit) |
 
 ## What We Are Testing
 
@@ -6184,6 +6185,83 @@ Rerun the experiment after this milestone to populate the exact SGLang stage
 trace.
 ```
 
+### Milestone 35: Instrumentation Evidence Audit
+
+Full note:
+
+```text
+INSTRUMENTATION_AUDIT.md
+```
+
+Why this milestone is needed:
+
+```text
+The report now has many charts:
+  readable KV lifecycle timelines
+  H2D readiness dots
+  replay queue timelines
+  client-dispatch KV movement timelines
+  replay delay waterfalls
+  detailed KV lifecycle tables
+
+Milestone 35 audits the evidence behind each chart so we do not overclaim.
+```
+
+What it adds:
+
+```text
+Evidence levels:
+  DIRECT          directly emitted by a driver/SGLang hook
+  DERIVED         computed from direct events
+  INFERRED        likely, but not directly observed as a physical event
+  NOT_YET_PROVEN  outside the current evidence boundary
+```
+
+New master report section:
+
+```text
+Instrumentation Evidence Audit
+```
+
+New output files:
+
+```text
+artifacts/results/reports/<report_label>/report/instrumentation_evidence_audit_summary.csv
+artifacts/results/reports/<report_label>/report/instrumentation_evidence_audit_matrix.csv
+artifacts/results/reports/<report_label>/report/instrumentation_chart_inventory.csv
+artifacts/results/reports/<report_label>/report/instrumentation_artifact_inventory.csv
+artifacts/results/reports/<report_label>/report/instrumentation_evidence_audit.md
+```
+
+Run the standalone audit:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/audit_master_report_evidence.py \
+  --report artifacts/results/reports/deep_delay_trace_h2d_sweet_spot_1/report
+```
+
+Important events/claims to observe:
+
+```text
+H2D bars should map to exact SGLang-visible host-to-device KV movement rows.
+D2H/write-host rows should map to SGLang/HiCache host-write events.
+GPU and host eviction rows should map to direct residency/eviction hooks.
+Request delay rows should map to request-stage hooks where available.
+Recompute bars should be labeled as inferred until a direct recompute hook exists.
+Physical DMA saturation should be labeled not-yet-proven without CUPTI/Nsight/counter evidence.
+```
+
+Simple interpretation:
+
+```text
+This milestone is the report's honesty layer.
+It tells us which visuals are backed by direct instrumentation and which are
+still derived, inferred, or outside the current proof boundary.
+```
+
 ## Directory Layout
 
 ```text
@@ -6191,6 +6269,7 @@ sglang_direct_kv/
   README.md
   KV_BLOCK_LEDGER.md
   KV_EXACT_MOVEMENT_ATTRIBUTION.md
+  INSTRUMENTATION_AUDIT.md
   pyproject.toml
   requirements.txt
 
@@ -6217,6 +6296,7 @@ sglang_direct_kv/
     run_milestone27_real_prompt_controlled_replay.sh
     run_real_prompt_controlled_replay.py
     build_milestone27_controlled_replay_report.py
+    audit_master_report_evidence.py
     run_milestone24_live_paired_agentbench_report.sh
     live_prefetch_controller.py
     build_live_agentbench_tool_gap_report.py

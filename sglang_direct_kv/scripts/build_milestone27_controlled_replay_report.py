@@ -30,6 +30,7 @@ from agentic_kv.block_ledger import (
     normalize_sglang_trace_events,
     write_ledger_artifacts,
 )
+from agentic_kv.evidence_audit import audit_markdown, audit_report_data
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
     build_local_timing_phase_timeline_svg,
@@ -2869,119 +2870,13 @@ def replay_delay_breakdown_html(
         <p>No replay delay breakdown rows were available for this report.</p>
         <p class="note">This usually means the selected run did not include replay due timestamps or replay requests.</p>
         """
-    running_rows = replay_delay_running_context_rows(gaps, trace_rows, h2d_events)
-    stage_rows = request_stage_trace_rows(gaps, trace_rows)
-    h2d_delay_rows = h2d_activity_during_delay_rows(gaps, h2d_events)
     shown = delay_rows[:max_rows]
-    shown_labels = {str(row.get("row") or "") for row in shown}
-    running_shown = [row for row in running_rows if str(row.get("row") or "") in shown_labels]
-    stage_shown = [row for row in stage_rows if str(row.get("row") or "") in shown_labels][: max_rows * 12]
-    h2d_delay_shown = [row for row in h2d_delay_rows if str(row.get("row") or "") in shown_labels][: max_rows * 12]
-    verdict_rows = replay_delay_verdict_rows(delay_rows)
-    duration_columns = [
-        "row",
-        "mode",
-        "fillers",
-        "tool_wait_ms",
-        "resume_ttft_ms",
-        "copy_verdict",
-        "main_delay_source",
-        "dominant_delay_ms",
-        "delay_confidence",
-        "client_submit_relative_ms",
-        "request_start_relative_ms",
-        "sglang_receive_relative_ms",
-        "scheduler_queue_relative_ms",
-        "scheduler_admit_relative_ms",
-        "cache_first_event_relative_ms",
-        "h2d_start_relative_ms",
-        "h2d_end_relative_ms",
-        "first_token_relative_ms",
-        "due_to_client_submit_ms",
-        "client_submit_to_request_start_ms",
-        "request_start_to_sglang_receive_ms",
-        "sglang_receive_to_scheduler_queue_ms",
-        "scheduler_queue_wait_ms",
-        "scheduler_admit_to_cache_lookup_ms",
-        "cache_lookup_to_h2d_start_ms",
-        "h2d_duration_ms",
-        "h2d_end_to_first_token_ms",
-        "scheduler_queue_waiting_len",
-        "scheduler_admit_running_batch_requests",
-        "scheduler_admit_running_batch_extend_tokens",
-        "simple_meaning",
-    ]
-    running_columns = [
-        "row",
-        "fillers",
-        "tool_wait_ms",
-        "delay_window_end",
-        "delay_window_ms",
-        "scheduler_events",
-        "model_forward_events",
-        "prefill_batch_events",
-        "decode_batch_events",
-        "cache_hicache_events",
-        "raw_hostpool_h2d_events",
-        "exact_target_h2d_events_before_target_start",
-        "exact_other_h2d_events_before_target_start",
-        "max_scheduler_waiting_queue_len",
-        "max_running_batch_requests",
-        "max_running_batch_extend_tokens",
-        "simple_meaning",
-    ]
-    request_stage_columns = [
-        "row",
-        "stage",
-        "stage_group",
-        "phase",
-        "time_relative_to_replay_due_ms",
-        "duration_ms",
-        "method",
-        "request_count",
-        "scheduler_waiting_queue_len",
-        "scheduler_running_batch_request_count",
-        "scheduler_running_batch_extend_num_tokens",
-        "host_index_count",
-        "device_index_count",
-        "exact_sglang_hook",
-        "simple_meaning",
-    ]
-    h2d_delay_columns = [
-        "row",
-        "owner_kind",
-        "owner_row",
-        "phase",
-        "source_event",
-        "start_relative_to_replay_due_ms",
-        "end_relative_to_replay_due_ms",
-        "duration_ms",
-        "token_or_index_count",
-        "node_id",
-        "layer_id",
-        "confidence",
-        "simple_meaning",
-    ]
     return f"""
     <p>This section explains the missing time between replay due and replay-side KV readiness. It separates client dispatch, SGLang receive, scheduler queue/admit, cache lookup/load-back, H2D copy, and post-H2D first-token work.</p>
-    <p class="note">The waterfall uses a local scale per row so long waits are readable. The tables below keep the exact measured millisecond values. Blank cells mean the stage was not observed in the trace.</p>
+    <p class="note">The waterfall uses a local scale per row so long waits are readable. Long proof tables are moved to <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     <h3>Delay Waterfall Timeline</h3>
     <div class="setup-diagram">{build_replay_delay_waterfall_svg(shown, max_rows=max_rows)}</div>
-    <h3>Main Verdicts</h3>
-    {table_html(verdict_rows)}
-    <h3>Exact SGLang Request Stage Trace</h3>
-    <p class="note">These rows come from direct SGLang method hooks emitted as <code>kv_telemetry.request_stage</code>. They are not parsed from server logs.</p>
-    {table_html(stage_shown, request_stage_columns)}
-    <h3>Stage Duration Table</h3>
-    {table_html(shown, duration_columns)}
-    <h3>H2D Activity During The Delay Window</h3>
-    <p class="note">This shows visible H2D events in the same controlled case between replay due and the target row's KV readiness point.</p>
-    {table_html(h2d_delay_shown, h2d_delay_columns)}
-    <h3>What Was Running Instead</h3>
-    <p class="note">This scans the same controlled case from replay due until the target H2D starts. It counts scheduler/model/cache activity and exact H2D events visible in that interval.</p>
-    {table_html(running_shown, running_columns)}
-    <h3>Evidence Confidence</h3>
-    <p class="note">Client submit/request/first-token timestamps are measured by the driver. SGLang receive/scheduler/H2D timestamps are exact when hooks emitted them. First cache-event and recompute timing are inferred from surrounding SGLang cache/TTFT evidence.</p>
+    <p class="note">For exact per-row values, open the bottom evidence section and look at <strong>Replay Delay Verdicts</strong>, <strong>Replay Delay Stage Trace</strong>, <strong>Stage Duration Table</strong>, and <strong>H2D Activity During The Delay Window</strong>.</p>
     """
 
 
@@ -3154,6 +3049,386 @@ def peak_concurrent_h2d_events(events: list[dict[str, Any]]) -> int:
         active += delta
         peak = max(peak, active)
     return peak
+
+
+def exact_movement_case_id(row: dict[str, Any]) -> str:
+    session_id = str(row.get("session_id") or "")
+    if "::" in session_id:
+        return session_id.split("::", 1)[0]
+    return str(row.get("case_id") or "")
+
+
+def exact_movement_display_session(row: dict[str, Any]) -> str:
+    session_id = str(row.get("session_id") or "")
+    if "::" in session_id:
+        return session_id.split("::", 1)[1]
+    return session_id
+
+
+def exact_movement_kind(row: dict[str, Any]) -> str:
+    direction = str(row.get("direction") or "")
+    movement = str(row.get("movement") or "")
+    if direction == "host_to_device" or movement == "host_to_gpu_load":
+        return "H2D"
+    if direction == "device_to_host" or movement == "gpu_to_host_write":
+        return "D2H"
+    if direction == "device_evict" or movement == "gpu_evict":
+        return "GPU evict"
+    if direction == "host_evict":
+        return "host evict"
+    return direction or movement or "KV movement"
+
+
+def exact_movement_source_rank(row: dict[str, Any]) -> int:
+    source = str(row.get("source_event") or "")
+    kind = exact_movement_kind(row)
+    if kind == "H2D":
+        return exact_h2d_source_rank(row)
+    if kind == "D2H":
+        if "hostpool.backup_from_device_all_layer" in source:
+            return 0
+        if source == "hicache.write.end":
+            return 1
+        return 2
+    if kind == "GPU evict":
+        if source == "hicache.evict_device.end":
+            return 0
+        return 1
+    return 2
+
+
+def selected_exact_movement_rows(exact_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer lower-level copy/eviction hooks when wrapper and lower-level events both exist."""
+    grouped: defaultdict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in exact_rows:
+        session_id = str(row.get("session_id") or "")
+        if not session_id:
+            continue
+        start = as_float(row.get("copy_start_ms"))
+        end = as_float(row.get("copy_end_ms"))
+        if start is None or end is None:
+            continue
+        key = (
+            session_id,
+            str(row.get("phase") or ""),
+            str(row.get("movement") or ""),
+            str(row.get("direction") or ""),
+        )
+        grouped[key].append(row)
+
+    selected: list[dict[str, Any]] = []
+    for rows in grouped.values():
+        best_rank = min(exact_movement_source_rank(row) for row in rows)
+        selected.extend(row for row in rows if exact_movement_source_rank(row) == best_rank)
+    return selected
+
+
+def exact_movement_case_offsets(
+    gaps: list[dict[str, Any]],
+    exact_rows: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Return per-case raw-trace-to-gap-clock offsets using target H2D anchors."""
+    gap_by_session: dict[str, dict[str, Any]] = {}
+    for gap in gaps:
+        for key in (str(gap.get("ledger_session_id") or ""), str(gap.get("session_id") or "")):
+            if key:
+                gap_by_session[key] = gap
+
+    grouped: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in selected_exact_movement_rows(exact_rows):
+        if exact_movement_kind(row) != "H2D":
+            continue
+        session_id = str(row.get("session_id") or "")
+        if session_id not in gap_by_session:
+            continue
+        grouped[(session_id, h2d_event_phase(row))].append(row)
+
+    offsets: defaultdict[str, list[float]] = defaultdict(list)
+    for (session_id, phase), rows in grouped.items():
+        raw_starts = [as_float(row.get("copy_start_ms")) for row in rows]
+        raw_starts = [value for value in raw_starts if value is not None]
+        if not raw_starts:
+            continue
+        gap = gap_by_session[session_id]
+        anchor_key = "direct_kv_h2d_start_ms" if phase == "hint" else "replay_kv_h2d_start_ms"
+        anchor_start = as_float(gap.get(anchor_key))
+        if anchor_start is None:
+            continue
+        case_id = str(gap.get("case_id") or exact_movement_case_id(rows[0]))
+        if case_id:
+            offsets[case_id].append(anchor_start - min(raw_starts))
+
+    return {case_id: median(values) for case_id, values in offsets.items() if values}
+
+
+def all_aligned_kv_movement_events(
+    gaps: list[dict[str, Any]],
+    exact_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Align all exact KV movement events, including filler pressure, to the case clock."""
+    offsets = exact_movement_case_offsets(gaps, exact_rows)
+    gap_by_ledger_session: dict[str, dict[str, Any]] = {
+        str(gap.get("ledger_session_id") or ""): gap
+        for gap in gaps
+        if str(gap.get("ledger_session_id") or "")
+    }
+
+    output: list[dict[str, Any]] = []
+    for row in selected_exact_movement_rows(exact_rows):
+        case_id = exact_movement_case_id(row)
+        offset = offsets.get(case_id)
+        raw_start = as_float(row.get("copy_start_ms"))
+        raw_end = as_float(row.get("copy_end_ms"))
+        if offset is None or raw_start is None or raw_end is None:
+            continue
+
+        ledger_session_id = str(row.get("session_id") or "")
+        display_session_id = exact_movement_display_session(row)
+        owner_gap = gap_by_ledger_session.get(ledger_session_id)
+        phase = str(row.get("phase") or "")
+        if owner_gap:
+            owner_kind = "target row"
+            owner_row = str(owner_gap.get("timeline_label") or "")
+        elif phase == "pressure_filler" or "_pressure_" in display_session_id:
+            owner_kind = "pressure/filler"
+            owner_row = ""
+        else:
+            owner_kind = "other session"
+            owner_row = ""
+
+        aligned_start = round(raw_start + offset, 3)
+        aligned_end = round(raw_end + offset, 3)
+        duration = max(0.0, aligned_end - aligned_start)
+        block_key = "|".join(
+            str(row.get(key) or "")
+            for key in ("session_id", "node_id", "host_index_signature", "device_index_signature")
+        )
+        token_count = (
+            as_float(row.get("token_or_index_count"))
+            or as_float(row.get("host_index_count"))
+            or as_float(row.get("device_index_count"))
+            or 0.0
+        )
+        output.append(
+            {
+                "case_id": case_id,
+                "owner_kind": owner_kind,
+                "owner_row": owner_row,
+                "session_id": display_session_id,
+                "ledger_session_id": ledger_session_id,
+                "phase": phase,
+                "movement": row.get("movement", ""),
+                "direction": row.get("direction", ""),
+                "movement_kind": exact_movement_kind(row),
+                "source_event": row.get("source_event", ""),
+                "node_id": row.get("node_id", ""),
+                "layer_id": row.get("layer_id", ""),
+                "block_key": block_key,
+                "token_or_index_count": round(token_count, 3),
+                "aligned_start_ms": aligned_start,
+                "aligned_end_ms": aligned_end,
+                "duration_ms": round(duration, 3),
+                "raw_copy_start_ms": row.get("copy_start_ms", ""),
+                "raw_copy_end_ms": row.get("copy_end_ms", ""),
+                "case_clock_offset_ms": round(offset, 3),
+                "alignment_confidence": "case_h2d_anchor",
+                "evidence_confidence": row.get("confidence", ""),
+                "simple_meaning": row.get("simple_meaning", ""),
+            }
+        )
+    output.sort(
+        key=lambda row: (
+            str(row.get("case_id") or ""),
+            as_float(row.get("aligned_start_ms")) or 0.0,
+            as_float(row.get("aligned_end_ms")) or 0.0,
+            str(row.get("movement_kind") or ""),
+            str(row.get("ledger_session_id") or ""),
+        )
+    )
+    return output
+
+
+def kv_events_overlap_window(
+    events: list[dict[str, Any]],
+    start_ms: float,
+    end_ms: float,
+    case_id: str | None = None,
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for event in events:
+        if case_id and str(event.get("case_id") or "") != case_id:
+            continue
+        start = as_float(event.get("aligned_start_ms"))
+        end = as_float(event.get("aligned_end_ms"))
+        if start is None or end is None:
+            continue
+        if start <= end_ms and end >= start_ms:
+            output.append(event)
+    return output
+
+
+def peak_concurrent_kv_events(events: list[dict[str, Any]]) -> int:
+    points: list[tuple[float, int]] = []
+    for event in events:
+        start = as_float(event.get("aligned_start_ms"))
+        end = as_float(event.get("aligned_end_ms"))
+        if start is None or end is None:
+            continue
+        points.append((start, 1))
+        points.append((max(start, end), -1))
+    active = 0
+    peak = 0
+    for _, delta in sorted(points, key=lambda item: (item[0], -item[1])):
+        active += delta
+        peak = max(peak, active)
+    return peak
+
+
+def client_dispatch_window_end(row: dict[str, Any]) -> tuple[float | None, str]:
+    for key, label in (
+        ("replay_sglang_receive_start_ms", "SGLang receive"),
+        ("resume_start_ms", "client request call start"),
+        ("replay_scheduler_queue_enter_start_ms", "scheduler queue"),
+        ("replay_scheduler_admit_start_ms", "scheduler admit"),
+        ("replay_kv_h2d_start_ms", "replay H2D start"),
+    ):
+        value = as_float(row.get(key))
+        if value is not None:
+            return value, label
+    token_time = first_token_ms(row)
+    if token_time is not None:
+        return token_time, "first token"
+    return None, ""
+
+
+def client_dispatch_kv_movement_summary_rows(
+    gaps: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        window_end, end_stage = client_dispatch_window_end(gap)
+        if window_end is None or window_end <= due:
+            continue
+        label = str(gap.get("timeline_label") or f"G{idx:02d}")
+        case_id = str(gap.get("case_id") or "")
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        events = kv_events_overlap_window(all_kv_events, due, window_end, case_id=case_id)
+        kind_counts = Counter(str(event.get("movement_kind") or "KV movement") for event in events)
+        owner_counts = Counter(str(event.get("owner_kind") or "unknown") for event in events)
+        target_events = [event for event in events if str(event.get("ledger_session_id") or "") == target_session]
+        filler_events = [event for event in events if str(event.get("owner_kind") or "") == "pressure/filler"]
+        token_sum = sum(as_float(event.get("token_or_index_count")) or 0.0 for event in events)
+        duration_sum = sum(as_float(event.get("duration_ms")) or 0.0 for event in events)
+        if not events:
+            verdict = "no visible KV movement during dispatch"
+            explanation = (
+                "The exact SGLang KV movement hooks did not show H2D, D2H, or GPU eviction "
+                "while this replay was waiting to reach SGLang."
+            )
+        elif kind_counts.get("H2D", 0) and kind_counts.get("D2H", 0):
+            verdict = "mixed H2D/D2H movement during dispatch"
+            explanation = (
+                "Other KV loads and host backups were visible while this replay was still in the dispatch window."
+            )
+        elif kind_counts.get("H2D", 0):
+            verdict = "H2D movement during dispatch"
+            explanation = "Host-to-device KV loads were visible before this target replay reached SGLang."
+        elif kind_counts.get("D2H", 0) or kind_counts.get("GPU evict", 0):
+            verdict = "D2H/eviction movement during dispatch"
+            explanation = "SGLang was backing up or evicting KV for other sessions while this replay was still waiting."
+        else:
+            verdict = "other KV movement during dispatch"
+            explanation = "Some SGLang-visible KV movement happened during the dispatch window."
+        rows.append(
+            {
+                "row": label,
+                "session_id": gap.get("session_id", ""),
+                "case_id": case_id,
+                "mode": gap.get("mode", ""),
+                "fillers": case_fillers(gap),
+                "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                "client_dispatch_window": f"replay due -> {end_stage}",
+                "dispatch_window_ms": round(window_end - due, 3),
+                "all_kv_events": len(events),
+                "h2d_events": kind_counts.get("H2D", 0),
+                "d2h_events": kind_counts.get("D2H", 0),
+                "gpu_evict_events": kind_counts.get("GPU evict", 0),
+                "host_evict_events": kind_counts.get("host evict", 0),
+                "target_row_events": len(target_events),
+                "pressure_filler_events": len(filler_events),
+                "other_session_events": owner_counts.get("other session", 0),
+                "logical_blocks_touched": len({str(event.get("block_key") or "") for event in events if str(event.get("block_key") or "")}),
+                "token_or_index_count_sum": round(token_sum, 3),
+                "duration_sum_ms": round(duration_sum, 3),
+                "peak_concurrent_kv_events": peak_concurrent_kv_events(events),
+                "verdict": verdict,
+                "simple_explanation": explanation,
+            }
+        )
+    return rows
+
+
+def client_dispatch_kv_movement_event_rows(
+    gaps: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        window_end, end_stage = client_dispatch_window_end(gap)
+        if window_end is None or window_end <= due:
+            continue
+        label = str(gap.get("timeline_label") or f"G{idx:02d}")
+        case_id = str(gap.get("case_id") or "")
+        target_session = str(gap.get("ledger_session_id") or gap.get("session_id") or "")
+        events = kv_events_overlap_window(all_kv_events, due, window_end, case_id=case_id)
+        events.sort(
+            key=lambda event: (
+                as_float(event.get("aligned_start_ms")) or 0.0,
+                as_float(event.get("aligned_end_ms")) or 0.0,
+                str(event.get("movement_kind") or ""),
+            )
+        )
+        for order, event in enumerate(events):
+            start = as_float(event.get("aligned_start_ms"))
+            end = as_float(event.get("aligned_end_ms"))
+            owner_session = str(event.get("ledger_session_id") or "")
+            rows.append(
+                {
+                    "row": label,
+                    "case_id": case_id,
+                    "mode": gap.get("mode", ""),
+                    "fillers": case_fillers(gap),
+                    "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                    "client_dispatch_window": f"replay due -> {end_stage}",
+                    "event_order": order,
+                    "owner_kind": "target replay" if owner_session == target_session else event.get("owner_kind", ""),
+                    "owner_row": event.get("owner_row", ""),
+                    "owner_session_id": event.get("session_id", ""),
+                    "phase": event.get("phase", ""),
+                    "movement_kind": event.get("movement_kind", ""),
+                    "movement": event.get("movement", ""),
+                    "direction": event.get("direction", ""),
+                    "source_event": event.get("source_event", ""),
+                    "node_id": event.get("node_id", ""),
+                    "layer_id": event.get("layer_id", ""),
+                    "block_key": event.get("block_key", ""),
+                    "token_or_index_count": event.get("token_or_index_count", ""),
+                    "start_relative_to_replay_due_ms": round(start - due, 3) if start is not None else "",
+                    "end_relative_to_replay_due_ms": round(end - due, 3) if end is not None else "",
+                    "duration_ms": event.get("duration_ms", ""),
+                    "alignment_confidence": event.get("alignment_confidence", ""),
+                    "evidence_confidence": event.get("evidence_confidence", ""),
+                    "simple_meaning": event.get("simple_meaning", ""),
+                }
+            )
+    return rows
 
 
 def pressure_level(event_count: int, peak: int, tokens: float, duration_sum: float) -> str:
@@ -3684,96 +3959,235 @@ def h2d_bandwidth_pressure_html(
             "low_pressure_gaps": sum(1 for row in pressure_rows if row.get("pressure_level") == "low"),
         }
     ]
-    pressure_columns = [
-        "row",
-        "mode",
-        "fillers",
-        "tool_wait_ms",
-        "pressure_level",
-        "deadline_window_h2d_events",
-        "window_start_relative_ms",
-        "window_end_relative_ms",
-        "nearby_h2d_events",
-        "own_h2d_events",
-        "other_h2d_events",
-        "nearby_logical_blocks",
-        "nearby_h2d_event_tokens",
-        "nearby_h2d_duration_sum_ms",
-        "peak_concurrent_h2d_events",
-        "replay_h2d_start_relative_ms",
-        "replay_h2d_end_relative_ms",
-        "h2d_finish_margin_ms",
-        "resume_ttft_ms",
-        "simple_meaning",
-    ]
-    event_columns = [
-        "row",
-        "mode",
-        "fillers",
-        "phase",
-        "source_event",
-        "node_id",
-        "layer_id",
-        "token_or_index_count",
-        "relative_h2d_start_ms",
-        "relative_h2d_end_ms",
-        "h2d_duration_ms",
-        "confidence",
-    ]
-    contention_columns = [
-        "target_row",
-        "case_id",
-        "fillers",
-        "tool_wait_ms",
-        "target_h2d_lateness_ms",
-        "all_h2d_events_in_window",
-        "target_h2d_events",
-        "other_h2d_events",
-        "other_h2d_before_target_start",
-        "peak_concurrent_h2d_events",
-        "h2d_token_or_index_sum",
-        "verdict",
-        "simple_explanation",
-    ]
-    contention_event_columns = [
-        "target_row",
-        "event_order",
-        "owner_row",
-        "same_as_target",
-        "owner_kind",
-        "phase",
-        "source_event",
-        "node_id",
-        "layer_id",
-        "token_or_index_count",
-        "start_relative_to_target_due_ms",
-        "end_relative_to_target_due_ms",
-        "duration_ms",
-        "confidence",
-    ]
+    summary_cards = "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+        for label, value in [
+            ("aligned H2D events", summary[0]["aligned_h2d_events"]),
+            ("unique sessions", summary[0]["unique_sessions"]),
+            ("unique logical blocks", summary[0]["unique_logical_blocks"]),
+            ("H2D duration sum", f"{summary[0]['duration_sum_ms']} ms"),
+            ("medium pressure gaps", summary[0]["medium_pressure_gaps"]),
+            ("low pressure gaps", summary[0]["low_pressure_gaps"]),
+        ]
+    ) + "</div>"
     return f"""
     <p>This section answers: near each replay deadline, how busy was the KV host-to-device movement path?</p>
     <p class="note">The view is relative to replay due time. That avoids mixing separate controlled cases on one misleading absolute clock. Negative means before replay was due; positive means after replay was due.</p>
-    {table_html(summary)}
+    {summary_cards}
     <h3>H2D Activity By Time Window</h3>
     <p>Each bar counts exact SGLang-visible H2D copy events in a window around replay due. This is the closest report-level view of memory-movement pressure without running a full hardware profiler.</p>
     <div class="setup-diagram">{h2d_activity_window_bar_chart(window_rows)}</div>
-    {table_html(window_rows)}
     <h3>Per-Gap Nearby H2D Pressure</h3>
     <p>The pressure window starts at <code>replay_due - 500 ms</code> and extends until either <code>replay_due + 1000 ms</code> or the observed H2D finish time, whichever is later. This shows the H2D traffic seen while the replay was waiting for KV readiness.</p>
     <p class="note"><code>deadline_window_h2d_events</code> keeps the original fixed near-deadline count from <code>-500 ms</code> to <code>+1000 ms</code>. <code>nearby_h2d_events</code> uses the wider deadline-to-ready window.</p>
-    {table_html(pressure_rows, pressure_columns, limit=max_detail_rows)}
     <h3>Per-Gap H2D Contention Timeline</h3>
     <p>This view picks the latest H2D rows and shows all exact H2D events in the same controlled case while that row was waiting for KV readiness.</p>
     <p class="note">If other H2D bars appear before the target row's own H2D starts, the target likely waited behind other movement. If the H2D lanes are quiet until the target starts, the delay likely happened before SGLang reached the copy path.</p>
     <div class="setup-diagram">{build_per_gap_h2d_contention_svg(contention_targets, h2d_events)}</div>
-    <h3>Per-Gap Contention Verdicts</h3>
-    {table_html(contention_summary, contention_columns, limit=max_detail_rows)}
-    <h3>Per-Gap Contention Event Rows</h3>
-    {table_html(contention_events, contention_event_columns, limit=max_detail_rows)}
-    <h3>Aligned H2D Event Samples</h3>
-    <p class="note">These are exact lower-level H2D movement rows after aligning them to the same local clock as each replay gap. The report prefers <code>hostpool.load_to_device_per_layer</code> rows when available to avoid double-counting wrapper events.</p>
-    {table_html(h2d_events, event_columns, limit=max_detail_rows)}
+    <p class="note">Exact window rows, per-gap pressure rows, contention verdicts, contention events, and aligned H2D event rows are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
+    """
+
+
+def client_dispatch_movement_color(kind: str) -> str:
+    return {
+        "H2D": "#06b6d4",
+        "D2H": "#f97316",
+        "GPU evict": "#64748b",
+        "host evict": "#991b1b",
+    }.get(kind, "#8b5cf6")
+
+
+def select_client_dispatch_kv_summary_rows(
+    rows: list[dict[str, Any]],
+    max_rows: int,
+) -> list[dict[str, Any]]:
+    with_movement = [row for row in rows if int(as_float(row.get("all_kv_events")) or 0) > 0]
+    if with_movement:
+        selected = sorted(
+            with_movement,
+            key=lambda row: (
+                -(as_float(row.get("all_kv_events")) or 0.0),
+                -(as_float(row.get("h2d_events")) or 0.0),
+                -(as_float(row.get("d2h_events")) or 0.0),
+                str(row.get("row") or ""),
+            ),
+        )
+        return selected[:max_rows]
+    return sorted(
+        rows,
+        key=lambda row: (-(as_float(row.get("dispatch_window_ms")) or 0.0), str(row.get("row") or "")),
+    )[:max_rows]
+
+
+def build_client_dispatch_kv_movement_svg(
+    summary_rows: list[dict[str, Any]],
+    event_rows: list[dict[str, Any]],
+    max_rows: int = 10,
+) -> str:
+    selected = select_client_dispatch_kv_summary_rows(summary_rows, max_rows)
+    if not selected:
+        return "<p>No client-dispatch windows were available for the KV movement chart.</p>"
+
+    events_by_row: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in event_rows:
+        events_by_row[str(event.get("row") or "")].append(event)
+
+    max_time = 1000.0
+    for row in selected:
+        max_time = max(max_time, as_float(row.get("dispatch_window_ms")) or 0.0)
+        for event in events_by_row.get(str(row.get("row") or ""), []):
+            end = as_float(event.get("end_relative_to_replay_due_ms"))
+            if end is not None:
+                max_time = max(max_time, end)
+    x_min = -100.0
+    x_max = max(1000.0, max_time)
+    width = 1480
+    left = 230
+    right = 44
+    top = 96
+    row_h = 104
+    bottom = 84
+    height = top + len(selected) * row_h + bottom
+    plot_w = width - left - right
+
+    def symlog(value: float, linear_width: float = 50.0) -> float:
+        if value == 0:
+            return 0.0
+        return math.copysign(math.log1p(abs(value) / linear_width), value)
+
+    scaled_min = symlog(x_min)
+    scaled_max = symlog(x_max)
+
+    def x_pos(value: float) -> float:
+        scaled = symlog(value)
+        return left + (scaled - scaled_min) * plot_w / max(1e-9, scaled_max - scaled_min)
+
+    def draw_bar(parts: list[str], start: float, end: float, y: float, color: str, title: str, label: str = "") -> None:
+        x1 = x_pos(start)
+        x2 = x_pos(max(end, start))
+        w = max(3.0, x2 - x1)
+        parts.append(
+            f'<rect x="{x1:.1f}" y="{y:.1f}" width="{w:.1f}" height="13" rx="4" fill="{color}" opacity="0.86">'
+            f'<title>{html.escape(title)}</title></rect>'
+        )
+        if label and w >= 58:
+            parts.append(
+                f'<text x="{x1 + w / 2:.1f}" y="{y + 10:.1f}" text-anchor="middle" font-size="8" '
+                f'font-weight="800" fill="#ffffff">{html.escape(label)}</text>'
+            )
+
+    zero_x = x_pos(0.0)
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Client dispatch KV movement timeline">',
+        '<text x="12" y="28" font-size="18" font-weight="800" fill="#0f172a">All KV movement during client dispatch</text>',
+        '<text x="12" y="50" font-size="12" fill="#475569">Each row shows exact SGLang-visible KV movement while the target replay was waiting to reach SGLang.</text>',
+        f'<line x1="{zero_x:.1f}" y1="{top - 28}" x2="{zero_x:.1f}" y2="{height - 58}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{zero_x + 4:.1f}" y="{top - 36}" font-size="11" font-weight="800" fill="#111827">0 ms replay due</text>',
+    ]
+    ticks = [-100.0, -10.0, 0.0, 10.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0, 30000.0, 60000.0, 120000.0]
+    if all(abs(x_max - tick) > 1 for tick in ticks):
+        ticks.append(x_max)
+    for tick in sorted(tick for tick in ticks if x_min <= tick <= x_max):
+        x = x_pos(tick)
+        label = f"{int(tick)} ms" if abs(tick) < 1000 else f"{tick / 1000:.0f} s"
+        parts.append(f'<line x1="{x:.1f}" y1="{top - 18}" x2="{x:.1f}" y2="{height - 62}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top - 24}" text-anchor="middle" font-size="10" fill="#475569">{html.escape(label)}</text>')
+
+    lane_names = [("H2D", "H2D"), ("D2H", "D2H"), ("GPU evict", "evict")]
+    for idx, row in enumerate(selected):
+        y = top + idx * row_h
+        band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
+        row_id = str(row.get("row") or f"C{idx:02d}")
+        dispatch_ms = as_float(row.get("dispatch_window_ms")) or 0.0
+        parts.append(f'<rect x="0" y="{y - 6:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
+        parts.append(f'<text x="12" y="{y + 15:.1f}" font-size="15" font-weight="800" fill="#0f172a">{html.escape(row_id)}</text>')
+        parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="11" font-weight="800" fill="#334155">{html.escape(str(row.get("verdict") or ""))}</text>')
+        parts.append(f'<text x="12" y="{y + 53:.1f}" font-size="10" fill="#475569">dispatch {html.escape(display_ms(dispatch_ms))}; fillers {html.escape(str(row.get("fillers") or ""))}</text>')
+        parts.append(f'<text x="12" y="{y + 71:.1f}" font-size="10" fill="#475569">H2D {row.get("h2d_events", 0)} | D2H {row.get("d2h_events", 0)} | evict {row.get("gpu_evict_events", 0)}</text>')
+
+        dispatch_x1 = x_pos(0.0)
+        dispatch_x2 = x_pos(dispatch_ms)
+        dispatch_w = max(3.0, dispatch_x2 - dispatch_x1)
+        parts.append(
+            f'<rect x="{dispatch_x1:.1f}" y="{y + 5:.1f}" width="{dispatch_w:.1f}" height="76" rx="5" '
+            f'fill="#dbeafe" opacity="0.38"><title>Client dispatch window: replay due to {html.escape(str(row.get("client_dispatch_window") or ""))}; {dispatch_ms:.3f} ms</title></rect>'
+        )
+        for lane_idx, (kind, lane_label) in enumerate(lane_names):
+            lane_y = y + 12 + lane_idx * 23
+            parts.append(f'<text x="{left - 10}" y="{lane_y + 10:.1f}" text-anchor="end" font-size="10" font-weight="700" fill="#334155">{lane_label}</text>')
+            parts.append(f'<line x1="{left}" y1="{lane_y + 7:.1f}" x2="{left + plot_w}" y2="{lane_y + 7:.1f}" stroke="#dbe4ee"/>')
+
+        for event in events_by_row.get(row_id, []):
+            start = as_float(event.get("start_relative_to_replay_due_ms"))
+            end = as_float(event.get("end_relative_to_replay_due_ms"))
+            if start is None or end is None:
+                continue
+            kind = str(event.get("movement_kind") or "KV movement")
+            lane_index = 0 if kind == "H2D" else 1 if kind == "D2H" else 2
+            lane_y = y + 12 + lane_index * 23
+            color = client_dispatch_movement_color(kind)
+            owner = str(event.get("owner_kind") or "")
+            label = "filler" if owner == "pressure/filler" else "target" if owner == "target replay" else ""
+            title = (
+                f"{row_id} | {kind} | owner={owner} | session={event.get('owner_session_id', '')} | "
+                f"source={event.get('source_event', '')} | start={start:.3f} ms | end={end:.3f} ms | "
+                f"duration={event.get('duration_ms', '')} ms | tokens/indices={event.get('token_or_index_count', '')}"
+            )
+            draw_bar(parts, start, end, lane_y, color, title, label)
+
+    legend_y = height - 42
+    lx = left
+    legend = [
+        ("client dispatch window", "#dbeafe"),
+        ("H2D", client_dispatch_movement_color("H2D")),
+        ("D2H/write host", client_dispatch_movement_color("D2H")),
+        ("GPU evict", client_dispatch_movement_color("GPU evict")),
+    ]
+    for label, color in legend:
+        parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="15" height="15" rx="3" fill="{color}" opacity="0.88"/>')
+        parts.append(f'<text x="{lx + 22:.1f}" y="{legend_y + 12:.1f}" font-size="12" fill="#334155">{html.escape(label)}</text>')
+        lx += 230
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def client_dispatch_kv_movement_html(
+    summary_rows: list[dict[str, Any]],
+    event_rows: list[dict[str, Any]],
+    max_rows: int = 10,
+) -> str:
+    if not summary_rows:
+        return """
+        <p>No client-dispatch windows were available for this report.</p>
+        <p class="note">This usually means the run did not include replay due timestamps and request-stage timestamps.</p>
+        """
+    windows_with_movement = [row for row in summary_rows if int(as_float(row.get("all_kv_events")) or 0) > 0]
+    h2d_windows = [row for row in summary_rows if int(as_float(row.get("h2d_events")) or 0) > 0]
+    d2h_windows = [row for row in summary_rows if int(as_float(row.get("d2h_events")) or 0) > 0]
+    evict_windows = [row for row in summary_rows if int(as_float(row.get("gpu_evict_events")) or 0) > 0]
+    total_events = sum(int(as_float(row.get("all_kv_events")) or 0) for row in summary_rows)
+    pressure_events = sum(int(as_float(row.get("pressure_filler_events")) or 0) for row in summary_rows)
+    cards = [
+        ("dispatch windows", len(summary_rows)),
+        ("windows with KV movement", len(windows_with_movement)),
+        ("windows with H2D", len(h2d_windows)),
+        ("windows with D2H", len(d2h_windows)),
+        ("windows with GPU evict", len(evict_windows)),
+        ("pressure/filler events", pressure_events),
+        ("all KV events in dispatch", total_events),
+    ]
+    cards_html = "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+        for label, value in cards
+    ) + "</div>"
+    return f"""
+    <p>This section checks the long <strong>client/workload dispatch</strong> interval. It asks: while the target replay was waiting to reach SGLang, were other sessions already moving, backing up, or evicting KV?</p>
+    <p class="note">This uses exact SGLang KV movement hooks aligned onto each controlled case clock. It includes target rows and pressure/filler sessions. It is still SGLang-visible movement, not a full PCIe/CUPTI hardware trace.</p>
+    {cards_html}
+    <h3>Client Dispatch KV Movement Timeline</h3>
+    <p>The blue background is the target replay's dispatch window. Colored bars show exact KV movement from any session in the same controlled case during that window.</p>
+    <div class="setup-diagram">{build_client_dispatch_kv_movement_svg(summary_rows, event_rows, max_rows=max_rows)}</div>
+    <p class="note">The full aligned event rows and per-gap summaries are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     """
 
 
@@ -4103,12 +4517,22 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
     summary = replay_h2d_readiness_summary(h2d_rows) if h2d_rows else []
     buckets = replay_h2d_readiness_bucket_rows(h2d_rows) if h2d_rows else []
     detail = queue_rows[:80]
+    summary_cards = ""
+    if summary:
+        summary_cards = "<div class=\"cards\">" + "\n".join(
+            f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+            for label, value in [
+                ("H2D rows", summary[0].get("h2d_rows", "")),
+                ("finished before due", summary[0].get("finished_before_due", "")),
+                ("late H2D rows", summary[0].get("late_h2d_rows", "")),
+                ("median finish margin", f"{summary[0].get('median_finish_margin_ms', '')} ms"),
+                ("worst lateness", f"{summary[0].get('worst_lateness_ms', '')} ms"),
+            ]
+        ) + "</div>"
     h2d_plot_html = (
         f"""
     <h3>Replay H2D Readiness Dot Plot</h3>
     <div class="setup-diagram">{build_replay_h2d_readiness_dot_plot(h2d_rows)}</div>
-    <h3>Readiness Buckets</h3>
-    {table_html(buckets)}
         """
         if h2d_rows
         else """
@@ -4120,14 +4544,13 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
     <p>This no-prefetch chart answers a different question from prefetch margin: when replay needed KV, how late did the replay-side host-to-device KV load finish?</p>
     <p class="note">The dot value is <code>replay_due_time - replay_h2d_finish_time</code>. Positive means the KV load finished before the replay deadline. Negative means the replay deadline passed first, so the model turn had to wait for KV readiness.</p>
     <p class="note">The timing is split into concrete queue stages: replay due, client submit, SGLang receive, scheduler queue, scheduler admit, H2D start, and H2D finish. This separates queue delay from the visible host-to-device movement window.</p>
-    {table_html(summary)}
+    {summary_cards}
     <h3>Replay Queue Timeline vs H2D Start</h3>
     <p>This chart checks whether the replay request was submitted late, queued inside SGLang, delayed before scheduler admission, or delayed before visible KV H2D movement began.</p>
     <p class="note">Each gap has stage markers drawn side-by-side so they do not hide each other. Their vertical position still shows the real timing relative to replay due. Missing markers mean that stage was not present in the trace, usually because the run was generated before scheduler tracing was enabled.</p>
     <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot(queue_rows)}</div>
     {h2d_plot_html}
-    <h3>Timing Split Behind The Plot</h3>
-    {table_html(detail, ["order", "session_id", "fillers", "tool_gap_ms", "resume_ttft_ms", "replay_due_to_client_submit_ms", "replay_due_to_request_start_ms", "client_submit_to_request_start_ms", "replay_due_to_sglang_receive_ms", "replay_due_to_scheduler_queue_ms", "replay_due_to_scheduler_admit_ms", "scheduler_queue_waiting_len", "scheduler_queue_running_len", "scheduler_admit_running_batch_requests", "scheduler_admit_running_batch_extend_tokens", "scheduler_queue_to_admit_ms", "replay_due_to_h2d_start_ms", "scheduler_admit_to_h2d_ms", "request_start_to_h2d_start_ms", "h2d_visible_wall_window_ms", "h2d_event_duration_sum_ms", "request_start_to_h2d_end_ms", "replay_due_to_h2d_end_ms", "h2d_finish_margin_ms", "replay_h2d_events", "replay_h2d_tokens", "final_path", "simple_meaning"])}
+    <p class="note">Readiness buckets and exact queue timing rows are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     """
 
 
@@ -4420,11 +4843,45 @@ def render_html(
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
     interesting_block_lifecycle_rows = block_lifecycle_by_gap_rows(interesting, kv_block_rows)
     all_h2d_activity_events = aligned_h2d_activity_events(all_timeline_rows, exact_kv_movement_rows)
+    all_kv_movement_events = all_aligned_kv_movement_events(all_timeline_rows, exact_kv_movement_rows)
+    client_dispatch_kv_summary_rows = client_dispatch_kv_movement_summary_rows(
+        all_timeline_rows, all_kv_movement_events
+    )
+    client_dispatch_kv_event_rows = client_dispatch_kv_movement_event_rows(
+        all_timeline_rows, all_kv_movement_events
+    )
     all_h2d_pressure_rows = h2d_pressure_by_gap_rows(all_timeline_rows, all_h2d_activity_events)
     interesting_labels = {str(row.get("timeline_label") or "") for row in interesting}
     interesting_h2d_pressure_rows = [
         row for row in all_h2d_pressure_rows if str(row.get("row") or "") in interesting_labels
     ]
+    replay_delay_rows = replay_delay_breakdown_rows(all_timeline_rows, all_h2d_activity_events)
+    replay_delay_verdict_table_rows = replay_delay_verdict_rows(replay_delay_rows)
+    replay_delay_stage_rows = request_stage_trace_rows(all_timeline_rows, trace_rows)
+    replay_delay_h2d_rows = h2d_activity_during_delay_rows(all_timeline_rows, all_h2d_activity_events)
+    replay_delay_running_rows = replay_delay_running_context_rows(all_timeline_rows, trace_rows, all_h2d_activity_events)
+    replay_h2d_readiness_table_rows = replay_h2d_readiness_rows(gaps)
+    replay_h2d_readiness_bucket_table_rows = replay_h2d_readiness_bucket_rows(replay_h2d_readiness_table_rows)
+    replay_queue_table_rows = replay_queue_timing_rows(gaps)
+    evidence_audit = audit_report_data(
+        {
+            "gaps": gaps,
+            "exact_kv_movement_attribution": exact_kv_movement_rows,
+            "kv_block_ledger": kv_block_rows,
+            "replay_delay_stage_trace": replay_delay_stage_rows,
+            "replay_queue_timing": replay_queue_table_rows,
+            "client_dispatch_kv_movement_summary": client_dispatch_kv_summary_rows,
+            "client_dispatch_kv_movement_events": client_dispatch_kv_event_rows,
+        }
+    )
+    h2d_activity_window_table_rows = h2d_activity_window_rows(all_h2d_activity_events)
+    h2d_contention_targets = select_h2d_contention_targets(all_timeline_rows)
+    h2d_contention_summary_table_rows = h2d_contention_summary_rows(
+        h2d_contention_targets, all_h2d_activity_events
+    )
+    h2d_contention_event_table_rows = h2d_contention_event_rows(
+        h2d_contention_targets, all_h2d_activity_events
+    )
     global_title = global_readiness_section_title(gaps)
     gap_columns = [
         "session_id",
@@ -4481,11 +4938,12 @@ def render_html(
         ("global-prefetch", global_title),
         ("h2d-pressure", "KV H2D Bandwidth Pressure"),
         ("delay-breakdown", "Replay Delay Breakdown"),
+        ("client-dispatch-kv", "Client Dispatch KV Movement"),
         ("timeline-guide", "How To Read Timelines"),
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
-        ("exact-block-lifecycle", "Detailed KV Block Lifecycle Table"),
         ("observations", "Key Observations"),
-        ("appendix", "Appendix / Raw Evidence"),
+        ("evidence-audit", "Instrumentation Evidence Audit"),
+        ("appendix", "Evidence Tables / Raw Proof"),
         ("reproduce", "Reproduce This Report"),
     ]
     if live_run:
@@ -4537,6 +4995,11 @@ def render_html(
     {replay_delay_breakdown_html(all_timeline_rows, trace_rows, all_h2d_activity_events, max_rows=max_timeline_gaps)}
   </details>
 
+  <details id="client-dispatch-kv" class="section-card theme-directkv">
+    <summary><h2>Client Dispatch KV Movement</h2></summary>
+    {client_dispatch_kv_movement_html(client_dispatch_kv_summary_rows, client_dispatch_kv_event_rows, max_rows=max_timeline_gaps)}
+  </details>
+
   <details id="timeline-guide" class="section-card theme-guide">
     <summary><h2>How To Read The Timelines</h2></summary>
     {timeline_guide_html(profiled_available=True)}
@@ -4546,21 +5009,8 @@ def render_html(
     <summary><h2>Readable KV Lifecycle Timeline</h2></summary>
     <p class="note">This is the main timeline. Each row is one controlled replay gap such as <code>G00</code>. The columns are local views, so the bars are stretched for readability while the printed durations preserve the measured timing.</p>
     <p class="note">Cyan and green bars now carry exact logical KV block attribution from the ledger. Hover over those bars to see block IDs, node IDs, token ranges, H2D start/end times, durations, and evidence confidence. Magenta/gold replay work remains explicitly marked as estimated.</p>
-    <p class="note">The block lifecycle strip at the bottom of each row summarizes how many logical KV blocks were loaded from host, stayed host-resident, stayed GPU+host resident, or were lost before replay.</p>
-    <p class="note">The nearby H2D pressure strip shows exact H2D copy events from <code>500 ms before replay due</code> through the later of <code>1000 ms after due</code> or the observed H2D finish time. This makes very late KV movement visible instead of clipping it out of the pressure window.</p>
-    {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows)}
-  </details>
-
-  <details id="exact-block-lifecycle" class="section-card theme-directkv">
-    <summary><h2>Detailed KV Block Lifecycle Table</h2></summary>
-    <p>This is the one detailed evidence table. Each row follows one logical SGLang KV block for one request gap and shows the lifecycle verdict, exact movement timings, replay timing, recompute timing estimate, and attribution strength.</p>
-    <h3>Column Guide</h3>
-    <p class="note">Use this guide as the plain-English legend for the detailed lifecycle table.</p>
-    {table_html(detailed_kv_lifecycle_column_guide_rows(), ["column", "meaning"])}
-    <h3>Lifecycle Rows</h3>
-    <p class="note">The H2D timing columns come from SGLang-visible KV movement hooks. Recompute timing is labeled <code>_est</code> because it is inferred from replay prefill/TTFT counters rather than from a physical block-level recompute event.</p>
-    <p class="note">Read <code>lifecycle_steps</code> left to right. Example: <code>write_host -&gt; evict_gpu -&gt; load_gpu[replay]</code> means SGLang backed up the block, removed it from GPU residency, then replay loaded it from host back into GPU memory.</p>
-    {table_html(detailed_kv_lifecycle_table_rows(gaps, kv_block_rows), limit=1000)}
+    <p class="note">Detailed block lifecycle counts and nearby H2D pressure rows are kept in <strong>Evidence Tables / Raw Proof</strong> at the bottom so this timeline stays easy to scan.</p>
+    {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}
   </details>
 
   {live_section}
@@ -4571,9 +5021,58 @@ def render_html(
     {table_html(key_observation_rows(interesting), ["row", "mode", "status", "what happened", "why it matters", "tool_wait_ms", "resume_ttft_ms", "replay_path", "verdict"])}
   </details>
 
+  <details id="evidence-audit" class="section-card theme-profiled">
+    <summary><h2>Instrumentation Evidence Audit</h2></summary>
+    <p>This section audits whether the report is backed by direct SGLang instrumentation, derived values, or inference. It is meant to keep the report honest: exact KV bars should trace to real hooks and IDs; inferred values should be labeled as inferred.</p>
+    <h3>Audit Summary</h3>
+    {table_html(evidence_audit["summary"])}
+    <h3>Audit Matrix</h3>
+    {table_html(evidence_audit["matrix"])}
+    <h3>Chart Evidence Inventory</h3>
+    {table_html(evidence_audit["chart_inventory"])}
+    <h3>Artifact Inventory</h3>
+    {table_html(evidence_audit["artifact_inventory"])}
+  </details>
+
   <details id="appendix" class="section-card theme-appendix">
-    <summary><h2>Appendix / Raw Evidence</h2></summary>
-    <p class="note">These tables are kept for debugging and auditability. The main manager-facing evidence is the lifecycle timeline and the detailed KV block lifecycle table above.</p>
+    <summary><h2>Evidence Tables / Raw Proof</h2></summary>
+    <p class="note">These long tables are grouped here so the main report stays chart-first. Use this section when you want to audit the exact measured values behind the charts.</p>
+    <h3>Detailed KV Block Lifecycle Column Guide</h3>
+    {table_html(detailed_kv_lifecycle_column_guide_rows(), ["column", "meaning"])}
+    <h3>Detailed KV Block Lifecycle Rows</h3>
+    <p class="note">The H2D timing columns come from SGLang-visible KV movement hooks. Recompute timing is labeled <code>_est</code> because it is inferred from replay prefill/TTFT counters rather than from a physical block-level recompute event.</p>
+    {table_html(detailed_kv_lifecycle_table_rows(gaps, kv_block_rows), limit=1000)}
+    <h3>Replay H2D Readiness Rows</h3>
+    {table_html(replay_h2d_readiness_table_rows)}
+    <h3>Replay H2D Readiness Buckets</h3>
+    {table_html(replay_h2d_readiness_bucket_table_rows)}
+    <h3>Replay Queue Timing Rows</h3>
+    {table_html(replay_queue_table_rows, limit=1000)}
+    <h3>Replay Delay Verdicts</h3>
+    {table_html(replay_delay_verdict_table_rows)}
+    <h3>Replay Delay Stage Trace</h3>
+    <p class="note">These rows come from direct SGLang method hooks emitted as <code>kv_telemetry.request_stage</code>. They are not parsed from server logs.</p>
+    {table_html(replay_delay_stage_rows, limit=2000)}
+    <h3>Replay Delay Stage Duration Rows</h3>
+    {table_html(replay_delay_rows)}
+    <h3>H2D Activity During The Delay Window</h3>
+    {table_html(replay_delay_h2d_rows, limit=2000)}
+    <h3>What Was Running During The Delay</h3>
+    {table_html(replay_delay_running_rows)}
+    <h3>All Aligned KV Movement Rows</h3>
+    {table_html(all_kv_movement_events, limit=2000)}
+    <h3>Client Dispatch KV Movement Summary</h3>
+    {table_html(client_dispatch_kv_summary_rows)}
+    <h3>Client Dispatch KV Movement Events</h3>
+    {table_html(client_dispatch_kv_event_rows, limit=2000)}
+    <h3>H2D Activity Window Rows</h3>
+    {table_html(h2d_activity_window_table_rows)}
+    <h3>Per-Gap H2D Pressure Rows</h3>
+    {table_html(all_h2d_pressure_rows)}
+    <h3>Per-Gap H2D Contention Verdict Rows</h3>
+    {table_html(h2d_contention_summary_table_rows)}
+    <h3>Per-Gap H2D Contention Event Rows</h3>
+    {table_html(h2d_contention_event_table_rows, limit=2000)}
     <h3>Mode Summary</h3>
     {table_html(mode_rows)}
     <h3>Replay Path Proof Rows</h3>
@@ -4661,6 +5160,13 @@ def main() -> None:
     queue_timing = replay_queue_timing_rows(all_gaps)
     all_labeled_gaps = timeline_rows_with_labels(selected_timeline_gaps(all_gaps, len(all_gaps)))
     h2d_activity_events = aligned_h2d_activity_events(all_labeled_gaps, exact_kv_rows)
+    all_kv_movement_events = all_aligned_kv_movement_events(all_labeled_gaps, exact_kv_rows)
+    client_dispatch_kv_summary = client_dispatch_kv_movement_summary_rows(
+        all_labeled_gaps, all_kv_movement_events
+    )
+    client_dispatch_kv_events = client_dispatch_kv_movement_event_rows(
+        all_labeled_gaps, all_kv_movement_events
+    )
     h2d_pressure_rows = h2d_pressure_by_gap_rows(all_labeled_gaps, h2d_activity_events)
     h2d_activity_windows = h2d_activity_window_rows(h2d_activity_events)
     h2d_contention_targets = select_h2d_contention_targets(all_labeled_gaps)
@@ -4672,6 +5178,17 @@ def main() -> None:
     replay_delay_stage_trace = request_stage_trace_rows(all_labeled_gaps, all_trace_rows)
     replay_delay_h2d_activity = h2d_activity_during_delay_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_gap_verdicts = delay_verdicts_by_gap_rows(replay_delay_breakdown)
+    evidence_audit = audit_report_data(
+        {
+            "gaps": all_gaps,
+            "exact_kv_movement_attribution": exact_kv_rows,
+            "kv_block_ledger": kv_block_rows,
+            "replay_delay_stage_trace": replay_delay_stage_trace,
+            "replay_queue_timing": queue_timing,
+            "client_dispatch_kv_movement_summary": client_dispatch_kv_summary,
+            "client_dispatch_kv_movement_events": client_dispatch_kv_events,
+        }
+    )
     write_csv(args.out_dir / "controlled_replay_gaps.csv", all_gaps)
     write_csv(args.out_dir / "replay_path_ledger.csv", ledger)
     write_csv(args.out_dir / "replay_h2d_readiness.csv", h2d_readiness)
@@ -4683,6 +5200,9 @@ def main() -> None:
     write_csv(args.out_dir / "replay_delay_h2d_activity.csv", replay_delay_h2d_activity)
     write_csv(args.out_dir / "replay_delay_gap_verdicts.csv", replay_delay_gap_verdicts)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
+    write_csv(args.out_dir / "all_aligned_kv_movement_events.csv", all_kv_movement_events)
+    write_csv(args.out_dir / "client_dispatch_kv_movement_summary.csv", client_dispatch_kv_summary)
+    write_csv(args.out_dir / "client_dispatch_kv_movement_events.csv", client_dispatch_kv_events)
     write_csv(args.out_dir / "h2d_pressure_by_gap.csv", h2d_pressure_rows)
     write_csv(args.out_dir / "h2d_activity_windows.csv", h2d_activity_windows)
     write_csv(args.out_dir / "h2d_contention_by_gap.csv", h2d_contention_summary)
@@ -4694,6 +5214,14 @@ def main() -> None:
     write_csv(args.out_dir / "exact_kv_movement_summary.csv", exact_movement_summary_rows(exact_kv_rows))
     write_csv(args.out_dir / "kv_block_lifecycle_by_gap.csv", kv_block_lifecycle_by_gap)
     write_csv(args.out_dir / "kv_block_lifecycle_verdict_counts.csv", block_lifecycle_verdict_counts(kv_block_lifecycle_by_gap))
+    write_csv(args.out_dir / "instrumentation_evidence_audit_summary.csv", evidence_audit["summary"])
+    write_csv(args.out_dir / "instrumentation_evidence_audit_matrix.csv", evidence_audit["matrix"])
+    write_csv(args.out_dir / "instrumentation_chart_inventory.csv", evidence_audit["chart_inventory"])
+    write_csv(args.out_dir / "instrumentation_artifact_inventory.csv", evidence_audit["artifact_inventory"])
+    (args.out_dir / "instrumentation_evidence_audit.md").write_text(
+        audit_markdown(evidence_audit),
+        encoding="utf-8",
+    )
     write_ledger_artifacts(args.out_dir, kv_block_rows, all_gaps)
     write_json(
         args.out_dir / "controlled_replay_report.json",
@@ -4711,6 +5239,9 @@ def main() -> None:
             "replay_delay_gap_verdicts": replay_delay_gap_verdicts,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
+            "all_aligned_kv_movement_events": all_kv_movement_events,
+            "client_dispatch_kv_movement_summary": client_dispatch_kv_summary,
+            "client_dispatch_kv_movement_events": client_dispatch_kv_events,
             "h2d_pressure_by_gap": h2d_pressure_rows,
             "h2d_activity_windows": h2d_activity_windows,
             "h2d_contention_by_gap": h2d_contention_summary,
@@ -4727,6 +5258,10 @@ def main() -> None:
             "counterfactual_summary": counterfactual_summary_rows(ledger),
             "instrumentation_coverage": instrumentation_coverage_rows(all_gaps, ledger),
             "request_id_coverage": request_coverage,
+            "instrumentation_evidence_audit_summary": evidence_audit["summary"],
+            "instrumentation_evidence_audit_matrix": evidence_audit["matrix"],
+            "instrumentation_chart_inventory": evidence_audit["chart_inventory"],
+            "instrumentation_artifact_inventory": evidence_audit["artifact_inventory"],
         },
     )
     live_run = None
