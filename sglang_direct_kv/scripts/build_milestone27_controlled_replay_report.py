@@ -5295,6 +5295,8 @@ def unified_stack_axis_values(
             "hint_submitted_ms",
             "prefetch_start_ms",
             "prefetch_end_ms",
+            "direct_kv_h2d_start_ms",
+            "direct_kv_h2d_end_ms",
             "resume_submitted_ms",
             "resume_start_ms",
             "resume_end_ms",
@@ -5938,6 +5940,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         )
         parts.append(f'<text x="16" y="{y + 132:.1f}" font-size="10" fill="#475569">{html.escape(replay_h2d_left[:54])}</text>')
         replay_work_parts = []
+        prefetch_start_abs_for_summary = as_float(row.get("prefetch_start_ms"))
+        prefetch_end_abs_for_summary = as_float(row.get("prefetch_end_ms"))
+        prefetch_margin_for_summary = as_float(row.get("prefetch_margin_ms"))
+        if prefetch_start_abs_for_summary is not None and prefetch_end_abs_for_summary is not None:
+            prefetch_summary = f"prefetch {display_ms(prefetch_end_abs_for_summary - prefetch_start_abs_for_summary)}"
+            if prefetch_margin_for_summary is not None:
+                prefetch_summary += f" | margin {display_ms(prefetch_margin_for_summary)}"
+            replay_work_parts.append(prefetch_summary)
         if recompute_tokens_for_summary >= 128:
             replay_work_parts.append(f"recompute {compact_token_count(recompute_tokens_for_summary)}")
         if ttft_ms is not None:
@@ -6142,6 +6152,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 "GPU evict": (zoom_title_y + 102, unified_stack_color("evict")),
                 "host evict": (zoom_title_y + 132, unified_stack_color("host_evict")),
             }
+            hint_h2d_relative_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
             for lane_name, (lane_y, _) in zoom_lanes.items():
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name.replace("GPU ", ""))}</text>')
                 parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
@@ -6155,12 +6166,21 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 lane_y, color = zoom_lanes[kind]
                 owner = str(event.get("ledger_session_id") or "")
                 target = owner == target_session
+                hint_side_target_h2d = (
+                    target
+                    and kind == "H2D"
+                    and hint_h2d_relative_span is not None
+                    and span[0] <= hint_h2d_relative_span[1]
+                    and span[1] >= hint_h2d_relative_span[0]
+                )
+                if hint_side_target_h2d:
+                    color = unified_stack_color("hint_h2d")
                 title = kv_event_tooltip(label, event, span, target)
                 event_label = ""
                 if target and kind == "H2D":
                     event_label = short_bar_label(
                         [
-                            "H2D",
+                            "hint H2D" if hint_side_target_h2d else "H2D",
                             compact_tokens(event.get("token_or_index_count")),
                             display_ms(as_float(event.get("duration_ms")) or (span[1] - span[0])),
                         ],
