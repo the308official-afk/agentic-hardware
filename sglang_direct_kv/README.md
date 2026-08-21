@@ -5188,7 +5188,7 @@ UPDATE_LATEST=1 \
 START_INDEX=0 \
 END_INDEX=15 \
 MAX_STEPS=10 \
-MAX_TIMELINE_GAPS=18 \
+MAX_TIMELINE_GAPS=32 \
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=8 \
@@ -5969,7 +5969,7 @@ EXPERIMENT_KIND=controlled \
 REPORT_LABEL=exact_kv_attribution_demo \
 PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
-MAX_TIMELINE_GAPS=18 \
+MAX_TIMELINE_GAPS=32 \
 MAX_PAIRS=8 \
 MODES="no_prefetch" \
 TOOL_WAIT_LIST_MS="100" \
@@ -6332,7 +6332,7 @@ TARGET_PROMPT_TOKENS=4096 \
 MAX_TOTAL_TOKENS=16384 \
 HICACHE_SIZE_GB=16 \
 MEM_FRACTION_STATIC=0.72 \
-MAX_TIMELINE_GAPS=18 \
+MAX_TIMELINE_GAPS=32 \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
