@@ -5367,6 +5367,16 @@ def unified_stack_legend_table_html() -> str:
             "SGLang receive, scheduler queue/admit, cache lookup, or load-back decision work before useful model/KV work.",
         ),
         (
+            "Direct prefetch attempt",
+            unified_stack_color("prefetch"),
+            "The direct SGLang KV load-back hint path. This is the software-emulated prefetch request, not a prompt-warming request.",
+        ),
+        (
+            "Hint-side KV H2D",
+            unified_stack_color("hint_h2d"),
+            "Host-to-device KV movement caused by the direct prefetch/hint path before or around replay.",
+        ),
+        (
             "Replay KV H2D",
             unified_stack_color("h2d"),
             "KV cache data loaded from host memory back into GPU memory. In the replay zoom, this is the replay request's own KV load-back.",
@@ -5677,7 +5687,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    row_h = 650
+    row_h = 790
     bottom = 116
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
@@ -5840,6 +5850,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ("tool wait", unified_stack_color("tool_wait")),
         ("client dispatch", unified_stack_color("client_dispatch")),
         ("scheduler/load path", unified_stack_color("scheduler")),
+        ("direct prefetch", unified_stack_color("prefetch")),
+        ("hint-side KV H2D", unified_stack_color("hint_h2d")),
         ("KV H2D", unified_stack_color("h2d")),
         ("D2H/offload", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
@@ -5907,9 +5919,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         replay_zoom = replay_zoom_bounds(row, due)
 
         parts.append(f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" fill="{band}"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="112" rx="8" fill="#ffffff" opacity="0.38"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 132:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 318:.1f}" width="{plot_w + 4:.1f}" height="270" rx="8" fill="#fff7ed" opacity="0.42"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="196" rx="8" fill="#ffffff" opacity="0.38"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="288" rx="8" fill="#fff7ed" opacity="0.42"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
         parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
@@ -5944,8 +5956,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
 
         overview_lanes = [
             ("overview", y + 28),
-            ("request path", y + 64),
-            ("replay summary", y + 100),
+            ("prefetch path", y + 64),
+            ("request path", y + 100),
+            ("replay summary", y + 136),
         ]
         for lane_label, lane_y in overview_lanes:
             parts.append(f'<text x="{left - 10}" y="{lane_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="800" fill="#334155">{html.escape(lane_label)}</text>')
@@ -5960,7 +5973,51 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if span:
                 draw_span(parts, overview_x, x_min, x_max, span[0], span[1], overview_y - 4, main_bar_h, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity, break_long=True)
 
-        request_y = y + 64
+        prefetch_y = y + 64
+        prefetch_span = _relative_span(row, "prefetch_start_ms", "prefetch_end_ms", due)
+        if prefetch_span:
+            prefetch_duration = prefetch_span[1] - prefetch_span[0]
+            prefetch_margin = as_float(row.get("prefetch_margin_ms"))
+            margin_text = f" | margin={display_ms(prefetch_margin)}" if prefetch_margin is not None else ""
+            draw_span(
+                parts,
+                overview_x,
+                x_min,
+                x_max,
+                prefetch_span[0],
+                prefetch_span[1],
+                prefetch_y - 4,
+                main_bar_h,
+                unified_stack_color("prefetch"),
+                "direct prefetch",
+                f"{label} | direct KV prefetch attempt: {display_ms(prefetch_duration)}{margin_text}",
+                opacity=0.74,
+                break_long=True,
+                min_w=min_visible_bar_w,
+                label_min_w=118.0,
+            )
+        hint_h2d_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
+        if hint_h2d_span:
+            hint_duration = hint_h2d_span[1] - hint_h2d_span[0]
+            draw_span(
+                parts,
+                overview_x,
+                x_min,
+                x_max,
+                hint_h2d_span[0],
+                hint_h2d_span[1],
+                prefetch_y + 20,
+                max(12.0, main_bar_h - 6),
+                unified_stack_color("hint_h2d"),
+                "hint H2D",
+                f"{label} | hint-side direct KV H2D: {display_ms(hint_duration)} | events={row.get('direct_kv_h2d_events', '')}",
+                opacity=0.92,
+                min_w=min_visible_bar_w,
+                label_min_w=78.0,
+                font_size=9,
+            )
+
+        request_y = y + 100
         request_spans = [
             (_relative_span(row, "resume_submitted_ms", "resume_start_ms", due), unified_stack_color("client_dispatch"), "client dispatch", "client dispatch: replay submitted but client call had not started"),
             (_relative_span(row, "replay_sglang_receive_start_ms", "replay_sglang_receive_end_ms", due), unified_stack_color("sglang_receive"), "receive", "SGLang receive stage"),
@@ -5971,7 +6028,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if span:
                 draw_span(parts, overview_x, x_min, x_max, span[0], span[1], request_y - 4, main_bar_h, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", break_long=True)
 
-        replay_y = y + 100
+        replay_y = y + 136
         replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
         if replay_h2d:
             draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 6, main_bar_h, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=min_visible_bar_w)
@@ -6061,7 +6118,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if decode_span[1] > decode_span[0]:
                 draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 74, main_bar_h, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
 
-        zoom_title_y = y + 150
+        zoom_title_y = y + 252
         parts.append(f'<text x="{left - 10}" y="{zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">KV zoom</text>')
         if zoom is None:
             parts.append(f'<text x="{left + 8}" y="{zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No SGLang-visible KV movement in this gap window.</text>')
@@ -6127,7 +6184,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     font_size=9,
                 )
 
-        replay_zoom_title_y = y + 344
+        replay_zoom_title_y = y + 452
         parts.append(f'<text x="{left - 10}" y="{replay_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">replay zoom</text>')
         if replay_zoom is None:
             parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No replay timing was available for this gap.</text>')
@@ -6714,7 +6771,7 @@ def render_html(
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}
   </details>
 
-  <details id="unified-forensic-stack" class="section-card theme-profiled">
+  <details id="unified-forensic-stack" class="section-card theme-profiled" open>
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
     {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps)}
   </details>
