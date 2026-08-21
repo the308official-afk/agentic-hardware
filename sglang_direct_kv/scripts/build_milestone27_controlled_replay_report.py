@@ -38,6 +38,7 @@ from build_live_agentbench_tool_gap_report import (
     build_replay_execution_timeline_svg,
     display_ms,
     read_jsonl,
+    replay_phase_segments,
     table_html,
     timeline_kv_outcome,
     write_csv,
@@ -5217,9 +5218,14 @@ def unified_stack_legend_table_html() -> str:
             "KV leaves GPU residency. A host copy may still exist unless host eviction also happens.",
         ),
         (
-            "Prefill / recompute window",
+            "Recompute / rebuild estimate",
             unified_stack_color("recompute"),
-            "Before-first-token replay model work. It may include rebuilding missing KV, ordinary prefill, and runtime overhead. It is not pure recompute unless the counters say missing prefix tokens were rebuilt.",
+            "Estimated part of the before-first-token replay work spent rebuilding missing KV/prefix tokens. This is inferred from replay counters, not a pure hardware event.",
+        ),
+        (
+            "Remaining prefill / TTFT",
+            unified_stack_color("prefill"),
+            "The leftover before-first-token time after visible H2D and estimated recompute are separated out. This can include ordinary prefill, waiting, or other model/runtime work.",
         ),
         (
             "Decode",
@@ -5472,7 +5478,8 @@ def build_unified_per_gap_stack_timeline_svg(
         ("H2D", unified_stack_color("h2d")),
         ("D2H", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
-        ("prefill/recompute", unified_stack_color("recompute")),
+        ("recompute est.", unified_stack_color("recompute")),
+        ("remaining TTFT", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
     for legend_label, color in legend:
@@ -5506,7 +5513,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    row_h = 590
+    row_h = 650
     bottom = 116
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
@@ -5668,7 +5675,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ("H2D", unified_stack_color("h2d")),
         ("D2H", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
-        ("prefill/recompute", unified_stack_color("recompute")),
+        ("recompute est.", unified_stack_color("recompute")),
+        ("remaining TTFT", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
 
@@ -5731,7 +5739,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" fill="{band}"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="112" rx="8" fill="#ffffff" opacity="0.38"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 132:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 318:.1f}" width="{plot_w + 4:.1f}" height="220" rx="8" fill="#fff7ed" opacity="0.42"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 318:.1f}" width="{plot_w + 4:.1f}" height="270" rx="8" fill="#fff7ed" opacity="0.42"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
         parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
@@ -5803,14 +5811,65 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             prefill_start_rel = replay_start - due
             first_token_rel = first_token - due
             recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
-            replay_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
-            replay_label = "prefill/recompute" if recompute_tokens >= 128 else "TTFT"
-            draw_span(parts, overview_x, x_min, x_max, prefill_start_rel, first_token_rel, replay_y + 18, main_bar_h, replay_color, replay_label, f"{label} | replay prefill/recompute window: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82, break_long=True)
+            segments = replay_phase_segments(row)
+            recompute_ms = segments.get("recompute", 0.0)
+            normal_prefill_ms = segments.get("normal_prefill", 0.0)
+            cursor_rel = prefill_start_rel
+            if recompute_tokens >= 128 and recompute_ms > 0:
+                recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
+                draw_span(
+                    parts,
+                    overview_x,
+                    x_min,
+                    x_max,
+                    cursor_rel,
+                    recompute_end_rel,
+                    replay_y + 18,
+                    main_bar_h,
+                    unified_stack_color("recompute"),
+                    "recompute est.",
+                    f"{label} | estimated replay recompute/rebuild: {display_ms(recompute_end_rel - cursor_rel)}",
+                    opacity=0.82,
+                    break_long=True,
+                )
+                cursor_rel = recompute_end_rel
+            if normal_prefill_ms > 0 and first_token_rel > cursor_rel:
+                draw_span(
+                    parts,
+                    overview_x,
+                    x_min,
+                    x_max,
+                    cursor_rel,
+                    first_token_rel,
+                    replay_y + 46,
+                    main_bar_h,
+                    unified_stack_color("prefill"),
+                    "remaining TTFT",
+                    f"{label} | remaining before-first-token work: {display_ms(first_token_rel - cursor_rel)}",
+                    opacity=0.84,
+                    break_long=True,
+                )
+            elif recompute_tokens < 128:
+                draw_span(
+                    parts,
+                    overview_x,
+                    x_min,
+                    x_max,
+                    prefill_start_rel,
+                    first_token_rel,
+                    replay_y + 46,
+                    main_bar_h,
+                    unified_stack_color("prefill"),
+                    "TTFT",
+                    f"{label} | time to first token: {display_ms(first_token_rel - prefill_start_rel)}",
+                    opacity=0.84,
+                    break_long=True,
+                )
             draw_overview_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
         if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
             decode_span = (first_token - due, (as_float(row.get("resume_end_ms")) or first_token) - due)
             if decode_span[1] > decode_span[0]:
-                draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 46, main_bar_h, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
+                draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 74, main_bar_h, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
 
         zoom_title_y = y + 150
         parts.append(f'<text x="{left - 10}" y="{zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">KV zoom</text>')
@@ -5890,18 +5949,19 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
             for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
                 tx = zoom_x(tick_value, rz_min, rz_max)
-                parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 178:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 198:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+                parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 242:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
             if rz_min <= 0 <= rz_max:
                 zx = zoom_x(0.0, rz_min, rz_max)
-                parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 178:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 32:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#111827" stroke-width="1.6"/>')
                 parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 44:.1f}" font-size="9" font-weight="800">due</text>')
 
             replay_zoom_lanes = [
                 ("replay request", replay_zoom_title_y + 48),
                 ("replay H2D", replay_zoom_title_y + 86),
-                ("prefill/recompute", replay_zoom_title_y + 124),
-                ("decode", replay_zoom_title_y + 162),
+                ("recompute est.", replay_zoom_title_y + 124),
+                ("remaining TTFT", replay_zoom_title_y + 162),
+                ("decode", replay_zoom_title_y + 200),
             ]
             for lane_name, lane_y in replay_zoom_lanes:
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name)}</text>')
@@ -5981,57 +6041,110 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             replay_start_abs = as_float(row.get("resume_start_ms"))
             first_token_abs = first_token_ms(row)
             if replay_start_abs is not None and first_token_abs is not None:
-                prefill_recompute_start_abs = as_float(row.get("replay_prefill_recompute_start_ms"))
-                prefill_recompute_end_abs = as_float(row.get("replay_prefill_recompute_end_ms"))
-                pre_token_start_abs = prefill_recompute_start_abs if prefill_recompute_start_abs is not None else replay_start_abs
-                pre_token_end_abs = (
-                    min(prefill_recompute_end_abs, first_token_abs)
-                    if prefill_recompute_end_abs is not None
-                    else first_token_abs
-                )
-                if pre_token_end_abs <= pre_token_start_abs:
-                    pre_token_end_abs = first_token_abs
+                pre_token_start_abs = as_float(row.get("replay_prefill_start_ms")) or replay_start_abs
                 pre_token_start = pre_token_start_abs - due
-                pre_token_end = pre_token_end_abs - due
+                first_token_rel = first_token_abs - due
                 recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
-                pre_token_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
-                pre_token_duration = pre_token_end - pre_token_start
-                pre_token_label = short_bar_label(
-                    [
-                        "prefill/recompute" if recompute_tokens >= 128 else "TTFT",
-                        compact_token_count(recompute_tokens) if recompute_tokens >= 128 else "",
-                        display_ms(pre_token_duration),
-                    ],
-                    max_chars=42,
-                )
                 cached_prefix = compact_token_count(row.get("replay_cached_prefix_tokens"))
                 input_tokens = compact_token_count(row.get("replay_input_tokens"))
                 timing_source = str(row.get("replay_prefill_recompute_timing_source") or "fallback_request_ttft_window")
-                pre_token_title = (
-                    f"{label} | replay prefill/recompute window | timing_source={timing_source} | "
-                    f"duration={display_ms(pre_token_duration)} | "
-                    f"recompute_or_prefill={compact_token_count(recompute_tokens)} | input={input_tokens} | "
-                    f"cached_prefix={cached_prefix} | first_token={display_ms(pre_token_end)} relative to due"
-                )
-                draw_span(
-                    parts,
-                    lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
-                    rz_min,
-                    rz_max,
-                    pre_token_start,
-                    pre_token_end,
-                    replay_zoom_title_y + 113,
-                    main_bar_h,
-                    pre_token_color,
-                    pre_token_label,
-                    pre_token_title,
-                    opacity=0.88,
-                    min_w=6.0,
-                    label_min_w=82.0,
-                    font_size=9,
-                )
-                first_token_x = zoom_x(pre_token_end, rz_min, rz_max)
-                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 108:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 184:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(pre_token_end))} relative to due</title></line>')
+                segments = replay_phase_segments(row)
+                recompute_ms = segments.get("recompute", 0.0)
+                normal_prefill_ms = segments.get("normal_prefill", 0.0)
+                cursor_rel = pre_token_start
+                if recompute_tokens >= 128 and recompute_ms > 0:
+                    recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
+                    recompute_label = short_bar_label(
+                        ["recompute est.", compact_token_count(recompute_tokens), display_ms(recompute_end_rel - cursor_rel)],
+                        max_chars=44,
+                    )
+                    recompute_title = (
+                        f"{label} | estimated replay recompute/rebuild | timing_source={timing_source} | "
+                        f"duration={display_ms(recompute_end_rel - cursor_rel)} | rebuilt_or_new_prefill={compact_token_count(recompute_tokens)} | "
+                        f"input={input_tokens} | cached_prefix={cached_prefix} | estimate_note=derived from replay counters and model-forward timing"
+                    )
+                    draw_span(
+                        parts,
+                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        rz_min,
+                        rz_max,
+                        cursor_rel,
+                        recompute_end_rel,
+                        replay_zoom_title_y + 113,
+                        main_bar_h,
+                        unified_stack_color("recompute"),
+                        recompute_label,
+                        recompute_title,
+                        opacity=0.88,
+                        min_w=6.0,
+                        label_min_w=82.0,
+                        font_size=9,
+                    )
+                    cursor_rel = recompute_end_rel
+                else:
+                    missing_title = f"{label} | no estimated replay recompute/rebuild segment"
+                    draw_span(
+                        parts,
+                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        rz_min,
+                        rz_max,
+                        pre_token_start,
+                        min(first_token_rel, pre_token_start + 1.0),
+                        replay_zoom_title_y + 113,
+                        main_bar_h,
+                        "#f8fafc",
+                        "",
+                        missing_title,
+                        opacity=0.40,
+                        min_w=3.0,
+                        label_min_w=9999.0,
+                    )
+                if normal_prefill_ms > 0 and first_token_rel > cursor_rel:
+                    prefill_end_rel = first_token_rel
+                    prefill_label = short_bar_label(
+                        ["remaining TTFT", display_ms(prefill_end_rel - cursor_rel)],
+                        max_chars=42,
+                    )
+                    prefill_title = (
+                        f"{label} | remaining before-first-token replay work | duration={display_ms(prefill_end_rel - cursor_rel)} | "
+                        f"note=leftover TTFT after visible H2D and estimated recompute are separated"
+                    )
+                    draw_span(
+                        parts,
+                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        rz_min,
+                        rz_max,
+                        cursor_rel,
+                        prefill_end_rel,
+                        replay_zoom_title_y + 151,
+                        main_bar_h,
+                        unified_stack_color("prefill"),
+                        prefill_label,
+                        prefill_title,
+                        opacity=0.88,
+                        min_w=6.0,
+                        label_min_w=82.0,
+                        font_size=9,
+                    )
+                else:
+                    draw_span(
+                        parts,
+                        lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
+                        rz_min,
+                        rz_max,
+                        cursor_rel,
+                        min(first_token_rel, cursor_rel + 1.0),
+                        replay_zoom_title_y + 151,
+                        main_bar_h,
+                        "#f8fafc",
+                        "",
+                        f"{label} | no remaining before-first-token TTFT segment after H2D/recompute split",
+                        opacity=0.40,
+                        min_w=3.0,
+                        label_min_w=9999.0,
+                    )
+                first_token_x = zoom_x(first_token_rel, rz_min, rz_max)
+                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 108:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 222:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(first_token_rel))} relative to due</title></line>')
                 parts.append(f'<text x="{first_token_x + 5:.1f}" y="{replay_zoom_title_y + 112:.1f}" font-size="8" font-weight="800" fill="#92400e">first token</text>')
 
             if first_token_abs is not None and as_float(row.get("resume_end_ms")) is not None:
@@ -6046,7 +6159,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         rz_max,
                         decode_start,
                         decode_end,
-                        replay_zoom_title_y + 151,
+                        replay_zoom_title_y + 189,
                         main_bar_h,
                         unified_stack_color("decode"),
                         short_bar_label(["decode", display_ms(decode_duration)], max_chars=36),
@@ -6078,10 +6191,10 @@ def unified_per_gap_forensic_stack_html(
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
     <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, and a local zoom of replay execution.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, the prefill/recompute window, first-token timing, and decode.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, estimated recompute/rebuild, remaining TTFT, first-token timing, and decode.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
-    <p class="note">The magenta <strong>Prefill / recompute window</strong> is the before-first-token replay model-work window. It can include ordinary prefill, rebuilding missing KV/prefix tokens, and runtime overhead. It is not a claim of pure recompute unless the replay counters show missing prefix/KV work was rebuilt.</p>
+    <p class="note">The magenta <strong>recompute estimate</strong> is inferred from replay counters and model-forward timing. The gold <strong>remaining TTFT</strong> is the leftover before-first-token work after visible H2D and estimated recompute are separated out.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
@@ -6315,7 +6428,7 @@ def render_html(
 
   <details id="summary" class="section-card theme-summary">
     <summary><h2>Summary</h2></summary>
-    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is split into evidence colors: cyan for replay-side host KV load, magenta for the prefill/recompute window, and gold for remaining prefill or wait.</p>
+    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is split into evidence colors: cyan for replay-side host KV load, magenta for estimated recompute/rebuild, and gold for remaining prefill or TTFT work.</p>
     {metric_cards_html(mode_rows)}
   </details>
 
