@@ -6237,9 +6237,23 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         if replay_zoom is None:
             parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No replay timing was available for this gap.</text>')
         else:
-            rz_min, rz_max = replay_zoom
+            base_rz_min, base_rz_max = replay_zoom
+            rz_min, rz_max = base_rz_min, base_rz_max
             rz_span = max(1.0, rz_max - rz_min)
-            has_prefetch_window = hint_h2d_span is not None
+            has_prefetch_window = False
+            if hint_h2d_span is not None:
+                # Use a broken axis only when the prefetch copy really happened
+                # before the replay region. If the two windows overlap, drawing
+                # them side-by-side makes the labels look like time moves
+                # backwards, so we keep one chronological replay window.
+                prefetch_gap_before_replay = base_rz_min - hint_h2d_span[1]
+                has_prefetch_window = prefetch_gap_before_replay > 50.0
+                if not has_prefetch_window:
+                    hint_duration = max(1.0, hint_h2d_span[1] - hint_h2d_span[0])
+                    hint_pad = max(20.0, hint_duration * 0.10)
+                    rz_min = min(base_rz_min, hint_h2d_span[0] - hint_pad)
+                    rz_max = max(base_rz_max, hint_h2d_span[1] + hint_pad)
+                    rz_span = max(1.0, rz_max - rz_min)
             if has_prefetch_window:
                 prefetch_window_start = hint_h2d_span[0]
                 prefetch_window_end = hint_h2d_span[1]
@@ -6297,7 +6311,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 hz_min = rz_min
                 hz_max = rz_max
                 replay_zoom_label = f"expanded replay region: {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
-                parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">Replay zoom: expanded replay execution region</text>')
+                replay_zoom_title = "Replay zoom: expanded replay execution region"
+                if hint_h2d_span is not None:
+                    replay_zoom_title = "Replay zoom: chronological prefetch + replay execution region"
+                    replay_zoom_label = (
+                        f"single-window replay region: prefetch/replay overlap or arrive close together; "
+                        f"shown chronologically from {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
+                    )
+                parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">{html.escape(replay_zoom_title)}</text>')
                 parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
                 for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
                     tx = replay_x(tick_value)
