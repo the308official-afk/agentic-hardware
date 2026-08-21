@@ -1422,6 +1422,7 @@ def _request_stage_event(
 
 def _prefill_telemetry_event(
     *,
+    phase: str,
     call_id: str,
     event_name: str,
     method_name: str,
@@ -1440,9 +1441,10 @@ def _prefill_telemetry_event(
         return None
     batch = context.get("batch") if isinstance(context.get("batch"), dict) else {}
     event: dict[str, Any] = {
-        "event": "kv_telemetry.prefill.end",
+        "event": f"kv_telemetry.prefill.{phase}",
         "call_id": call_id,
-        "source_event": f"{event_name}.end",
+        "source_event": f"{event_name}.{phase}",
+        "phase": phase,
         "class": class_name,
         "method": method_name,
         "category": category,
@@ -1559,6 +1561,16 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         )
         if request_stage_start_event:
             _write_event(request_stage_start_event)
+        prefill_start_event = _prefill_telemetry_event(
+            phase="start",
+            call_id=call_id,
+            event_name=event_name,
+            method_name=method_name,
+            class_name=cls.__name__,
+            context=start_kv_context,
+        )
+        if prefill_start_event:
+            _write_event(prefill_start_event)
         if _should_start_torch_profiler(event_name, start_kv_context):
             maybe_start_torch_profiler(nvtx_name)
         try:
@@ -1668,6 +1680,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             if request_stage_end_event:
                 _write_event(request_stage_end_event)
             prefill_event = _prefill_telemetry_event(
+                phase="end",
                 call_id=call_id,
                 event_name=event_name,
                 method_name=method_name,

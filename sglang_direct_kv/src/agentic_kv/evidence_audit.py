@@ -102,14 +102,14 @@ def chart_inventory_rows() -> EvidenceRows:
             "limitation": "SGLang-visible copy window, not raw DMA queue occupancy",
         },
         {
-            "report_item": "Readable KV Lifecycle Timeline: recompute/rebuild",
+            "report_item": "Readable KV Lifecycle Timeline: prefill/recompute window",
             "visual_element": "magenta bar",
             "source_artifact": "replay_path_ledger.csv / gaps fields",
-            "raw_hook_or_source": "cache counters, prefix-match counters, TTFT/model-forward evidence",
+            "raw_hook_or_source": "kv_telemetry.prefill.start/end model-forward hooks, cache counters, prefix-match counters, TTFT fallback",
             "identity_carried": "session_id, request_id when available",
-            "evidence_level": "INFERRED",
-            "audit_rule": "replay_new_prefill_tokens_est or recomputed_tokens_est exists",
-            "limitation": "not a physical per-token recompute hook yet",
+            "evidence_level": "DIRECT/INFERRED",
+            "audit_rule": "replay_prefill_recompute_start_ms/end_ms or replay_new_prefill_tokens_est exists",
+            "limitation": "model-forward window is directly timed when hooks are present; exact per-token recompute amount still comes from cache/prefix counters",
         },
         {
             "report_item": "Global Replay H2D Readiness",
@@ -519,11 +519,11 @@ def inference_boundary_rows(data: dict[str, Any]) -> EvidenceRows:
     return [
         {
             "area": "inference boundaries",
-            "check": "recompute/rebuild evidence",
+            "check": "prefill/recompute evidence",
             "coverage": coverage_text(len(recompute_rows), len(gaps)),
-            "evidence_level": "INFERRED",
-            "status": "explicitly marked inferred",
-            "meaning": "Recompute bars are estimates from cache/prefix/model-forward evidence, not direct physical recompute hooks.",
+            "evidence_level": "DIRECT/INFERRED",
+            "status": "window directly timed when hooks exist; token attribution estimated",
+            "meaning": "The magenta bar is the replay prefill/recompute window. Its timing is direct when model-forward hooks are present, but exact pure-recompute tokens still come from cache/prefix counters.",
         },
         {
             "area": "inference boundaries",

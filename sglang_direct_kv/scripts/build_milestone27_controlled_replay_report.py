@@ -731,7 +731,7 @@ def replay_path_from_evidence(row: dict[str, Any]) -> str:
     hit_ratio = as_float(row.get("replay_cache_hit_ratio_pct"))
     ttft = as_float(row.get("resume_ttft_ms"))
     if new_prefill is not None and new_prefill >= 128 and ttft is not None and ttft >= 1000:
-        return "replay recompute/prefill suspected"
+        return "replay prefill/recompute path suspected"
     if hit_ratio is not None and hit_ratio >= 90:
         return "mostly cache hit/resident"
     if ttft is not None and ttft >= 1000:
@@ -751,14 +751,14 @@ def per_gap_verdict(row: dict[str, Any]) -> str:
     if mode == "no_prefetch":
         if replay_loaded:
             return "no_prefetch_replay_loaded_kv"
-        if replay_path_value == "replay recompute/prefill suspected":
+        if replay_path_value == "replay prefill/recompute path suspected":
             return "no_prefetch_replay_recomputed"
         return "no_prefetch_cache_reused_or_scheduler_wait"
     if margin is None:
         return "prefetch_missing_or_unfinished"
     if margin < 0 and replay_loaded:
         return "prefetch_late_replay_loaded_kv"
-    if margin < 0 and replay_path_value == "replay recompute/prefill suspected":
+    if margin < 0 and replay_path_value == "replay prefill/recompute path suspected":
         return "prefetch_late_replay_recomputed"
     if margin < 0:
         return "prefetch_late_no_replay_h2d"
@@ -766,7 +766,7 @@ def per_gap_verdict(row: dict[str, Any]) -> str:
         return "prefetch_ready_but_replay_loaded_kv"
     if hint_loaded and replay_path_value in {"mostly cache hit/resident", "likely cache hit/resident"}:
         return "prefetch_success_cache_reused"
-    if replay_path_value == "replay recompute/prefill suspected":
+    if replay_path_value == "replay prefill/recompute path suspected":
         return "prefetch_ready_but_replay_recomputed"
     if replay_path_value in {"mostly cache hit/resident", "likely cache hit/resident"}:
         if not hint_loaded and hint_host_hit == 0:
@@ -875,7 +875,11 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         base_ts,
         {"kv_telemetry.scheduler.start", "kv_telemetry.scheduler.end", "kv_telemetry.request_stage"},
     )
-    prefill_by_session = telemetry_events_by_session(trace_rows, base_ts, "kv_telemetry.prefill.end")
+    prefill_by_session = telemetry_events_by_session(
+        trace_rows,
+        base_ts,
+        {"kv_telemetry.prefill.start", "kv_telemetry.prefill.end"},
+    )
     sessions = sorted(session_meta)
     gaps: list[dict[str, Any]] = []
     for idx, session in enumerate(sessions):
@@ -1031,6 +1035,13 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_model_forward_end_ms": replay_prefill_summary["end_ms"],
             "replay_model_forward_total_ms": replay_prefill_summary["duration_ms"],
             "replay_model_forward_categories": replay_prefill_summary["categories"],
+            "replay_prefill_recompute_start_ms": replay_prefill_summary["start_ms"],
+            "replay_prefill_recompute_end_ms": replay_prefill_summary["end_ms"],
+            "replay_prefill_recompute_duration_ms": replay_prefill_summary["duration_ms"],
+            "replay_prefill_recompute_event_count": replay_prefill_summary["event_count"],
+            "replay_prefill_recompute_timing_source": (
+                "exact_model_forward_hook" if replay_prefill_summary["event_count"] else "fallback_request_ttft_window"
+            ),
             "pre_replay_checkpoint_ms": checkpoint.get("ms", ""),
             "pre_replay_expected_reuse": checkpoint.get("expected_reuse", ""),
             "pre_replay_gpu_resident_tokens": checkpoint.get("gpu_resident_tokens", ""),
@@ -1075,7 +1086,7 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "hint_h2d_gaps": sum(1 for row in items if has_events(row.get("direct_kv_h2d_events"))),
                 "replay_h2d_gaps": sum(1 for row in items if has_events(row.get("replay_kv_h2d_events"))),
                 "replay_recompute_or_wait_suspected_gaps": sum(
-                    1 for value in replay_paths if value in {"replay recompute/prefill suspected", "scheduler/cache wait suspected"}
+                    1 for value in replay_paths if value in {"replay prefill/recompute path suspected", "scheduler/cache wait suspected"}
                 ),
                 "likely_cache_hit_or_resident_gaps": replay_paths.count("likely cache hit/resident"),
                 "mostly_cache_hit_or_resident_gaps": replay_paths.count("mostly cache hit/resident"),
@@ -1372,9 +1383,9 @@ def detailed_kv_lifecycle_column_guide_rows() -> list[dict[str, str]]:
         {"column": "h2d_start_ms", "meaning": "When host-to-device reload of this block started."},
         {"column": "h2d_end_ms", "meaning": "When host-to-device reload of this block finished."},
         {"column": "h2d_duration_ms", "meaning": "How long the visible KV host-to-device movement took."},
-        {"column": "recompute_start_ms_est", "meaning": "Estimated start of replay recompute/prefill when old KV had to be rebuilt."},
-        {"column": "recompute_end_ms_est", "meaning": "Estimated end of replay recompute/prefill."},
-        {"column": "recompute_duration_ms_est", "meaning": "Estimated time spent rebuilding missing prefix/KV work."},
+        {"column": "recompute_start_ms_est", "meaning": "Start of the replay prefill/recompute window. Exact when model-forward hooks are present; otherwise a fallback estimate."},
+        {"column": "recompute_end_ms_est", "meaning": "End of the replay prefill/recompute window. Exact when model-forward hooks are present; otherwise a fallback estimate."},
+        {"column": "recompute_duration_ms_est", "meaning": "Measured or estimated time spent in before-first-token replay work, including prefill and possible missing-KV rebuild."},
         {"column": "replay_due_ms", "meaning": "When replay ideally needed the KV to already be ready."},
         {"column": "replay_start_ms", "meaning": "When the replay request actually started running."},
         {"column": "first_token_ms", "meaning": "When the replay produced its first output token."},
@@ -2361,7 +2372,7 @@ def copy_verdict_for_delay_row(
         new_prefill = as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
         if new_prefill >= 128:
             return (
-                "no replay H2D; recompute/prefill path",
+                "no replay H2D; prefill/recompute path",
                 "Replay did not show host-to-device KV movement, and cache counters suggest missing prefix work was rebuilt.",
             )
         return (
@@ -5168,6 +5179,71 @@ def unified_stack_color(kind: str) -> str:
     }.get(kind, "#64748b")
 
 
+def unified_stack_legend_table_html() -> str:
+    rows = [
+        (
+            "Initial model turn",
+            unified_stack_color("initial"),
+            "The first model request before the agent/tool wait begins.",
+        ),
+        (
+            "Tool wait",
+            unified_stack_color("tool_wait"),
+            "The pause while a tool is running. This is the opportunity window where prefetch could help.",
+        ),
+        (
+            "Client dispatch",
+            unified_stack_color("client_dispatch"),
+            "The replay request has become due, but it is still in the driver/client path before useful SGLang work starts.",
+        ),
+        (
+            "Scheduler / load path",
+            unified_stack_color("scheduler"),
+            "SGLang receive, scheduler queue/admit, cache lookup, or load-back decision work before useful model/KV work.",
+        ),
+        (
+            "H2D",
+            unified_stack_color("h2d"),
+            "Host-to-device KV movement: KV is loaded from host memory back into GPU memory.",
+        ),
+        (
+            "D2H",
+            unified_stack_color("d2h"),
+            "Device-to-host KV movement: KV is backed up or offloaded from GPU memory to host memory.",
+        ),
+        (
+            "Evict",
+            unified_stack_color("evict"),
+            "KV leaves GPU residency. A host copy may still exist unless host eviction also happens.",
+        ),
+        (
+            "Prefill / recompute window",
+            unified_stack_color("recompute"),
+            "Before-first-token replay model work. It may include rebuilding missing KV, ordinary prefill, and runtime overhead. It is not pure recompute unless the counters say missing prefix tokens were rebuilt.",
+        ),
+        (
+            "Decode",
+            unified_stack_color("decode"),
+            "Generation after the first output token is produced.",
+        ),
+    ]
+    body = []
+    for name, color, meaning in rows:
+        body.append(
+            "<tr>"
+            f'<td><span style="display:inline-block;width:54px;height:16px;border-radius:4px;'
+            f'background:{html.escape(color)};border:1px solid #cbd5e1"></span></td>'
+            f"<td>{html.escape(name)}</td>"
+            f"<td>{html.escape(meaning)}</td>"
+            "</tr>"
+        )
+    return (
+        '<table class="compact-table">'
+        "<thead><tr><th>Color</th><th>Timeline element</th><th>Simple meaning</th></tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
 def build_unified_per_gap_stack_timeline_svg(
     gaps: list[dict[str, Any]],
     all_kv_events: list[dict[str, Any]],
@@ -5364,11 +5440,12 @@ def build_unified_per_gap_stack_timeline_svg(
         first_token = first_token_ms(row)
         replay_start = as_float(row.get("resume_start_ms"))
         if first_token is not None and replay_start is not None:
-            prefill_start_rel = replay_start - due
+            prefill_recompute_start = as_float(row.get("replay_prefill_recompute_start_ms"))
+            prefill_start_rel = (prefill_recompute_start - due) if prefill_recompute_start is not None else replay_start - due
             first_token_rel = first_token - due
             recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
             if recompute_tokens >= 128:
-                draw_span(parts, prefill_start_rel, first_token_rel, replay_y + 10, 10, unified_stack_color("recompute"), "recompute/prefill", f"{label} | estimated replay recompute/prefill until first token: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82)
+                draw_span(parts, prefill_start_rel, first_token_rel, replay_y + 10, 10, unified_stack_color("recompute"), "prefill/recompute", f"{label} | replay prefill/recompute window until first token: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82)
             else:
                 draw_span(parts, prefill_start_rel, first_token_rel, replay_y + 10, 10, unified_stack_color("prefill"), "TTFT", f"{label} | remaining time to first token: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82)
             draw_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
@@ -5395,7 +5472,7 @@ def build_unified_per_gap_stack_timeline_svg(
         ("H2D", unified_stack_color("h2d")),
         ("D2H", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
-        ("recompute", unified_stack_color("recompute")),
+        ("prefill/recompute", unified_stack_color("recompute")),
         ("decode", unified_stack_color("decode")),
     ]
     for legend_label, color in legend:
@@ -5591,7 +5668,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ("H2D", unified_stack_color("h2d")),
         ("D2H", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
-        ("recompute", unified_stack_color("recompute")),
+        ("prefill/recompute", unified_stack_color("recompute")),
         ("decode", unified_stack_color("decode")),
     ]
 
@@ -5727,8 +5804,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             first_token_rel = first_token - due
             recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
             replay_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
-            replay_label = "recompute/TTFT" if recompute_tokens >= 128 else "TTFT"
-            draw_span(parts, overview_x, x_min, x_max, prefill_start_rel, first_token_rel, replay_y + 18, main_bar_h, replay_color, replay_label, f"{label} | replay pre-first-token path: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82, break_long=True)
+            replay_label = "prefill/recompute" if recompute_tokens >= 128 else "TTFT"
+            draw_span(parts, overview_x, x_min, x_max, prefill_start_rel, first_token_rel, replay_y + 18, main_bar_h, replay_color, replay_label, f"{label} | replay prefill/recompute window: {display_ms(first_token_rel - prefill_start_rel)}", opacity=0.82, break_long=True)
             draw_overview_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
         if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
             decode_span = (first_token - due, (as_float(row.get("resume_end_ms")) or first_token) - due)
@@ -5823,7 +5900,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             replay_zoom_lanes = [
                 ("replay request", replay_zoom_title_y + 48),
                 ("replay H2D", replay_zoom_title_y + 86),
-                ("before first token", replay_zoom_title_y + 124),
+                ("prefill/recompute", replay_zoom_title_y + 124),
                 ("decode", replay_zoom_title_y + 162),
             ]
             for lane_name, lane_y in replay_zoom_lanes:
@@ -5904,14 +5981,24 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             replay_start_abs = as_float(row.get("resume_start_ms"))
             first_token_abs = first_token_ms(row)
             if replay_start_abs is not None and first_token_abs is not None:
-                pre_token_start = replay_start_abs - due
-                pre_token_end = first_token_abs - due
+                prefill_recompute_start_abs = as_float(row.get("replay_prefill_recompute_start_ms"))
+                prefill_recompute_end_abs = as_float(row.get("replay_prefill_recompute_end_ms"))
+                pre_token_start_abs = prefill_recompute_start_abs if prefill_recompute_start_abs is not None else replay_start_abs
+                pre_token_end_abs = (
+                    min(prefill_recompute_end_abs, first_token_abs)
+                    if prefill_recompute_end_abs is not None
+                    else first_token_abs
+                )
+                if pre_token_end_abs <= pre_token_start_abs:
+                    pre_token_end_abs = first_token_abs
+                pre_token_start = pre_token_start_abs - due
+                pre_token_end = pre_token_end_abs - due
                 recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
                 pre_token_color = unified_stack_color("recompute") if recompute_tokens >= 128 else unified_stack_color("prefill")
                 pre_token_duration = pre_token_end - pre_token_start
                 pre_token_label = short_bar_label(
                     [
-                        "recompute" if recompute_tokens >= 128 else "TTFT",
+                        "prefill/recompute" if recompute_tokens >= 128 else "TTFT",
                         compact_token_count(recompute_tokens) if recompute_tokens >= 128 else "",
                         display_ms(pre_token_duration),
                     ],
@@ -5919,8 +6006,10 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 )
                 cached_prefix = compact_token_count(row.get("replay_cached_prefix_tokens"))
                 input_tokens = compact_token_count(row.get("replay_input_tokens"))
+                timing_source = str(row.get("replay_prefill_recompute_timing_source") or "fallback_request_ttft_window")
                 pre_token_title = (
-                    f"{label} | replay before first token | duration={display_ms(pre_token_duration)} | "
+                    f"{label} | replay prefill/recompute window | timing_source={timing_source} | "
+                    f"duration={display_ms(pre_token_duration)} | "
                     f"recompute_or_prefill={compact_token_count(recompute_tokens)} | input={input_tokens} | "
                     f"cached_prefix={cached_prefix} | first_token={display_ms(pre_token_end)} relative to due"
                 )
@@ -5989,7 +6078,10 @@ def unified_per_gap_forensic_stack_html(
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
     <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, and a local zoom of replay execution.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, recompute/prefill, first-token timing, and decode.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, the prefill/recompute window, first-token timing, and decode.</p>
+    <h3>Legend / How To Read This Timeline</h3>
+    {unified_stack_legend_table_html()}
+    <p class="note">The magenta <strong>Prefill / recompute window</strong> is the before-first-token replay model-work window. It can include ordinary prefill, rebuilding missing KV/prefix tokens, and runtime overhead. It is not a claim of pure recompute unless the replay counters show missing prefix/KV work was rebuilt.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
@@ -6223,7 +6315,7 @@ def render_html(
 
   <details id="summary" class="section-card theme-summary">
     <summary><h2>Summary</h2></summary>
-    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is inferred from TTFT and is now split into evidence colors: cyan for replay-side host KV load, magenta for recompute/rebuild, and gold for remaining prefill or wait.</p>
+    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is split into evidence colors: cyan for replay-side host KV load, magenta for the prefill/recompute window, and gold for remaining prefill or wait.</p>
     {metric_cards_html(mode_rows)}
   </details>
 
