@@ -25,6 +25,26 @@ _NODE_RESIDENCY_BY_ID: dict[str, dict[str, Any]] = {}
 _REQUEST_INTAKE_BY_RID: dict[str, dict[str, Any]] = {}
 
 
+def _first_int(value: Any, *keys: str) -> int | None:
+    """Best-effort integer extraction from dictionaries or raw values."""
+
+    if isinstance(value, dict):
+        for key in keys:
+            raw = value.get(key)
+            try:
+                if raw not in (None, ""):
+                    return int(raw)
+            except (TypeError, ValueError):
+                pass
+        return None
+    try:
+        if value not in (None, ""):
+            return int(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def _trace_path() -> Path:
     return Path(os.environ.get("AGENTIC_KV_TRACE_PATH", "artifacts/kv_movement_trace.jsonl"))
 
@@ -218,6 +238,60 @@ def _request_index_count(request: dict[str, Any], *keys: str) -> int | None:
     return None
 
 
+def _enrich_request_prefill_attribution(request: dict[str, Any]) -> None:
+    """Attach stable replay/prefill token-range hints to a request summary.
+
+    SGLang's exact request object fields vary across releases. The report layer
+    should not depend on those internal names, so this function normalizes the
+    useful pieces we can observe into stable fields.
+    """
+
+    full_tokens = (
+        _first_int(request.get("full_input_tokens"))
+        or _first_int(request.get("ingest_input_tokens"))
+        or _request_index_count(request, "ingest_input_ids", "ingest_origin_input_ids", "input_ids", "origin_input_ids", "fill_ids")
+    )
+    active_tokens = (
+        _first_int(request.get("active_input_tokens"))
+        or _request_index_count(request, "origin_input_ids", "fill_ids", "input_ids")
+    )
+    prefix_tokens = (
+        _first_int(request.get("cached_prefix_tokens"))
+        or _request_index_count(request, "prefix_indices")
+        or _first_int(request.get("cache_protected_len"))
+        or _first_int(request.get("kv_committed_len"))
+    )
+    host_hit_tokens = _first_int(request.get("host_hit_length"))
+
+    if full_tokens is not None:
+        request.setdefault("prefill_full_input_tokens", full_tokens)
+    if active_tokens is not None:
+        request.setdefault("prefill_active_input_tokens", active_tokens)
+    if prefix_tokens is not None:
+        request.setdefault("prefill_cached_prefix_tokens", prefix_tokens)
+    if host_hit_tokens is not None:
+        request.setdefault("prefill_host_hit_tokens", host_hit_tokens)
+
+    # If the scheduler has trimmed the request before this hook sees it, full
+    # input tokens can be larger than active tokens. Preserve that as evidence.
+    if full_tokens is not None and active_tokens is not None and full_tokens > active_tokens:
+        request.setdefault("prefill_scheduler_trimmed_tokens", full_tokens - active_tokens)
+        prefix_tokens = max(prefix_tokens or 0, full_tokens - active_tokens)
+        request.setdefault("prefill_cached_prefix_tokens", prefix_tokens)
+
+    if full_tokens is None or prefix_tokens is None:
+        return
+    uncached_start = max(0, min(prefix_tokens, full_tokens))
+    uncached_end = full_tokens
+    uncached_count = max(0, uncached_end - uncached_start)
+    request.setdefault("prefill_uncached_token_start", uncached_start)
+    request.setdefault("prefill_uncached_token_end", uncached_end)
+    request.setdefault("prefill_uncached_token_count", uncached_count)
+    request.setdefault("prefill_recompute_candidate_tokens", uncached_count)
+    if uncached_count:
+        request.setdefault("prefill_token_range", f"{uncached_start}..{uncached_end}")
+
+
 def _remember_request_intake(context: dict[str, Any]) -> None:
     candidates: list[dict[str, Any]] = []
     req = context.get("request")
@@ -289,6 +363,7 @@ def _apply_request_intake_context(context: dict[str, Any]) -> None:
         for key, value in _copy_agent_context(intake).items():
             request.setdefault(key, value)
             context.setdefault(key, value)
+        _enrich_request_prefill_attribution(request)
 
 
 def _propagated_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
@@ -467,6 +542,7 @@ def _request_like_context(req: Any) -> dict[str, Any]:
                 context[attr] = _index_context(value) if hasattr(value, "numel") else _int_list_signature(value)
             except Exception:
                 pass
+    _enrich_request_prefill_attribution(context)
     return {key: value for key, value in context.items() if value not in (None, "", [], {})}
 
 
@@ -492,17 +568,60 @@ def _requests_from_value(value: Any, limit: int = 16) -> list[dict[str, Any]]:
 def _batch_context(batch: Any) -> dict[str, Any]:
     if batch is None:
         return {}
-    out: dict[str, Any] = {"type": type(batch).__name__}
+    out: dict[str, Any] = {"type": type(batch).__name__, "object_id": hex(id(batch))}
     for attr in ("batch_is_full", "forward_mode", "extend_num_tokens", "seq_lens_sum", "bs", "batch_size"):
         if hasattr(batch, attr):
             try:
                 out[attr] = _safe_summary(getattr(batch, attr))
             except Exception:
                 pass
+    for attr in (
+        "input_ids",
+        "req_pool_indices",
+        "seq_lens",
+        "extend_lens",
+        "extend_start_loc",
+        "extend_prefix_lens",
+        "extend_num_tokens_cpu",
+        "prefix_lens",
+    ):
+        if hasattr(batch, attr):
+            try:
+                value = getattr(batch, attr)
+                out[attr] = _index_context(value) if hasattr(value, "numel") else _safe_summary(value)
+            except Exception:
+                pass
     requests = _requests_from_value(batch)
     if requests:
         out["requests"] = requests
         out["request_count"] = len(requests)
+        uncached = 0
+        full_tokens = 0
+        cached_tokens = 0
+        with_uncached = 0
+        token_ranges: list[str] = []
+        for request in requests:
+            _enrich_request_prefill_attribution(request)
+            count = _first_int(request.get("prefill_uncached_token_count"))
+            full = _first_int(request.get("prefill_full_input_tokens"))
+            cached = _first_int(request.get("prefill_cached_prefix_tokens"))
+            if count is not None:
+                uncached += count
+                if count > 0:
+                    with_uncached += 1
+            if full is not None:
+                full_tokens += full
+            if cached is not None:
+                cached_tokens += cached
+            token_range = request.get("prefill_token_range")
+            if token_range not in (None, "", [], {}) and len(token_ranges) < 16:
+                token_ranges.append(str(token_range))
+        out["request_uncached_token_sum"] = uncached
+        out["request_full_token_sum"] = full_tokens
+        out["request_cached_prefix_token_sum"] = cached_tokens
+        out["requests_with_uncached_tokens"] = with_uncached
+        if token_ranges:
+            out["uncached_token_ranges_sample"] = token_ranges
     return {key: value for key, value in out.items() if value not in (None, "", [], {})}
 
 
@@ -717,6 +836,7 @@ def _req_context(req: Any) -> dict[str, Any]:
                 context[f"{attr}_id"] = _node_id(getattr(req, attr))
             except Exception:
                 pass
+    _enrich_request_prefill_attribution(context)
     return {key: value for key, value in context.items() if value not in (None, "", [], {})}
 
 
@@ -1415,6 +1535,53 @@ def _request_stage_event(
         if count is not None:
             event[out_key] = count
 
+    batch = context.get("batch")
+    if isinstance(batch, dict):
+        for key in (
+            "object_id",
+            "forward_mode",
+            "extend_num_tokens",
+            "seq_lens_sum",
+            "request_uncached_token_sum",
+            "request_full_token_sum",
+            "request_cached_prefix_token_sum",
+            "requests_with_uncached_tokens",
+            "uncached_token_ranges_sample",
+        ):
+            value = batch.get(key)
+            if value not in (None, "", [], {}):
+                event[f"batch_{key}"] = value
+        requests = batch.get("requests")
+        if isinstance(requests, list):
+            attributed: list[dict[str, Any]] = []
+            for request in requests[:16]:
+                if not isinstance(request, dict):
+                    continue
+                attributed.append(
+                    {
+                        key: request.get(key)
+                        for key in (
+                            "rid",
+                            "request_id",
+                            "agent_request_id",
+                            "agent_session_id",
+                            "agent_phase",
+                            "agent_case_id",
+                            "agent_gap_id",
+                            "prefill_full_input_tokens",
+                            "prefill_active_input_tokens",
+                            "prefill_cached_prefix_tokens",
+                            "prefill_uncached_token_start",
+                            "prefill_uncached_token_end",
+                            "prefill_uncached_token_count",
+                            "prefill_token_range",
+                        )
+                        if request.get(key) not in (None, "", [], {})
+                    }
+                )
+            if attributed:
+                event["batch_request_prefill_attribution"] = attributed
+
     if duration_ms is not None:
         event["duration_ms"] = duration_ms
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}
@@ -1453,11 +1620,47 @@ def _prefill_telemetry_event(
         "forward_mode": batch.get("forward_mode", ""),
         "extend_num_tokens": batch.get("extend_num_tokens", ""),
         "seq_lens_sum": batch.get("seq_lens_sum", ""),
+        "batch_object_id": batch.get("object_id", ""),
+        "batch_uncached_token_sum": batch.get("request_uncached_token_sum", ""),
+        "batch_full_token_sum": batch.get("request_full_token_sum", ""),
+        "batch_cached_prefix_token_sum": batch.get("request_cached_prefix_token_sum", ""),
+        "batch_requests_with_uncached_tokens": batch.get("requests_with_uncached_tokens", ""),
+        "batch_uncached_token_ranges_sample": batch.get("uncached_token_ranges_sample", ""),
     }
     event.update(_copy_agent_context(context))
     sessions = context.get("agent_sessions")
     if isinstance(sessions, list) and sessions:
         event["agent_sessions"] = [_copy_agent_context(item) for item in sessions if isinstance(item, dict)]
+    requests = batch.get("requests") if isinstance(batch, dict) else None
+    if isinstance(requests, list):
+        attributed: list[dict[str, Any]] = []
+        for request in requests[:16]:
+            if not isinstance(request, dict):
+                continue
+            attributed.append(
+                {
+                    key: request.get(key)
+                    for key in (
+                        "rid",
+                        "request_id",
+                        "agent_request_id",
+                        "agent_session_id",
+                        "agent_phase",
+                        "agent_case_id",
+                        "agent_gap_id",
+                        "prefill_full_input_tokens",
+                        "prefill_active_input_tokens",
+                        "prefill_cached_prefix_tokens",
+                        "prefill_uncached_token_start",
+                        "prefill_uncached_token_end",
+                        "prefill_uncached_token_count",
+                        "prefill_token_range",
+                    )
+                    if request.get(key) not in (None, "", [], {})
+                }
+            )
+        if attributed:
+            event["request_prefill_attribution"] = attributed
     if duration_ms is not None:
         event["duration_ms"] = duration_ms
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}

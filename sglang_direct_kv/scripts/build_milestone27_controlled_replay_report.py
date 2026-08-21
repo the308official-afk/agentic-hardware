@@ -287,6 +287,16 @@ def _agent_sessions_for_event(row: dict[str, Any]) -> list[str]:
             session = agent_session_from_context(item)
             if session and session not in sessions:
                 sessions.append(session)
+    for key in ("request_prefill_attribution", "batch_request_prefill_attribution"):
+        values = row.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            session = agent_session_from_context(item)
+            if session and session not in sessions:
+                sessions.append(session)
     return sessions
 
 
@@ -330,6 +340,14 @@ def telemetry_events_by_session(
                     "forward_mode": row.get("forward_mode", ""),
                     "extend_num_tokens": row.get("extend_num_tokens", ""),
                     "seq_lens_sum": row.get("seq_lens_sum", ""),
+                    "batch_object_id": row.get("batch_object_id", ""),
+                    "batch_uncached_token_sum": row.get("batch_uncached_token_sum", ""),
+                    "batch_full_token_sum": row.get("batch_full_token_sum", ""),
+                    "batch_cached_prefix_token_sum": row.get("batch_cached_prefix_token_sum", ""),
+                    "batch_requests_with_uncached_tokens": row.get("batch_requests_with_uncached_tokens", ""),
+                    "batch_uncached_token_ranges_sample": row.get("batch_uncached_token_ranges_sample", ""),
+                    "request_prefill_attribution": row.get("request_prefill_attribution", ""),
+                    "batch_request_prefill_attribution": row.get("batch_request_prefill_attribution", ""),
                     "host_index_count": row.get("host_index_count", ""),
                     "device_index_count": row.get("device_index_count", ""),
                 }
@@ -370,6 +388,126 @@ def summarize_timed_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         "end_ms": round(max(ends), 3) if ends else "",
         "duration_ms": round(total, 3) if duration_count else "",
         "categories": ", ".join(f"{key}:{value}" for key, value in sorted(categories.items())),
+    }
+
+
+def _prefill_attribution_items(event: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for key in ("request_prefill_attribution", "batch_request_prefill_attribution"):
+        value = event.get(key)
+        if isinstance(value, list):
+            items.extend(item for item in value if isinstance(item, dict))
+    return items
+
+
+def summarize_prefill_runtime_attribution(events: list[dict[str, Any]], session_id: str) -> dict[str, Any]:
+    """Summarize SGLang-runtime evidence for uncached replay prefill/recompute.
+
+    This is stronger than the old report-only estimate because it uses request
+    token attribution carried by the SGLang model-forward hooks. It is still
+    runtime-level evidence, not per-CUDA-kernel hardware profiling.
+    """
+
+    paired: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for event in events:
+        call_id = str(event.get("call_id") or "")
+        if not call_id:
+            continue
+        phase = str(event.get("phase") or "")
+        if phase not in {"start", "end"}:
+            continue
+        paired[call_id][phase] = event
+
+    candidates: list[dict[str, Any]] = []
+    for call_id, pair in paired.items():
+        start_event = pair.get("start") or {}
+        end_event = pair.get("end") or {}
+        source = end_event or start_event
+        start = as_float(start_event.get("start_or_end_ms"))
+        end = as_float(end_event.get("start_or_end_ms"))
+        duration = as_float(end_event.get("duration_ms")) or as_float(start_event.get("duration_ms"))
+        if start is None and end is not None and duration is not None:
+            start = end - duration
+        if end is None and start is not None and duration is not None:
+            end = start + duration
+        if start is None or end is None:
+            continue
+
+        matched_items = [
+            item
+            for item in [*_prefill_attribution_items(start_event), *_prefill_attribution_items(end_event)]
+            if agent_session_from_context(item) == session_id
+        ]
+        if not matched_items:
+            continue
+        best = max(
+            matched_items,
+            key=lambda item: as_float(item.get("prefill_uncached_token_count")) or 0.0,
+        )
+        uncached = as_float(best.get("prefill_uncached_token_count"))
+        if uncached is None or uncached <= 0:
+            continue
+        candidates.append(
+            {
+                "call_id": call_id,
+                "start_ms": round(start, 3),
+                "end_ms": round(end, 3),
+                "duration_ms": round(end - start, 3),
+                "method": source.get("method", ""),
+                "category": source.get("category", ""),
+                "batch_object_id": source.get("batch_object_id", ""),
+                "batch_request_count": source.get("request_count", ""),
+                "batch_extend_num_tokens": source.get("extend_num_tokens", ""),
+                "batch_uncached_token_sum": source.get("batch_uncached_token_sum", ""),
+                "batch_full_token_sum": source.get("batch_full_token_sum", ""),
+                "batch_cached_prefix_token_sum": source.get("batch_cached_prefix_token_sum", ""),
+                "request_uncached_tokens": int(uncached),
+                "request_full_input_tokens": best.get("prefill_full_input_tokens", ""),
+                "request_active_input_tokens": best.get("prefill_active_input_tokens", ""),
+                "request_cached_prefix_tokens": best.get("prefill_cached_prefix_tokens", ""),
+                "request_uncached_token_start": best.get("prefill_uncached_token_start", ""),
+                "request_uncached_token_end": best.get("prefill_uncached_token_end", ""),
+                "request_uncached_token_range": best.get("prefill_token_range", ""),
+            }
+        )
+
+    if not candidates:
+        return {
+            "event_count": 0,
+            "start_ms": "",
+            "end_ms": "",
+            "duration_ms": "",
+            "tokens": "",
+            "token_range": "",
+            "batch_id": "",
+            "batch_request_count": "",
+            "batch_uncached_token_sum": "",
+            "evidence": "no request-attributed model-forward batch observed",
+            "confidence": "fallback_estimate",
+        }
+
+    candidates.sort(key=lambda item: (as_float(item.get("start_ms")) or 0.0, -(as_float(item.get("request_uncached_tokens")) or 0.0)))
+    first = candidates[0]
+    total_tokens = sum(int(as_float(item.get("request_uncached_tokens")) or 0) for item in candidates)
+    ranges = [str(item.get("request_uncached_token_range")) for item in candidates if item.get("request_uncached_token_range")]
+    return {
+        "event_count": len(candidates),
+        "start_ms": first["start_ms"],
+        "end_ms": max(item["end_ms"] for item in candidates),
+        "duration_ms": round(sum(float(item["duration_ms"]) for item in candidates), 3),
+        "tokens": total_tokens,
+        "token_range": ", ".join(ranges[:4]),
+        "batch_id": first.get("batch_object_id", ""),
+        "batch_request_count": first.get("batch_request_count", ""),
+        "batch_uncached_token_sum": first.get("batch_uncached_token_sum", ""),
+        "batch_extend_num_tokens": first.get("batch_extend_num_tokens", ""),
+        "request_full_input_tokens": first.get("request_full_input_tokens", ""),
+        "request_cached_prefix_tokens": first.get("request_cached_prefix_tokens", ""),
+        "evidence": (
+            f"SGLang model-forward hook attributed {int(total_tokens)} uncached tokens "
+            f"for this replay session"
+        ),
+        "confidence": "runtime_attributed",
     }
 
 
@@ -912,6 +1050,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         replay_scheduler_summary = summarize_timed_events(replay_scheduler_events)
         replay_queue_summary = summarize_scheduler_queue_path(replay_scheduler_events, replay.get("start_ms", ""), due_ms)
         replay_prefill_summary = summarize_timed_events(replay_prefill_events)
+        replay_prefill_attribution = summarize_prefill_runtime_attribution(replay_prefill_events, session)
         replay_prefill_end_ms = ""
         replay_ttft_ms = as_float(replay.get("ttft_ms", ""))
         replay_start_ms = as_float(replay.get("start_ms", ""))
@@ -1043,6 +1182,20 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_prefill_recompute_timing_source": (
                 "exact_model_forward_hook" if replay_prefill_summary["event_count"] else "fallback_request_ttft_window"
             ),
+            "replay_runtime_prefill_attribution_events": replay_prefill_attribution["event_count"],
+            "replay_runtime_prefill_attribution_start_ms": replay_prefill_attribution["start_ms"],
+            "replay_runtime_prefill_attribution_end_ms": replay_prefill_attribution["end_ms"],
+            "replay_runtime_prefill_attribution_duration_ms": replay_prefill_attribution["duration_ms"],
+            "replay_runtime_prefill_attributed_tokens": replay_prefill_attribution["tokens"],
+            "replay_runtime_prefill_token_range": replay_prefill_attribution["token_range"],
+            "replay_runtime_prefill_batch_id": replay_prefill_attribution["batch_id"],
+            "replay_runtime_prefill_batch_request_count": replay_prefill_attribution["batch_request_count"],
+            "replay_runtime_prefill_batch_uncached_token_sum": replay_prefill_attribution["batch_uncached_token_sum"],
+            "replay_runtime_prefill_batch_extend_num_tokens": replay_prefill_attribution.get("batch_extend_num_tokens", ""),
+            "replay_runtime_prefill_request_full_input_tokens": replay_prefill_attribution.get("request_full_input_tokens", ""),
+            "replay_runtime_prefill_request_cached_prefix_tokens": replay_prefill_attribution.get("request_cached_prefix_tokens", ""),
+            "replay_runtime_prefill_evidence": replay_prefill_attribution["evidence"],
+            "replay_runtime_prefill_confidence": replay_prefill_attribution["confidence"],
             "pre_replay_checkpoint_ms": checkpoint.get("ms", ""),
             "pre_replay_expected_reuse": checkpoint.get("expected_reuse", ""),
             "pre_replay_gpu_resident_tokens": checkpoint.get("gpu_resident_tokens", ""),
@@ -1595,6 +1748,12 @@ def replay_attribution_rows(rows: list[dict[str, Any]], limit: int | None = None
                 "scheduler_total_ms": row.get("replay_scheduler_total_ms", ""),
                 "model_forward_events": row.get("replay_model_forward_event_count", ""),
                 "model_forward_total_ms": row.get("replay_model_forward_total_ms", ""),
+                "runtime_prefill_attribution": row.get("replay_runtime_prefill_confidence", ""),
+                "runtime_prefill_tokens": row.get("replay_runtime_prefill_attributed_tokens", ""),
+                "runtime_prefill_token_range": row.get("replay_runtime_prefill_token_range", ""),
+                "runtime_prefill_batch": row.get("replay_runtime_prefill_batch_id", ""),
+                "runtime_prefill_batch_requests": row.get("replay_runtime_prefill_batch_request_count", ""),
+                "runtime_prefill_evidence": row.get("replay_runtime_prefill_evidence", ""),
                 "replay_path": row.get("replay_path", ""),
                 "final_path": row.get("final_path", ""),
                 "bottleneck_label": row.get("bottleneck_label", ""),
@@ -1658,6 +1817,12 @@ def replay_path_proof_rows(ledger: list[dict[str, Any]], limit: int | None = Non
         "replay_scheduler_total_ms",
         "replay_model_forward_event_count",
         "replay_model_forward_total_ms",
+        "replay_runtime_prefill_confidence",
+        "replay_runtime_prefill_attributed_tokens",
+        "replay_runtime_prefill_token_range",
+        "replay_runtime_prefill_batch_id",
+        "replay_runtime_prefill_batch_request_count",
+        "replay_runtime_prefill_evidence",
         "evidence_summary",
     ]
     return [{column: row.get(column, "") for column in columns} for row in selected]
@@ -5218,9 +5383,9 @@ def unified_stack_legend_table_html() -> str:
             "KV leaves GPU residency. A host copy may still exist unless host eviction also happens.",
         ),
         (
-            "Recompute / rebuild estimate",
+            "Prefill / recompute attribution",
             unified_stack_color("recompute"),
-            "Estimated part of the before-first-token replay work spent rebuilding missing KV/prefix tokens. This is inferred from replay counters, not a pure hardware event.",
+            "Runtime-attributed model-forward work for uncached replay tokens when SGLang exposes the request batch; otherwise a fallback estimate from replay counters.",
         ),
         (
             "Remaining prefill / TTFT",
@@ -5478,7 +5643,7 @@ def build_unified_per_gap_stack_timeline_svg(
         ("H2D", unified_stack_color("h2d")),
         ("D2H", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
-        ("recompute est.", unified_stack_color("recompute")),
+        ("prefill/recompute", unified_stack_color("recompute")),
         ("remaining TTFT", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
@@ -5675,7 +5840,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ("H2D", unified_stack_color("h2d")),
         ("D2H", unified_stack_color("d2h")),
         ("evict", unified_stack_color("evict")),
-        ("recompute est.", unified_stack_color("recompute")),
+        ("prefill/recompute", unified_stack_color("recompute")),
         ("remaining TTFT", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
@@ -5827,8 +5992,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     replay_y + 18,
                     main_bar_h,
                     unified_stack_color("recompute"),
-                    "recompute est.",
-                    f"{label} | estimated replay recompute/rebuild: {display_ms(recompute_end_rel - cursor_rel)}",
+                    "prefill/recompute",
+                    f"{label} | replay prefill/recompute estimate: {display_ms(recompute_end_rel - cursor_rel)}",
                     opacity=0.82,
                     break_long=True,
                 )
@@ -5959,7 +6124,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             replay_zoom_lanes = [
                 ("replay request", replay_zoom_title_y + 48),
                 ("replay H2D", replay_zoom_title_y + 86),
-                ("recompute est.", replay_zoom_title_y + 124),
+                ("prefill/recompute", replay_zoom_title_y + 124),
                 ("remaining TTFT", replay_zoom_title_y + 162),
                 ("decode", replay_zoom_title_y + 200),
             ]
@@ -6044,7 +6209,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 pre_token_start_abs = as_float(row.get("replay_prefill_start_ms")) or replay_start_abs
                 pre_token_start = pre_token_start_abs - due
                 first_token_rel = first_token_abs - due
-                recompute_tokens = as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
+                runtime_attr_tokens = as_float(row.get("replay_runtime_prefill_attributed_tokens"))
+                runtime_attr_start_abs = as_float(row.get("replay_runtime_prefill_attribution_start_ms"))
+                runtime_attr_end_abs = as_float(row.get("replay_runtime_prefill_attribution_end_ms"))
+                runtime_attr_confidence = str(row.get("replay_runtime_prefill_confidence") or "")
+                recompute_tokens = runtime_attr_tokens or as_float(row.get("recomputed_tokens_est")) or as_float(row.get("replay_new_prefill_tokens_est")) or 0.0
                 cached_prefix = compact_token_count(row.get("replay_cached_prefix_tokens"))
                 input_tokens = compact_token_count(row.get("replay_input_tokens"))
                 timing_source = str(row.get("replay_prefill_recompute_timing_source") or "fallback_request_ttft_window")
@@ -6053,15 +6222,34 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 normal_prefill_ms = segments.get("normal_prefill", 0.0)
                 cursor_rel = pre_token_start
                 if recompute_tokens >= 128 and recompute_ms > 0:
-                    recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
+                    if (
+                        runtime_attr_confidence == "runtime_attributed"
+                        and runtime_attr_start_abs is not None
+                        and runtime_attr_end_abs is not None
+                        and runtime_attr_end_abs > runtime_attr_start_abs
+                    ):
+                        cursor_rel = runtime_attr_start_abs - due
+                        recompute_end_rel = runtime_attr_end_abs - due
+                        timing_source = "runtime_attributed_model_forward_batch"
+                    else:
+                        recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
                     recompute_label = short_bar_label(
-                        ["recompute est.", compact_token_count(recompute_tokens), display_ms(recompute_end_rel - cursor_rel)],
+                        [
+                            "runtime prefill" if runtime_attr_confidence == "runtime_attributed" else "prefill est.",
+                            compact_token_count(recompute_tokens),
+                            display_ms(recompute_end_rel - cursor_rel),
+                        ],
                         max_chars=44,
                     )
+                    token_range = str(row.get("replay_runtime_prefill_token_range") or "")
+                    batch_id = str(row.get("replay_runtime_prefill_batch_id") or "")
+                    batch_requests = str(row.get("replay_runtime_prefill_batch_request_count") or "")
                     recompute_title = (
-                        f"{label} | estimated replay recompute/rebuild | timing_source={timing_source} | "
+                        f"{label} | replay prefill/recompute attribution | timing_source={timing_source} | "
                         f"duration={display_ms(recompute_end_rel - cursor_rel)} | rebuilt_or_new_prefill={compact_token_count(recompute_tokens)} | "
-                        f"input={input_tokens} | cached_prefix={cached_prefix} | estimate_note=derived from replay counters and model-forward timing"
+                        f"input={input_tokens} | cached_prefix={cached_prefix} | token_range={token_range or 'unknown'} | "
+                        f"batch={batch_id or 'unknown'} | batch_requests={batch_requests or 'unknown'} | "
+                        f"note={'request-attributed SGLang model-forward evidence' if runtime_attr_confidence == 'runtime_attributed' else 'fallback estimate derived from replay counters and model-forward timing'}"
                     )
                     draw_span(
                         parts,
@@ -6080,9 +6268,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         label_min_w=82.0,
                         font_size=9,
                     )
-                    cursor_rel = recompute_end_rel
+                    cursor_rel = max(cursor_rel, recompute_end_rel)
                 else:
-                    missing_title = f"{label} | no estimated replay recompute/rebuild segment"
+                    missing_title = f"{label} | no visible prefill/recompute attribution segment"
                     draw_span(
                         parts,
                         lambda value, z_min=rz_min, z_max=rz_max: zoom_x(value, z_min, z_max),
@@ -6194,7 +6382,7 @@ def unified_per_gap_forensic_stack_html(
     <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect replay H2D, estimated recompute/rebuild, remaining TTFT, first-token timing, and decode.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
-    <p class="note">The magenta <strong>recompute estimate</strong> is inferred from replay counters and model-forward timing. The gold <strong>remaining TTFT</strong> is the leftover before-first-token work after visible H2D and estimated recompute are separated out.</p>
+    <p class="note">The magenta <strong>prefill/recompute</strong> bar uses request-attributed SGLang model-forward timing when available; otherwise it is a clearly marked fallback estimate. The gold <strong>remaining TTFT</strong> is the leftover before-first-token work after visible H2D and prefill/recompute attribution are separated out.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
