@@ -26,16 +26,12 @@ COLORS = {
     "late_after_pressure": "#dc2626",
     "near_resume": "#dc2626",
     "no_prefetch": "#111827",
-    "request_warm_pre_pressure": "#16a34a",
-    "request_warm_near_resume": "#dc2626",
     "direct_load_pre_pressure": "#2563eb",
     "direct_load_near_resume": "#7c3aed",
 }
 
 STRATEGY_LABELS = {
     "no_prefetch": "no prefetch",
-    "request_warm_pre_pressure": "request warm, pre-pressure",
-    "request_warm_near_resume": "request warm, near-resume",
     "direct_load_pre_pressure": "direct load, pre-pressure",
     "direct_load_near_resume": "direct load, near-resume",
 }
@@ -71,7 +67,7 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
         ):
             row[key] = float(row.get(key, 0.0) or 0.0)
         row["hint_timing"] = canonical_timing(str(row["hint_timing"]))
-        row.setdefault("prefetch_action", "request_warm")
+        row.setdefault("prefetch_action", "direct_load")
         if "strategy" not in row or not row["strategy"]:
             if row["mode"] == "no_prefetch":
                 row["strategy"] = "no_prefetch"
@@ -245,18 +241,14 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
     if multiple_actions and section == "Benefit vs Cache Pressure":
         for filler in fillers:
             baseline = row_for(rows, mode="no_prefetch", filler=filler)
-            req_pre = strategy_row(rows, filler=filler, action="request_warm", timing="pre_pressure")
             direct_pre = strategy_row(rows, filler=filler, action="direct_load", timing="pre_pressure")
-            req_near = strategy_row(rows, filler=filler, action="request_warm", timing="near_resume")
             direct_near = strategy_row(rows, filler=filler, action="direct_load", timing="near_resume")
             table_rows.append(
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
                     fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(req_pre["benefit_vs_no_prefetch_ms"] if req_pre else None),
                     fmt_ms(direct_pre["benefit_vs_no_prefetch_ms"] if direct_pre else None),
-                    fmt_ms(req_near["benefit_vs_no_prefetch_ms"] if req_near else None),
                     fmt_ms(direct_near["benefit_vs_no_prefetch_ms"] if direct_near else None),
                     fmt_pct(direct_near["benefit_vs_no_prefetch_pct"] if direct_near else None),
                 ]
@@ -266,9 +258,7 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
                 "fillers",
                 "first TTFT",
                 "resume base",
-                "req pre benefit",
                 "direct pre benefit",
-                "req near benefit",
                 "direct near benefit",
                 "direct near %",
             ],
@@ -278,18 +268,14 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
     if multiple_actions and section == "Resume TTFT vs Cache Pressure":
         for filler in fillers:
             baseline = row_for(rows, mode="no_prefetch", filler=filler)
-            req_pre = strategy_row(rows, filler=filler, action="request_warm", timing="pre_pressure")
             direct_pre = strategy_row(rows, filler=filler, action="direct_load", timing="pre_pressure")
-            req_near = strategy_row(rows, filler=filler, action="request_warm", timing="near_resume")
             direct_near = strategy_row(rows, filler=filler, action="direct_load", timing="near_resume")
             table_rows.append(
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
                     fmt_ms(baseline["resume_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(req_pre["resume_ttft_avg_ms"] if req_pre else None),
                     fmt_ms(direct_pre["resume_ttft_avg_ms"] if direct_pre else None),
-                    fmt_ms(req_near["resume_ttft_avg_ms"] if req_near else None),
                     fmt_ms(direct_near["resume_ttft_avg_ms"] if direct_near else None),
                 ]
             )
@@ -298,9 +284,7 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
                 "fillers",
                 "first TTFT",
                 "resume base",
-                "req pre resume",
                 "direct pre resume",
-                "req near resume",
                 "direct near resume",
             ],
             table_rows,
@@ -309,17 +293,13 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
     if multiple_actions and section == "Prefetch Cost vs Cache Pressure":
         for filler in fillers:
             baseline = row_for(rows, mode="no_prefetch", filler=filler)
-            req_pre = strategy_row(rows, filler=filler, action="request_warm", timing="pre_pressure")
             direct_pre = strategy_row(rows, filler=filler, action="direct_load", timing="pre_pressure")
-            req_near = strategy_row(rows, filler=filler, action="request_warm", timing="near_resume")
             direct_near = strategy_row(rows, filler=filler, action="direct_load", timing="near_resume")
             table_rows.append(
                 [
                     str(int(filler)),
                     fmt_ms(baseline["warm_ttft_avg_ms"] if baseline else None),
-                    fmt_ms(req_pre["prefetch_ttft_avg_ms"] if req_pre else None),
                     fmt_ms(direct_pre["prefetch_ttft_avg_ms"] if direct_pre else None),
-                    fmt_ms(req_near["prefetch_ttft_avg_ms"] if req_near else None),
                     fmt_ms(direct_near["prefetch_ttft_avg_ms"] if direct_near else None),
                 ]
             )
@@ -327,9 +307,7 @@ def chart_table(section: str, rows: list[dict[str, Any]]) -> str:
             [
                 "fillers",
                 "first TTFT",
-                "req pre cost",
                 "direct pre cost",
-                "req near cost",
                 "direct near cost",
             ],
             table_rows,

@@ -1255,7 +1255,6 @@ def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
     ranks = {
         "no_prefetch": 0,
         "direct_prefetch": 1,
-        "request_warm": 2,
         "oracle_prefetch": 3,
         "oracle_direct_load": 3,
     }

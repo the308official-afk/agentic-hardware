@@ -244,7 +244,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F3 | Starting earlier is not sufficient. | `1500 ms` oracle lead produced `late_prefetch: 10` and `too_early_or_unprotected: 2`. | More lead time can trade late prefetch for eviction-before-reuse. | Need residency protection, not just earlier prefetch. | Strong |
 | F4 | Raw KV load time is not the main observed delay. | Oracle lead sweep: average hint duration was about `1284-1345 ms`, while total measured hint-side `hicache.load` time was only about `10-13 ms` across all sessions. | The long delay is mostly outside the raw KV load call. | Need a prioritized prefetch path that avoids normal request scheduling/queueing delays. | Strong |
 | F5 | Correct prefetches can still be wasted. | `too_early_or_unprotected` sessions had both prefetch-side loads and replay-side loads, plus eviction pressure between hint and replay. | A correct hint can fail if the prefetched KV is not kept resident. | Need protected/pinned residency windows for prefetched KV. | Strong |
-| F6 | `request_warm` remains an important software baseline. | Milestone 9B showed similar outcome patterns for `request_warm` and `direct_load`. | A manager can ask whether ordinary software warming is enough. | Compare hardware-assisted designs against software-only warming, not only against `no_prefetch`. | Baseline |
+| F6 | Prompt-based warming is retired from the active testbed. | Earlier milestones used a normal warm request as a software-only baseline, but the current code path disables it and uses direct SGLang KV load-back hooks for prefetch experiments. | This keeps the evidence focused on real KV movement rather than prompt tricks. | Compare `direct_load` against `no_prefetch`; use old prompt-warming data only as historical background. | Updated |
 | F7 | Oracle timing currently improves TTFT but still misses deadlines under pressure. | `ORACLE_LEAD_MS=1500` improved replay TTFT by about `219 ms`, but still produced `late_prefetch: 10`. | Better timing helps, but the prefetch path is not predictable enough. | Hardware/runtime support should expose deadline and progress telemetry. | Strong |
 | F8 | Worker-local profiling can expose SGLang CUDA activity. | Milestone 10 torch-profiler smoke exported one worker trace with `14329` kernel-like events, `5569` memcpy-like events, `70` HtoD events, and `2229` DtoH events. | We now have a path to inspect GPU activity from inside the SGLang worker. | Use worker-local profiling for DMA/copy evidence when external Nsight misses worker GPU activity. | New |
 | F9 | Agentic timelines can show where lateness happens. | Milestone 11 smoke produced SGLang KV windows, profiler CUDA copy rows, hint outcome labels, and a per-session HTML timeline. | We can now show whether the hint was late at the request level, the KV-load level, or the CUDA-copy level. | This is the clearest evidence path for motivating deadline-aware prefetch hardware. | New |
@@ -1339,7 +1339,7 @@ It is not yet a clean out-of-band admin command like PREFETCH_KV(session=42).
 Next substep:
 
 ```text
-Compare direct_load against request_warm and no_prefetch under the same pressure settings.
+Compare direct_load against no_prefetch under the same pressure settings.
 Then turn the trigger request into a cleaner in-server control hook.
 ```
 
@@ -1527,20 +1527,18 @@ Status: implemented as the next sweep.
 What it is:
 
 ```text
-Repeat the Milestone 6 design-space sweep, but add the direct SGLang load-back path.
-This compares three cases:
+Repeat the Milestone 6 design-space sweep, but use the direct SGLang load-back path.
+This compares two active cases:
 1. no_prefetch
-2. request_warm
-3. direct_load
+2. direct_load
 ```
 
 Why we need it:
 
 ```text
-Milestone 6 showed that request-level warming can help.
 Milestone 7D showed that direct_load can move real SGLang load_back work into the tool gap.
 Milestone 8 asks the bigger question:
-Across cache pressure, prompt size, and timing, how much better is direct_load than no_prefetch and request_warm?
+Across cache pressure, prompt size, and timing, how much better is direct_load than no_prefetch?
 ```
 
 Default design planes:
@@ -1550,7 +1548,7 @@ Default design planes:
 | Prefetch timing | `TIMINGS` | `pre_pressure near_resume` | Whether the prefetch happens before pressure or close to resume. |
 | Cache pressure | `FILLER_LIST` | `12 24 96 192` | How many unrelated sessions compete for KV space. |
 | Request size | `PROMPT_TOKEN_LIST` | `1024 1536` | How large target and filler prompts are. |
-| Prefetch action | `PREFETCH_ACTIONS` | `request_warm direct_load` | Whether we use normal request warming or the direct SGLang load-back trigger. |
+| Prefetch action | `PREFETCH_ACTIONS` | `direct_load` | Use only the direct SGLang load-back trigger. |
 
 Run it:
 
@@ -1562,32 +1560,31 @@ RESULT_ROOT=artifacts/results/milestone8_direct_load_design_space \
 FILLER_LIST="12 24 96 192" \
 PROMPT_TOKEN_LIST="1024 1536" \
 TIMINGS="pre_pressure near_resume" \
-PREFETCH_ACTIONS="request_warm direct_load" \
+PREFETCH_ACTIONS="direct_load" \
 bash scripts/run_milestone8_direct_load_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
 What the default sweep runs:
 
 ```text
-2 request sizes x 4 pressure levels x 5 cases
+2 request sizes x 4 pressure levels x 3 cases
 
 For each request size and pressure level:
 1 no_prefetch baseline
-2 request_warm timing choices
 2 direct_load timing choices
 ```
 
-That is 40 total SGLang server runs by default.
+That is 24 total SGLang server runs by default.
 Each design point starts a fresh SGLang server, runs one case, writes metrics/traces, then stops the server.
 This avoids cache state leaking from one design point into the next.
 
 Progress shown in the terminal:
 
 ```text
-Total cases: 40
-==== Milestone 8 case [1/40]: no_prefetch_request_warm_near_resume_f12_p1024 ====
+Total cases: 24
+==== Milestone 8 case [1/24]: no_prefetch_direct_load_near_resume_f12_p1024 ====
 ...
-==== Completed Milestone 8 case [1/40]: no_prefetch_request_warm_near_resume_f12_p1024 ====
+==== Completed Milestone 8 case [1/24]: no_prefetch_direct_load_near_resume_f12_p1024 ====
 ```
 
 Output files:
@@ -1619,9 +1616,9 @@ Chart meaning:
 ```text
 x-axis = cache pressure, measured by filler sessions
 y-axis = latency metric
-lines = request_warm/direct_load timing choices
+lines = direct_load timing choices
 separate charts = prompt size
-tables show first TTFT, no_prefetch resume TTFT, request_warm resume TTFT, direct_load resume TTFT, and benefit values
+tables show first TTFT, no_prefetch resume TTFT, direct_load resume TTFT, and benefit values
 ```
 
 Important events to observe:
@@ -1640,7 +1637,6 @@ Expected story:
 
 ```text
 no_prefetch pays the host-to-GPU KV load cost at resume time.
-request_warm may help, but it warms through a normal generation request.
 direct_load should move real SGLang load_back work into the tool gap.
 If direct_load works well, resume TTFT should be lower and hicache.load calls should appear during the prefetch phase instead of the resume phase.
 ```
@@ -1652,7 +1648,7 @@ RESULT_ROOT=artifacts/results/milestone8_smoke \
 FILLER_LIST="12" \
 PROMPT_TOKEN_LIST="1024" \
 TIMINGS="near_resume" \
-PREFETCH_ACTIONS="request_warm direct_load" \
+PREFETCH_ACTIONS="direct_load" \
 bash scripts/run_milestone8_direct_load_design_space.sh Qwen/Qwen2.5-1.5B-Instruct
 ```
 
@@ -1664,10 +1660,8 @@ prompt_tokens: 1024
 timing: near_resume
 
 no_prefetch resume TTFT: 52.389 ms
-request_warm resume TTFT: 43.744 ms
 direct_load resume TTFT: 42.790 ms
 
-request_warm benefit: 8.645 ms, 16.50%
 direct_load benefit: 9.599 ms, 18.32%
 
 direct_load attempts: 2
@@ -1751,7 +1745,6 @@ Modes:
 | Mode | Meaning |
 | --- | --- |
 | `no_prefetch` | Initial requests and replays only. |
-| `request_warm` | Dynamo-like frontend sends a normal SGLang warm request during tool wait. |
 | `direct_load` | Frontend sends the direct SGLang load-back trigger during tool wait. |
 | `oracle_direct_load` | Frontend sends direct load close to replay time. This is the timing upper bound. |
 
@@ -1762,7 +1755,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 RESULT_ROOT=artifacts/results/milestone9_agentic_traffic \
-MODES="no_prefetch request_warm direct_load oracle_direct_load" \
+MODES="no_prefetch direct_load oracle_direct_load" \
 SESSION_COUNT=12 \
 ARRIVAL_GAP_MS=120 \
 TOOL_WAIT_LIST_MS="250 500 900 1600" \
@@ -1775,11 +1768,10 @@ bash scripts/run_milestone9_agentic_traffic.sh Qwen/Qwen2.5-1.5B-Instruct
 What the default run does:
 
 ```text
-Runs 4 clean SGLang server runs:
+Runs 3 clean SGLang server runs:
 1. no_prefetch
-2. request_warm
-3. direct_load
-4. oracle_direct_load
+2. direct_load
+3. oracle_direct_load
 
 Within each run, 12 agent sessions arrive 120 ms apart.
 Each session has a tool wait selected from 250, 500, 900, and 1600 ms.
@@ -1804,7 +1796,7 @@ artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.
 artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.md
 artifacts/results/milestone9_agentic_traffic/no_prefetch_outcomes/hint_outcomes.html
 
-The same files are produced for request_warm, direct_load, and oracle_direct_load.
+The same files are produced for direct_load and oracle_direct_load.
 
 Combined summary:
 artifacts/results/milestone9_agentic_traffic/traffic_summary.csv
@@ -1876,7 +1868,7 @@ hiradix.evict
 Why this supports the hardware argument:
 
 ```text
-If request_warm or direct_load fires too early, KV can be evicted before replay.
+If direct_load fires too early, KV can be evicted before replay.
 If it fires too late, replay still stalls.
 If many sessions overlap, one session's prefetch can compete with another session's active decode or useful KV.
 
@@ -1940,7 +1932,7 @@ How to generate a combined report from existing results:
 ```bash
 python scripts/summarize_agentic_traffic_results.py \
   --root artifacts/results/milestone9_agentic_traffic \
-  --modes "no_prefetch request_warm direct_load oracle_direct_load"
+  --modes "no_prefetch direct_load oracle_direct_load"
 ```
 
 The fastest file to inspect is:
@@ -3738,7 +3730,6 @@ What it is:
 Use the real AgentBench replay workload from Milestone 16/17, then compare:
 
   no_prefetch
-  request_warm
   direct_load
   oracle_direct_load
 
@@ -3764,7 +3755,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 WORKLOAD_JSONL=artifacts/results/latest_real/agentbench_replay_workload.jsonl \
-MODES="no_prefetch request_warm direct_load oracle_direct_load" \
+MODES="no_prefetch direct_load oracle_direct_load" \
 ORACLE_LEAD_MS=500 \
 TRAFFIC_CONCURRENCY=4 \
 bash scripts/run_milestone18_agentbench_trace_replay_modes.sh \
@@ -3792,11 +3783,10 @@ Latest validation:
 
 ```text
 Replay sessions: 5
-Modes compared: no_prefetch, request_warm, direct_load, oracle_direct_load
+Modes compared: no_prefetch, direct_load, oracle_direct_load
 
 Average replay TTFT:
   no_prefetch:        107.070 ms
-  request_warm:       115.743 ms
   direct_load:        120.002 ms
   oracle_direct_load:  91.353 ms
 

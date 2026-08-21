@@ -11,7 +11,7 @@ from statistics import mean, median
 from typing import Any
 
 
-DEFAULT_MODES = ["no_prefetch", "request_warm", "direct_load", "oracle_direct_load"]
+DEFAULT_MODES = ["no_prefetch", "direct_load", "oracle_direct_load"]
 
 
 def read_csv(path: Path) -> list[dict[str, Any]]:

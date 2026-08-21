@@ -215,7 +215,7 @@ async def main_async() -> None:
     parser.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
     parser.add_argument(
         "--mode",
-        choices=("no_prefetch", "request_warm", "direct_load", "oracle_direct_load"),
+        choices=("no_prefetch", "direct_load", "oracle_direct_load"),
         default="no_prefetch",
     )
     parser.add_argument("--session-count", type=int, default=12)
@@ -363,7 +363,7 @@ async def main_async() -> None:
             if args.mode == "no_prefetch":
                 return
             p_hash = prompt_hash(base_prompt)
-            action = "direct_load" if args.mode in {"direct_load", "oracle_direct_load"} else "request_warm"
+            action = "direct_load"
             trace_and_mark(
                 {
                     "event": "agent.hint_prefetch_start",
@@ -376,52 +376,43 @@ async def main_async() -> None:
                     "replay_due_offset_ms": replay_due_offset_ms,
                 }
             )
-            if action == "direct_load":
-                trigger_prompt = (
-                    base_prompt
-                    + "\n\n"
-                    + f"{DIRECT_LOAD_TRIGGER} session_id={session.session_id} prompt_hash={p_hash}"
-                )
-                trace_and_mark(
-                    {
-                        "event": "agent.direct_kv_load_attempt",
-                        "session_id": session.session_id,
-                        "mode": args.mode,
-                        "priority": session.priority,
-                        "prefetch_action": action,
-                        "prompt_hash": p_hash,
-                        "trigger_prompt_hash": prompt_hash(trigger_prompt),
-                        "trigger_marker": DIRECT_LOAD_TRIGGER,
-                        "intended_action": "exercise_sglang_init_load_back_path",
-                    }
-                )
-                row = await run_request(
-                    session,
-                    trigger_prompt,
-                    "hint_prefetch",
-                    f"{session.session_id}_direct_load_hint",
-                    args.prefetch_max_tokens,
-                )
-                trace_and_mark(
-                    {
-                        "event": "agent.direct_kv_load_request.end",
-                        "session_id": session.session_id,
-                        "mode": args.mode,
-                        "priority": session.priority,
-                        "prefetch_action": action,
-                        "prompt_hash": p_hash,
-                        "ttft_ms": row["ttft_ms"],
-                        "total_latency_ms": row["total_latency_ms"],
-                    }
-                )
-            else:
-                await run_request(
-                    session,
-                    base_prompt,
-                    "hint_prefetch",
-                    f"{session.session_id}_request_warm_hint",
-                    args.prefetch_max_tokens,
-                )
+            trigger_prompt = (
+                base_prompt
+                + "\n\n"
+                + f"{DIRECT_LOAD_TRIGGER} session_id={session.session_id} prompt_hash={p_hash}"
+            )
+            trace_and_mark(
+                {
+                    "event": "agent.direct_kv_load_attempt",
+                    "session_id": session.session_id,
+                    "mode": args.mode,
+                    "priority": session.priority,
+                    "prefetch_action": action,
+                    "prompt_hash": p_hash,
+                    "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                    "trigger_marker": DIRECT_LOAD_TRIGGER,
+                    "intended_action": "exercise_sglang_init_load_back_path",
+                }
+            )
+            row = await run_request(
+                session,
+                trigger_prompt,
+                "hint_prefetch",
+                f"{session.session_id}_direct_load_hint",
+                args.prefetch_max_tokens,
+            )
+            trace_and_mark(
+                {
+                    "event": "agent.direct_kv_load_request.end",
+                    "session_id": session.session_id,
+                    "mode": args.mode,
+                    "priority": session.priority,
+                    "prefetch_action": action,
+                    "prompt_hash": p_hash,
+                    "ttft_ms": row["ttft_ms"],
+                    "total_latency_ms": row["total_latency_ms"],
+                }
+            )
             trace_and_mark(
                 {
                     "event": "agent.hint_prefetch_end",
@@ -475,7 +466,7 @@ async def main_async() -> None:
                         "expected_resume_ms": session.tool_wait_ms,
                         "tool_start_offset_ms": tool_start_offset_ms,
                         "reuse_confidence": 0.75,
-                        "prefetch_action": "direct_load" if args.mode in {"direct_load", "oracle_direct_load"} else "request_warm",
+                        "prefetch_action": "direct_load",
                         "prompt_hash": prompt_hash(base_prompt),
                     }
                 )

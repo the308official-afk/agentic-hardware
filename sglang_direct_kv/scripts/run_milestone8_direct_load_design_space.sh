@@ -8,7 +8,7 @@ TARGET_SESSIONS="${TARGET_SESSIONS:-2}"
 FILLER_LIST="${FILLER_LIST:-12 24 96 192}"
 PROMPT_TOKEN_LIST="${PROMPT_TOKEN_LIST:-1024 1536}"
 TIMINGS="${TIMINGS:-pre_pressure near_resume}"
-PREFETCH_ACTIONS="${PREFETCH_ACTIONS:-request_warm direct_load}"
+PREFETCH_ACTIONS="${PREFETCH_ACTIONS:-direct_load}"
 PRESSURE_CONCURRENCY="${PRESSURE_CONCURRENCY:-1}"
 RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone8_direct_load_design_space}"
 
@@ -128,7 +128,7 @@ echo "Each case starts a fresh SGLang server."
 
 for prompt_tokens in ${PROMPT_TOKEN_LIST}; do
   for fillers in ${FILLER_LIST}; do
-    run_case "no_prefetch" "near_resume" "request_warm" "${fillers}" "${prompt_tokens}"
+    run_case "no_prefetch" "near_resume" "direct_load" "${fillers}" "${prompt_tokens}"
     for timing in ${TIMINGS}; do
       for action in ${PREFETCH_ACTIONS}; do
         run_case "hint_aware" "${timing}" "${action}" "${fillers}" "${prompt_tokens}"

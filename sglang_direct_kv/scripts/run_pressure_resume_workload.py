@@ -147,11 +147,11 @@ async def main_async() -> None:
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
     parser.add_argument(
         "--prefetch-action",
-        choices=("request_warm", "direct_probe", "direct_load"),
-        default="request_warm",
+        choices=("direct_probe", "direct_load"),
+        default="direct_load",
         help=(
-            "request_warm sends a normal SGLang warm request; direct_probe records the intended direct KV load; "
-            "direct_load sends a marked trigger request that exercises SGLang's natural init_load_back/load_back path."
+            "direct_probe records the intended direct KV load; direct_load sends a marked trigger request "
+            "that exercises SGLang's natural init_load_back/load_back path. Prompt-based warming is disabled."
         ),
     )
     parser.add_argument("--out", default="artifacts/results/pressure_resume_metrics.jsonl")

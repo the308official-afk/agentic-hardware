@@ -57,7 +57,7 @@ def summarize_case(metrics_path: Path) -> dict[str, Any] | None:
 
     mode = str(first.get("mode", "unknown"))
     hint_timing = canonical_timing(str(first.get("hint_prefetch_timing", "unknown")))
-    prefetch_action = str(first.get("prefetch_action", "request_warm"))
+    prefetch_action = str(first.get("prefetch_action", "direct_load"))
     if mode == "no_prefetch":
         strategy = "no_prefetch"
     elif mode == "hint_aware":
