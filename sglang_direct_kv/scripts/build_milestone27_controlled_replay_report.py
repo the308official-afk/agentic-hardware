@@ -5689,7 +5689,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    row_h = 850
+    row_h = 1020
     bottom = 116
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
@@ -5902,8 +5902,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
         '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
-        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, and an expanded replay zoom. The overview uses replay-relative symlog time; each zoom strip uses local linear time.</text>',
-        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give the dense KV and replay activity room to breathe.</text>',
+        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, an expanded replay zoom, and a KV readiness deadline zoom.</text>',
+        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give dense KV, replay, and deadline activity room to breathe.</text>',
         f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
         f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
     ]
@@ -5952,6 +5952,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="196" rx="8" fill="#ffffff" opacity="0.38"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="344" rx="8" fill="#fff7ed" opacity="0.42"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f8fafc" opacity="0.92"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
         parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
@@ -6677,6 +6678,148 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         font_size=9,
                     )
 
+        deadline_zoom_title_y = y + 818
+        parts.append(f'<text x="{left - 10}" y="{deadline_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">deadline zoom</text>')
+        hint_deadline_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
+        replay_deadline_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
+        useful_span = hint_deadline_span or replay_deadline_span
+        useful_kind = "prefetch" if hint_deadline_span else "replay"
+        if useful_span is None:
+            parts.append(
+                f'<text x="{left + 8}" y="{deadline_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
+                f'KV readiness deadline zoom</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{deadline_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'No useful host-to-device KV movement was observed for this row.</text>'
+            )
+            parts.append(f'<line x1="{left}" y1="{deadline_zoom_title_y + 50:.1f}" x2="{left + plot_w}" y2="{deadline_zoom_title_y + 50:.1f}" stroke="#dbe4ee"/>')
+            parts.append(
+                f'<text x="{left + plot_w / 2:.1f}" y="{deadline_zoom_title_y + 56:.1f}" text-anchor="middle" '
+                f'font-size="11" font-weight="900" fill="#64748b">no visible KV H2D before first-token path</text>'
+            )
+        else:
+            ready_ms = useful_span[1]
+            start_ms = useful_span[0]
+            useful_duration = max(0.0, useful_span[1] - useful_span[0])
+            if ready_ms <= 0:
+                verdict_text = f"ready {display_ms(abs(ready_ms))} before due"
+                verdict_color = "#15803d"
+                gap_color = "#16a34a"
+                gap_start, gap_end = ready_ms, 0.0
+            else:
+                verdict_text = f"late by {display_ms(ready_ms)}"
+                verdict_color = "#dc2626"
+                gap_color = "#dc2626"
+                gap_start, gap_end = 0.0, ready_ms
+            dz_values = [0.0, start_ms, ready_ms]
+            if first_token is not None:
+                dz_values.append(first_token - due)
+            dz_min = min(dz_values)
+            dz_max = max(dz_values)
+            dz_span = max(1.0, dz_max - dz_min)
+            dz_pad = max(20.0, dz_span * 0.08)
+            dz_min -= dz_pad
+            dz_max += dz_pad
+
+            def deadline_x(value: float, z_min: float = dz_min, z_max: float = dz_max) -> float:
+                return local_zoom_x(value, z_min, z_max, left, plot_w)
+
+            h2d_label_prefix = "prefetch KV H2D" if useful_kind == "prefetch" else "replay KV H2D"
+            h2d_color = unified_stack_color("hint_h2d") if useful_kind == "prefetch" else unified_stack_color("h2d")
+            event_count = row.get("direct_kv_h2d_events") if useful_kind == "prefetch" else replay_h2d_summary["events"]
+            block_count = "" if useful_kind == "prefetch" else f"{replay_h2d_summary['blocks']} blk"
+            token_count = "" if useful_kind == "prefetch" else compact_tokens(replay_h2d_summary["tokens"])
+            h2d_label = short_bar_label(
+                [
+                    h2d_label_prefix,
+                    f"{event_count} evt" if useful_kind == "prefetch" and event_count not in ("", None) else block_count,
+                    token_count,
+                    display_ms(useful_duration),
+                ],
+                max_chars=46,
+            )
+            h2d_title = (
+                f"{label} | deadline zoom useful KV movement | kind={useful_kind} | "
+                f"start={display_ms(start_ms)} relative to due | end={display_ms(ready_ms)} relative to due | "
+                f"duration={display_ms(useful_duration)} | verdict={verdict_text}"
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{deadline_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
+                f'KV readiness deadline zoom</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{deadline_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'Shows the gap from replay due to useful KV readiness. {html.escape(verdict_text)}.</text>'
+            )
+            for tick_value in [dz_min, dz_min + dz_span * 0.25, dz_min + dz_span * 0.5, dz_min + dz_span * 0.75, dz_max]:
+                tx = deadline_x(tick_value)
+                parts.append(f'<line x1="{tx:.1f}" y1="{deadline_zoom_title_y + 30:.1f}" x2="{tx:.1f}" y2="{deadline_zoom_title_y + 122:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{deadline_zoom_title_y + 140:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            if dz_min <= 0 <= dz_max:
+                zx = deadline_x(0.0)
+                parts.append(f'<line x1="{zx:.1f}" y1="{deadline_zoom_title_y + 30:.1f}" x2="{zx:.1f}" y2="{deadline_zoom_title_y + 122:.1f}" stroke="#111827" stroke-width="1.8"/>')
+                parts.append(f'<text x="{zx + 5:.1f}" y="{deadline_zoom_title_y + 43:.1f}" font-size="9" font-weight="900" fill="#111827">due</text>')
+            deadline_lanes = [
+                ("readiness gap", deadline_zoom_title_y + 55),
+                ("useful KV H2D", deadline_zoom_title_y + 94),
+            ]
+            for lane_name, lane_y in deadline_lanes:
+                parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name)}</text>')
+                parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
+            gap_x1 = deadline_x(max(dz_min, min(dz_max, gap_start)))
+            gap_x2 = deadline_x(max(dz_min, min(dz_max, gap_end)))
+            if abs(gap_x2 - gap_x1) >= 2.0:
+                parts.append(
+                    f'<line x1="{gap_x1:.1f}" y1="{deadline_zoom_title_y + 60:.1f}" x2="{gap_x2:.1f}" y2="{deadline_zoom_title_y + 60:.1f}" '
+                    f'stroke="{gap_color}" stroke-width="2.2" stroke-dasharray="6 5"><title>{html.escape(label)} | {html.escape(verdict_text)}</title></line>'
+                )
+                gap_label_x = min(max((gap_x1 + gap_x2) / 2, left + 70), left + plot_w - 70)
+                parts.append(
+                    f'<text x="{gap_label_x:.1f}" y="{deadline_zoom_title_y + 52:.1f}" text-anchor="middle" font-size="9" '
+                    f'font-weight="900" fill="{verdict_color}">{html.escape(verdict_text)}</text>'
+                )
+            draw_span(
+                parts,
+                deadline_x,
+                dz_min,
+                dz_max,
+                useful_span[0],
+                useful_span[1],
+                deadline_zoom_title_y + 83,
+                main_bar_h,
+                h2d_color,
+                h2d_label,
+                h2d_title,
+                opacity=0.94,
+                min_w=min_visible_bar_w,
+                label_min_w=96.0,
+                font_size=9,
+            )
+            clipped_deadline_start = max(dz_min, min(dz_max, useful_span[0]))
+            clipped_deadline_end = max(dz_min, min(dz_max, useful_span[1]))
+            if clipped_deadline_end > clipped_deadline_start:
+                h2d_x1 = deadline_x(clipped_deadline_start)
+                h2d_x2 = deadline_x(clipped_deadline_end)
+                if max(min_visible_bar_w, h2d_x2 - h2d_x1) < 96.0:
+                    draw_small_bar_callout(
+                        parts,
+                        h2d_x1,
+                        h2d_x2,
+                        deadline_zoom_title_y + 83,
+                        main_bar_h,
+                        h2d_label,
+                        h2d_title,
+                        h2d_color,
+                        fill_color="#f0fdf4" if useful_kind == "prefetch" else "#ecfeff",
+                        text_color="#166534" if useful_kind == "prefetch" else "#155e75",
+                    )
+            ready_x = deadline_x(max(dz_min, min(dz_max, ready_ms)))
+            parts.append(
+                f'<circle cx="{ready_x:.1f}" cy="{deadline_zoom_title_y + 60:.1f}" r="4.5" fill="{verdict_color}">'
+                f'<title>{html.escape(label)} | KV ready marker: {html.escape(verdict_text)}</title></circle>'
+            )
+
         verdict_y = y + row_h - 28
         verdict = str(row.get("lifecycle_verdict") or row.get("final_path") or row.get("per_gap_verdict") or "")
         explanation = str(row.get("lifecycle_explanation") or row.get("replay_cache_path_summary") or "")
@@ -6697,11 +6840,12 @@ def unified_per_gap_forensic_stack_html(
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
-    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, and a local zoom of replay execution.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode.</p>
+    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, and a deadline zoom for KV readiness.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">When prefetch-side H2D exists, the replay zoom becomes a two-window broken-axis view: the left window shows the earlier green prefetch KV H2D, the right window shows replay execution, and the break marker shows the long elapsed time compressed between them.</p>
+    <p class="note">In the deadline zoom, the dashed line is the readiness gap. Green means KV became ready before replay was due; red means useful KV H2D completed late.</p>
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows)}</div>
