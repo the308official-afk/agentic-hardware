@@ -15,6 +15,11 @@ class KVBlockRecord:
     token_end: int | None
     token_count: int
     node_id: str = ""
+    request_id: str = ""
+    agent_request_id: str = ""
+    correlation_id: str = ""
+    case_id: str = ""
+    gap_id: str = ""
     current_state: str = "UNKNOWN"
     first_seen_ms: float | None = None
     last_seen_ms: float | None = None
@@ -41,6 +46,8 @@ class KVBlockRecord:
     recompute_events: int = 0
     confidence: str = "medium"
     exact_attribution: str = "range_only"
+    evidence_level: str = ""
+    exact_correlation_source: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,6 +129,11 @@ class KVBlockLedger:
             token_end=event.token_end,
             token_count=event.token_count,
             node_id=event.node_id,
+            request_id=event.request_id,
+            agent_request_id=event.agent_request_id,
+            correlation_id=event.correlation_id,
+            case_id=event.case_id,
+            gap_id=event.gap_id,
             host_index_signature=event.host_index_signature,
             host_index_start=event.host_index_start,
             host_index_end=event.host_index_end,
@@ -134,6 +146,8 @@ class KVBlockLedger:
             last_seen_ms=event.time_ms,
             confidence=event.confidence,
             exact_attribution=exact_attribution_level(event),
+            evidence_level=event.evidence_level,
+            exact_correlation_source=event.exact_correlation_source,
         )
         self.records[block_id] = record
         return record
@@ -193,6 +207,16 @@ def build_block_ledger(events: list[NormalizedKVEvent]) -> KVBlockLedger:
 def merge_identity_fields(record: KVBlockRecord, event: NormalizedKVEvent) -> None:
     if not record.node_id and event.node_id:
         record.node_id = event.node_id
+    if not record.request_id and event.request_id:
+        record.request_id = event.request_id
+    if not record.agent_request_id and event.agent_request_id:
+        record.agent_request_id = event.agent_request_id
+    if not record.correlation_id and event.correlation_id:
+        record.correlation_id = event.correlation_id
+    if not record.case_id and event.case_id:
+        record.case_id = event.case_id
+    if not record.gap_id and event.gap_id:
+        record.gap_id = event.gap_id
     if not record.host_index_signature and event.host_index_signature:
         record.host_index_signature = event.host_index_signature
     if record.host_index_start is None and event.host_index_start is not None:
@@ -210,6 +234,9 @@ def merge_identity_fields(record: KVBlockRecord, event: NormalizedKVEvent) -> No
     if not record.device_index_count and event.device_index_count:
         record.device_index_count = event.device_index_count
     record.exact_attribution = strongest_attribution(record.exact_attribution, exact_attribution_level(event))
+    record.evidence_level = strongest_evidence_level(record.evidence_level, event.evidence_level)
+    if not record.exact_correlation_source and event.exact_correlation_source:
+        record.exact_correlation_source = event.exact_correlation_source
     if event.confidence == "high":
         record.confidence = "high"
 
@@ -233,5 +260,16 @@ def strongest_attribution(current: str, candidate: str) -> str:
         "device_indices": 2,
         "host_indices": 2,
         "host_and_device_indices": 3,
+    }
+    return candidate if rank.get(candidate, 0) > rank.get(current, 0) else current
+
+
+def strongest_evidence_level(current: str, candidate: str) -> str:
+    rank = {
+        "": 0,
+        "DERIVED_OR_INFERRED": 1,
+        "DIRECT_TIMED": 2,
+        "DIRECT_PARTIAL_ID": 3,
+        "DIRECT_EXACT_INDEXED": 4,
     }
     return candidate if rank.get(candidate, 0) > rank.get(current, 0) else current

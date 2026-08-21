@@ -262,6 +262,7 @@ async def chat_once(
 
 
 def agentic_params(pair: ReplayPair, phase: str, mode: str, label: str, p_hash: str) -> dict[str, Any]:
+    correlation_id = f"{pair.session_id}:{phase}:{label}"
     return {
         "agentic_kv": {
             "session_id": pair.session_id,
@@ -271,12 +272,20 @@ def agentic_params(pair: ReplayPair, phase: str, mode: str, label: str, p_hash: 
             "prompt_hash": p_hash,
             "priority": pair.priority,
             "task_index": pair.task_index,
+            "request_id": label,
+            "parent_run_id": pair.session_id,
+            "correlation_id": correlation_id,
+            "case_id": pair.session_id,
+            "gap_id": str(pair.task_index),
         },
         "request_context": {
             "request_id": label,
             "parent_run_id": pair.session_id,
             "phase": phase,
             "task_index": pair.task_index,
+            "correlation_id": correlation_id,
+            "case_id": pair.session_id,
+            "gap_id": str(pair.task_index),
         },
     }
 

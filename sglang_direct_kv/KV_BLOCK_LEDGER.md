@@ -181,8 +181,9 @@ This ledger:
   tracks logical KV blocks across lifecycle states.
 
 Exact attribution:
-  also records host/device index signatures, layer IDs, request IDs, and
-  copy start/end windows for the SGLang movement functions.
+  also records host/device index signatures, layer IDs, request IDs,
+  correlation IDs, case/gap IDs, and copy start/end windows for the SGLang
+  movement functions.
 ```
 
 In simple words, this ledger says:
@@ -196,6 +197,22 @@ The exact attribution layer tries to say:
 ```text
 G04 host indices 1812..3859 moved into GPU/device indices 4200..6247
 between time A and time B.
+```
+
+After the audit-hardening pass, exact movement rows also try to say:
+
+```text
+This movement belonged to request/correlation X, came from SGLang hook Y,
+and has evidence level DIRECT_EXACT_INDEXED / DIRECT_PARTIAL_ID /
+DIRECT_TIMED / DERIVED_OR_INFERRED.
+```
+
+Important:
+
+```text
+block_id is still a stable logical report ID.
+It is stronger than a visual guess, but it is not a hardware page-table ID.
+For physical DMA-lane proof, use CUPTI/Nsight/vendor copy-engine counters.
 ```
 
 ## Modularity Rule

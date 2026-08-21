@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from agentic_kv.evidence_schema import movement_kind_display, movement_kind_from_row
+
 
 EvidenceRows = list[dict[str, Any]]
 
@@ -232,10 +234,8 @@ def audit_exact_movement_rows(exact_rows: EvidenceRows) -> EvidenceRows:
                 "meaning": "No exact KV movement rows were available for this report.",
             }
         ]
-    h2d = [row for row in exact_rows if str(row.get("direction") or "") == "host_to_device"]
-    d2h = [row for row in exact_rows if str(row.get("direction") or "") == "device_to_host"]
-    evict = [row for row in exact_rows if str(row.get("direction") or "") == "device_evict"]
-    host_evict = [row for row in exact_rows if str(row.get("direction") or "") == "host_evict"]
+    movement_kinds = Counter(movement_kind_display(movement_kind_from_row(row)) for row in exact_rows)
+    identity_keys = ["request_id", "agent_request_id", "correlation_id"]
     output: EvidenceRows = [
         {
             "area": "exact KV movement",
@@ -269,11 +269,11 @@ def audit_exact_movement_rows(exact_rows: EvidenceRows) -> EvidenceRows:
         },
         {
             "area": "exact KV movement",
-            "check": "request ID coverage",
-            "coverage": coverage_text(count_rows_with(exact_rows, "request_id"), total),
+            "check": "request/correlation identity coverage",
+            "coverage": coverage_text(count_rows_with_any(exact_rows, identity_keys), total),
             "evidence_level": "DIRECT",
-            "status": status_for_fraction(count_rows_with(exact_rows, "request_id"), total, weak_below=0.25),
-            "meaning": "Movement rows can be tied to an SGLang request when request_id is present.",
+            "status": status_for_fraction(count_rows_with_any(exact_rows, identity_keys), total, weak_below=0.25),
+            "meaning": "Movement rows can be tied to an SGLang request/correlation identity when these fields are present.",
         },
         {
             "area": "exact KV movement",
@@ -317,7 +317,7 @@ def audit_exact_movement_rows(exact_rows: EvidenceRows) -> EvidenceRows:
         {
             "area": "exact KV movement",
             "check": "movement type counts",
-            "coverage": f"H2D={len(h2d)}, D2H={len(d2h)}, GPU evict={len(evict)}, host evict={len(host_evict)}",
+            "coverage": ", ".join(f"{name}={count}" for name, count in sorted(movement_kinds.items())),
             "evidence_level": "DIRECT",
             "status": "informational",
             "meaning": "Breakdown of direct movement/residency event types visible in this run.",
@@ -396,6 +396,7 @@ def audit_request_stage_rows(stage_rows: EvidenceRows, queue_rows: EvidenceRows)
     total = len(stage_rows)
     stage_names = Counter(str(row.get("stage") or "") for row in stage_rows if has_value(row, "stage"))
     queue_total = len(queue_rows)
+    identity_keys = ["request_id", "agent_request_id", "correlation_id"]
     output: EvidenceRows = [
         {
             "area": "request lifecycle",
@@ -407,11 +408,11 @@ def audit_request_stage_rows(stage_rows: EvidenceRows, queue_rows: EvidenceRows)
         },
         {
             "area": "request lifecycle",
-            "check": "request ID coverage in stage rows",
-            "coverage": coverage_text(count_rows_with(stage_rows, "request_id"), total),
+            "check": "request/correlation identity coverage in stage rows",
+            "coverage": coverage_text(count_rows_with_any(stage_rows, identity_keys), total),
             "evidence_level": "DIRECT",
-            "status": status_for_fraction(count_rows_with(stage_rows, "request_id"), total, weak_below=0.25),
-            "meaning": "Stage rows can be tied to SGLang request IDs when present.",
+            "status": status_for_fraction(count_rows_with_any(stage_rows, identity_keys), total, weak_below=0.25),
+            "meaning": "Stage rows can be tied to SGLang request/correlation identities when present.",
         },
         {
             "area": "request lifecycle",
@@ -444,9 +445,7 @@ def audit_request_stage_rows(stage_rows: EvidenceRows, queue_rows: EvidenceRows)
 def audit_dispatch_kv_rows(summary_rows: EvidenceRows, event_rows: EvidenceRows) -> EvidenceRows:
     total = len(summary_rows)
     events = len(event_rows)
-    h2d = sum(1 for row in event_rows if str(row.get("kind") or "") == "H2D")
-    d2h = sum(1 for row in event_rows if str(row.get("kind") or "") == "D2H")
-    evict = sum(1 for row in event_rows if str(row.get("kind") or "") == "GPU evict")
+    movement_kinds = Counter(movement_kind_display(movement_kind_from_row(row)) for row in event_rows)
     pressure = sum(1 for row in event_rows if str(row.get("owner_kind") or "") == "pressure/filler")
     target = sum(1 for row in event_rows if str(row.get("owner_kind") or "") == "target row")
     return [
@@ -469,7 +468,7 @@ def audit_dispatch_kv_rows(summary_rows: EvidenceRows, event_rows: EvidenceRows)
         {
             "area": "client dispatch KV movement",
             "check": "movement type counts",
-            "coverage": f"H2D={h2d}, D2H={d2h}, GPU evict={evict}",
+            "coverage": ", ".join(f"{name}={count}" for name, count in sorted(movement_kinds.items())),
             "evidence_level": "DIRECT",
             "status": "informational",
             "meaning": "What kind of SGLang-visible KV movement happened while rows were dispatching.",

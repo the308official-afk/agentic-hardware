@@ -59,6 +59,42 @@ The current testbed has strong software-visible evidence for:
 | Logical block lifecycle | The ledger assigns stable logical block IDs and tracks source events over time. |
 | Client dispatch movement | The report filters direct movement events to the target dispatch window. |
 
+## Hardening Added After The First Audit
+
+The first audit showed one important bug and one important limitation:
+
+```text
+Bug:
+  Some report rows used movement_kind, while the audit was counting kind.
+  That made dispatch-window H2D/D2H/GPU-evict counts look like zero.
+
+Limitation:
+  Some SGLang movement rows had session identity but weak request/correlation
+  identity, so they were harder to tie to one exact request.
+```
+
+The hardening pass adds:
+
+| Improvement | What Changed |
+| --- | --- |
+| Shared movement vocabulary | `agentic_kv.evidence_schema` maps all rows to one movement vocabulary: H2D, D2H, GPU evict, host evict, cache match, recompute. |
+| Stronger request identity | The workload driver sends `request_id`, `parent_run_id`, `correlation_id`, `case_id`, and `gap_id` in `custom_params`. |
+| Trace-field propagation | `sglang_trace_patch.py` now preserves those request/correlation fields when SGLang exposes them. |
+| Ledger identity fields | Normalized KV events and block records now carry request/correlation/case/gap fields. |
+| Stronger audit coverage | The audit counts request/correlation identity coverage, not only the old `request_id` column. |
+| Evidence-level labels | Exact movement rows expose `evidence_level` and `exact_correlation_source`. |
+
+Important:
+
+```text
+Reports rebuilt from old traces will benefit from the movement-kind audit fix,
+but they cannot magically contain request/correlation fields that were not
+present in the old trace.
+
+Rerun the experiment after this hardening pass to populate the new identity
+fields in fresh traces.
+```
+
 ## What Is Still Limited
 
 The current report should not overclaim these:

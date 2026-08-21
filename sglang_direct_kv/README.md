@@ -6215,6 +6215,13 @@ Evidence levels:
   DERIVED         computed from direct events
   INFERRED        likely, but not directly observed as a physical event
   NOT_YET_PROVEN  outside the current evidence boundary
+
+Hardening added after the first audit:
+  one shared movement vocabulary for H2D/D2H/GPU-evict/host-evict
+  request_id/correlation_id/case_id/gap_id propagation from the workload driver
+  request/correlation fields in normalized KV events and block ledger records
+  corrected dispatch-window movement-kind audit counts
+  evidence_level and exact_correlation_source columns for exact movement rows
 ```
 
 New master report section:
@@ -6260,6 +6267,10 @@ Simple interpretation:
 This milestone is the report's honesty layer.
 It tells us which visuals are backed by direct instrumentation and which are
 still derived, inferred, or outside the current proof boundary.
+
+Reports rebuilt from old traces can fix the movement-kind accounting, but
+fresh experiments are needed to populate the newly added request/correlation
+fields in raw SGLang trace events.
 ```
 
 ## Directory Layout

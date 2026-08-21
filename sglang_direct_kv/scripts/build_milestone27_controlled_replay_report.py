@@ -31,6 +31,7 @@ from agentic_kv.block_ledger import (
     write_ledger_artifacts,
 )
 from agentic_kv.evidence_audit import audit_markdown, audit_report_data
+from agentic_kv.evidence_schema import movement_kind_display, movement_kind_from_row
 from build_live_agentbench_tool_gap_report import (
     build_expanded_gap_timeline_svg,
     build_local_timing_phase_timeline_svg,
@@ -1311,6 +1312,10 @@ def detailed_kv_lifecycle_table_rows(
         "lifecycle_explanation",
         "block_id",
         "node_id",
+        "request_id",
+        "correlation_id",
+        "case_id",
+        "gap_id",
         "token_range",
         "token_count",
         "first_write_host_ms",
@@ -1337,6 +1342,8 @@ def detailed_kv_lifecycle_table_rows(
         "hint_load_gpu_events",
         "exact_attribution",
         "confidence",
+        "evidence_level",
+        "exact_correlation_source",
         "host_index_signature",
         "device_index_signature",
         "lifecycle_steps",
@@ -1353,6 +1360,10 @@ def detailed_kv_lifecycle_column_guide_rows() -> list[dict[str, str]]:
         {"column": "lifecycle_explanation", "meaning": "Plain English explanation of the verdict."},
         {"column": "block_id", "meaning": "Stable logical ID assigned by our KV block ledger."},
         {"column": "node_id", "meaning": "SGLang radix/cache node ID if SGLang exposed one."},
+        {"column": "request_id", "meaning": "Driver/SGLang request identity when the trace preserved it."},
+        {"column": "correlation_id", "meaning": "Stable request-correlation ID carried from the workload driver when available."},
+        {"column": "case_id", "meaning": "Controlled-case identity used to align movement events to a timeline row."},
+        {"column": "gap_id", "meaning": "Tool-gap identity when the workload exposes one."},
         {"column": "token_range", "meaning": "Approximate token/index range covered by this logical KV block."},
         {"column": "token_count", "meaning": "Approximate number of KV indices/tokens in the block."},
         {"column": "first_write_host_ms", "meaning": "When this KV block was first backed up from GPU memory to host HiCache."},
@@ -1379,6 +1390,8 @@ def detailed_kv_lifecycle_column_guide_rows() -> list[dict[str, str]]:
         {"column": "hint_load_gpu_events", "meaning": "Number of host-to-GPU loads attributed to the hint/prefetch path."},
         {"column": "exact_attribution", "meaning": "What exact evidence was available, such as host and device index signatures."},
         {"column": "confidence", "meaning": "How strong the lifecycle evidence is."},
+        {"column": "evidence_level", "meaning": "Whether the row is exact indexed evidence, partial direct evidence, timed evidence, or inferred."},
+        {"column": "exact_correlation_source", "meaning": "Which field tied the movement/block back to a request or session."},
         {"column": "host_index_signature", "meaning": "Stable fingerprint of the host-side KV indices involved."},
         {"column": "device_index_signature", "meaning": "Stable fingerprint of the GPU-side KV indices involved."},
         {"column": "lifecycle_steps", "meaning": "Compact event history, read left to right."},
@@ -1401,7 +1414,12 @@ def exact_movement_table_rows(rows: list[dict[str, Any]], gaps: list[dict[str, A
         "session_id",
         "phase",
         "movement",
+        "movement_kind",
         "direction",
+        "request_id",
+        "correlation_id",
+        "case_id",
+        "gap_id",
         "copy_start_ms",
         "copy_end_ms",
         "duration_ms",
@@ -1413,9 +1431,10 @@ def exact_movement_table_rows(rows: list[dict[str, Any]], gaps: list[dict[str, A
         "device_index_count",
         "node_id",
         "layer_id",
-        "request_id",
         "source_event",
         "confidence",
+        "evidence_level",
+        "exact_correlation_source",
         "simple_meaning",
     ]
     output: list[dict[str, Any]] = []
@@ -1649,7 +1668,9 @@ def hardware_counterfactual_rows(ledger: list[dict[str, Any]]) -> list[dict[str,
 
 
 def request_id_coverage_rows(trace_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: defaultdict[str, dict[str, int]] = defaultdict(lambda: {"events": 0, "with_agent_session": 0, "with_request_id": 0})
+    grouped: defaultdict[str, dict[str, int]] = defaultdict(
+        lambda: {"events": 0, "with_agent_session": 0, "with_request_identity": 0}
+    )
     for row in trace_rows:
         event = str(row.get("event") or "")
         if not event:
@@ -1668,16 +1689,29 @@ def request_id_coverage_rows(trace_rows: list[dict[str, Any]]) -> list[dict[str,
             continue
         context = context_from_trace_event(row)
         sessions = _agent_sessions_for_event(row)
-        request_id = row.get("request_id") or context.get("request_id")
+        request_id = (
+            row.get("request_id")
+            or row.get("agent_request_id")
+            or row.get("correlation_id")
+            or context.get("request_id")
+            or context.get("agent_request_id")
+            or context.get("agent_correlation_id")
+        )
         req = context.get("request")
         if not request_id and isinstance(req, dict):
-            request_id = req.get("rid") or req.get("request_id")
+            request_id = (
+                req.get("rid")
+                or req.get("request_id")
+                or req.get("agent_request_id")
+                or req.get("agent_correlation_id")
+                or req.get("agent_label")
+            )
         item = grouped[group]
         item["events"] += 1
         if sessions or row.get("session_id") or row.get("agent_session_id"):
             item["with_agent_session"] += 1
         if request_id:
-            item["with_request_id"] += 1
+            item["with_request_identity"] += 1
     rows: list[dict[str, Any]] = []
     for group, counts in sorted(grouped.items()):
         total = counts["events"]
@@ -1687,8 +1721,10 @@ def request_id_coverage_rows(trace_rows: list[dict[str, Any]]) -> list[dict[str,
                 "events": total,
                 "with_agent_session": counts["with_agent_session"],
                 "agent_session_coverage_pct": round(counts["with_agent_session"] * 100.0 / total, 2) if total else 0.0,
-                "with_request_id": counts["with_request_id"],
-                "request_id_coverage_pct": round(counts["with_request_id"] * 100.0 / total, 2) if total else 0.0,
+                "with_request_identity": counts["with_request_identity"],
+                "request_identity_coverage_pct": round(counts["with_request_identity"] * 100.0 / total, 2)
+                if total
+                else 0.0,
             }
         )
     return rows
@@ -3066,17 +3102,7 @@ def exact_movement_display_session(row: dict[str, Any]) -> str:
 
 
 def exact_movement_kind(row: dict[str, Any]) -> str:
-    direction = str(row.get("direction") or "")
-    movement = str(row.get("movement") or "")
-    if direction == "host_to_device" or movement == "host_to_gpu_load":
-        return "H2D"
-    if direction == "device_to_host" or movement == "gpu_to_host_write":
-        return "D2H"
-    if direction == "device_evict" or movement == "gpu_evict":
-        return "GPU evict"
-    if direction == "host_evict":
-        return "host evict"
-    return direction or movement or "KV movement"
+    return movement_kind_display(movement_kind_from_row(row))
 
 
 def exact_movement_source_rank(row: dict[str, Any]) -> int:

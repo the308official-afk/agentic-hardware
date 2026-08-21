@@ -148,6 +148,11 @@ def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
             "agent_mode",
             "agent_prompt_hash",
             "agent_priority",
+            "agent_request_id",
+            "agent_parent_run_id",
+            "agent_correlation_id",
+            "agent_case_id",
+            "agent_gap_id",
         )
         if context.get(key) not in (None, "", [], {})
     }
@@ -195,7 +200,7 @@ def _agent_context_from_context(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request_id_from_request(request: dict[str, Any]) -> str:
-    value = request.get("rid") or request.get("request_id")
+    value = request.get("rid") or request.get("request_id") or request.get("agent_request_id") or request.get("agent_label")
     return str(value) if value not in (None, "", [], {}) else ""
 
 
@@ -434,7 +439,22 @@ def _cache_operation_summary(operation: Any) -> dict[str, Any]:
 
 def _request_like_context(req: Any) -> dict[str, Any]:
     context = _req_context(req)
-    for attr in ("rid", "request_id", "session_id", "agent_session_id", "agent_phase", "agent_mode", "agent_label"):
+    for attr in (
+        "rid",
+        "request_id",
+        "session_id",
+        "agent_session_id",
+        "agent_phase",
+        "agent_mode",
+        "agent_label",
+        "agent_prompt_hash",
+        "agent_priority",
+        "agent_request_id",
+        "agent_parent_run_id",
+        "agent_correlation_id",
+        "agent_case_id",
+        "agent_gap_id",
+    ):
         if hasattr(req, attr) and attr not in context:
             try:
                 context[attr] = _safe_summary(getattr(req, attr))
@@ -654,6 +674,21 @@ def _req_context(req: Any) -> dict[str, Any]:
                 context["agent_mode"] = _safe_summary(agentic.get("mode"))
                 context["agent_prompt_hash"] = _safe_summary(agentic.get("prompt_hash"))
                 context["agent_priority"] = _safe_summary(agentic.get("priority"))
+                context["agent_request_id"] = _safe_summary(agentic.get("request_id"))
+                context["agent_parent_run_id"] = _safe_summary(agentic.get("parent_run_id"))
+                context["agent_correlation_id"] = _safe_summary(agentic.get("correlation_id"))
+                context["agent_case_id"] = _safe_summary(agentic.get("case_id"))
+                context["agent_gap_id"] = _safe_summary(agentic.get("gap_id"))
+                if context.get("agent_request_id") and "request_id" not in context:
+                    context["request_id"] = context["agent_request_id"]
+            request_context = custom_params.get("request_context")
+            if isinstance(request_context, dict):
+                context["request_id"] = context.get("request_id") or _safe_summary(request_context.get("request_id"))
+                context["agent_parent_run_id"] = context.get("agent_parent_run_id") or _safe_summary(
+                    request_context.get("parent_run_id")
+                )
+                context["agent_case_id"] = context.get("agent_case_id") or _safe_summary(request_context.get("case_id"))
+                context["agent_gap_id"] = context.get("agent_gap_id") or _safe_summary(request_context.get("gap_id"))
     except Exception:
         pass
     try:
@@ -1186,14 +1221,18 @@ def _request_count(context: dict[str, Any]) -> int | str:
 
 
 def _first_request_id(context: dict[str, Any]) -> Any:
+    for key in ("request_id", "agent_request_id", "agent_label"):
+        value = context.get(key)
+        if value not in (None, ""):
+            return value
     req = context.get("request")
     if isinstance(req, dict):
-        return req.get("rid") or req.get("request_id")
+        return req.get("rid") or req.get("request_id") or req.get("agent_request_id") or req.get("agent_label")
     requests = context.get("requests")
     if isinstance(requests, list):
         for req in requests:
             if isinstance(req, dict):
-                value = req.get("rid") or req.get("request_id")
+                value = req.get("rid") or req.get("request_id") or req.get("agent_request_id") or req.get("agent_label")
                 if value not in (None, ""):
                     return value
     return ""

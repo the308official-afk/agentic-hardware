@@ -3,6 +3,17 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
+from agentic_kv.evidence_schema import (
+    case_identity,
+    correlation_identity,
+    correlation_source,
+    gap_identity,
+    movement_evidence_level,
+    movement_kind_from_fields,
+    request_identity,
+    request_or_context_value,
+)
+
 from .events import KVEventType, NormalizedKVEvent
 
 
@@ -32,9 +43,10 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
         session_id = agent_session_from_context(context)
         if not session_id or "::live_prefetch::" in session_id:
             continue
-        case_id = str(context.get("ledger_case_id") or row.get("ledger_case_id") or "")
-        if case_id:
-            session_id = f"{case_id}::{session_id}"
+        ledger_case_id = str(context.get("ledger_case_id") or row.get("ledger_case_id") or "")
+        case_id = ledger_case_id or case_identity(context)
+        if ledger_case_id:
+            session_id = f"{ledger_case_id}::{session_id}"
         phase = agent_phase_from_context(context)
         token_start, token_end, token_count = event_range(event_type, context, row)
         duration = as_float(row.get("duration_ms"))
@@ -43,7 +55,24 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
         copy_start_ms = round(time_ms - duration, 3) if time_ms is not None and duration is not None else None
         host_start, host_end, host_count = index_range(context.get("host_indices"))
         device_start, device_end, device_count = index_range(context.get("device_indices"))
-        request = nested_request(context)
+        request_id = request_identity(context)
+        agent_request_id = request_or_context_value(context, "agent_request_id")
+        correlation_id = correlation_identity(context)
+        gap_id = gap_identity(context)
+        movement_kind = movement_kind_from_fields(
+            direction=context.get("direction", ""),
+            movement="",
+            event_type=event_type.value,
+            source_event=source_event,
+        )
+        evidence_probe = {
+            "copy_start_ms": copy_start_ms,
+            "copy_end_ms": time_ms,
+            "source_event": source_event,
+            "host_index_signature": index_signature(context.get("host_indices")),
+            "device_index_signature": index_signature(context.get("device_indices")),
+            "node_id": str(context.get("node_id") or ""),
+        }
         events.append(
             NormalizedKVEvent(
                 event_type=event_type,
@@ -55,9 +84,14 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
                 token_end=token_end,
                 token_count=token_count,
                 node_id=str(context.get("node_id") or ""),
-                request_id=str(context.get("request_id") or request.get("rid") or request.get("request_id") or ""),
+                request_id=request_id,
+                agent_request_id=agent_request_id,
+                correlation_id=correlation_id,
+                case_id=case_id,
+                gap_id=gap_id,
                 layer_id=str(context.get("layer_id") or ""),
                 direction=str(context.get("direction") or ""),
+                movement_kind=movement_kind,
                 host_index_start=host_start,
                 host_index_end=host_end,
                 host_index_count=host_count,
@@ -70,7 +104,26 @@ def normalize_sglang_trace_events(trace_rows: Iterable[dict[str, Any]]) -> list[
                 copy_end_ms=time_ms,
                 source_event=source_event,
                 confidence=event_confidence(event_type, context),
-                raw={"event": source_event, "phase": phase, "direction": context.get("direction", "")},
+                evidence_level=movement_evidence_level(evidence_probe),
+                exact_correlation_source=correlation_source(
+                    {
+                        "correlation_id": correlation_id,
+                        "request_id": request_id,
+                        "agent_request_id": agent_request_id,
+                        "agent_label": request_or_context_value(context, "agent_label"),
+                        "session_id": session_id,
+                    }
+                ),
+                raw={
+                    "event": source_event,
+                    "phase": phase,
+                    "direction": context.get("direction", ""),
+                    "movement_kind": movement_kind,
+                    "request_id": request_id,
+                    "correlation_id": correlation_id,
+                    "case_id": case_id,
+                    "gap_id": gap_id,
+                },
             )
         )
     return sorted(events, key=lambda event: event.time_ms if event.time_ms is not None else -1.0)

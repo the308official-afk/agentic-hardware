@@ -26,8 +26,13 @@ class NormalizedKVEvent:
     token_count: int = 0
     node_id: str = ""
     request_id: str = ""
+    agent_request_id: str = ""
+    correlation_id: str = ""
+    case_id: str = ""
+    gap_id: str = ""
     layer_id: str = ""
     direction: str = ""
+    movement_kind: str = ""
     host_index_start: int | None = None
     host_index_end: int | None = None
     host_index_count: int = 0
@@ -40,6 +45,8 @@ class NormalizedKVEvent:
     copy_end_ms: float | None = None
     source_event: str = ""
     confidence: str = "medium"
+    evidence_level: str = ""
+    exact_correlation_source: str = ""
     raw: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
