@@ -5534,6 +5534,45 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'font-weight="900" fill="{text_fill}">{html.escape(label)}</text>'
             )
 
+    def draw_small_bar_callout(
+        parts: list[str],
+        x1: float,
+        x2: float,
+        y: float,
+        h: float,
+        label: str,
+        title: str,
+        color: str,
+    ) -> None:
+        if not label:
+            return
+        text_w = min(310.0, max(110.0, len(label) * 5.8 + 22.0))
+        plot_right = left + plot_w
+        if x2 + text_w + 12.0 <= plot_right:
+            rect_x = x2 + 10.0
+            text_x = rect_x + text_w / 2
+            line_x1 = x2
+            line_x2 = rect_x
+        else:
+            rect_x = max(left, x1 - text_w - 10.0)
+            text_x = rect_x + text_w / 2
+            line_x1 = rect_x + text_w
+            line_x2 = x1
+        rect_y = y - 1.0
+        center_y = y + h / 2
+        parts.append(
+            f'<line x1="{line_x1:.1f}" y1="{center_y:.1f}" x2="{line_x2:.1f}" y2="{center_y:.1f}" '
+            f'stroke="{color}" stroke-width="1.4" opacity="0.72"><title>{html.escape(title)}</title></line>'
+        )
+        parts.append(
+            f'<rect x="{rect_x:.1f}" y="{rect_y:.1f}" width="{text_w:.1f}" height="{h + 2:.1f}" rx="5" '
+            f'fill="#ecfeff" stroke="{color}" stroke-width="1.2" opacity="0.96"><title>{html.escape(title)}</title></rect>'
+        )
+        parts.append(
+            f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="9" '
+            f'font-weight="900" fill="#155e75">{html.escape(label)}</text>'
+        )
+
     def draw_overview_marker(parts: list[str], value: float, y1: float, y2: float, color: str, title: str) -> None:
         if value < x_min or value > x_max:
             return
@@ -5816,8 +5855,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 replay_h2d_duration = replay_h2d_span[1] - replay_h2d_span[0]
                 replay_h2d_label = short_bar_label(
                     [
-                        "H2D",
-                        f"{replay_h2d_summary['blocks']} blk" if replay_h2d_summary["events"] else "",
+                        f"H2D: {replay_h2d_summary['blocks']} blk" if replay_h2d_summary["events"] else "H2D",
                         compact_tokens(replay_h2d_summary["tokens"]) if replay_h2d_summary["tokens"] else "",
                         display_ms(replay_h2d_duration),
                     ],
@@ -5846,6 +5884,22 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     label_min_w=82.0,
                     font_size=9,
                 )
+                clipped_h2d_start = max(rz_min, min(rz_max, replay_h2d_span[0]))
+                clipped_h2d_end = max(rz_min, min(rz_max, replay_h2d_span[1]))
+                if clipped_h2d_end > clipped_h2d_start:
+                    h2d_x1 = zoom_x(clipped_h2d_start, rz_min, rz_max)
+                    h2d_x2 = zoom_x(clipped_h2d_end, rz_min, rz_max)
+                    if max(6.0, h2d_x2 - h2d_x1) < 82.0:
+                        draw_small_bar_callout(
+                            parts,
+                            h2d_x1,
+                            h2d_x2,
+                            replay_zoom_title_y + 75,
+                            main_bar_h,
+                            replay_h2d_label,
+                            replay_h2d_title,
+                            unified_stack_color("h2d"),
+                        )
 
             replay_start_abs = as_float(row.get("resume_start_ms"))
             first_token_abs = first_token_ms(row)
