@@ -5308,12 +5308,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     x_min -= pad
     x_max += pad
 
-    width = 1780
-    left = 280
+    width = 1880
+    left = 330
     right = 56
-    top = 150
-    row_h = 404
-    bottom = 96
+    top = 194
+    row_h = 500
+    bottom = 108
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
     scaled_min = h2d_symlog_value(x_min)
@@ -5406,7 +5406,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<text x="{bx:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="11" '
                 f'font-weight="900" fill="{color}">...</text>'
             )
-        if label and w >= 74:
+        if label and w >= 118:
             text_x = x1 + w / 2
             parts.append(
                 f'<text x="{text_x:.1f}" y="{y + h / 2 + 4:.1f}" text-anchor="middle" font-size="9" '
@@ -5423,6 +5423,25 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         )
 
     zero_x = overview_x(0.0)
+    legend = [
+        ("initial", unified_stack_color("initial")),
+        ("tool wait", unified_stack_color("tool_wait")),
+        ("client dispatch", unified_stack_color("client_dispatch")),
+        ("scheduler/load path", unified_stack_color("scheduler")),
+        ("H2D", unified_stack_color("h2d")),
+        ("D2H", unified_stack_color("d2h")),
+        ("evict", unified_stack_color("evict")),
+        ("recompute", unified_stack_color("recompute")),
+        ("decode", unified_stack_color("decode")),
+    ]
+
+    def append_legend(parts: list[str], x_start: float, y_pos: float) -> None:
+        lx = x_start
+        for legend_label, color in legend:
+            parts.append(f'<rect x="{lx:.1f}" y="{y_pos:.1f}" width="14" height="14" rx="3" fill="{color}" opacity="0.88"/>')
+            parts.append(f'<text x="{lx + 20:.1f}" y="{y_pos + 12:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
+            lx += 158
+
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
         '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
@@ -5431,6 +5450,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
         f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
     ]
+    append_legend(parts, left, 102)
     ticks = h2d_symlog_tick_values(x_min, x_max)
     for value in ticks:
         x = overview_x(value)
@@ -5452,27 +5472,31 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         zoom = zoom_bounds(row, row_events, due)
         replay_zoom = replay_zoom_bounds(row, due)
 
-        parts.append(f'<rect x="0" y="{y - 8:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
-        parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="900">{html.escape(label)}</text>')
-        parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
-        parts.append(f'<text x="12" y="{y + 52:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}; fillers {html.escape(case_fillers(row))}; wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
+        parts.append(f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" fill="{band}"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="106" rx="8" fill="#ffffff" opacity="0.38"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 132:.1f}" width="{plot_w + 4:.1f}" height="128" rx="8" fill="#f8fafc" opacity="0.80"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 292:.1f}" width="{plot_w + 4:.1f}" height="132" rx="8" fill="#fff7ed" opacity="0.36"/>')
+        parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
+        parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
+        parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
+        parts.append(f'<text x="16" y="{y + 84:.1f}" font-size="10" fill="#475569">fillers {html.escape(case_fillers(row))} | wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
         parts.append(
-            f'<text x="12" y="{y + 70:.1f}" font-size="10" fill="#475569">'
+            f'<text x="16" y="{y + 108:.1f}" font-size="10" fill="#475569">'
             f'H2D {event_counts.get("H2D", 0)} | D2H {event_counts.get("D2H", 0)} | evict {event_counts.get("GPU evict", 0)}'
             f'</text>'
         )
-        parts.append(f'<text x="12" y="{y + 88:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:48])}</text>')
+        parts.append(f'<text x="16" y="{y + 132:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:48])}</text>')
 
         overview_lanes = [
-            ("overview", y + 18),
-            ("request", y + 48),
-            ("replay", y + 78),
+            ("overview", y + 28),
+            ("request path", y + 64),
+            ("replay summary", y + 100),
         ]
         for lane_label, lane_y in overview_lanes:
             parts.append(f'<text x="{left - 10}" y="{lane_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="800" fill="#334155">{html.escape(lane_label)}</text>')
             parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
 
-        overview_y = y + 18
+        overview_y = y + 28
         for span, color, span_label, title, opacity in [
             (_relative_span(row, "current_start_ms", "current_end_ms", due), unified_stack_color("initial"), "initial", "initial model turn", 0.84),
             (_relative_span(row, "tool_gap_start_ms", "tool_gap_end_ms", due), unified_stack_color("tool_wait"), "tool wait", "agent/tool wait window", 0.78),
@@ -5481,7 +5505,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if span:
                 draw_span(parts, overview_x, x_min, x_max, span[0], span[1], overview_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity, break_long=True)
 
-        request_y = y + 48
+        request_y = y + 64
         request_spans = [
             (_relative_span(row, "resume_submitted_ms", "resume_start_ms", due), unified_stack_color("client_dispatch"), "client dispatch", "client dispatch: replay submitted but client call had not started"),
             (_relative_span(row, "replay_sglang_receive_start_ms", "replay_sglang_receive_end_ms", due), unified_stack_color("sglang_receive"), "receive", "SGLang receive stage"),
@@ -5492,7 +5516,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if span:
                 draw_span(parts, overview_x, x_min, x_max, span[0], span[1], request_y, 14, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", break_long=True)
 
-        replay_y = y + 78
+        replay_y = y + 100
         replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
         if replay_h2d:
             draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 2, 9, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=7)
@@ -5511,7 +5535,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             if decode_span[1] > decode_span[0]:
                 draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 25, 9, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
 
-        zoom_title_y = y + 116
+        zoom_title_y = y + 150
         parts.append(f'<text x="{left - 10}" y="{zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">KV zoom</text>')
         if zoom is None:
             parts.append(f'<text x="{left + 8}" y="{zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No SGLang-visible KV movement in this gap window.</text>')
@@ -5519,20 +5543,21 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             z_min, z_max = zoom
             z_span = max(1.0, z_max - z_min)
             zoom_label = f"expanded KV burst: {display_ms(z_min)} -> {display_ms(z_max)} relative to replay due"
-            parts.append(f'<text x="{left + 8}" y="{zoom_title_y - 4:.1f}" font-size="10" font-weight="800" fill="#475569">{html.escape(zoom_label)}</text>')
+            parts.append(f'<text x="{left + 8}" y="{zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">KV zoom: expanded memory movement region</text>')
+            parts.append(f'<text x="{left + 8}" y="{zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(zoom_label)}</text>')
             for tick_value in [z_min, z_min + z_span * 0.25, z_min + z_span * 0.5, z_min + z_span * 0.75, z_max]:
                 tx = zoom_x(tick_value, z_min, z_max)
-                parts.append(f'<line x1="{tx:.1f}" y1="{zoom_title_y + 14:.1f}" x2="{tx:.1f}" y2="{zoom_title_y + 91:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{zoom_title_y + 108:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+                parts.append(f'<line x1="{tx:.1f}" y1="{zoom_title_y + 26:.1f}" x2="{tx:.1f}" y2="{zoom_title_y + 112:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{zoom_title_y + 128:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
             if z_min <= 0 <= z_max:
                 zx = zoom_x(0.0, z_min, z_max)
-                parts.append(f'<line x1="{zx:.1f}" y1="{zoom_title_y + 14:.1f}" x2="{zx:.1f}" y2="{zoom_title_y + 91:.1f}" stroke="#111827" stroke-width="1.6"/>')
-                parts.append(f'<text x="{zx + 4:.1f}" y="{zoom_title_y + 26:.1f}" font-size="9" font-weight="800">due</text>')
+                parts.append(f'<line x1="{zx:.1f}" y1="{zoom_title_y + 26:.1f}" x2="{zx:.1f}" y2="{zoom_title_y + 112:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                parts.append(f'<text x="{zx + 4:.1f}" y="{zoom_title_y + 38:.1f}" font-size="9" font-weight="800">due</text>')
             zoom_lanes = {
-                "H2D": (zoom_title_y + 20, unified_stack_color("h2d")),
-                "D2H": (zoom_title_y + 42, unified_stack_color("d2h")),
-                "GPU evict": (zoom_title_y + 64, unified_stack_color("evict")),
-                "host evict": (zoom_title_y + 82, unified_stack_color("host_evict")),
+                "H2D": (zoom_title_y + 34, unified_stack_color("h2d")),
+                "D2H": (zoom_title_y + 58, unified_stack_color("d2h")),
+                "GPU evict": (zoom_title_y + 82, unified_stack_color("evict")),
+                "host evict": (zoom_title_y + 106, unified_stack_color("host_evict")),
             }
             for lane_name, (lane_y, _) in zoom_lanes.items():
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name.replace("GPU ", ""))}</text>')
@@ -5568,7 +5593,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     min_w=5.0 if target else 3.5,
                 )
 
-        replay_zoom_title_y = y + 244
+        replay_zoom_title_y = y + 312
         parts.append(f'<text x="{left - 10}" y="{replay_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">replay zoom</text>')
         if replay_zoom is None:
             parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No replay timing was available for this gap.</text>')
@@ -5576,21 +5601,22 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             rz_min, rz_max = replay_zoom
             rz_span = max(1.0, rz_max - rz_min)
             replay_zoom_label = f"expanded replay region: {display_ms(rz_min)} -> {display_ms(rz_max)} relative to replay due"
-            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 4:.1f}" font-size="10" font-weight="800" fill="#475569">{html.escape(replay_zoom_label)}</text>')
+            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">Replay zoom: expanded replay execution region</text>')
+            parts.append(f'<text x="{left + 8}" y="{replay_zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(replay_zoom_label)}</text>')
             for tick_value in [rz_min, rz_min + rz_span * 0.25, rz_min + rz_span * 0.5, rz_min + rz_span * 0.75, rz_max]:
                 tx = zoom_x(tick_value, rz_min, rz_max)
-                parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 14:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 90:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 107:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+                parts.append(f'<line x1="{tx:.1f}" y1="{replay_zoom_title_y + 26:.1f}" x2="{tx:.1f}" y2="{replay_zoom_title_y + 116:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{replay_zoom_title_y + 132:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
             if rz_min <= 0 <= rz_max:
                 zx = zoom_x(0.0, rz_min, rz_max)
-                parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 14:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 90:.1f}" stroke="#111827" stroke-width="1.6"/>')
-                parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 26:.1f}" font-size="9" font-weight="800">due</text>')
+                parts.append(f'<line x1="{zx:.1f}" y1="{replay_zoom_title_y + 26:.1f}" x2="{zx:.1f}" y2="{replay_zoom_title_y + 116:.1f}" stroke="#111827" stroke-width="1.6"/>')
+                parts.append(f'<text x="{zx + 4:.1f}" y="{replay_zoom_title_y + 38:.1f}" font-size="9" font-weight="800">due</text>')
 
             replay_zoom_lanes = [
-                ("request", replay_zoom_title_y + 20),
-                ("H2D", replay_zoom_title_y + 42),
-                ("pre-token", replay_zoom_title_y + 64),
-                ("decode", replay_zoom_title_y + 86),
+                ("replay request", replay_zoom_title_y + 34),
+                ("replay H2D", replay_zoom_title_y + 58),
+                ("before first token", replay_zoom_title_y + 82),
+                ("decode", replay_zoom_title_y + 106),
             ]
             for lane_name, lane_y in replay_zoom_lanes:
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name)}</text>')
@@ -5605,10 +5631,10 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     rz_max,
                     replay_request_span[0],
                     replay_request_span[1],
-                    replay_zoom_title_y + 18,
+                    replay_zoom_title_y + 32,
                     10,
                     unified_stack_color("decode"),
-                    "request",
+                    "replay request",
                     f"{label} | replay request wall time: {display_ms(replay_request_span[1] - replay_request_span[0])}",
                     opacity=0.58,
                     min_w=5.0,
@@ -5623,10 +5649,10 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     rz_max,
                     replay_h2d_span[0],
                     replay_h2d_span[1],
-                    replay_zoom_title_y + 40,
+                    replay_zoom_title_y + 56,
                     10,
                     unified_stack_color("h2d"),
-                    "H2D",
+                    "replay H2D",
                     f"{label} | replay-side KV H2D: {display_ms(replay_h2d_span[1] - replay_h2d_span[0])}",
                     opacity=0.92,
                     min_w=6.0,
@@ -5647,7 +5673,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     rz_max,
                     pre_token_start,
                     pre_token_end,
-                    replay_zoom_title_y + 62,
+                    replay_zoom_title_y + 80,
                     10,
                     pre_token_color,
                     pre_token_label,
@@ -5656,8 +5682,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     min_w=6.0,
                 )
                 first_token_x = zoom_x(pre_token_end, rz_min, rz_max)
-                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 56:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 98:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(pre_token_end))} relative to due</title></line>')
-                parts.append(f'<text x="{first_token_x + 4:.1f}" y="{replay_zoom_title_y + 60:.1f}" font-size="8" font-weight="800" fill="#92400e">first token</text>')
+                parts.append(f'<line x1="{first_token_x:.1f}" y1="{replay_zoom_title_y + 74:.1f}" x2="{first_token_x:.1f}" y2="{replay_zoom_title_y + 120:.1f}" stroke="#eab308" stroke-width="1.8"><title>{html.escape(label)} | first token: {html.escape(display_ms(pre_token_end))} relative to due</title></line>')
+                parts.append(f'<text x="{first_token_x + 5:.1f}" y="{replay_zoom_title_y + 78:.1f}" font-size="8" font-weight="800" fill="#92400e">first token</text>')
 
             if first_token_abs is not None and as_float(row.get("resume_end_ms")) is not None:
                 decode_start = first_token_abs - due
@@ -5670,7 +5696,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         rz_max,
                         decode_start,
                         decode_end,
-                        replay_zoom_title_y + 84,
+                        replay_zoom_title_y + 104,
                         10,
                         unified_stack_color("decode"),
                         "decode",
@@ -5686,23 +5712,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         if explanation:
             parts.append(f'<text x="{left}" y="{verdict_y + 16:.1f}" font-size="9" fill="#475569">{html.escape(explanation[:190])}</text>')
 
-    legend_y = height - 48
-    lx = left
-    legend = [
-        ("initial", unified_stack_color("initial")),
-        ("tool wait", unified_stack_color("tool_wait")),
-        ("client dispatch", unified_stack_color("client_dispatch")),
-        ("scheduler/load path", unified_stack_color("scheduler")),
-        ("H2D", unified_stack_color("h2d")),
-        ("D2H", unified_stack_color("d2h")),
-        ("evict", unified_stack_color("evict")),
-        ("recompute", unified_stack_color("recompute")),
-        ("decode", unified_stack_color("decode")),
-    ]
-    for legend_label, color in legend:
-        parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.86"/>')
-        parts.append(f'<text x="{lx + 18:.1f}" y="{legend_y + 11:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
-        lx += 150
+    append_legend(parts, left, height - 48)
     parts.append("</svg>")
     return "\n".join(parts)
 
