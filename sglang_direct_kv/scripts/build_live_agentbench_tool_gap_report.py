@@ -367,6 +367,8 @@ def build_local_timing_phase_timeline_svg(
     show_prefetch_legend: bool = True,
     kv_block_lifecycle_rows: list[dict[str, Any]] | None = None,
     h2d_pressure_rows: list[dict[str, Any]] | None = None,
+    show_block_lifecycle_strip: bool = True,
+    show_h2d_pressure_strip: bool = True,
 ) -> str:
     rows = gaps[:max_rows]
     if not rows:
@@ -376,7 +378,7 @@ def build_local_timing_phase_timeline_svg(
     left = 215
     right = 40
     top = 116
-    row_h = 274
+    row_h = 274 if show_block_lifecycle_strip or show_h2d_pressure_strip else 214
     header_h = 42
     gap = 16
     turn_w = 220
@@ -400,9 +402,11 @@ def build_local_timing_phase_timeline_svg(
         ("recompute/rebuild", "#db2777"),
         ("remaining TTFT", "#eab308"),
         ("decode", "#ef4444"),
-        ("block lifecycle strip", "#475569"),
-        ("nearby H2D pressure", "#b91c1c"),
     ]
+    if show_block_lifecycle_strip:
+        legend.append(("block lifecycle strip", "#475569"))
+    if show_h2d_pressure_strip:
+        legend.append(("nearby H2D pressure", "#b91c1c"))
 
     block_rows_by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for block_row in kv_block_lifecycle_rows or []:
@@ -779,7 +783,7 @@ def build_local_timing_phase_timeline_svg(
             svg.append(f'<text x="12" y="{y + 127}" font-size="10" fill="#64748b">task {fmt(task_index)} / gap {fmt(gap_index)}</text>')
         if mode:
             svg.append(f'<text x="12" y="{y + 145}" font-size="10" fill="#64748b">mode {fmt(mode)}</text>')
-        if block_summary["rows"]:
+        if show_block_lifecycle_strip and block_summary["rows"]:
             block_line = (
                 f"blocks {len(block_summary['rows'])}; "
                 f"replay H2D {len(block_summary['replay_loaded'])}; "
@@ -787,10 +791,10 @@ def build_local_timing_phase_timeline_svg(
                 f"exact {len(block_summary['exact'])}"
             )
             svg.append(f'<text x="12" y="{y + 164}" font-size="10" fill="#334155" font-weight="700">{fmt(block_line)}</text>')
-        else:
+        elif show_block_lifecycle_strip:
             svg.append(f'<text x="12" y="{y + 164}" font-size="10" fill="#64748b">no matched block rows</text>')
         pressure_row = h2d_pressure_by_label.get(label)
-        if pressure_row:
+        if show_h2d_pressure_strip and pressure_row:
             svg.append(
                 f'<text x="12" y="{y + 183}" font-size="10" fill="{pressure_color(str(pressure_row.get("pressure_level") or ""))}" font-weight="800">'
                 f'H2D pressure {fmt(str(pressure_row.get("pressure_level") or "none"))}: {fmt(str(pressure_row.get("nearby_h2d_events") or 0))} events</text>'
@@ -1027,8 +1031,10 @@ def build_local_timing_phase_timeline_svg(
         else:
             missing(svg, replay_bar_x, y + 14 + 3 * lane_step, replay_bar_w, bar_h, "no decode")
 
-        block_strip(svg, x_turn + 12, y + 0, width - x_turn - right - 24, block_summary, row)
-        pressure_strip(svg, x_turn + 12, y + 0, width - x_turn - right - 24, pressure_row)
+        if show_block_lifecycle_strip:
+            block_strip(svg, x_turn + 12, y + 0, width - x_turn - right - 24, block_summary, row)
+        if show_h2d_pressure_strip:
+            pressure_strip(svg, x_turn + 12, y + 0, width - x_turn - right - 24, pressure_row)
 
     svg.append(f'<line x1="0" y1="{plot_bottom:.1f}" x2="{width}" y2="{plot_bottom:.1f}" stroke="#cbd5e1"/>')
     append_timeline_legend(svg, legend, left, legend_y, 160)

@@ -4767,6 +4767,167 @@ def reproduce_controlled_replay_html(result_root: Path) -> str:
     )
 
 
+def _rows_matching_label(rows: list[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+    return [row for row in rows if str(row.get("row") or "") == label]
+
+
+def _first_matching_label(rows: list[dict[str, Any]], label: str) -> dict[str, Any]:
+    matching = _rows_matching_label(rows, label)
+    return matching[0] if matching else {}
+
+
+def _card_value(value: Any, suffix: str = "") -> str:
+    if value in ("", None):
+        return "not observed"
+    if isinstance(value, float):
+        text = f"{value:.3f}".rstrip("0").rstrip(".")
+    else:
+        text = str(value)
+    return f"{text}{suffix}"
+
+
+def _delay_summary_text(delay_row: dict[str, Any]) -> str:
+    if not delay_row:
+        return "No replay delay breakdown was available for this row."
+    verdict = str(delay_row.get("copy_verdict") or "delay path observed")
+    source = str(delay_row.get("main_delay_source") or "unknown delay source")
+    simple = str(delay_row.get("simple_meaning") or "")
+    if simple:
+        return f"{verdict}: {source}. {simple}"
+    return f"{verdict}: {source}."
+
+
+def _dispatch_summary_text(dispatch_row: dict[str, Any]) -> str:
+    if not dispatch_row:
+        return "No client-dispatch window was available for this row."
+    verdict = str(dispatch_row.get("verdict") or "dispatch window observed")
+    events = dispatch_row.get("all_kv_events", "")
+    h2d = dispatch_row.get("h2d_events", "")
+    d2h = dispatch_row.get("d2h_events", "")
+    evict = dispatch_row.get("gpu_evict_events", "")
+    return f"{verdict}. During dispatch: {events} KV events, {h2d} H2D, {d2h} D2H, {evict} GPU evictions."
+
+
+def _block_summary_text(block_rows: list[dict[str, Any]]) -> str:
+    if not block_rows:
+        return "No block-ledger rows were available for this gap."
+    verdicts = Counter(str(row.get("lifecycle_verdict") or "unknown") for row in block_rows)
+    pieces = [f"{count} {verdict}" for verdict, count in sorted(verdicts.items())]
+    exact = sum(1 for row in block_rows if str(row.get("evidence_level") or "").startswith("exact"))
+    return f"{len(block_rows)} logical KV blocks tracked; " + ", ".join(pieces) + f"; {exact} exact-index rows."
+
+
+def _forensic_evidence_table_rows(
+    gap: dict[str, Any],
+    delay_row: dict[str, Any],
+    queue_row: dict[str, Any],
+    dispatch_row: dict[str, Any],
+    block_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    label = str(gap.get("timeline_label") or "")
+    return [
+        {
+            "evidence": "gap setup",
+            "what it says": (
+                f"{label} is mode={gap.get('mode', '')}, fillers={case_fillers(gap)}, "
+                f"tool wait={gap.get('tool_gap_ms', '')} ms, task={gap.get('task_index', '')}, "
+                f"gap={gap.get('gap_order_in_task', '')}."
+            ),
+        },
+        {
+            "evidence": "replay path",
+            "what it says": (
+                f"path={gap.get('replay_path') or replay_path_from_evidence(gap)}; "
+                f"final_path={gap.get('final_path', '')}; TTFT={gap.get('resume_ttft_ms', '')} ms."
+            ),
+        },
+        {
+            "evidence": "queue timing",
+            "what it says": queue_row.get("simple_meaning", "No no-prefetch queue row was available."),
+        },
+        {
+            "evidence": "delay breakdown",
+            "what it says": _delay_summary_text(delay_row),
+        },
+        {
+            "evidence": "client-dispatch KV movement",
+            "what it says": _dispatch_summary_text(dispatch_row),
+        },
+        {
+            "evidence": "block ledger",
+            "what it says": _block_summary_text(block_rows),
+        },
+    ]
+
+
+def per_gap_forensic_view_html(
+    gaps: list[dict[str, Any]],
+    kv_block_rows: list[dict[str, Any]],
+    h2d_pressure_rows: list[dict[str, Any]],
+    replay_delay_rows: list[dict[str, Any]],
+    replay_queue_rows: list[dict[str, Any]],
+    client_dispatch_summary_rows: list[dict[str, Any]],
+    client_dispatch_event_rows: list[dict[str, Any]],
+    exact_kv_movement_rows: list[dict[str, Any]],
+    max_cases: int,
+) -> str:
+    if not gaps:
+        return "<p>No timeline rows were available for per-gap forensics.</p>"
+
+    cases: list[str] = []
+    for gap in gaps[:max_cases]:
+        label = str(gap.get("timeline_label") or f"G{len(cases):02d}")
+        block_rows = detailed_kv_lifecycle_table_rows([gap], kv_block_rows, limit=8)
+        delay_row = _first_matching_label(replay_delay_rows, label)
+        queue_row = _first_matching_label(replay_queue_rows, label)
+        dispatch_row = _first_matching_label(client_dispatch_summary_rows, label)
+        dispatch_events = _rows_matching_label(client_dispatch_event_rows, label)
+        pressure_rows = _rows_matching_label(h2d_pressure_rows, label)
+        exact_rows = exact_movement_table_rows(exact_kv_movement_rows, [gap], limit=12)
+        status, status_color = observation_status(gap)
+        summary_cards = [
+            ("mode", gap.get("mode", "")),
+            ("fillers", case_fillers(gap)),
+            ("tool wait", _card_value(gap.get("tool_gap_ms"), " ms")),
+            ("TTFT", _card_value(gap.get("resume_ttft_ms"), " ms")),
+            ("replay path", gap.get("replay_path") or replay_path_from_evidence(gap)),
+            ("verdict", gap.get("per_gap_verdict") or per_gap_verdict(gap)),
+        ]
+        cards_html = "<div class=\"cards\">" + "\n".join(
+            f"<div class=\"card\"><div class=\"label\">{html.escape(str(name))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+            for name, value in summary_cards
+        ) + "</div>"
+        evidence_rows = _forensic_evidence_table_rows(gap, delay_row, queue_row, dispatch_row, block_rows)
+        cases.append(
+            f"""
+      <details class="forensic-case">
+        <summary><h3>{html.escape(label)}: <span style="color:{html.escape(status_color)}">{html.escape(status)}</span></h3></summary>
+        {cards_html}
+        <p class="note">This case file shows the same row across the main lifecycle timeline, queue timing, client-dispatch KV movement, and delay waterfall. Full proof rows stay in the appendix.</p>
+        <h4>1. Readable KV Lifecycle Timeline</h4>
+        <div class="setup-diagram">{build_local_timing_phase_timeline_svg([gap], 1, show_prefetch_legend=True, kv_block_lifecycle_rows=block_rows, h2d_pressure_rows=pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}</div>
+        <h4>2. Replay Queue Timeline vs H2D Start</h4>
+        <div class="setup-diagram">{build_replay_request_vs_h2d_timeline_plot([queue_row] if queue_row else [])}</div>
+        <h4>3. Client Dispatch KV Movement</h4>
+        <div class="setup-diagram">{build_client_dispatch_kv_movement_svg([dispatch_row] if dispatch_row else [], dispatch_events, max_rows=1)}</div>
+        <h4>4. Replay Delay Waterfall</h4>
+        <div class="setup-diagram">{build_replay_delay_waterfall_svg([delay_row] if delay_row else [], max_rows=1)}</div>
+        <h4>5. Short Evidence Summary</h4>
+        {table_html(evidence_rows, ["evidence", "what it says"])}
+        <h4>6. Sample Exact KV/Block Proof Rows</h4>
+        {table_html(block_rows, ["row", "mode", "lifecycle_verdict", "block_id", "node_id", "token_range", "h2d_start_ms", "h2d_end_ms", "h2d_duration_ms", "exact_attribution", "evidence_level"], limit=8)}
+        {table_html(exact_rows, ["row", "phase", "movement_kind", "direction", "copy_start_ms", "copy_end_ms", "duration_ms", "node_id", "source_event", "confidence", "evidence_level"], limit=12)}
+      </details>
+            """
+        )
+
+    return f"""
+    <p>This section is a per-row case file. Open one row, for example <code>G00</code>, to see the same gap across all major views without jumping around the report.</p>
+    <p class="note">Use this when presenting: start with the readable lifecycle timeline, then open the queue, dispatch, and waterfall views underneath to explain why the replay was ready, late, loaded from host, or recomputed.</p>
+    {"".join(cases)}
+    """
+
+
 def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps: int) -> str:
     if not live_run:
         return """
@@ -4967,6 +5128,7 @@ def render_html(
         ("client-dispatch-kv", "Client Dispatch KV Movement"),
         ("timeline-guide", "How To Read Timelines"),
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
+        ("per-gap-forensics", "Per-Gap Forensic View"),
         ("observations", "Key Observations"),
         ("evidence-audit", "Instrumentation Evidence Audit"),
         ("appendix", "Evidence Tables / Raw Proof"),
@@ -5037,6 +5199,11 @@ def render_html(
     <p class="note">Cyan and green bars now carry exact logical KV block attribution from the ledger. Hover over those bars to see block IDs, node IDs, token ranges, H2D start/end times, durations, and evidence confidence. Magenta/gold replay work remains explicitly marked as estimated.</p>
     <p class="note">Detailed block lifecycle counts and nearby H2D pressure rows are kept in <strong>Evidence Tables / Raw Proof</strong> at the bottom so this timeline stays easy to scan.</p>
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}
+  </details>
+
+  <details id="per-gap-forensics" class="section-card theme-profiled">
+    <summary><h2>Per-Gap Forensic View</h2></summary>
+    {per_gap_forensic_view_html(interesting, kv_block_rows, all_h2d_pressure_rows, replay_delay_rows, replay_queue_table_rows, client_dispatch_kv_summary_rows, client_dispatch_kv_event_rows, exact_kv_movement_rows, max_timeline_gaps)}
   </details>
 
   {live_section}

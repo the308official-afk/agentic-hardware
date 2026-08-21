@@ -960,6 +960,13 @@ def css() -> str:
     .timeline-stack { display: grid; grid-template-columns: 1fr; gap: 26px; }
     .timeline-panel { min-width: 0; }
     .setup-diagram { margin: 12px 0 18px; }
+    details.forensic-case { border: 1px solid #e2e8f0; border-left: 6px solid #7e22ce; border-radius: 8px; padding: 14px 16px; margin: 16px 0; background: #ffffff; }
+    details.forensic-case summary { cursor: pointer; list-style: none; }
+    details.forensic-case summary::-webkit-details-marker { display: none; }
+    details.forensic-case summary h3 { display: inline-block; margin: 0; }
+    details.forensic-case h4 { margin: 18px 0 8px; font-size: 15px; color: #334155; }
+    details.forensic-case .setup-diagram { margin: 8px 0 12px; padding: 8px 0; border-top: 1px solid #f1f5f9; }
+    details.forensic-case .card .value { font-size: 15px; overflow-wrap: anywhere; }
     .toc { display: flex; flex-wrap: wrap; gap: 10px 16px; }
     .toc a { background: var(--theme-bg, #f1f5f9); border: 1px solid #e2e8f0; border-left: 7px solid var(--theme, #64748b); border-radius: 6px; padding: 7px 10px; color: #0f172a; font-weight: 650; }
     .toc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
@@ -1422,6 +1429,12 @@ SECTION_THEMES = {
     "setup": "theme-setup",
     "timeline-guide": "theme-guide",
     "global-prefetch": "theme-global",
+    "h2d-pressure": "theme-directkv",
+    "delay-breakdown": "theme-profiled",
+    "client-dispatch-kv": "theme-directkv",
+    "readable-phase-timeline": "theme-clean",
+    "per-gap-forensics": "theme-profiled",
+    "evidence-audit": "theme-profiled",
     "replay-attribution": "theme-directkv",
     "late-prefetch": "theme-profiled",
     "early-prefetch": "theme-directkv",
