@@ -7189,7 +7189,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<text x="{left + 8}" y="{pool_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
                 f'SGLang KV-pool occupancy while this gap was active. max {pool_max_usage:.1f}%, avg {pool_avg_usage:.1f}%, pressure {html.escape(pool_verdict)}.</text>'
             )
-            for pct, dash, color in [(65.0, "3 4", "#ca8a04"), (85.0, "4 4", "#ea580c"), (95.0, "5 4", "#dc2626")]:
+            for pct, dash, color, threshold_label in [
+                (65.0, "3 4", "#ca8a04", "65%"),
+                (85.0, "4 4", "#ea580c", "85%"),
+                (95.0, "5 4", "#dc2626", "95% near full"),
+            ]:
                 py = chart_bottom - chart_h * pct / 100.0
                 parts.append(
                     f'<line x1="{left}" y1="{py:.1f}" x2="{left + plot_w}" y2="{py:.1f}" '
@@ -7197,7 +7201,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 )
                 parts.append(
                     f'<text x="{left - 8}" y="{py + 3:.1f}" text-anchor="end" font-size="8" '
-                    f'font-weight="800" fill="{color}">{int(pct)}%</text>'
+                    f'font-weight="800" fill="{color}">{threshold_label}</text>'
                 )
             parts.append(f'<line x1="{left}" y1="{chart_bottom:.1f}" x2="{left + plot_w}" y2="{chart_bottom:.1f}" stroke="#dbe4ee"/>')
             for tick_value in [pool_min, pool_min + pool_span * 0.25, pool_min + pool_span * 0.5, pool_min + pool_span * 0.75, pool_max]:
@@ -7208,6 +7212,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 zx = pool_x(0.0)
                 parts.append(f'<line x1="{zx:.1f}" y1="{chart_top:.1f}" x2="{zx:.1f}" y2="{chart_bottom + 9:.1f}" stroke="#111827" stroke-width="1.4"/>')
                 parts.append(f'<text x="{zx + 4:.1f}" y="{chart_top + 11:.1f}" font-size="8" font-weight="900" fill="#111827">due</text>')
+            peak_labeled = False
             for item in pool_bins:
                 usage = as_float(item.get("max_usage_pct"))
                 samples = as_float(item.get("samples")) or 0.0
@@ -7229,6 +7234,28 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     f'<rect x="{x1:.1f}" y="{bar_y:.1f}" width="{w:.1f}" height="{bar_h:.1f}" rx="2" '
                     f'fill="{color}" opacity="0.82"><title>{html.escape(title)}</title></rect>'
                 )
+                label_text = f"{usage:.0f}%"
+                is_peak = abs(usage - pool_max_usage) < 0.05 and not peak_labeled
+                should_label = w >= 18.0 and (usage >= 65.0 or is_peak or len(pool_bins_with_samples) <= 24)
+                if should_label:
+                    text_color = "#ffffff" if usage >= 85.0 else "#111827"
+                    if bar_h >= 16.0:
+                        parts.append(
+                            f'<text x="{x1 + w / 2:.1f}" y="{bar_y + min(bar_h - 4.0, 13.0):.1f}" '
+                            f'text-anchor="middle" font-size="7" font-weight="900" fill="{text_color}">{label_text}</text>'
+                        )
+                    else:
+                        parts.append(
+                            f'<text x="{x1 + w / 2:.1f}" y="{bar_y - 3.0:.1f}" '
+                            f'text-anchor="middle" font-size="7" font-weight="900" fill="#334155">{label_text}</text>'
+                        )
+                if is_peak:
+                    peak_labeled = True
+                    peak_label_y = max(chart_top + 8.0, bar_y - 12.0)
+                    parts.append(
+                        f'<text x="{x1 + w / 2:.1f}" y="{peak_label_y:.1f}" text-anchor="middle" '
+                        f'font-size="8" font-weight="900" fill="#991b1b">peak {label_text}</text>'
+                    )
 
         deadline_zoom_title_y = y + 988
         parts.append(f'<text x="{left - 10}" y="{deadline_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">deadline zoom</text>')
