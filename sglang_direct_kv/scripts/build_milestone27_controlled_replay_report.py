@@ -3574,6 +3574,20 @@ def kv_pool_pressure_label(usage_pct: float | None) -> str:
     return "low"
 
 
+def kv_pool_heat_color(usage_pct: float | None) -> str:
+    if usage_pct is None:
+        return "#cbd5e1"
+    if usage_pct >= 99.0:
+        return "#991b1b"
+    if usage_pct >= 95.0:
+        return "#ef4444"
+    if usage_pct >= 85.0:
+        return "#f97316"
+    if usage_pct >= 65.0:
+        return "#eab308"
+    return "#22c55e"
+
+
 def nearest_kv_pool_sample(
     samples: list[dict[str, Any]],
     target_ms: Any,
@@ -3597,6 +3611,59 @@ def nearest_kv_pool_sample(
     out = dict(best)
     out["distance_from_target_ms"] = round(best_distance, 3)
     return out
+
+
+def kv_pool_histogram_bins(
+    samples: list[dict[str, Any]],
+    due_ms: Any,
+    start_ms: Any,
+    end_ms: Any,
+    bin_count: int = 36,
+) -> list[dict[str, Any]]:
+    due = as_float(due_ms)
+    start = as_float(start_ms)
+    end = as_float(end_ms)
+    if due is None or start is None or end is None or end <= start:
+        return []
+    bin_count = max(4, min(80, bin_count))
+    span = end - start
+    buckets: list[list[float]] = [[] for _ in range(bin_count)]
+    for sample in samples:
+        aligned = as_float(sample.get("aligned_ms"))
+        usage = as_float(sample.get("kv_pool_usage_pct"))
+        if aligned is None or usage is None or aligned < start or aligned > end:
+            continue
+        idx = min(bin_count - 1, max(0, int((aligned - start) * bin_count / max(1e-9, span))))
+        buckets[idx].append(usage)
+    bins: list[dict[str, Any]] = []
+    for idx, values in enumerate(buckets):
+        b_start = start + span * idx / bin_count
+        b_end = start + span * (idx + 1) / bin_count
+        if values:
+            avg_usage = mean(values)
+            max_usage = max(values)
+            bins.append(
+                {
+                    "start_rel_ms": round(b_start - due, 3),
+                    "end_rel_ms": round(b_end - due, 3),
+                    "avg_usage_pct": round(avg_usage, 3),
+                    "max_usage_pct": round(max_usage, 3),
+                    "samples": len(values),
+                    "pressure": kv_pool_pressure_label(max_usage),
+                }
+            )
+        else:
+            bins.append(
+                {
+                    "start_rel_ms": round(b_start - due, 3),
+                    "end_rel_ms": round(b_end - due, 3),
+                    "avg_usage_pct": "",
+                    "max_usage_pct": "",
+                    "samples": 0,
+                    "pressure": "missing",
+                }
+            )
+    return bins
 
 
 def kv_pool_window_stats(samples: list[dict[str, Any]], start_ms: Any, end_ms: Any) -> dict[str, Any]:
@@ -3641,6 +3708,35 @@ def kv_pool_residency_by_gap_rows(
             replay_h2d_start if replay_h2d_start is not None else gap.get("resume_start_ms"),
         )
         dispatch_stats = kv_pool_window_stats(case_samples, gap.get("resume_submitted_ms"), gap.get("resume_start_ms"))
+        pool_window_start_candidates = [
+            as_float(gap.get("tool_gap_start_ms")),
+            as_float(gap.get("prefetch_start_ms")),
+            due,
+        ]
+        pool_window_end_candidates = [
+            as_float(gap.get("resume_end_ms")),
+            first_token_ms(gap),
+            as_float(gap.get("replay_kv_h2d_end_ms")),
+            as_float(gap.get("direct_kv_h2d_end_ms")),
+            as_float(gap.get("resume_start_ms")),
+        ]
+        pool_window_start_values = [value for value in pool_window_start_candidates if value is not None]
+        pool_window_end_values = [value for value in pool_window_end_candidates if value is not None]
+        if due is not None:
+            pool_window_start = min(pool_window_start_values) if pool_window_start_values else due - 500.0
+            pool_window_end = max(pool_window_end_values) if pool_window_end_values else due + 1000.0
+            pool_pad = max(50.0, (pool_window_end - pool_window_start) * 0.04)
+            pool_window_start -= pool_pad
+            pool_window_end += pool_pad
+        else:
+            pool_window_start = None
+            pool_window_end = None
+        pool_histogram = kv_pool_histogram_bins(
+            case_samples,
+            due,
+            pool_window_start,
+            pool_window_end,
+        )
 
         checkpoint_map = {
             "at_due": gap.get("tool_gap_end_ms"),
@@ -3683,6 +3779,17 @@ def kv_pool_residency_by_gap_rows(
                 "max_usage_during_client_dispatch_pct": dispatch_stats.get("max_usage_pct", ""),
                 "samples_due_to_replay_h2d": before_replay_h2d_stats.get("samples", 0),
                 "max_usage_due_to_replay_h2d_pct": before_replay_h2d_stats.get("max_usage_pct", ""),
+                "pool_timeline_start_rel_ms": (
+                    round(pool_window_start - due, 3)
+                    if pool_window_start is not None and due is not None
+                    else ""
+                ),
+                "pool_timeline_end_rel_ms": (
+                    round(pool_window_end - due, 3)
+                    if pool_window_end is not None and due is not None
+                    else ""
+                ),
+                "pool_timeline_bins_json": json.dumps(pool_histogram, separators=(",", ":")),
                 **checkpoint_values,
                 **checkpoint_sources,
                 "evidence": "direct_sglang_kv_pool_state" if case_samples else "missing_pool_samples",
@@ -6025,7 +6132,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    row_h = 1020
+    row_h = 1200
     bottom = 116
     plot_w = width - left - right
     height = top + len(rows) * row_h + bottom
@@ -6241,8 +6348,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
         '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
-        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, an expanded replay zoom, and a KV readiness deadline zoom.</text>',
-        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give dense KV, replay, and deadline activity room to breathe.</text>',
+        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, an expanded replay zoom, a GPU KV-pool residency zoom, and a KV readiness deadline zoom.</text>',
+        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give dense KV, replay, pool pressure, and deadline activity room to breathe.</text>',
         f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
         f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
     ]
@@ -6292,7 +6399,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="196" rx="8" fill="#ffffff" opacity="0.38"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="344" rx="8" fill="#fff7ed" opacity="0.42"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f8fafc" opacity="0.92"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f0fdf4" opacity="0.70"/>')
+        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 962:.1f}" width="{plot_w + 4:.1f}" height="160" rx="8" fill="#f8fafc" opacity="0.92"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
         parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
@@ -7035,7 +7143,94 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         font_size=9,
                     )
 
-        deadline_zoom_title_y = y + 818
+        pool_zoom_title_y = y + 818
+        parts.append(f'<text x="{left - 10}" y="{pool_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">GPU pool zoom</text>')
+        pool_bins: list[dict[str, Any]] = []
+        if kv_pool_row and kv_pool_row.get("pool_timeline_bins_json"):
+            try:
+                parsed_pool_bins = json.loads(str(kv_pool_row.get("pool_timeline_bins_json") or "[]"))
+                if isinstance(parsed_pool_bins, list):
+                    pool_bins = [item for item in parsed_pool_bins if isinstance(item, dict)]
+            except json.JSONDecodeError:
+                pool_bins = []
+        pool_bins_with_samples = [
+            item for item in pool_bins if as_float(item.get("max_usage_pct")) is not None and as_float(item.get("samples")) not in (None, 0.0)
+        ]
+        if not pool_bins_with_samples:
+            parts.append(
+                f'<text x="{left + 8}" y="{pool_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
+                f'GPU KV-pool residency zoom</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{pool_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'No direct SGLang KV-pool samples were available for this row. Rerun with AGENTIC_KV_TRACE_KV_POOL=1.</text>'
+            )
+            parts.append(f'<line x1="{left}" y1="{pool_zoom_title_y + 72:.1f}" x2="{left + plot_w}" y2="{pool_zoom_title_y + 72:.1f}" stroke="#dbe4ee"/>')
+        else:
+            pool_min = min(as_float(item.get("start_rel_ms")) or 0.0 for item in pool_bins)
+            pool_max = max(as_float(item.get("end_rel_ms")) or 0.0 for item in pool_bins)
+            pool_span = max(1.0, pool_max - pool_min)
+            pool_max_usage = max(as_float(item.get("max_usage_pct")) or 0.0 for item in pool_bins_with_samples)
+            pool_avg_values = [as_float(item.get("avg_usage_pct")) for item in pool_bins_with_samples]
+            pool_avg_usage = mean([value for value in pool_avg_values if value is not None]) if pool_avg_values else 0.0
+            pool_verdict = str(kv_pool_row.get("kv_pool_verdict") or kv_pool_pressure_label(pool_max_usage))
+
+            def pool_x(value: float, z_min: float = pool_min, z_max: float = pool_max) -> float:
+                return local_zoom_x(value, z_min, z_max, left, plot_w)
+
+            chart_top = pool_zoom_title_y + 42
+            chart_h = 72.0
+            chart_bottom = chart_top + chart_h
+            parts.append(
+                f'<text x="{left + 8}" y="{pool_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
+                f'GPU KV-pool residency zoom</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{pool_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'SGLang KV-pool occupancy while this gap was active. max {pool_max_usage:.1f}%, avg {pool_avg_usage:.1f}%, pressure {html.escape(pool_verdict)}.</text>'
+            )
+            for pct, dash, color in [(65.0, "3 4", "#ca8a04"), (85.0, "4 4", "#ea580c"), (95.0, "5 4", "#dc2626")]:
+                py = chart_bottom - chart_h * pct / 100.0
+                parts.append(
+                    f'<line x1="{left}" y1="{py:.1f}" x2="{left + plot_w}" y2="{py:.1f}" '
+                    f'stroke="{color}" stroke-width="1" stroke-dasharray="{dash}" opacity="0.45"/>'
+                )
+                parts.append(
+                    f'<text x="{left - 8}" y="{py + 3:.1f}" text-anchor="end" font-size="8" '
+                    f'font-weight="800" fill="{color}">{int(pct)}%</text>'
+                )
+            parts.append(f'<line x1="{left}" y1="{chart_bottom:.1f}" x2="{left + plot_w}" y2="{chart_bottom:.1f}" stroke="#dbe4ee"/>')
+            for tick_value in [pool_min, pool_min + pool_span * 0.25, pool_min + pool_span * 0.5, pool_min + pool_span * 0.75, pool_max]:
+                tx = pool_x(tick_value)
+                parts.append(f'<line x1="{tx:.1f}" y1="{chart_top:.1f}" x2="{tx:.1f}" y2="{chart_bottom + 9:.1f}" stroke="#e5e7eb"/>')
+                parts.append(f'<text x="{tx:.1f}" y="{chart_bottom + 25:.1f}" text-anchor="middle" font-size="8" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            if pool_min <= 0 <= pool_max:
+                zx = pool_x(0.0)
+                parts.append(f'<line x1="{zx:.1f}" y1="{chart_top:.1f}" x2="{zx:.1f}" y2="{chart_bottom + 9:.1f}" stroke="#111827" stroke-width="1.4"/>')
+                parts.append(f'<text x="{zx + 4:.1f}" y="{chart_top + 11:.1f}" font-size="8" font-weight="900" fill="#111827">due</text>')
+            for item in pool_bins:
+                usage = as_float(item.get("max_usage_pct"))
+                samples = as_float(item.get("samples")) or 0.0
+                start_rel = as_float(item.get("start_rel_ms"))
+                end_rel = as_float(item.get("end_rel_ms"))
+                if usage is None or samples <= 0 or start_rel is None or end_rel is None or end_rel <= start_rel:
+                    continue
+                x1 = pool_x(start_rel)
+                x2 = pool_x(end_rel)
+                w = max(2.0, x2 - x1 - 1.0)
+                bar_h = max(3.0, chart_h * min(100.0, max(0.0, usage)) / 100.0)
+                bar_y = chart_bottom - bar_h
+                color = kv_pool_heat_color(usage)
+                title = (
+                    f"{label} | GPU KV-pool bin | time={display_ms(start_rel)} -> {display_ms(end_rel)} relative to due | "
+                    f"max_usage={usage:.3f}% | avg_usage={item.get('avg_usage_pct', '')}% | samples={int(samples)} | pressure={item.get('pressure', '')}"
+                )
+                parts.append(
+                    f'<rect x="{x1:.1f}" y="{bar_y:.1f}" width="{w:.1f}" height="{bar_h:.1f}" rx="2" '
+                    f'fill="{color}" opacity="0.82"><title>{html.escape(title)}</title></rect>'
+                )
+
+        deadline_zoom_title_y = y + 988
         parts.append(f'<text x="{left - 10}" y="{deadline_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">deadline zoom</text>')
         hint_deadline_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
         replay_deadline_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
@@ -7198,11 +7393,12 @@ def unified_per_gap_forensic_stack_html(
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
-    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, and a deadline zoom for KV readiness.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due.</p>
+    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, a GPU KV-pool residency zoom, and a deadline zoom for KV readiness.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the GPU pool zoom to see whether SGLang's KV pool was nearly full around the replay. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">When prefetch-side H2D exists, the replay zoom becomes a two-window broken-axis view: the left window shows the earlier green prefetch KV H2D, the right window shows replay execution, and the break marker shows the long elapsed time compressed between them.</p>
+    <p class="note">In the GPU pool zoom, green/yellow means lower KV-pool pressure, orange/red means high pressure, and dark red means the KV pool was effectively full. This is direct SGLang KV memory-pool telemetry, not a coarse NVIDIA-SMI whole-GPU memory estimate.</p>
     <p class="note">In the deadline zoom, the dashed line is the readiness gap. Green means KV became ready before replay was due; red means useful KV H2D completed late.</p>
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
