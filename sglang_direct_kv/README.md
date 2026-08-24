@@ -95,47 +95,27 @@ The stronger argument is that current runtime/GPU memory paths lack deadline-awa
 
 ### Manager-Facing Claims / Research Framing
 
-This section collects concise claims that connect our measurements to the hardware/runtime co-design argument.
-Use these phrases in status updates, slides, and manager-facing summaries.
+These are the current core claims we can safely make from the testbed so far:
 
-| Finding | Safe Claim | Why It Matters |
-| --- | --- | --- |
-| Agentic prefetch can be issued but still miss replay. | Software hints alone do not guarantee useful KV residency before the agent resumes. | The system needs enforcement, not just prediction. |
-| The KV pool can be under high pressure when replay arrives. | Agentic prefetch is not just a bandwidth problem; it is also a residency-management problem. | Prefetch must make room for the right KV and keep it useful. |
-| Prefetch can compete with normal serving work. | Current software/SGLang paths can delay hinted KV movement under active traffic. | Motivates deadline-aware and priority-aware migration. |
-| KV can be loaded, evicted, or recomputed depending on pressure. | Correctly identifying the next session is not enough if the KV cannot be protected until reuse. | Motivates temporary residency protection and smarter eviction choice. |
-| Current data movement sees memory ranges, not agent intent. | A generic DMA/copy path can move bytes, but it does not know those bytes are urgent KV for a soon-resuming agent. | Motivates agent-aware metadata, telemetry, and scheduling hints. |
+1. Our results suggest that agentic prefetch is not just a bandwidth problem.
+   Under high KV-pool pressure, software hints can be issued but still fail to
+   create useful residency before replay. This motivates hardware/runtime
+   support that can make KV movement and residency enforceable: priority-aware
+   migration, eviction choice, temporary protection, and telemetry showing
+   whether the hinted KV actually became resident in time.
 
-Core claims:
+2. The core opportunity is not simply to prefetch earlier. It is to make sure
+   the right KV is resident, protected, and reusable when the agent resumes.
 
-```text
-Our results suggest that agentic prefetch is not just a bandwidth problem.
-Under high KV-pool pressure, software hints can be issued but still fail to
-create useful residency before replay. This motivates hardware/runtime support
-that can make KV movement and residency enforceable: priority-aware migration,
-eviction choice, temporary protection, and telemetry showing whether the hinted
-KV actually became resident in time.
-```
+3. Existing software can decide which sessions are likely to resume, but
+   today's memory movement path does not cheaply enforce those decisions under
+   contention.
 
-```text
-The core opportunity is not simply to prefetch earlier. It is to make sure the
-right KV is resident, protected, and reusable when the agent resumes.
-```
+4. A generic DMA engine can move memory, but it does not know that a transfer
+   is urgent KV for a soon-resuming agent session.
 
-```text
-Existing software can decide which sessions are likely to resume, but today's
-memory movement path does not cheaply enforce those decisions under contention.
-```
-
-```text
-A generic DMA engine can move memory, but it does not know that a transfer is
-urgent KV for a soon-resuming agent session.
-```
-
-```text
-High KV-pool pressure makes agentic prefetch a residency-management problem,
-not just a copy-bandwidth problem.
-```
+5. High KV-pool pressure makes agentic prefetch a residency-management problem,
+   not just a copy-bandwidth problem.
 
 Latest harsher controlled run:
 
