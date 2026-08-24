@@ -6652,6 +6652,15 @@ Unified Forensic Stack Timeline:
   deadline-priority rows should show the direct prefetch/replay path getting a
   cleaner window before ordinary filler pressure resumes.
 
+Grouped Mode Comparison Timeline:
+  compare the same task/gap scenario across:
+    Cxx-NP  = no prefetch
+    Cxx-DP  = direct prefetch
+    Cxx-DLP = deadline-priority prefetch
+  This is the easiest view for checking whether the deadline-priority policy
+  changed the timing of prefetch H2D, replay H2D, TTFT, and KV residency for the
+  same workload setup.
+
 GPU KV Pool Residency:
   check whether priority helped create useful residency or whether the pool was
   still too full to keep prefetched KV useful.

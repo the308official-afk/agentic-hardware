@@ -1373,6 +1373,86 @@ def timeline_rows_with_labels(rows: list[dict[str, Any]], prefix: str = "G") -> 
     return labeled
 
 
+def scenario_compare_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("task_index") or ""),
+        str(row.get("gap_order_in_task") or ""),
+        str(row.get("tool_gap_ms") or ""),
+    )
+
+
+def scenario_compare_sort_key(key: tuple[str, str, str]) -> tuple[int, int, float, str]:
+    task, gap, wait = key
+    task_rank = int(task) if str(task).isdigit() else 10**9
+    gap_rank = int(gap) if str(gap).isdigit() else 10**9
+    wait_rank = as_float(wait)
+    return task_rank, gap_rank, wait_rank if wait_rank is not None else 10**12, "|".join(key)
+
+
+def mode_short_label(mode: Any) -> str:
+    labels = {
+        "no_prefetch": "NP",
+        "direct_prefetch": "DP",
+        "deadline_priority_prefetch": "DLP",
+        "priority_direct_prefetch": "PDP",
+        "oracle_direct_load": "ODL",
+        "oracle_prefetch": "OP",
+    }
+    return labels.get(canonical_mode(mode), str(mode or "M")[:3].upper())
+
+
+def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int) -> list[dict[str, Any]]:
+    scenario_to_modes: defaultdict[tuple[str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in gaps:
+        mode = canonical_mode(row.get("mode"))
+        if mode not in {"no_prefetch", "direct_prefetch", "deadline_priority_prefetch"}:
+            continue
+        scenario_to_modes[scenario_compare_key(row)][mode] = row
+
+    complete_or_partial = [
+        (key, rows_by_mode)
+        for key, rows_by_mode in scenario_to_modes.items()
+        if len(rows_by_mode) >= 2
+    ]
+    complete_or_partial.sort(key=lambda item: scenario_compare_sort_key(item[0]))
+
+    mode_order = ["no_prefetch", "direct_prefetch", "deadline_priority_prefetch"]
+    output: list[dict[str, Any]] = []
+    for scenario_idx, (_key, rows_by_mode) in enumerate(complete_or_partial[:max_scenarios]):
+        for mode in mode_order:
+            row = rows_by_mode.get(mode)
+            if not row:
+                continue
+            copied = dict(row)
+            copied["comparison_scenario"] = f"C{scenario_idx:02d}"
+            copied["timeline_label"] = f"C{scenario_idx:02d}-{mode_short_label(mode)}"
+            output.append(copied)
+    return output
+
+
+def mode_comparison_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        margin = as_float(row.get("prefetch_margin_ms"))
+        output.append(
+            {
+                "scenario": row.get("comparison_scenario", ""),
+                "row": row.get("timeline_label", ""),
+                "mode": display_mode(row.get("mode")),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "prefetch_margin_ms": round(margin, 3) if margin is not None else "",
+                "hint_h2d_events": row.get("direct_kv_h2d_events", ""),
+                "replay_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "verdict": display_verdict(row.get("per_gap_verdict", "")),
+                "lifecycle": row.get("lifecycle_verdict", ""),
+            }
+        )
+    return output
+
+
 def case_fillers(row: dict[str, Any]) -> str:
     name = Path(str(row.get("case_dir") or "")).name
     if "_f" not in name:
@@ -7518,6 +7598,45 @@ def unified_per_gap_forensic_stack_html(
     """
 
 
+def grouped_mode_comparison_timeline_html(
+    rows: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+    kv_pool_residency_rows: list[dict[str, Any]] | None = None,
+) -> str:
+    if not rows:
+        return """
+        <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in at least two of: no prefetch, direct prefetch, and deadline priority prefetch.</p>
+        """
+    scenario_count = len({str(row.get("comparison_scenario") or "") for row in rows})
+    row_map_columns = [
+        "scenario",
+        "row",
+        "mode",
+        "task",
+        "gap",
+        "tool_wait_ms",
+        "prefetch_margin_ms",
+        "hint_h2d_events",
+        "replay_h2d_events",
+        "resume_ttft_ms",
+        "verdict",
+        "lifecycle",
+    ]
+    return f"""
+    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> are the same task/gap setup shown under no prefetch, direct prefetch, and deadline-priority prefetch.</p>
+    <p class="note">Mode order is always: no prefetch, direct prefetch, deadline priority prefetch. This makes it easier to compare whether the deadline-aware policy changed when KV movement happened, whether replay still loaded KV, and whether TTFT improved.</p>
+    <div class="cards">
+      <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
+      <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
+      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DLP</div></div>
+    </div>
+    <h3>Scenario Row Map</h3>
+    {table_html(mode_comparison_summary_rows(rows), row_map_columns, limit=120)}
+    <h3>Grouped Forensic Timeline</h3>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows)}</div>
+    """
+
+
 def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps: int) -> str:
     if not live_run:
         return """
@@ -7642,6 +7761,8 @@ def render_html(
     interesting_kv_pool_residency_rows = [
         row for row in kv_pool_residency_rows if str(row.get("row") or "") in interesting_labels
     ]
+    grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
+    grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
     replay_h2d_readiness_table_rows = replay_h2d_readiness_rows(gaps)
     replay_h2d_readiness_bucket_table_rows = replay_h2d_readiness_bucket_rows(replay_h2d_readiness_table_rows)
     replay_queue_table_rows = replay_queue_timing_rows(gaps)
@@ -7725,6 +7846,7 @@ def render_html(
         ("timeline-guide", "How To Read Timelines"),
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
         ("unified-forensic-stack", "Unified Forensic Stack Timeline"),
+        ("grouped-mode-comparison", "Grouped Mode Comparison"),
         ("observations", "Key Observations"),
         ("evidence-audit", "Instrumentation Evidence Audit"),
         ("appendix", "Evidence Tables / Raw Proof"),
@@ -7806,6 +7928,11 @@ def render_html(
   <details id="unified-forensic-stack" class="section-card theme-profiled" open>
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
     {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows)}
+  </details>
+
+  <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
+    <summary><h2>Grouped Mode Comparison Timeline</h2></summary>
+    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows)}
   </details>
 
   {live_section}
