@@ -394,6 +394,17 @@ async def main_async() -> None:
                 if args.mode == "deadline_priority_prefetch":
                     write_trace_event(
                         {
+                            "event": "m38.deadline_service.start",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "tool_start_offset_ms": round(tool_start_offset_ms, 3),
+                            "hint_offset_ms": round(hint_offset_ms, 3),
+                            "replay_due_offset_ms": round(replay_due_ms, 3),
+                            "policy": "coordinate_prefetch_residency_and_replay_admission",
+                        }
+                    )
+                    write_trace_event(
+                        {
                             "event": "m38.deadline_prefetch_deadline.set",
                             "session_id": pair.session_id,
                             "mode": args.mode,
@@ -570,7 +581,54 @@ async def main_async() -> None:
                     "replay_due_offset_ms": round(replay_due_ms, 3),
                 }
             )
-            await run_request(pair, pair.replay_prompt, "replay", f"{pair.session_id}_replay", args.max_tokens)
+            replay_admission_start_ms = (time.perf_counter() - workload_start) * 1000.0
+            if args.mode == "deadline_priority_prefetch" and hint_task is not None:
+                if not hint_task.done():
+                    write_trace_event(
+                        {
+                            "event": "m38.deadline_replay_admission.waiting_for_prefetch",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "replay_due_offset_ms": round(replay_due_ms, 3),
+                            "wait_start_offset_ms": round(replay_admission_start_ms, 3),
+                            "reason": "prefetch_not_finished_at_replay_deadline",
+                        }
+                    )
+                    await hint_task
+                    replay_admission_start_ms = (time.perf_counter() - workload_start) * 1000.0
+                write_trace_event(
+                    {
+                        "event": "m38.deadline_replay_admission.start",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "admission_start_offset_ms": round(replay_admission_start_ms, 3),
+                        "admission_lateness_ms": round(replay_admission_start_ms - replay_due_ms, 3),
+                        "uses_driver_concurrency_gate": False,
+                        "policy": "admit_replay_immediately_after_priority_prefetch",
+                    }
+                )
+                await run_request(
+                    pair,
+                    pair.replay_prompt,
+                    "replay",
+                    f"{pair.session_id}_replay",
+                    args.max_tokens,
+                    use_concurrency_limit=False,
+                )
+                replay_admission_end_ms = (time.perf_counter() - workload_start) * 1000.0
+                write_trace_event(
+                    {
+                        "event": "m38.deadline_replay_admission.end",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "admission_end_offset_ms": round(replay_admission_end_ms, 3),
+                        "admitted_replay_duration_ms": round(replay_admission_end_ms - replay_admission_start_ms, 3),
+                    }
+                )
+            else:
+                await run_request(pair, pair.replay_prompt, "replay", f"{pair.session_id}_replay", args.max_tokens)
             replay_completed_event.set()
             if args.mode == "deadline_priority_prefetch" and hint_task is not None:
                 protection_end_ms = (time.perf_counter() - workload_start) * 1000.0
@@ -582,6 +640,15 @@ async def main_async() -> None:
                         "protection_end_offset_ms": round(protection_end_ms, 3),
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "release_reason": "replay_completed",
+                    }
+                )
+                write_trace_event(
+                    {
+                        "event": "m38.deadline_service.end",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "service_end_offset_ms": round(protection_end_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
                     }
                 )
             write_trace_event(

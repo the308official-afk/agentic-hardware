@@ -6542,9 +6542,12 @@ deadline_priority_prefetch:
   the hint is issued near the start of the tool wait, not near the end.
   the hint bypasses the driver's local low-priority concurrency gate.
   low-priority filler traffic is held until after the replay finishes.
+  replay admission is coupled to the priority prefetch path.
+  after the prefetch finishes, replay bypasses the driver's low-priority queue
+  and is submitted immediately through the reserved path.
   a short post-replay quiet window is kept before filler traffic resumes.
   this emulates a deadline-aware prefetch queue / migration lane that tries to
-  make urgent KV resident and protected before the agent resumes.
+  make urgent KV resident, protected, and consumed before normal traffic resumes.
 ```
 
 Simple meaning:
@@ -6555,7 +6558,22 @@ direct_prefetch says:
 
 deadline_priority_prefetch says:
   "this KV is replay-critical, so move it early, put it in a priority lane,
-   pause low-priority background work, and keep it useful until replay."
+   pause low-priority background work, admit replay as soon as the KV path is
+   ready, and keep the KV useful until replay consumes it."
+```
+
+Timeline model:
+
+```text
+tool wait starts
+-> deadline service starts
+-> priority direct KV prefetch runs
+-> filler/background requests stay paused
+-> replay becomes due
+-> if prefetch is ready, replay is admitted immediately
+-> if prefetch is not ready, replay waits for that priority prefetch
+-> replay consumes the prefetched KV
+-> normal filler/background work resumes
 ```
 
 What this does and does not prove:
@@ -6654,6 +6672,11 @@ m38.deadline_prefetch_deadline.set
   the driver recorded the replay deadline and decided the hint should be
   treated as replay-critical work.
 
+m38.deadline_service.start / m38.deadline_service.end
+  the full deadline-critical service window. This includes priority prefetch,
+  temporary residency protection, priority replay admission, and the release
+  back to normal traffic.
+
 m38.deadline_low_priority_fillers.held
   background filler traffic was paused so it does not flood the SGLang request
   queue while the urgent prefetch/replay path is active.
@@ -6674,6 +6697,15 @@ m38.deadline_residency_protection.start / m38.deadline_residency_protection.end
   traffic stays held so the prefetched KV is less likely to be immediately
   displaced before replay.
 
+m38.deadline_replay_admission.waiting_for_prefetch
+  replay was due, but the priority prefetch had not finished yet. The replay
+  waits for that prefetch instead of racing ahead and triggering its own
+  replay-side load/recompute path.
+
+m38.deadline_replay_admission.start / m38.deadline_replay_admission.end
+  replay entered and exited the reserved replay path. In this emulation it
+  bypasses the driver's normal low-priority request gate.
+
 m27.prefetch.start / m27.prefetch.end
   the direct SGLang KV hook attempt itself.
 ```
@@ -6685,8 +6717,8 @@ Global Prefetch Margin:
   deadline_priority_prefetch should ideally move more dots above the 0 ms line.
 
 Unified Forensic Stack Timeline:
-  deadline-priority rows should show the direct prefetch/replay path getting a
-  cleaner window before ordinary filler pressure resumes.
+  deadline-priority rows should show the direct prefetch and replay path acting
+  as one coordinated service window before ordinary filler pressure resumes.
 
 Grouped Mode Comparison Timeline:
   compare the same task/gap scenario across:

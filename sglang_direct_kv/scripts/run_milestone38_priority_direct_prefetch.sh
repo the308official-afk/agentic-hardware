@@ -60,6 +60,6 @@ cd "${DIRECT_ROOT}"
 
 echo "Milestone 38: Deadline-Priority Direct Prefetch Emulation"
 echo "This compares no_prefetch, best-effort direct_prefetch, and deadline_priority_prefetch."
-echo "deadline_priority_prefetch issues the direct KV hint early, bypasses the local low-priority request gate, holds filler traffic through replay, and keeps a short post-replay quiet window."
+echo "deadline_priority_prefetch issues the direct KV hint early, bypasses the local low-priority request gate, holds filler traffic, admits replay through the reserved path after the hint, and keeps a short post-replay quiet window."
 
 bash scripts/run_milestone36_multi_session_agentic_replay.sh "${MODEL}"
