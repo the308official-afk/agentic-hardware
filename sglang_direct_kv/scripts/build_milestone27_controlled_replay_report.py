@@ -65,6 +65,8 @@ from replay_path_classifier import (
     instrumentation_coverage_rows,
 )
 
+PREFETCH_MODE_NAMES = {"direct_prefetch", "priority_direct_prefetch"}
+
 
 def as_float(value: Any) -> float | None:
     try:
@@ -1255,6 +1257,7 @@ def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
     ranks = {
         "no_prefetch": 0,
         "direct_prefetch": 1,
+        "priority_direct_prefetch": 2,
         "oracle_prefetch": 3,
         "oracle_direct_load": 3,
     }
@@ -1284,7 +1287,7 @@ def prefetch_attempt_gaps(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         row
         for row in gaps
-        if str(row.get("mode") or "") == "direct_prefetch"
+        if str(row.get("mode") or "") in PREFETCH_MODE_NAMES
         and as_float(row.get("prefetch_margin_ms")) is not None
     ]
 
@@ -2156,6 +2159,7 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
     by_mode = {str(row.get("mode") or ""): row for row in mode_rows}
     no_prefetch = by_mode.get("no_prefetch", {})
     direct = by_mode.get("direct_prefetch", {})
+    priority = by_mode.get("priority_direct_prefetch", {})
     cards = [
         ("controlled gaps", sum(int(row.get("controlled_gaps") or 0) for row in mode_rows)),
         ("no-prefetch avg TTFT", f"{no_prefetch.get('avg_resume_ttft_ms', '')} ms"),
@@ -2165,6 +2169,14 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
         ("suspected replay wait/recompute", sum(int(row.get("replay_recompute_or_wait_suspected_gaps") or 0) for row in mode_rows)),
         ("likely cache hit/resident", sum(int(row.get("likely_cache_hit_or_resident_gaps") or 0) for row in mode_rows)),
     ]
+    if priority:
+        cards.extend(
+            [
+                ("priority-prefetch avg TTFT", f"{priority.get('avg_resume_ttft_ms', '')} ms"),
+                ("priority late prefetches", priority.get("late_prefetches", "")),
+                ("priority H2D gaps", priority.get("hint_h2d_gaps", "")),
+            ]
+        )
     if "oracle_prefetch" in by_mode:
         oracle = by_mode["oracle_prefetch"]
         cards.extend(

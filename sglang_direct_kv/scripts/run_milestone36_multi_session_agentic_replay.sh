@@ -20,6 +20,8 @@ TOOL_WAIT_JITTER_MS="${TOOL_WAIT_JITTER_MS:-0}"
 PREFETCH_TIMING="${PREFETCH_TIMING:-early}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-20}"
 PREFETCH_LEAD_MS="${PREFETCH_LEAD_MS:-120}"
+PRIORITY_PREFETCH_WINDOW_MS="${PRIORITY_PREFETCH_WINDOW_MS:-500}"
+PRIORITY_POST_PREFETCH_QUIET_MS="${PRIORITY_POST_PREFETCH_QUIET_MS:-0}"
 BACKGROUND_FILLERS_PER_SESSION="${BACKGROUND_FILLERS_PER_SESSION:-0}"
 FILLER_PROMPT_TOKENS="${FILLER_PROMPT_TOKENS:-1024}"
 TARGET_PROMPT_TOKENS="${TARGET_PROMPT_TOKENS:-0}"
@@ -146,6 +148,11 @@ echo "SESSION_COUNT=${SESSION_COUNT}"
 echo "ARRIVAL_SHAPE=${ARRIVAL_SHAPE}"
 echo "ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
+echo "PREFETCH_TIMING=${PREFETCH_TIMING}"
+echo "HINT_DELAY_MS=${HINT_DELAY_MS}"
+echo "PREFETCH_LEAD_MS=${PREFETCH_LEAD_MS}"
+echo "PRIORITY_PREFETCH_WINDOW_MS=${PRIORITY_PREFETCH_WINDOW_MS}"
+echo "PRIORITY_POST_PREFETCH_QUIET_MS=${PRIORITY_POST_PREFETCH_QUIET_MS}"
 echo "BACKGROUND_FILLERS_PER_SESSION=${BACKGROUND_FILLERS_PER_SESSION}"
 echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY}"
 echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
@@ -201,6 +208,8 @@ run_case() {
     --prefetch-timing "${PREFETCH_TIMING}"
     --hint-delay-ms "${HINT_DELAY_MS}"
     --prefetch-lead-ms "${PREFETCH_LEAD_MS}"
+    --priority-prefetch-window-ms "${PRIORITY_PREFETCH_WINDOW_MS}"
+    --priority-post-prefetch-quiet-ms "${PRIORITY_POST_PREFETCH_QUIET_MS}"
     --background-fillers-per-session "${BACKGROUND_FILLERS_PER_SESSION}"
     --filler-prompt-tokens "${FILLER_PROMPT_TOKENS}"
     --target-prompt-tokens "${TARGET_PROMPT_TOKENS}"
@@ -222,9 +231,9 @@ run_case() {
 
 for mode in ${MODES}; do
   case "${mode}" in
-    no_prefetch|direct_prefetch) ;;
+    no_prefetch|direct_prefetch|priority_direct_prefetch) ;;
     *)
-      echo "ERROR: Milestone 36 only supports no_prefetch and direct_prefetch. Got: ${mode}" >&2
+      echo "ERROR: Milestone 36 only supports no_prefetch, direct_prefetch, and priority_direct_prefetch. Got: ${mode}" >&2
       exit 2
       ;;
   esac

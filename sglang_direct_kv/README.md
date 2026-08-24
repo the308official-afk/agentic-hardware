@@ -57,6 +57,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 35: Instrumentation Evidence Audit | Ready | [Milestone 35](#milestone-35-instrumentation-evidence-audit) |
 | Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
 | Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
+| Milestone 38: Priority-Aware Direct Prefetch Emulation | Ready | [Milestone 38](#milestone-38-priority-aware-direct-prefetch-emulation) |
 
 ## What We Are Testing
 
@@ -6327,9 +6328,15 @@ This milestone avoids old prompt-based request warming.
 Allowed modes:
   no_prefetch
   direct_prefetch
+  priority_direct_prefetch
 
 direct_prefetch uses the direct SGLang KV load-back trigger path. It does not
 try to warm the cache by asking SGLang to generate from a duplicate prompt.
+
+priority_direct_prefetch uses the same direct SGLang KV load-back trigger, but
+the driver temporarily holds low-priority filler traffic while the urgent hint
+gets a reserved software lane. This emulates a priority-aware hardware/runtime
+prefetch path.
 ```
 
 Run through the master-report script:
@@ -6456,6 +6463,151 @@ This is direct SGLang KV-pool telemetry. It is stronger than reading logs or
 total GPU memory, but it is still not a physical DMA-engine saturation counter.
 It tells us how SGLang's KV cache pool looked when replay/prefetch/H2D events
 were happening.
+```
+
+### Milestone 38: Priority-Aware Direct Prefetch Emulation
+
+Why this milestone is needed:
+
+```text
+So far, most prefetch attempts are best-effort. The runtime issues a useful
+hint, but that hint still competes with ordinary serving work, filler traffic,
+decode, cache lookup, and KV movement.
+
+This milestone asks:
+  what if urgent agentic KV prefetch got priority over low-value background
+  traffic?
+
+That is the software emulation of the hardware idea:
+  "prefetch KV for this soon-resuming agent first."
+```
+
+What it compares:
+
+```text
+no_prefetch:
+  no hint is issued.
+  replay pays whatever KV load/recompute cost exists.
+
+direct_prefetch:
+  the direct SGLang KV load-back hook is issued during tool wait.
+  it competes normally with filler/background work.
+
+priority_direct_prefetch:
+  the same direct SGLang KV load-back hook is issued.
+  low-priority filler traffic is temporarily held while the hint runs.
+  this emulates a priority-aware prefetch queue / migration lane.
+```
+
+What this does and does not prove:
+
+```text
+It does prove whether prioritizing urgent hint work improves deadline margins
+inside our SGLang testbed.
+
+It does not prove that current GPU DMA hardware already has this behavior.
+The point is the opposite: we are emulating the enforcement that future
+hardware/runtime support could make cheaper and more predictable.
+```
+
+Run the three-way priority experiment:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone38_priority_direct_prefetch_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+WORKLOAD_SOURCE=synthetic \
+MODES="no_prefetch direct_prefetch priority_direct_prefetch" \
+SESSION_COUNT=12 \
+ARRIVAL_SHAPE=burst \
+ARRIVAL_GAP_MS=40 \
+BURST_SIZE=4 \
+BURST_GAP_MS=400 \
+TOOL_WAIT_LIST_MS="250 500" \
+PREFETCH_TIMING=early \
+HINT_DELAY_MS=10 \
+PRIORITY_PREFETCH_WINDOW_MS=750 \
+BACKGROUND_FILLERS_PER_SESSION=4 \
+REQUEST_CONCURRENCY=8 \
+SYNTHETIC_PROMPT_TOKENS=4096 \
+SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
+FILLER_PROMPT_TOKENS=1024 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+MAX_TIMELINE_GAPS=32 \
+bash scripts/run_milestone38_priority_direct_prefetch.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Equivalent master-report workflow:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+EXPERIMENT_KIND=multi_session \
+REPORT_LABEL=priority_direct_prefetch_demo_1 \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+WORKLOAD_SOURCE=synthetic \
+MODES="no_prefetch direct_prefetch priority_direct_prefetch" \
+SESSION_COUNT=12 \
+ARRIVAL_SHAPE=burst \
+ARRIVAL_GAP_MS=40 \
+BURST_SIZE=4 \
+BURST_GAP_MS=400 \
+TOOL_WAIT_LIST_MS="250 500" \
+PREFETCH_TIMING=early \
+HINT_DELAY_MS=10 \
+PRIORITY_PREFETCH_WINDOW_MS=750 \
+BACKGROUND_FILLERS_PER_SESSION=4 \
+REQUEST_CONCURRENCY=8 \
+SYNTHETIC_PROMPT_TOKENS=4096 \
+SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
+FILLER_PROMPT_TOKENS=1024 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+MAX_TIMELINE_GAPS=32 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Important events to observe:
+
+```text
+m38.priority_prefetch_lane.start
+  the urgent direct KV hint enters the reserved priority lane.
+
+m38.priority_prefetch_lane.end
+  the priority hint path finished.
+
+m38.low_priority_fillers.held
+  background filler traffic was paused so the hint could run first.
+
+m38.low_priority_fillers.released
+  filler traffic was allowed to resume.
+
+m27.prefetch.start / m27.prefetch.end
+  the direct SGLang KV hook attempt itself.
+```
+
+What to look for in `latest_master_report.html`:
+
+```text
+Global Prefetch Margin:
+  priority_direct_prefetch should ideally move more dots above the 0 ms line.
+
+Unified Forensic Stack Timeline:
+  priority rows should show the direct prefetch attempt getting a cleaner
+  window before ordinary filler pressure.
+
+GPU KV Pool Residency:
+  check whether priority helped create useful residency or whether the pool was
+  still too full to keep prefetched KV useful.
 ```
 
 ## Directory Layout
