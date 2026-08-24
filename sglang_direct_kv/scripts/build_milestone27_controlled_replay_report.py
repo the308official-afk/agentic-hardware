@@ -66,6 +66,11 @@ from replay_path_classifier import (
 )
 
 PREFETCH_MODE_NAMES = {"direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"}
+HARDWARE_BYPASS_LEVELS: list[tuple[str, str, float]] = [
+    ("best_case", "Best case: measured H2D only", 0.0),
+    ("realistic", "Realistic: measured H2D + 50 ms", 50.0),
+    ("conservative", "Conservative: measured H2D + 150 ms", 150.0),
+]
 
 
 def canonical_mode(mode: Any) -> str:
@@ -1451,6 +1456,300 @@ def mode_comparison_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, A
             }
         )
     return output
+
+
+def measured_kv_h2d_for_projection(row: dict[str, Any]) -> dict[str, Any]:
+    direct_duration = as_float(row.get("direct_kv_h2d_duration_ms"))
+    replay_duration = as_float(row.get("replay_kv_h2d_duration_ms"))
+    if direct_duration is not None and has_events(row.get("direct_kv_h2d_events")):
+        return {
+            "source": "hint-side direct KV H2D",
+            "duration_ms": direct_duration,
+            "events": row.get("direct_kv_h2d_events", ""),
+            "tokens": row.get("lifecycle_hint_h2d_tokens") or row.get("hint_host_load_tokens", ""),
+            "actual_ready_end_ms": as_float(row.get("direct_kv_h2d_end_ms")),
+        }
+    if replay_duration is not None and has_events(row.get("replay_kv_h2d_events")):
+        return {
+            "source": "replay-side KV H2D",
+            "duration_ms": replay_duration,
+            "events": row.get("replay_kv_h2d_events", ""),
+            "tokens": row.get("lifecycle_replay_h2d_tokens") or row.get("replay_host_load_tokens", ""),
+            "actual_ready_end_ms": as_float(row.get("replay_kv_h2d_end_ms")),
+        }
+    return {"source": "", "duration_ms": None, "events": "", "tokens": "", "actual_ready_end_ms": None}
+
+
+def actual_software_ready_margin_ms(row: dict[str, Any], measured: dict[str, Any]) -> float | None:
+    due = as_float(row.get("tool_gap_end_ms"))
+    if due is None:
+        return None
+    prefetch_margin = as_float(row.get("prefetch_margin_ms"))
+    if canonical_mode(row.get("mode")) in PREFETCH_MODE_NAMES and prefetch_margin is not None:
+        return prefetch_margin
+    actual_ready_end = as_float(measured.get("actual_ready_end_ms"))
+    if actual_ready_end is not None:
+        return round(due - actual_ready_end, 3)
+    first_token = first_token_ms(row)
+    if first_token is not None:
+        return round(due - first_token, 3)
+    return None
+
+
+def projected_hardware_bypass_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(gaps):
+        measured = measured_kv_h2d_for_projection(row)
+        measured_duration = as_float(measured.get("duration_ms"))
+        if measured_duration is None:
+            continue
+        due = as_float(row.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        tool_start = as_float(row.get("tool_gap_start_ms"))
+        tool_wait = as_float(row.get("tool_gap_ms"))
+        if tool_start is None and tool_wait is not None:
+            tool_start = due - tool_wait
+        if tool_start is None:
+            continue
+        label = str(row.get("timeline_label") or f"G{idx:02d}")
+        software_margin = actual_software_ready_margin_ms(row, measured)
+        software_lateness = max(0.0, -software_margin) if software_margin is not None else 0.0
+        ttft = as_float(row.get("resume_ttft_ms"))
+        for level, level_label, overhead_ms in HARDWARE_BYPASS_LEVELS:
+            projected_duration = measured_duration + overhead_ms
+            projected_end = tool_start + projected_duration
+            projected_margin = due - projected_end
+            projected_lateness = max(0.0, -projected_margin)
+            estimated_saved = max(0.0, software_lateness - projected_lateness)
+            if ttft is not None:
+                estimated_saved = min(ttft, estimated_saved)
+            rows.append(
+                {
+                    "row": label,
+                    "mode": display_mode(row.get("mode")),
+                    "scenario": row.get("comparison_scenario", ""),
+                    "task": row.get("task_index", ""),
+                    "gap": row.get("gap_order_in_task", ""),
+                    "tool_wait_ms": row.get("tool_gap_ms", ""),
+                    "measured_h2d_source": measured.get("source", ""),
+                    "measured_h2d_events": measured.get("events", ""),
+                    "measured_h2d_tokens_or_indices": measured.get("tokens", ""),
+                    "measured_h2d_duration_ms": round(measured_duration, 3),
+                    "software_ready_margin_ms": round(software_margin, 3) if software_margin is not None else "",
+                    "hardware_projection": level,
+                    "hardware_projection_label": level_label,
+                    "hardware_overhead_ms": round(overhead_ms, 3),
+                    "projected_hardware_duration_ms": round(projected_duration, 3),
+                    "projected_hardware_start_ms": round(tool_start, 3),
+                    "projected_hardware_end_ms": round(projected_end, 3),
+                    "projected_hardware_margin_ms": round(projected_margin, 3),
+                    "would_meet_deadline": 1 if projected_margin >= 0 else 0,
+                    "estimated_ttft_saved_ms": round(estimated_saved, 3),
+                    "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                    "simple_meaning": (
+                        "Projected hardware would finish before replay."
+                        if projected_margin >= 0
+                        else "Projected hardware would still miss replay, but by less if software was later."
+                    ),
+                }
+            )
+    return rows
+
+
+def projected_hardware_bypass_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_level: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_level[str(row.get("hardware_projection") or "")].append(row)
+    output: list[dict[str, Any]] = []
+    for level, level_label, _overhead in HARDWARE_BYPASS_LEVELS:
+        items = by_level.get(level, [])
+        margins = [float(row["projected_hardware_margin_ms"]) for row in items if row.get("projected_hardware_margin_ms") not in ("", None)]
+        saved = [float(row["estimated_ttft_saved_ms"]) for row in items if row.get("estimated_ttft_saved_ms") not in ("", None)]
+        h2d = [float(row["measured_h2d_duration_ms"]) for row in items if row.get("measured_h2d_duration_ms") not in ("", None)]
+        hits = sum(1 for row in items if str(row.get("would_meet_deadline")) == "1")
+        output.append(
+            {
+                "projection": level_label,
+                "gaps_with_measured_h2d": len(items),
+                "projected_deadline_hits": hits,
+                "projected_hit_rate_pct": round(hits * 100.0 / len(items), 2) if items else "",
+                "median_projected_margin_ms": round(median(margins), 3) if margins else "",
+                "worst_projected_lateness_ms": round(abs(min([m for m in margins if m < 0])), 3) if any(m < 0 for m in margins) else "",
+                "avg_measured_h2d_ms": avg(h2d),
+                "avg_estimated_ttft_saved_ms": avg(saved),
+                "total_estimated_ttft_saved_ms": round(sum(saved), 3) if saved else "",
+            }
+        )
+    return output
+
+
+def projected_hardware_bypass_cards_html(summary_rows: list[dict[str, Any]]) -> str:
+    by_projection = {str(row.get("projection") or ""): row for row in summary_rows}
+    cards: list[tuple[str, str]] = []
+    for _level, label, _overhead in HARDWARE_BYPASS_LEVELS:
+        row = by_projection.get(label, {})
+        cards.append((f"{label} hit rate", f"{row.get('projected_hit_rate_pct', '')}%"))
+    if summary_rows:
+        cards.insert(0, ("gaps with measured KV H2D", str(summary_rows[0].get("gaps_with_measured_h2d", ""))))
+    return "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(label)}</div><div class=\"value\">{html.escape(value)}</div></div>"
+        for label, value in cards
+    ) + "</div>"
+
+
+def build_projected_hardware_bypass_margin_plot(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No measured KV H2D rows were available for projected hardware-bypass analysis.</p>"
+    rows_by_gap: defaultdict[str, dict[str, Any]] = defaultdict(dict)
+    for row in rows:
+        gap = str(row.get("row") or "")
+        if gap:
+            rows_by_gap[gap][str(row.get("hardware_projection") or "")] = row
+    gap_labels = sorted(rows_by_gap, key=lambda value: (len(value), value))
+    software_values: list[float] = []
+    projected_values: list[float] = []
+    for gap in gap_labels:
+        any_row = next(iter(rows_by_gap[gap].values()))
+        software_margin = as_float(any_row.get("software_ready_margin_ms"))
+        if software_margin is not None:
+            software_values.append(software_margin)
+        for level, _label, _overhead in HARDWARE_BYPASS_LEVELS:
+            value = as_float(rows_by_gap[gap].get(level, {}).get("projected_hardware_margin_ms"))
+            if value is not None:
+                projected_values.append(value)
+    margins = software_values + projected_values
+    if not margins:
+        return "<p>No projection margin values were available.</p>"
+
+    width = 1480
+    height = 580
+    left = 98
+    right = 48
+    top = 74
+    bottom = 118
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    min_margin = min(margins)
+    max_margin = max(margins)
+    pad = max(50.0, (max_margin - min_margin) * 0.08)
+    y_min = min(min_margin - pad, -50.0)
+    y_max = max(max_margin + pad, 50.0)
+    scaled_min = h2d_symlog_value(y_min)
+    scaled_max = h2d_symlog_value(y_max)
+
+    def x_pos(index: int) -> float:
+        if len(gap_labels) <= 1:
+            return left + plot_w / 2
+        return left + index * plot_w / (len(gap_labels) - 1)
+
+    def y_pos(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
+
+    zero_y = y_pos(0.0)
+    colors = {
+        "software": "#7c3aed",
+        "best_case": "#16a34a",
+        "realistic": "#0891b2",
+        "conservative": "#f97316",
+    }
+    offsets = {
+        "software": -30,
+        "best_case": -10,
+        "realistic": 10,
+        "conservative": 30,
+    }
+    parts = [
+        '<svg viewBox="0 0 1480 580" width="100%" role="img" aria-label="Projected hardware bypass deadline margin plot">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
+        '<text x="22" y="292" transform="rotate(-90 22 292)" text-anchor="middle" font-size="13" font-weight="700">KV ready margin ms (symlog)</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 44}" text-anchor="middle" font-size="13" font-weight="700">gap / scenario order</text>',
+        '<text x="106" y="38" font-size="13" fill="#166534" font-weight="700">above line = KV ready before replay</text>',
+        '<text x="430" y="38" font-size="13" fill="#b91c1c" font-weight="700">below line = KV ready after replay</text>',
+    ]
+    seen_ticks: set[int] = set()
+    for value in h2d_symlog_tick_values(y_min, y_max):
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+
+    x_tick_step = max(1, len(gap_labels) // 12)
+    for index, gap in enumerate(gap_labels):
+        x = x_pos(index)
+        if index % x_tick_step == 0 or index == len(gap_labels) - 1:
+            parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
+            parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="10">{html.escape(gap)}</text>')
+
+    for index, gap in enumerate(gap_labels):
+        x = x_pos(index)
+        by_level = rows_by_gap[gap]
+        any_row = next(iter(by_level.values()))
+        software_margin = as_float(any_row.get("software_ready_margin_ms"))
+        if software_margin is not None:
+            y = y_pos(software_margin)
+            title = f"{gap} | observed software ready margin={software_margin:.3f} ms | mode={any_row.get('mode')}"
+            parts.append(
+                f'<circle cx="{x + offsets["software"]:.1f}" cy="{y:.1f}" r="6" fill="{colors["software"]}" opacity="0.88" stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></circle>'
+            )
+        for level, label, _overhead in HARDWARE_BYPASS_LEVELS:
+            projection = by_level.get(level)
+            if not projection:
+                continue
+            margin = as_float(projection.get("projected_hardware_margin_ms"))
+            if margin is None:
+                continue
+            y = y_pos(margin)
+            title = (
+                f"{gap} | {label} | projected margin={margin:.3f} ms | "
+                f"measured H2D={projection.get('measured_h2d_duration_ms')} ms | "
+                f"overhead={projection.get('hardware_overhead_ms')} ms | "
+                f"deadline_met={projection.get('would_meet_deadline')}"
+            )
+            parts.append(
+                f'<rect x="{x + offsets[level] - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" fill="{colors[level]}" opacity="0.88" stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></rect>'
+            )
+
+    legend = [
+        ("observed software ready", colors["software"], "circle"),
+        ("best-case hardware", colors["best_case"], "square"),
+        ("realistic hardware", colors["realistic"], "square"),
+        ("conservative hardware", colors["conservative"], "square"),
+    ]
+    lx = left
+    ly = height - 84
+    for label, color, kind in legend:
+        if kind == "circle":
+            parts.append(f'<circle cx="{lx}" cy="{ly}" r="6" fill="{color}"/>')
+        else:
+            parts.append(f'<rect x="{lx - 6}" y="{ly - 6}" width="12" height="12" rx="2" fill="{color}"/>')
+        parts.append(f'<text x="{lx + 14}" y="{ly + 4}" font-size="12">{html.escape(label)}</text>')
+        lx += 270
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def projected_hardware_bypass_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return """
+        <p>No measured KV H2D rows were available for projected hardware-bypass analysis.</p>
+        """
+    summary_rows = projected_hardware_bypass_summary_rows(rows)
+    return f"""
+    <p>This is a what-if estimate, not a real hardware run. It uses the measured KV H2D copy duration from the actual experiment, then asks what would happen if a low-overhead hardware/runtime path could start that same copy at tool-wait start and protect the KV until replay.</p>
+    <p class="note">This does not assume memory copying is free. It keeps the measured copy time and adds three overhead settings: best case adds 0 ms, realistic adds 50 ms, and conservative adds 150 ms.</p>
+    {projected_hardware_bypass_cards_html(summary_rows)}
+    <h3>Projected Deadline Margin</h3>
+    <p>Positive margin means the projected hardware path would finish before replay was due. Negative margin means even the projected hardware path would still be late.</p>
+    <div class="setup-diagram">{build_projected_hardware_bypass_margin_plot(rows)}</div>
+    <p class="note">The long per-gap projection table is in <strong>Evidence Tables / Raw Proof</strong>. Use it to audit the exact measured H2D duration, overhead assumption, projected finish time, and estimated TTFT saved for each row.</p>
+    """
 
 
 def case_fillers(row: dict[str, Any]) -> str:
@@ -7769,6 +8068,10 @@ def render_html(
     h2d_contention_event_table_rows = h2d_contention_event_rows(
         h2d_contention_targets, all_h2d_activity_events
     )
+    hardware_bypass_projection_rows = projected_hardware_bypass_rows(all_timeline_rows)
+    hardware_bypass_projection_summary_rows = projected_hardware_bypass_summary_rows(
+        hardware_bypass_projection_rows
+    )
     global_title = global_readiness_section_title(gaps)
     gap_columns = [
         "session_id",
@@ -7823,6 +8126,7 @@ def render_html(
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
         ("global-prefetch", global_title),
+        ("hardware-bypass", "Projected Hardware Bypass Benefit"),
         ("h2d-pressure", "KV H2D Bandwidth Pressure"),
         ("gpu-kv-residency", "GPU KV Pool Residency"),
         ("delay-breakdown", "Replay Delay Breakdown"),
@@ -7871,6 +8175,11 @@ def render_html(
     <summary><h2>{html.escape(global_title)}</h2></summary>
     <p>For no-prefetch rows, this section measures replay-side KV H2D readiness. For direct-prefetch rows, it also reports the normal prefetch margin.</p>
     {global_readiness_html(gaps)}
+  </details>
+
+  <details id="hardware-bypass" class="section-card theme-directkv">
+    <summary><h2>Projected Hardware Bypass Benefit</h2></summary>
+    {projected_hardware_bypass_html(hardware_bypass_projection_rows)}
   </details>
 
   <details id="h2d-pressure" class="section-card theme-directkv">
@@ -7978,6 +8287,10 @@ def render_html(
     {table_html(client_dispatch_kv_event_rows, limit=2000)}
     <h3>H2D Activity Window Rows</h3>
     {table_html(h2d_activity_window_table_rows)}
+    <h3>Projected Hardware Bypass Summary</h3>
+    {table_html(hardware_bypass_projection_summary_rows)}
+    <h3>Projected Hardware Bypass Per-Gap Rows</h3>
+    {table_html(hardware_bypass_projection_rows, limit=2000)}
     <h3>Per-Gap H2D Pressure Rows</h3>
     {table_html(all_h2d_pressure_rows)}
     <h3>Per-Gap H2D Contention Verdict Rows</h3>
@@ -8086,6 +8399,8 @@ def main() -> None:
     h2d_contention_targets = select_h2d_contention_targets(all_labeled_gaps)
     h2d_contention_summary = h2d_contention_summary_rows(h2d_contention_targets, h2d_activity_events)
     h2d_contention_events = h2d_contention_event_rows(h2d_contention_targets, h2d_activity_events)
+    hardware_bypass_projection = projected_hardware_bypass_rows(all_labeled_gaps)
+    hardware_bypass_projection_summary = projected_hardware_bypass_summary_rows(hardware_bypass_projection)
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_verdicts = replay_delay_verdict_rows(replay_delay_breakdown)
     replay_delay_running_context = replay_delay_running_context_rows(all_labeled_gaps, all_trace_rows, h2d_activity_events)
@@ -8125,6 +8440,8 @@ def main() -> None:
     write_csv(args.out_dir / "h2d_activity_windows.csv", h2d_activity_windows)
     write_csv(args.out_dir / "h2d_contention_by_gap.csv", h2d_contention_summary)
     write_csv(args.out_dir / "h2d_contention_events.csv", h2d_contention_events)
+    write_csv(args.out_dir / "projected_hardware_bypass.csv", hardware_bypass_projection)
+    write_csv(args.out_dir / "projected_hardware_bypass_summary.csv", hardware_bypass_projection_summary)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -8166,6 +8483,8 @@ def main() -> None:
             "h2d_activity_windows": h2d_activity_windows,
             "h2d_contention_by_gap": h2d_contention_summary,
             "h2d_contention_events": h2d_contention_events,
+            "projected_hardware_bypass": hardware_bypass_projection,
+            "projected_hardware_bypass_summary": hardware_bypass_projection_summary,
             "exact_kv_movement_attribution": exact_kv_rows,
             "exact_kv_movement_summary": exact_movement_summary_rows(exact_kv_rows),
             "kv_block_ledger": kv_block_rows,

@@ -58,6 +58,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
 | Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
 | Milestone 38: Deadline-Priority Direct Prefetch Emulation | Ready | [Milestone 38](#milestone-38-deadline-priority-direct-prefetch-emulation) |
+| Milestone 39: Projected Hardware Bypass Benefit | Ready | [Milestone 39](#milestone-39-projected-hardware-bypass-benefit) |
 
 ## Milestone Run Command Convention
 
@@ -6735,6 +6736,122 @@ Grouped Mode Comparison Timeline:
 GPU KV Pool Residency:
   check whether priority helped create useful residency or whether the pool was
   still too full to keep prefetched KV useful.
+```
+
+### Milestone 39: Projected Hardware Bypass Benefit
+
+Why this milestone is needed:
+
+```text
+The deadline-priority software mode is useful, but it is still expensive because
+it goes through SGLang's normal software/runtime path.
+
+This milestone asks:
+  if a real hardware/runtime bypass path could start the same measured KV H2D
+  copy earlier during tool wait, would it have met the replay deadline?
+```
+
+Important caveat:
+
+```text
+Projected hardware bypass is not a real hardware run.
+
+It is a what-if estimate built from real measurements:
+  real replay deadline
+  real tool-wait window
+  real observed KV H2D duration
+  real observed replay TTFT
+
+The projection does not assume copying is free. It assumes the same measured
+copy can be started earlier through a lower-overhead deadline-aware path and
+protected until replay.
+```
+
+Projection levels:
+
+```text
+best_case:
+  projected time = measured KV H2D time
+
+realistic:
+  projected time = measured KV H2D time + 50 ms overhead
+
+conservative:
+  projected time = measured KV H2D time + 150 ms overhead
+```
+
+What it adds to `latest_master_report.html`:
+
+```text
+Projected Hardware Bypass Benefit:
+  manager-facing chart showing observed software readiness margin versus
+  best-case, realistic, and conservative hardware-bypass margins.
+
+Evidence Tables / Raw Proof:
+  projected_hardware_bypass_summary
+  projected_hardware_bypass per-gap rows
+```
+
+Main rebuild command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+BUILD_ONLY=1 \
+EXPERIMENT_KIND=multi_session \
+REPORT_LABEL=multi_session_kv_pool_1 \
+UPDATE_LATEST=1 \
+MULTI_SESSION_ROOT=artifacts/results/runs/multi_session/multi_session_kv_pool_1 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Fresh run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone38_deadline_priority_prefetch_$(date +%Y%m%d_%H%M%S) \
+LATEST_REPORT_ROOT=artifacts/results \
+WORKLOAD_SOURCE=synthetic \
+MODES="no_prefetch direct_prefetch deadline_priority_prefetch" \
+SESSION_COUNT=12 \
+ARRIVAL_SHAPE=burst \
+ARRIVAL_GAP_MS=40 \
+BURST_SIZE=4 \
+BURST_GAP_MS=400 \
+TOOL_WAIT_LIST_MS="250 500" \
+PREFETCH_TIMING=early \
+HINT_DELAY_MS=10 \
+PRIORITY_PREFETCH_WINDOW_MS=750 \
+PRIORITY_POST_PREFETCH_QUIET_MS=750 \
+DEADLINE_RESERVE_WINDOW_MS=500 \
+BACKGROUND_FILLERS_PER_SESSION=4 \
+REQUEST_CONCURRENCY=8 \
+SYNTHETIC_PROMPT_TOKENS=4096 \
+SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
+FILLER_PROMPT_TOKENS=1024 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+MAX_TIMELINE_GAPS=32 \
+bash scripts/run_milestone38_priority_direct_prefetch.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+What to look for:
+
+```text
+Projected Hardware Bypass Benefit:
+  if best/realistic/conservative dots move above the 0 ms line, then measured
+  KV copying was short enough that a low-overhead hardware path could likely
+  have prepared KV before replay.
+
+If observed software remains far below 0 ms while projected hardware is above
+0 ms, the key blocker is not the raw copy duration alone. The blocker is the
+software/runtime path before useful movement becomes deadline-ready.
 ```
 
 ## Directory Layout
