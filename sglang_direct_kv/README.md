@@ -6539,9 +6539,23 @@ direct_prefetch:
 
 deadline_priority_prefetch:
   the same direct SGLang KV load-back hook is issued.
-  low-priority filler traffic is temporarily held around the replay deadline.
+  the hint is issued near the start of the tool wait, not near the end.
+  the hint bypasses the driver's local low-priority concurrency gate.
+  low-priority filler traffic is held until after the replay finishes.
+  a short post-replay quiet window is kept before filler traffic resumes.
   this emulates a deadline-aware prefetch queue / migration lane that tries to
-  make urgent KV resident before the agent resumes.
+  make urgent KV resident and protected before the agent resumes.
+```
+
+Simple meaning:
+
+```text
+direct_prefetch says:
+  "try to prefetch this KV sometime during the tool wait."
+
+deadline_priority_prefetch says:
+  "this KV is replay-critical, so move it early, put it in a priority lane,
+   pause low-priority background work, and keep it useful until replay."
 ```
 
 What this does and does not prove:
@@ -6574,7 +6588,8 @@ TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
 PRIORITY_PREFETCH_WINDOW_MS=750 \
-DEADLINE_RESERVE_WINDOW_MS=300 \
+PRIORITY_POST_PREFETCH_QUIET_MS=750 \
+DEADLINE_RESERVE_WINDOW_MS=500 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
@@ -6609,7 +6624,8 @@ TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
 PRIORITY_PREFETCH_WINDOW_MS=750 \
-DEADLINE_RESERVE_WINDOW_MS=300 \
+PRIORITY_POST_PREFETCH_QUIET_MS=750 \
+DEADLINE_RESERVE_WINDOW_MS=500 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
@@ -6628,15 +6644,35 @@ Important events to observe:
 ```text
 m38.deadline_priority_prefetch_lane.start
   the urgent direct KV hint enters the deadline-priority lane.
+  In this emulation, it bypasses the driver's local low-priority concurrency
+  gate so it can reach SGLang sooner.
 
 m38.deadline_priority_prefetch_lane.end
   the deadline-priority hint path finished.
 
+m38.deadline_prefetch_deadline.set
+  the driver recorded the replay deadline and decided the hint should be
+  treated as replay-critical work.
+
 m38.deadline_low_priority_fillers.held
-  background filler traffic was paused around the replay deadline.
+  background filler traffic was paused so it does not flood the SGLang request
+  queue while the urgent prefetch/replay path is active.
+
+m38.deadline_filler_admission.blocked
+  low-priority filler requests were prevented from entering the driver request
+  stream while replay-critical prefetch/replay work had priority.
 
 m38.deadline_low_priority_fillers.released
-  filler traffic was allowed to resume after the high-priority replay path.
+  filler traffic was allowed to resume after the high-priority replay path and
+  optional quiet/protection window.
+
+m38.deadline_filler_admission.released
+  low-priority filler requests were allowed back into the request stream.
+
+m38.deadline_residency_protection.start / m38.deadline_residency_protection.end
+  the emulated protection interval. During this period, low-priority filler
+  traffic stays held so the prefetched KV is less likely to be immediately
+  displaced before replay.
 
 m27.prefetch.start / m27.prefetch.end
   the direct SGLang KV hook attempt itself.
