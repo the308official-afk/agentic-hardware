@@ -20,6 +20,11 @@ FILLER_DIVERGE_EARLY="${FILLER_DIVERGE_EARLY:-1}"
 PREFETCH_TIMING="${PREFETCH_TIMING:-near_resume}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-20}"
 ORACLE_LEAD_MS="${ORACLE_LEAD_MS:-250}"
+PRIORITY_DIRECT_PREFETCH="${PRIORITY_DIRECT_PREFETCH:-1}"
+PRIORITY_PREFETCH_HEAD_START_MS="${PRIORITY_PREFETCH_HEAD_START_MS:-50}"
+PRIORITY_REPLAY_GUARD_MS="${PRIORITY_REPLAY_GUARD_MS:-120}"
+PRIORITY_REPLAY_RELEASE_MS="${PRIORITY_REPLAY_RELEASE_MS:-80}"
+PRIORITY_FILLER_STAGGER_MS="${PRIORITY_FILLER_STAGGER_MS:-2}"
 REQUEST_CONCURRENCY="${REQUEST_CONCURRENCY:-8}"
 MAX_TOKENS="${MAX_TOKENS:-8}"
 PREFETCH_MAX_TOKENS="${PREFETCH_MAX_TOKENS:-1}"
@@ -144,6 +149,10 @@ echo "SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS}"
 echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
 echo "MAX_PAIRS=${MAX_PAIRS}"
+echo "PRIORITY_DIRECT_PREFETCH=${PRIORITY_DIRECT_PREFETCH}"
+echo "PRIORITY_PREFETCH_HEAD_START_MS=${PRIORITY_PREFETCH_HEAD_START_MS}"
+echo "PRIORITY_REPLAY_GUARD_MS=${PRIORITY_REPLAY_GUARD_MS}"
+echo "PRIORITY_REPLAY_RELEASE_MS=${PRIORITY_REPLAY_RELEASE_MS}"
 echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER}"
 echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL}"
 echo "Total cases: ${total_cases}"
@@ -195,6 +204,10 @@ run_case() {
     --prefetch-timing "${PREFETCH_TIMING}"
     --hint-delay-ms "${HINT_DELAY_MS}"
     --oracle-lead-ms "${ORACLE_LEAD_MS}"
+    --priority-prefetch-head-start-ms "${PRIORITY_PREFETCH_HEAD_START_MS}"
+    --priority-replay-guard-ms "${PRIORITY_REPLAY_GUARD_MS}"
+    --priority-replay-release-ms "${PRIORITY_REPLAY_RELEASE_MS}"
+    --priority-filler-stagger-ms "${PRIORITY_FILLER_STAGGER_MS}"
     --max-tokens "${MAX_TOKENS}"
     --prefetch-max-tokens "${PREFETCH_MAX_TOKENS}"
     --concurrency "${REQUEST_CONCURRENCY}"
@@ -207,6 +220,11 @@ run_case() {
     driver_args+=(--filler-diverge-early)
   else
     driver_args+=(--no-filler-diverge-early)
+  fi
+  if [[ "${PRIORITY_DIRECT_PREFETCH}" == "1" ]]; then
+    driver_args+=(--priority-direct-prefetch)
+  else
+    driver_args+=(--no-priority-direct-prefetch)
   fi
 
   "${PYTHON_BIN}" "${driver_args[@]}" | tee "${case_root}/driver.log"

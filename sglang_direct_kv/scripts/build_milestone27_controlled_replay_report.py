@@ -95,7 +95,7 @@ def canonical_mode(mode: Any) -> str:
 def display_mode(mode: Any) -> str:
     labels = {
         "no_prefetch": "No prefetch",
-        "direct_prefetch": "Direct prefetch",
+        "direct_prefetch": "Dynamo-like direct prefetch",
         "priority_direct_prefetch": "Priority direct prefetch",
         "deadline_priority_prefetch": "Deadline priority prefetch",
         "projected_hardware_bypass": "Projected hardware bypass",
@@ -2736,7 +2736,11 @@ def timeline_model_table_html() -> str:
     rows = [
         ("Initial model turn", "#2563eb", "First model request before tool wait"),
         ("Tool wait", "#d1d5db", "Agent/tool pause where prefetch could happen"),
-        ("Direct prefetch attempt", "#a855f7", "Our hint/direct-load path tried to prepare KV"),
+        (
+            "Dynamo-like direct prefetch attempt",
+            "#a855f7",
+            "Our software baseline sends a priority-style direct KV hint and gives target replay work driver-level priority over filler traffic.",
+        ),
         ("Hint-side KV HtoD", "#16a34a", "Prefetch path actually loaded KV from host to GPU"),
         ("Replay-side KV HtoD", "#06b6d4", "Replay itself loaded KV from host to GPU"),
         ("Replay recompute", "#db2777", "Replay rebuilt missing old KV/prefix tokens"),
@@ -3005,7 +3009,7 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
                 round(due - direct_end, 3),
                 "measured",
                 "hint-side direct KV H2D",
-                "Direct prefetch: readiness is when hint-side KV H2D finished.",
+                "Dynamo-like direct prefetch: readiness is when hint-side KV H2D finished.",
             )
         replay_end = as_float(row.get("replay_kv_h2d_end_ms"))
         if replay_end is not None and has_events(row.get("replay_kv_h2d_events")):
@@ -3013,7 +3017,7 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
                 round(due - replay_end, 3),
                 "measured fallback",
                 "replay-side KV H2D",
-                "Direct prefetch did not produce visible hint-side H2D, so readiness falls back to replay-side KV H2D.",
+                "Dynamo-like direct prefetch did not produce visible hint-side H2D, so readiness falls back to replay-side KV H2D.",
             )
         prefetch_margin = as_float(row.get("prefetch_margin_ms"))
         if prefetch_margin is not None:
@@ -3021,7 +3025,7 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
                 round(prefetch_margin, 3),
                 "measured request path",
                 "prefetch request completion",
-                "Direct prefetch had no visible H2D, so this uses the measured prefetch request completion margin.",
+                "Dynamo-like direct prefetch had no visible H2D, so this uses the measured prefetch request completion margin.",
             )
         return None, "", "", "No hint-side or replay-side KV H2D was observed."
     return None, "", "", f"Mode {mode} is not included in this readiness comparison."
@@ -3233,7 +3237,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     ly = height - 82
     legend_items = [
         ("No prefetch", "no_prefetch"),
-        ("Direct prefetch", "direct_prefetch"),
+        ("Dynamo-like direct prefetch", "direct_prefetch"),
         ("Projected HW bypass", "projected_hardware_bypass"),
     ]
     for label, mode_key in legend_items:
@@ -6642,9 +6646,9 @@ def unified_stack_legend_table_html() -> str:
             "SGLang receive, scheduler queue/admit, cache lookup, or load-back decision work before useful model/KV work.",
         ),
         (
-            "Direct prefetch attempt",
+            "Dynamo-like direct prefetch attempt",
             unified_stack_color("prefetch"),
-            "The direct SGLang KV load-back hint path. This is the software-emulated prefetch request, not a prompt-warming request.",
+            "The direct SGLang KV load-back hint path with driver-level priority over low-priority filler traffic. This is not a prompt-warming request.",
         ),
         (
             "Hint-side KV H2D",
@@ -8482,8 +8486,8 @@ def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps
             "simple meaning": "When the live proxy sees a model turn produce tool calls, it emits a hint for that session.",
         },
         {
-            "part": "Direct prefetch attempt",
-            "simple meaning": "The controller sends a marked direct-load request so SGLang can exercise its KV load-back path.",
+            "part": "Dynamo-like direct prefetch attempt",
+            "simple meaning": "The controller sends a marked direct-load request and gives the hinted session priority over low-priority filler traffic where the driver can control ordering.",
         },
         {
             "part": "Resume",

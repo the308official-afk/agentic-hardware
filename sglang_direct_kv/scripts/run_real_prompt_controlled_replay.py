@@ -17,6 +17,14 @@ import httpx
 DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 
 
+class NoopAsyncContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+
 @dataclass(frozen=True)
 class ReplayPair:
     session_id: str
@@ -315,6 +323,39 @@ async def main_async() -> None:
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--prefetch-max-tokens", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument(
+        "--priority-direct-prefetch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For direct_prefetch, emulate Dynamo-like priority hints by giving the "
+            "prefetch/replay path a local driver priority window over filler traffic."
+        ),
+    )
+    parser.add_argument(
+        "--priority-prefetch-head-start-ms",
+        type=int,
+        default=50,
+        help="Delay low-priority filler launch briefly after a direct prefetch hint is submitted.",
+    )
+    parser.add_argument(
+        "--priority-replay-guard-ms",
+        type=int,
+        default=120,
+        help="Pause new low-priority filler launches this many ms before replay is due.",
+    )
+    parser.add_argument(
+        "--priority-replay-release-ms",
+        type=int,
+        default=80,
+        help="Resume low-priority filler launches this many ms after replay is due.",
+    )
+    parser.add_argument(
+        "--priority-filler-stagger-ms",
+        type=int,
+        default=2,
+        help="Small stagger between low-priority filler launches in priority direct prefetch mode.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=Path("artifacts/results/m27_metrics.jsonl"))
     args = parser.parse_args()
@@ -345,6 +386,11 @@ async def main_async() -> None:
             "filler_diverge_early": args.filler_diverge_early,
             "prefetch_timing": args.prefetch_timing,
             "oracle_lead_ms": args.oracle_lead_ms,
+            "priority_direct_prefetch": args.priority_direct_prefetch,
+            "priority_prefetch_head_start_ms": args.priority_prefetch_head_start_ms,
+            "priority_replay_guard_ms": args.priority_replay_guard_ms,
+            "priority_replay_release_ms": args.priority_replay_release_ms,
+            "priority_filler_stagger_ms": args.priority_filler_stagger_ms,
         }
     )
 
@@ -355,7 +401,15 @@ async def main_async() -> None:
             if delay > 0:
                 await asyncio.sleep(delay)
 
-        async def run_request(pair: ReplayPair, prompt: str, phase: str, label: str, max_tokens: int) -> dict[str, Any]:
+        async def run_request(
+            pair: ReplayPair,
+            prompt: str,
+            phase: str,
+            label: str,
+            max_tokens: int,
+            *,
+            use_concurrency_limit: bool = True,
+        ) -> dict[str, Any]:
             p_hash = prompt_hash(prompt)
             write_trace_event(
                 {
@@ -366,9 +420,11 @@ async def main_async() -> None:
                     "label": label,
                     "prompt_hash": p_hash,
                     "prompt_chars": len(prompt),
+                    "uses_driver_concurrency_gate": use_concurrency_limit,
                 }
             )
-            async with sem:
+            limiter = sem if use_concurrency_limit else NoopAsyncContext()
+            async with limiter:
                 write_trace_event(
                     {
                         "event": "m27.request.start",
@@ -378,6 +434,7 @@ async def main_async() -> None:
                         "label": label,
                         "prompt_hash": p_hash,
                         "prompt_chars": len(prompt),
+                        "uses_driver_concurrency_gate": use_concurrency_limit,
                     }
                 )
                 row = await chat_once(
@@ -416,7 +473,60 @@ async def main_async() -> None:
                 print(json.dumps(row, sort_keys=True), flush=True)
                 return row
 
-        async def run_filler(pair: ReplayPair, idx: int) -> None:
+        def priority_direct_enabled() -> bool:
+            return args.mode == "direct_prefetch" and args.priority_direct_prefetch
+
+        async def wait_for_priority_filler_slot(
+            pair: ReplayPair,
+            idx: int,
+            *,
+            tool_start_offset_ms: float,
+            replay_due_ms: float,
+            hint_offset_ms: float | None,
+        ) -> None:
+            if not priority_direct_enabled():
+                return
+            earliest_offset_ms = tool_start_offset_ms
+            if hint_offset_ms is not None:
+                earliest_offset_ms = max(
+                    earliest_offset_ms,
+                    hint_offset_ms + args.priority_prefetch_head_start_ms,
+                )
+            earliest_offset_ms += idx * args.priority_filler_stagger_ms
+            guard_start_ms = replay_due_ms - args.priority_replay_guard_ms
+            guard_end_ms = replay_due_ms + args.priority_replay_release_ms
+            if guard_start_ms <= earliest_offset_ms <= guard_end_ms:
+                earliest_offset_ms = guard_end_ms + idx * args.priority_filler_stagger_ms
+            write_trace_event(
+                {
+                    "event": "m27.priority.filler_scheduled",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "filler_index": idx,
+                    "earliest_offset_ms": round(earliest_offset_ms, 3),
+                    "guard_start_offset_ms": round(guard_start_ms, 3),
+                    "guard_end_offset_ms": round(guard_end_ms, 3),
+                    "priority_policy": "dynamo_like_direct_prefetch",
+                }
+            )
+            await sleep_until(earliest_offset_ms)
+
+        async def run_filler(
+            pair: ReplayPair,
+            idx: int,
+            *,
+            tool_start_offset_ms: float | None = None,
+            replay_due_ms: float | None = None,
+            hint_offset_ms: float | None = None,
+        ) -> None:
+            if tool_start_offset_ms is not None and replay_due_ms is not None:
+                await wait_for_priority_filler_slot(
+                    pair,
+                    idx,
+                    tool_start_offset_ms=tool_start_offset_ms,
+                    replay_due_ms=replay_due_ms,
+                    hint_offset_ms=hint_offset_ms,
+                )
             filler_session_id = f"{pair.session_id}_pressure_{idx}"
             if args.filler_diverge_early:
                 prompt = make_pressure_filler_prompt(filler_session_id, args.filler_prompt_tokens)
@@ -444,21 +554,30 @@ async def main_async() -> None:
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "prefetch_action": "direct_load",
-                    "prompt_hash": base_hash,
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                }
+                "prompt_hash": base_hash,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "priority_policy": "dynamo_like_direct_prefetch" if priority_direct_enabled() else "none",
+            }
+        )
+            await run_request(
+                pair,
+                trigger_prompt,
+                "hint_prefetch",
+                f"{pair.session_id}_direct_prefetch",
+                args.prefetch_max_tokens,
+                use_concurrency_limit=not priority_direct_enabled(),
             )
-            await run_request(pair, trigger_prompt, "hint_prefetch", f"{pair.session_id}_direct_prefetch", args.prefetch_max_tokens)
             write_trace_event(
                 {
                     "event": "m27.prefetch.end",
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "prefetch_action": "direct_load",
-                    "prompt_hash": base_hash,
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                }
-            )
+                "prompt_hash": base_hash,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "priority_policy": "dynamo_like_direct_prefetch" if priority_direct_enabled() else "none",
+            }
+        )
 
         async def run_pair(pair: ReplayPair, index: int) -> None:
             arrival_ms = index * 40.0
@@ -490,11 +609,8 @@ async def main_async() -> None:
                     "prompt_hash": prompt_hash(pair.prompt),
                 }
             )
-            pressure_tasks = [
-                asyncio.create_task(run_filler(pair, idx))
-                for idx in range(args.filler_sessions)
-            ]
             hint_task: asyncio.Task[None] | None = None
+            hint_offset_ms: float | None = None
             if args.mode != "no_prefetch":
                 if args.mode == "oracle_prefetch":
                     hint_offset_ms = max(tool_start_offset_ms, replay_due_ms - args.oracle_lead_ms)
@@ -518,6 +634,7 @@ async def main_async() -> None:
                         "tool_start_offset_ms": round(tool_start_offset_ms, 3),
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "reuse_confidence": round(rng.uniform(0.72, 0.95), 3),
+                        "priority_policy": "dynamo_like_direct_prefetch" if priority_direct_enabled() else "none",
                     }
                 )
 
@@ -526,7 +643,31 @@ async def main_async() -> None:
                     await issue_prefetch(pair, replay_due_ms)
 
                 hint_task = asyncio.create_task(hint_runner())
+            pressure_tasks = [
+                asyncio.create_task(
+                    run_filler(
+                        pair,
+                        idx,
+                        tool_start_offset_ms=tool_start_offset_ms,
+                        replay_due_ms=replay_due_ms,
+                        hint_offset_ms=hint_offset_ms,
+                    )
+                )
+                for idx in range(args.filler_sessions)
+            ]
             await sleep_until(replay_due_ms)
+            if priority_direct_enabled():
+                write_trace_event(
+                    {
+                        "event": "m27.priority.replay_lane",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "guard_ms": args.priority_replay_guard_ms,
+                        "release_ms": args.priority_replay_release_ms,
+                        "priority_policy": "dynamo_like_direct_prefetch",
+                    }
+                )
             write_trace_event(
                 {
                     "event": "m27.pre_replay.checkpoint",
@@ -549,7 +690,14 @@ async def main_async() -> None:
                     "replay_due_offset_ms": round(replay_due_ms, 3),
                 }
             )
-            await run_request(pair, pair.replay_prompt, "replay", f"{pair.session_id}_replay", args.max_tokens)
+            await run_request(
+                pair,
+                pair.replay_prompt,
+                "replay",
+                f"{pair.session_id}_replay",
+                args.max_tokens,
+                use_concurrency_limit=not priority_direct_enabled(),
+            )
             write_trace_event(
                 {
                     "event": "m27.tool_wait.end",

@@ -28,7 +28,7 @@ from run_real_prompt_controlled_replay import (
 )
 
 PREFETCH_MODES = {"direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"}
-PRIORITY_PREFETCH_MODES = {"priority_direct_prefetch", "deadline_priority_prefetch"}
+PRIORITY_PREFETCH_MODES = {"direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"}
 
 
 class NoopAsyncContext:
@@ -112,7 +112,7 @@ async def main_async() -> None:
         "--priority-prefetch-window-ms",
         type=int,
         default=500,
-        help="In priority prefetch modes, hold low-priority fillers while the urgent prefetch runs, up to this window.",
+        help="In direct_prefetch, hold low-priority fillers while the urgent prefetch runs, up to this window.",
     )
     parser.add_argument(
         "--priority-post-prefetch-quiet-ms",
@@ -124,7 +124,7 @@ async def main_async() -> None:
         "--deadline-reserve-window-ms",
         type=int,
         default=300,
-        help="In deadline_priority_prefetch mode, reserve this window before replay by deferring low-priority fillers.",
+        help="For direct_prefetch, reserve this window before replay by deferring low-priority fillers.",
     )
     parser.add_argument("--background-fillers-per-session", type=int, default=0)
     parser.add_argument("--filler-prompt-tokens", type=int, default=1024)
@@ -378,15 +378,15 @@ async def main_async() -> None:
                         "priority_policy": (
                             "deadline_reserved_prefetch_and_replay_lane"
                             if args.mode == "deadline_priority_prefetch"
-                            else "driver_reserved_prefetch_lane"
-                            if args.mode == "priority_direct_prefetch"
+                            else "dynamo_like_priority_hint_prefetch_and_replay_lane"
+                            if args.mode in PRIORITY_PREFETCH_MODES
                             else "best_effort"
                         ),
                         "priority_prefetch_window_ms": args.priority_prefetch_window_ms
                         if args.mode in PRIORITY_PREFETCH_MODES
                         else 0,
                         "deadline_reserve_window_ms": args.deadline_reserve_window_ms
-                        if args.mode == "deadline_priority_prefetch"
+                        if args.mode in PRIORITY_PREFETCH_MODES
                         else 0,
                         "uses_driver_concurrency_gate": args.mode not in PRIORITY_PREFETCH_MODES,
                     }
@@ -423,7 +423,7 @@ async def main_async() -> None:
                             {
                                 "event": "m38.deadline_priority_prefetch_lane.start"
                                 if args.mode == "deadline_priority_prefetch"
-                                else "m38.priority_prefetch_lane.start",
+                                else "m38.dynamo_like_prefetch_lane.start",
                                 "session_id": pair.session_id,
                                 "mode": args.mode,
                                 "hint_offset_ms": round(hint_offset_ms, 3),
@@ -453,7 +453,7 @@ async def main_async() -> None:
                             {
                                 "event": "m38.deadline_priority_prefetch_lane.end"
                                 if args.mode == "deadline_priority_prefetch"
-                                else "m38.priority_prefetch_lane.end",
+                                else "m38.dynamo_like_prefetch_lane.end",
                                 "session_id": pair.session_id,
                                 "mode": args.mode,
                                 "replay_due_offset_ms": round(replay_due_ms, 3),
@@ -518,14 +518,19 @@ async def main_async() -> None:
                             "release_reason": "replay_completed",
                         }
                     )
-                elif args.mode == "priority_direct_prefetch" and hint_task is not None:
+                elif args.mode in {"direct_prefetch", "priority_direct_prefetch"} and hint_task is not None:
+                    reserve_start_ms = max(tool_start_offset_ms, replay_due_ms - args.deadline_reserve_window_ms)
                     write_trace_event(
                         {
-                            "event": "m38.low_priority_fillers.held",
+                            "event": "m38.dynamo_like_low_priority_fillers.held",
                             "session_id": pair.session_id,
                             "mode": args.mode,
                             "background_fillers_per_session": args.background_fillers_per_session,
                             "priority_prefetch_window_ms": args.priority_prefetch_window_ms,
+                            "deadline_reserve_window_ms": args.deadline_reserve_window_ms,
+                            "reserve_start_offset_ms": round(reserve_start_ms, 3),
+                            "replay_due_offset_ms": round(replay_due_ms, 3),
+                            "policy": "hold_low_priority_fillers_while_urgent_hint_and_replay_get_front_of_driver_queue",
                         }
                     )
                     try:
@@ -540,7 +545,7 @@ async def main_async() -> None:
                         await asyncio.sleep(args.priority_post_prefetch_quiet_ms / 1000.0)
                     write_trace_event(
                         {
-                            "event": "m38.low_priority_fillers.released",
+                            "event": "m38.dynamo_like_low_priority_fillers.released",
                             "session_id": pair.session_id,
                             "mode": args.mode,
                             "release_reason": release_reason,
@@ -582,7 +587,7 @@ async def main_async() -> None:
                 }
             )
             replay_admission_start_ms = (time.perf_counter() - workload_start) * 1000.0
-            if args.mode == "deadline_priority_prefetch" and hint_task is not None:
+            if args.mode in PRIORITY_PREFETCH_MODES and hint_task is not None:
                 if not hint_task.done():
                     write_trace_event(
                         {
@@ -598,14 +603,18 @@ async def main_async() -> None:
                     replay_admission_start_ms = (time.perf_counter() - workload_start) * 1000.0
                 write_trace_event(
                     {
-                        "event": "m38.deadline_replay_admission.start",
+                        "event": "m38.deadline_replay_admission.start"
+                        if args.mode == "deadline_priority_prefetch"
+                        else "m38.dynamo_like_replay_admission.start",
                         "session_id": pair.session_id,
                         "mode": args.mode,
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "admission_start_offset_ms": round(replay_admission_start_ms, 3),
                         "admission_lateness_ms": round(replay_admission_start_ms - replay_due_ms, 3),
                         "uses_driver_concurrency_gate": False,
-                        "policy": "admit_replay_immediately_after_priority_prefetch",
+                        "policy": "admit_replay_immediately_after_priority_prefetch"
+                        if args.mode == "deadline_priority_prefetch"
+                        else "front_of_driver_queue_after_direct_prefetch",
                     }
                 )
                 await run_request(
@@ -619,7 +628,9 @@ async def main_async() -> None:
                 replay_admission_end_ms = (time.perf_counter() - workload_start) * 1000.0
                 write_trace_event(
                     {
-                        "event": "m38.deadline_replay_admission.end",
+                        "event": "m38.deadline_replay_admission.end"
+                        if args.mode == "deadline_priority_prefetch"
+                        else "m38.dynamo_like_replay_admission.end",
                         "session_id": pair.session_id,
                         "mode": args.mode,
                         "replay_due_offset_ms": round(replay_due_ms, 3),
