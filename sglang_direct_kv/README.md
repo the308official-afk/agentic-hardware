@@ -57,7 +57,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 35: Instrumentation Evidence Audit | Ready | [Milestone 35](#milestone-35-instrumentation-evidence-audit) |
 | Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
 | Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
-| Milestone 38: Priority-Aware Direct Prefetch Emulation | Ready | [Milestone 38](#milestone-38-priority-aware-direct-prefetch-emulation) |
+| Milestone 38: Deadline-Priority Direct Prefetch Emulation | Ready | [Milestone 38](#milestone-38-deadline-priority-direct-prefetch-emulation) |
 
 ## Milestone Run Command Convention
 
@@ -125,6 +125,8 @@ These are the current core claims we can safely make from the testbed so far:
 
 5. High KV-pool pressure makes agentic prefetch a residency-management problem,
    not just a copy-bandwidth problem.
+
+6. Current GPU DMA/copy engines can move memory efficiently, but they are mostly blind to agent context. They do not know that a transfer is urgent KV for a session expected to resume soon. A deadline-aware, agent-aware DMA path could prioritize the right KV transfers, throttle lower-priority movement, and expose whether the KV became resident before replay. This can reduce replay stalls and improve tail latency for tool-heavy agentic workloads.
 
 Latest harsher controlled run:
 
@@ -6336,15 +6338,15 @@ This milestone avoids old prompt-based request warming.
 Allowed modes:
   no_prefetch
   direct_prefetch
-  priority_direct_prefetch
+  deadline_priority_prefetch
 
 direct_prefetch uses the direct SGLang KV load-back trigger path. It does not
 try to warm the cache by asking SGLang to generate from a duplicate prompt.
 
-priority_direct_prefetch uses the same direct SGLang KV load-back trigger, but
-the driver temporarily holds low-priority filler traffic while the urgent hint
-gets a reserved software lane. This emulates a priority-aware hardware/runtime
-prefetch path.
+deadline_priority_prefetch uses the same direct SGLang KV load-back trigger,
+but the driver reserves the deadline window by holding low-priority filler
+traffic while the urgent hint/replay path gets a cleaner software lane. This
+emulates a deadline-aware, priority-aware hardware/runtime prefetch path.
 ```
 
 Main run command:
@@ -6505,7 +6507,7 @@ bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-### Milestone 38: Priority-Aware Direct Prefetch Emulation
+### Milestone 38: Deadline-Priority Direct Prefetch Emulation
 
 Why this milestone is needed:
 
@@ -6516,7 +6518,7 @@ decode, cache lookup, and KV movement.
 
 This milestone asks:
   what if urgent agentic KV prefetch got priority over low-value background
-  traffic?
+  traffic near the replay deadline?
 
 That is the software emulation of the hardware idea:
   "prefetch KV for this soon-resuming agent first."
@@ -6533,10 +6535,11 @@ direct_prefetch:
   the direct SGLang KV load-back hook is issued during tool wait.
   it competes normally with filler/background work.
 
-priority_direct_prefetch:
+deadline_priority_prefetch:
   the same direct SGLang KV load-back hook is issued.
-  low-priority filler traffic is temporarily held while the hint runs.
-  this emulates a priority-aware prefetch queue / migration lane.
+  low-priority filler traffic is temporarily held around the replay deadline.
+  this emulates a deadline-aware prefetch queue / migration lane that tries to
+  make urgent KV resident before the agent resumes.
 ```
 
 What this does and does not prove:
@@ -6556,10 +6559,10 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_ROOT=artifacts/results/milestone38_priority_direct_prefetch_$(date +%Y%m%d_%H%M%S) \
+RESULT_ROOT=artifacts/results/milestone38_deadline_priority_prefetch_$(date +%Y%m%d_%H%M%S) \
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch priority_direct_prefetch" \
+MODES="no_prefetch direct_prefetch deadline_priority_prefetch" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6569,6 +6572,7 @@ TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
 PRIORITY_PREFETCH_WINDOW_MS=750 \
+DEADLINE_RESERVE_WINDOW_MS=300 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
@@ -6589,11 +6593,11 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 EXPERIMENT_KIND=multi_session \
-REPORT_LABEL=priority_direct_prefetch_demo_1 \
+REPORT_LABEL=deadline_priority_prefetch_demo_1 \
 PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch priority_direct_prefetch" \
+MODES="no_prefetch direct_prefetch deadline_priority_prefetch" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6603,6 +6607,7 @@ TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
 PRIORITY_PREFETCH_WINDOW_MS=750 \
+DEADLINE_RESERVE_WINDOW_MS=300 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
@@ -6619,17 +6624,17 @@ bash scripts/run_master_report.sh \
 Important events to observe:
 
 ```text
-m38.priority_prefetch_lane.start
-  the urgent direct KV hint enters the reserved priority lane.
+m38.deadline_priority_prefetch_lane.start
+  the urgent direct KV hint enters the deadline-priority lane.
 
-m38.priority_prefetch_lane.end
-  the priority hint path finished.
+m38.deadline_priority_prefetch_lane.end
+  the deadline-priority hint path finished.
 
-m38.low_priority_fillers.held
-  background filler traffic was paused so the hint could run first.
+m38.deadline_low_priority_fillers.held
+  background filler traffic was paused around the replay deadline.
 
-m38.low_priority_fillers.released
-  filler traffic was allowed to resume.
+m38.deadline_low_priority_fillers.released
+  filler traffic was allowed to resume after the high-priority replay path.
 
 m27.prefetch.start / m27.prefetch.end
   the direct SGLang KV hook attempt itself.
@@ -6639,11 +6644,11 @@ What to look for in `latest_master_report.html`:
 
 ```text
 Global Prefetch Margin:
-  priority_direct_prefetch should ideally move more dots above the 0 ms line.
+  deadline_priority_prefetch should ideally move more dots above the 0 ms line.
 
 Unified Forensic Stack Timeline:
-  priority rows should show the direct prefetch attempt getting a cleaner
-  window before ordinary filler pressure.
+  deadline-priority rows should show the direct prefetch/replay path getting a
+  cleaner window before ordinary filler pressure resumes.
 
 GPU KV Pool Residency:
   check whether priority helped create useful residency or whether the pool was

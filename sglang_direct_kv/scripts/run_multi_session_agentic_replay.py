@@ -27,7 +27,8 @@ from run_real_prompt_controlled_replay import (
     write_trace_event,
 )
 
-PREFETCH_MODES = {"direct_prefetch", "priority_direct_prefetch"}
+PREFETCH_MODES = {"direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"}
+PRIORITY_PREFETCH_MODES = {"priority_direct_prefetch", "deadline_priority_prefetch"}
 
 
 def parse_range(raw: str) -> tuple[int, int]:
@@ -84,7 +85,7 @@ async def main_async() -> None:
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
     parser.add_argument(
         "--mode",
-        choices=("no_prefetch", "direct_prefetch", "priority_direct_prefetch"),
+        choices=("no_prefetch", "direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"),
         default="no_prefetch",
     )
     parser.add_argument("--workload-jsonl", type=Path)
@@ -103,13 +104,19 @@ async def main_async() -> None:
         "--priority-prefetch-window-ms",
         type=int,
         default=500,
-        help="In priority_direct_prefetch mode, hold low-priority fillers while the urgent prefetch runs, up to this window.",
+        help="In priority prefetch modes, hold low-priority fillers while the urgent prefetch runs, up to this window.",
     )
     parser.add_argument(
         "--priority-post-prefetch-quiet-ms",
         type=int,
         default=0,
         help="Optional quiet period after a priority prefetch before low-priority fillers are released.",
+    )
+    parser.add_argument(
+        "--deadline-reserve-window-ms",
+        type=int,
+        default=300,
+        help="In deadline_priority_prefetch mode, reserve this window before replay by deferring low-priority fillers.",
     )
     parser.add_argument("--background-fillers-per-session", type=int, default=0)
     parser.add_argument("--filler-prompt-tokens", type=int, default=1024)
@@ -159,6 +166,7 @@ async def main_async() -> None:
             "prefetch_timing": args.prefetch_timing,
             "priority_prefetch_window_ms": args.priority_prefetch_window_ms,
             "priority_post_prefetch_quiet_ms": args.priority_post_prefetch_quiet_ms,
+            "deadline_reserve_window_ms": args.deadline_reserve_window_ms,
             "background_fillers_per_session": args.background_fillers_per_session,
             "sampled_sessions": [
                 {
@@ -325,6 +333,7 @@ async def main_async() -> None:
             )
 
             hint_task: asyncio.Task[None] | None = None
+            replay_completed_event = asyncio.Event()
             if is_prefetch_mode(args.mode):
                 if args.prefetch_timing == "near_resume":
                     hint_offset_ms = max(tool_start_offset_ms, replay_due_ms - args.prefetch_lead_ms)
@@ -343,33 +352,47 @@ async def main_async() -> None:
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "reuse_confidence": 0.82,
                         "traffic_shape": "multi_session",
-                        "priority_policy": "driver_reserved_prefetch_lane"
-                        if args.mode == "priority_direct_prefetch"
-                        else "best_effort",
+                        "priority_policy": (
+                            "deadline_reserved_prefetch_and_replay_lane"
+                            if args.mode == "deadline_priority_prefetch"
+                            else "driver_reserved_prefetch_lane"
+                            if args.mode == "priority_direct_prefetch"
+                            else "best_effort"
+                        ),
                         "priority_prefetch_window_ms": args.priority_prefetch_window_ms
-                        if args.mode == "priority_direct_prefetch"
+                        if args.mode in PRIORITY_PREFETCH_MODES
+                        else 0,
+                        "deadline_reserve_window_ms": args.deadline_reserve_window_ms
+                        if args.mode == "deadline_priority_prefetch"
                         else 0,
                     }
                 )
 
                 async def run_hint_task() -> None:
                     await sleep_until(hint_offset_ms)
-                    if args.mode == "priority_direct_prefetch":
+                    if args.mode in PRIORITY_PREFETCH_MODES:
                         write_trace_event(
                             {
-                                "event": "m38.priority_prefetch_lane.start",
+                                "event": "m38.deadline_priority_prefetch_lane.start"
+                                if args.mode == "deadline_priority_prefetch"
+                                else "m38.priority_prefetch_lane.start",
                                 "session_id": pair.session_id,
                                 "mode": args.mode,
                                 "hint_offset_ms": round(hint_offset_ms, 3),
                                 "replay_due_offset_ms": round(replay_due_ms, 3),
                                 "priority_prefetch_window_ms": args.priority_prefetch_window_ms,
+                                "deadline_reserve_window_ms": args.deadline_reserve_window_ms
+                                if args.mode == "deadline_priority_prefetch"
+                                else 0,
                             }
                         )
                     await issue_prefetch(pair, replay_due_ms)
-                    if args.mode == "priority_direct_prefetch":
+                    if args.mode in PRIORITY_PREFETCH_MODES:
                         write_trace_event(
                             {
-                                "event": "m38.priority_prefetch_lane.end",
+                                "event": "m38.deadline_priority_prefetch_lane.end"
+                                if args.mode == "deadline_priority_prefetch"
+                                else "m38.priority_prefetch_lane.end",
                                 "session_id": pair.session_id,
                                 "mode": args.mode,
                                 "replay_due_offset_ms": round(replay_due_ms, 3),
@@ -379,7 +402,41 @@ async def main_async() -> None:
                 hint_task = asyncio.create_task(run_hint_task())
 
             async def run_filler_group() -> None:
-                if args.mode == "priority_direct_prefetch" and hint_task is not None:
+                if args.mode == "deadline_priority_prefetch" and hint_task is not None:
+                    reserve_start_ms = max(tool_start_offset_ms, replay_due_ms - args.deadline_reserve_window_ms)
+                    write_trace_event(
+                        {
+                            "event": "m38.deadline_low_priority_fillers.held",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "background_fillers_per_session": args.background_fillers_per_session,
+                            "deadline_reserve_window_ms": args.deadline_reserve_window_ms,
+                            "reserve_start_offset_ms": round(reserve_start_ms, 3),
+                            "replay_due_offset_ms": round(replay_due_ms, 3),
+                        }
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(hint_task),
+                            timeout=max(1, args.priority_prefetch_window_ms) / 1000.0,
+                        )
+                        hint_release_reason = "prefetch_completed"
+                    except asyncio.TimeoutError:
+                        hint_release_reason = "priority_window_expired"
+                    await replay_completed_event.wait()
+                    if args.priority_post_prefetch_quiet_ms > 0:
+                        await asyncio.sleep(args.priority_post_prefetch_quiet_ms / 1000.0)
+                    write_trace_event(
+                        {
+                            "event": "m38.deadline_low_priority_fillers.released",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "hint_release_reason": hint_release_reason,
+                            "release_reason": "replay_completed",
+                            "background_fillers_per_session": args.background_fillers_per_session,
+                        }
+                    )
+                elif args.mode == "priority_direct_prefetch" and hint_task is not None:
                     write_trace_event(
                         {
                             "event": "m38.low_priority_fillers.held",
@@ -443,6 +500,7 @@ async def main_async() -> None:
                 }
             )
             await run_request(pair, pair.replay_prompt, "replay", f"{pair.session_id}_replay", args.max_tokens)
+            replay_completed_event.set()
             write_trace_event(
                 {
                     "event": "m27.tool_wait.end",

@@ -65,7 +65,56 @@ from replay_path_classifier import (
     instrumentation_coverage_rows,
 )
 
-PREFETCH_MODE_NAMES = {"direct_prefetch", "priority_direct_prefetch"}
+PREFETCH_MODE_NAMES = {"direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"}
+
+
+def canonical_mode(mode: Any) -> str:
+    raw = str(mode or "")
+    if raw.startswith("deadline_priority_prefetch"):
+        return "deadline_priority_prefetch"
+    if raw.startswith("priority_direct_prefetch"):
+        return "priority_direct_prefetch"
+    if raw.startswith("direct_prefetch"):
+        return "direct_prefetch"
+    if raw.startswith("no_prefetch"):
+        return "no_prefetch"
+    if raw.startswith("oracle_direct_load"):
+        return "oracle_direct_load"
+    if raw.startswith("oracle_prefetch"):
+        return "oracle_prefetch"
+    return raw
+
+
+def display_mode(mode: Any) -> str:
+    labels = {
+        "no_prefetch": "No prefetch",
+        "direct_prefetch": "Direct prefetch",
+        "priority_direct_prefetch": "Priority direct prefetch",
+        "deadline_priority_prefetch": "Deadline priority prefetch",
+        "oracle_direct_load": "Oracle direct load",
+        "oracle_prefetch": "Oracle prefetch",
+    }
+    return labels.get(canonical_mode(mode), str(mode or "unknown"))
+
+
+def display_verdict(verdict: Any) -> str:
+    labels = {
+        "no_prefetch_replay_loaded_kv": "No prefetch; replay loaded KV",
+        "no_prefetch_replay_recomputed": "No prefetch; replay recomputed",
+        "no_prefetch_cache_reused_or_scheduler_wait": "No prefetch; cache reused or scheduler wait",
+        "prefetch_late_replay_loaded_kv": "Prefetch late; replay loaded KV",
+        "prefetch_late_replay_recomputed": "Prefetch late; replay recomputed",
+        "prefetch_late_no_replay_h2d": "Prefetch late; no replay H2D",
+        "prefetch_ready_but_replay_loaded_kv": "Prefetch ready, but replay still loaded KV",
+        "prefetch_success_cache_reused": "Prefetch success; replay reused cache",
+        "prefetch_ready_but_replay_recomputed": "Prefetch ready, but replay recomputed",
+        "prefetch_no_host_load_replay_cache_hit": "Prefetch found no host KV; replay cache hit",
+        "prefetch_ready_replay_cache_hit": "Prefetch ready; replay cache hit",
+        "prefetch_ran_but_no_host_kv": "Prefetch ran, but no host KV was available",
+        "prefetch_ready_no_replay_h2d": "Prefetch ready; no replay H2D",
+        "prefetch_missing_or_unfinished": "Prefetch missing or unfinished",
+    }
+    return labels.get(str(verdict or ""), str(verdict or "unknown"))
 
 
 def as_float(value: Any) -> float | None:
@@ -883,7 +932,7 @@ def replay_path_from_evidence(row: dict[str, Any]) -> str:
 
 
 def per_gap_verdict(row: dict[str, Any]) -> str:
-    mode = str(row.get("mode") or "")
+    mode = canonical_mode(row.get("mode"))
     margin = as_float(row.get("prefetch_margin_ms"))
     replay_loaded = has_events(row.get("replay_kv_h2d_events"))
     hint_loaded = has_events(row.get("direct_kv_h2d_events"))
@@ -1253,13 +1302,14 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
-    mode = str(row.get("mode") or "")
+    mode = canonical_mode(row.get("mode"))
     ranks = {
         "no_prefetch": 0,
         "direct_prefetch": 1,
-        "priority_direct_prefetch": 2,
-        "oracle_prefetch": 3,
-        "oracle_direct_load": 3,
+        "deadline_priority_prefetch": 2,
+        "priority_direct_prefetch": 3,
+        "oracle_prefetch": 4,
+        "oracle_direct_load": 4,
     }
     return ranks.get(mode, 9), mode
 
@@ -1287,7 +1337,7 @@ def prefetch_attempt_gaps(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         row
         for row in gaps
-        if str(row.get("mode") or "") in PREFETCH_MODE_NAMES
+        if canonical_mode(row.get("mode")) in PREFETCH_MODE_NAMES
         and as_float(row.get("prefetch_margin_ms")) is not None
     ]
 
@@ -1770,7 +1820,7 @@ def verdict_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_mode: defaultdict[str, Counter[str]] = defaultdict(Counter)
     totals: Counter[str] = Counter()
     for row in gaps:
-        mode = str(row.get("mode") or "")
+        mode = canonical_mode(row.get("mode"))
         verdict = str(row.get("per_gap_verdict") or per_gap_verdict(row))
         by_mode[mode][verdict] += 1
         totals[mode] += 1
@@ -1781,7 +1831,9 @@ def verdict_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
             output.append(
                 {
                     "mode": mode,
+                    "mode_label": display_mode(mode),
                     "verdict": verdict,
+                    "verdict_label": display_verdict(verdict),
                     "gaps": count,
                     "pct": round(count * 100.0 / total, 2) if total else 0.0,
                 }
@@ -1910,7 +1962,7 @@ def request_id_coverage_rows(trace_rows: list[dict[str, Any]]) -> list[dict[str,
 
 
 def observation_status(row: dict[str, Any]) -> tuple[str, str]:
-    mode = str(row.get("mode") or "")
+    mode = canonical_mode(row.get("mode"))
     margin = as_float(row.get("prefetch_margin_ms"))
     hint_h2d = has_events(row.get("direct_kv_h2d_events"))
     replay_h2d = has_events(row.get("replay_kv_h2d_events"))
@@ -1939,7 +1991,7 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
         label = str(row.get("timeline_label") or f"G{idx:02d}")
-        mode = str(row.get("mode") or "")
+        mode = canonical_mode(row.get("mode"))
         margin = as_float(row.get("prefetch_margin_ms"))
         gap_ms = as_float(row.get("tool_gap_ms"))
         ttft_ms = as_float(row.get("resume_ttft_ms"))
@@ -2156,9 +2208,10 @@ def manager_setup_html(run_env: dict[str, Any] | None = None) -> str:
 
 
 def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
-    by_mode = {str(row.get("mode") or ""): row for row in mode_rows}
+    by_mode = {canonical_mode(row.get("mode")): row for row in mode_rows}
     no_prefetch = by_mode.get("no_prefetch", {})
     direct = by_mode.get("direct_prefetch", {})
+    deadline = by_mode.get("deadline_priority_prefetch", {})
     priority = by_mode.get("priority_direct_prefetch", {})
     cards = [
         ("controlled gaps", sum(int(row.get("controlled_gaps") or 0) for row in mode_rows)),
@@ -2169,6 +2222,14 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
         ("suspected replay wait/recompute", sum(int(row.get("replay_recompute_or_wait_suspected_gaps") or 0) for row in mode_rows)),
         ("likely cache hit/resident", sum(int(row.get("likely_cache_hit_or_resident_gaps") or 0) for row in mode_rows)),
     ]
+    if deadline:
+        cards.extend(
+            [
+                ("deadline-prefetch avg TTFT", f"{deadline.get('avg_resume_ttft_ms', '')} ms"),
+                ("deadline late prefetches", deadline.get("late_prefetches", "")),
+                ("deadline H2D gaps", deadline.get("hint_h2d_gaps", "")),
+            ]
+        )
     if priority:
         cards.extend(
             [
@@ -2250,7 +2311,7 @@ def relative_to_due(value: Any, due: float) -> float | str:
 def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for idx, row in enumerate(gaps):
-        if str(row.get("mode") or "") != "no_prefetch":
+        if canonical_mode(row.get("mode")) != "no_prefetch":
             continue
         due = as_float(row.get("tool_gap_end_ms"))
         h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
@@ -2315,7 +2376,7 @@ def replay_h2d_readiness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]
 def replay_queue_timing_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for idx, row in enumerate(gaps):
-        if str(row.get("mode") or "") != "no_prefetch":
+        if canonical_mode(row.get("mode")) != "no_prefetch":
             continue
         due = as_float(row.get("tool_gap_end_ms"))
         if due is None:
@@ -5225,7 +5286,7 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
 def global_readiness_section_title(gaps: list[dict[str, Any]]) -> str:
     has_prefetch_margins = any(as_float(row.get("prefetch_margin_ms")) is not None for row in gaps)
     has_no_prefetch_h2d = any(
-        str(row.get("mode") or "") == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
+        canonical_mode(row.get("mode")) == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
         for row in gaps
     )
     if has_no_prefetch_h2d and not has_prefetch_margins:
@@ -5238,7 +5299,7 @@ def global_readiness_section_title(gaps: list[dict[str, Any]]) -> str:
 def global_readiness_html(gaps: list[dict[str, Any]]) -> str:
     has_prefetch_margins = any(as_float(row.get("prefetch_margin_ms")) is not None for row in gaps)
     has_no_prefetch_h2d = any(
-        str(row.get("mode") or "") == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
+        canonical_mode(row.get("mode")) == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
         for row in gaps
     )
     sections: list[str] = []
@@ -5991,9 +6052,17 @@ def build_unified_per_gap_stack_timeline_svg(
         status, status_color = observation_status(row)
         parts.append(f'<rect x="0" y="{y - 8:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
         parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="800">{html.escape(label)}</text>')
-        parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="800" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
-        parts.append(f'<text x="12" y="{y + 52:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}; fillers {html.escape(case_fillers(row))}; wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
-        parts.append(f'<text x="12" y="{y + 70:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row)))}</text>')
+        verdict_label = display_verdict(row.get("per_gap_verdict") or status)
+        raw_mode = str(row.get("mode") or "")
+        mode_label = display_mode(raw_mode)
+        parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="800" fill="{status_color}">{html.escape(verdict_label)}</text>')
+        parts.append(f'<text x="12" y="{y + 52:.1f}" font-size="10" fill="#475569">mode {html.escape(mode_label)}; fillers {html.escape(case_fillers(row))}; wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
+        if raw_mode and raw_mode != canonical_mode(raw_mode):
+            parts.append(f'<text x="12" y="{y + 70:.1f}" font-size="9" fill="#94a3b8">run {html.escape(raw_mode[:50])}</text>')
+            path_y = y + 86
+        else:
+            path_y = y + 70
+        parts.append(f'<text x="12" y="{path_y:.1f}" font-size="10" fill="#475569">{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row)))}</text>')
         for lane_key, lane_label in lane_names:
             lane_y = y + lane_offsets[lane_key]
             parts.append(f'<text x="{left - 10}" y="{lane_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="700" fill="#334155">{html.escape(lane_label)}</text>')
@@ -6414,8 +6483,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f0fdf4" opacity="0.70"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 962:.1f}" width="{plot_w + 4:.1f}" height="160" rx="8" fill="#f8fafc" opacity="0.92"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
-        parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(str(row.get("per_gap_verdict") or status))}</text>')
-        parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="10" fill="#475569">mode {html.escape(str(row.get("mode") or ""))}</text>')
+        verdict_label = display_verdict(row.get("per_gap_verdict") or status)
+        raw_mode = str(row.get("mode") or "")
+        mode_label = display_mode(raw_mode)
+        parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(verdict_label)}</text>')
+        parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="11" font-weight="900" fill="#334155">mode: {html.escape(mode_label)}</text>')
         parts.append(f'<text x="16" y="{y + 84:.1f}" font-size="10" fill="#475569">fillers {html.escape(case_fillers(row))} | wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
         parts.append(
             f'<text x="16" y="{y + 108:.1f}" font-size="10" fill="#475569">'

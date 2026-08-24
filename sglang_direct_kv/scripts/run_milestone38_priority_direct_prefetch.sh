@@ -2,10 +2,10 @@
 set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen2.5-Coder-7B-Instruct}"
-RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone38_priority_direct_prefetch_$(date +%Y%m%d_%H%M%S)}"
+RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone38_deadline_priority_prefetch_$(date +%Y%m%d_%H%M%S)}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 WORKLOAD_SOURCE="${WORKLOAD_SOURCE:-synthetic}"
-MODES="${MODES:-no_prefetch direct_prefetch priority_direct_prefetch}"
+MODES="${MODES:-no_prefetch direct_prefetch deadline_priority_prefetch}"
 SESSION_COUNT="${SESSION_COUNT:-12}"
 ARRIVAL_SHAPE="${ARRIVAL_SHAPE:-burst}"
 ARRIVAL_GAP_MS="${ARRIVAL_GAP_MS:-40}"
@@ -17,6 +17,7 @@ HINT_DELAY_MS="${HINT_DELAY_MS:-10}"
 PREFETCH_LEAD_MS="${PREFETCH_LEAD_MS:-120}"
 PRIORITY_PREFETCH_WINDOW_MS="${PRIORITY_PREFETCH_WINDOW_MS:-750}"
 PRIORITY_POST_PREFETCH_QUIET_MS="${PRIORITY_POST_PREFETCH_QUIET_MS:-0}"
+DEADLINE_RESERVE_WINDOW_MS="${DEADLINE_RESERVE_WINDOW_MS:-300}"
 BACKGROUND_FILLERS_PER_SESSION="${BACKGROUND_FILLERS_PER_SESSION:-4}"
 FILLER_PROMPT_TOKENS="${FILLER_PROMPT_TOKENS:-1024}"
 SYNTHETIC_PROMPT_TOKENS="${SYNTHETIC_PROMPT_TOKENS:-4096}"
@@ -42,6 +43,7 @@ export HINT_DELAY_MS
 export PREFETCH_LEAD_MS
 export PRIORITY_PREFETCH_WINDOW_MS
 export PRIORITY_POST_PREFETCH_QUIET_MS
+export DEADLINE_RESERVE_WINDOW_MS
 export BACKGROUND_FILLERS_PER_SESSION
 export FILLER_PROMPT_TOKENS
 export SYNTHETIC_PROMPT_TOKENS
@@ -56,8 +58,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${DIRECT_ROOT}"
 
-echo "Milestone 38: Priority-Aware Direct Prefetch Emulation"
-echo "This compares no_prefetch, best-effort direct_prefetch, and priority_direct_prefetch."
-echo "priority_direct_prefetch holds low-priority filler traffic while the direct KV hint gets a reserved software lane."
+echo "Milestone 38: Deadline-Priority Direct Prefetch Emulation"
+echo "This compares no_prefetch, best-effort direct_prefetch, and deadline_priority_prefetch."
+echo "deadline_priority_prefetch holds low-priority filler traffic around the replay deadline while the direct KV hint/replay path gets a reserved software lane."
 
 bash scripts/run_milestone36_multi_session_agentic_replay.sh "${MODEL}"
