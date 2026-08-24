@@ -7909,7 +7909,7 @@ def render_html(
     {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}
   </details>
 
-  <details id="unified-forensic-stack" class="section-card theme-profiled" open>
+  <details id="unified-forensic-stack" class="section-card theme-profiled">
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
     {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows)}
   </details>
