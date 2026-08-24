@@ -2984,6 +2984,282 @@ def replay_h2d_readiness_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[st
     return output
 
 
+def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, str]:
+    due = as_float(row.get("tool_gap_end_ms"))
+    if due is None:
+        return None, "", "", "missing replay due"
+    mode = canonical_mode(row.get("mode"))
+    if mode == "no_prefetch":
+        h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+        if h2d_end is not None and has_events(row.get("replay_kv_h2d_events")):
+            return (
+                round(due - h2d_end, 3),
+                "measured",
+                "replay-side KV H2D",
+                "No prefetch: readiness is when replay-side KV H2D finished.",
+            )
+        return None, "", "", "No replay-side KV H2D was observed."
+    if mode in PREFETCH_MODE_NAMES:
+        direct_end = as_float(row.get("direct_kv_h2d_end_ms"))
+        if direct_end is not None and has_events(row.get("direct_kv_h2d_events")):
+            return (
+                round(due - direct_end, 3),
+                "measured",
+                "hint-side direct KV H2D",
+                "Direct prefetch: readiness is when hint-side KV H2D finished.",
+            )
+        replay_end = as_float(row.get("replay_kv_h2d_end_ms"))
+        if replay_end is not None and has_events(row.get("replay_kv_h2d_events")):
+            return (
+                round(due - replay_end, 3),
+                "measured fallback",
+                "replay-side KV H2D",
+                "Direct prefetch did not produce visible hint-side H2D, so readiness falls back to replay-side KV H2D.",
+            )
+        prefetch_margin = as_float(row.get("prefetch_margin_ms"))
+        if prefetch_margin is not None:
+            return (
+                round(prefetch_margin, 3),
+                "measured request path",
+                "prefetch request completion",
+                "Direct prefetch had no visible H2D, so this uses the measured prefetch request completion margin.",
+            )
+        return None, "", "", "No hint-side or replay-side KV H2D was observed."
+    return None, "", "", f"Mode {mode} is not included in this readiness comparison."
+
+
+def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    scenario_to_modes: defaultdict[tuple[str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in gaps:
+        mode = canonical_mode(row.get("mode"))
+        if mode in {"no_prefetch", "direct_prefetch"}:
+            scenario_to_modes[scenario_compare_key(row)][mode] = row
+
+    scenarios = [
+        (key, rows_by_mode)
+        for key, rows_by_mode in scenario_to_modes.items()
+        if "no_prefetch" in rows_by_mode or "direct_prefetch" in rows_by_mode
+    ]
+    scenarios.sort(key=lambda item: scenario_compare_sort_key(item[0]))
+
+    output: list[dict[str, Any]] = []
+    for scenario_idx, (key, rows_by_mode) in enumerate(scenarios):
+        scenario_label = f"C{scenario_idx:02d}"
+        for mode in ("no_prefetch", "direct_prefetch"):
+            row = rows_by_mode.get(mode)
+            if not row:
+                continue
+            margin, evidence_kind, source, meaning = mode_readiness_margin(row)
+            if margin is None:
+                continue
+            output.append(
+                {
+                    "scenario": scenario_label,
+                    "mode": display_mode(mode),
+                    "mode_key": mode,
+                    "task": row.get("task_index", key[1]),
+                    "gap": row.get("gap_order_in_task", key[2]),
+                    "tool_wait_ms": row.get("tool_gap_ms", key[0]),
+                    "fillers": case_fillers(row),
+                    "kv_ready_margin_ms": margin,
+                    "ready_before_replay_due": 1 if margin >= 0 else 0,
+                    "evidence_kind": evidence_kind,
+                    "readiness_source": source,
+                    "measured_or_projected": "measured",
+                    "simple_meaning": meaning,
+                }
+            )
+
+        projection_source = rows_by_mode.get("direct_prefetch") or rows_by_mode.get("no_prefetch")
+        if projection_source:
+            projections = projected_hardware_bypass_rows([projection_source])
+            realistic = next((row for row in projections if row.get("hardware_projection") == "realistic"), None)
+            if realistic:
+                margin = as_float(realistic.get("projected_hardware_margin_ms"))
+                if margin is not None:
+                    output.append(
+                        {
+                            "scenario": scenario_label,
+                            "mode": "Projected hardware bypass",
+                            "mode_key": "projected_hardware_bypass",
+                            "task": realistic.get("task", key[1]),
+                            "gap": realistic.get("gap", key[2]),
+                            "tool_wait_ms": realistic.get("tool_wait_ms", key[0]),
+                            "fillers": case_fillers(projection_source),
+                            "kv_ready_margin_ms": round(margin, 3),
+                            "ready_before_replay_due": 1 if margin >= 0 else 0,
+                            "evidence_kind": "projected",
+                            "readiness_source": "projected hardware H2D",
+                            "measured_or_projected": "projected, not measured",
+                            "simple_meaning": (
+                                "Projected hardware bypass: assumes the urgent KV copy starts at the tool-wait boundary "
+                                "and pays measured H2D time plus 50 ms overhead."
+                            ),
+                        }
+                    )
+    return output
+
+
+def global_kv_readiness_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    mode_order = ["no_prefetch", "direct_prefetch", "projected_hardware_bypass"]
+    output: list[dict[str, Any]] = []
+    for mode in mode_order:
+        items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
+        if not items:
+            continue
+        margins = [float(row["kv_ready_margin_ms"]) for row in items if row.get("kv_ready_margin_ms") not in ("", None)]
+        ready = sum(1 for row in items if str(row.get("ready_before_replay_due")) == "1")
+        late_margins = [value for value in margins if value < 0]
+        output.append(
+            {
+                "mode": display_mode(mode),
+                "dots": len(items),
+                "ready_before_replay_due": ready,
+                "late": len(items) - ready,
+                "ready_pct": round(ready * 100.0 / len(items), 2) if items else "",
+                "median_margin_ms": round(median(margins), 3) if margins else "",
+                "worst_lateness_ms": round(abs(min(late_margins)), 3) if late_margins else "",
+                "evidence": (
+                    "projected, not measured"
+                    if mode == "projected_hardware_bypass"
+                    else "measured SGLang KV movement/request timing"
+                ),
+            }
+        )
+    return output
+
+
+def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
+    width = 1480
+    height = 560
+    left = 96
+    right = 48
+    top = 78
+    bottom = 120
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    margins = [float(row["kv_ready_margin_ms"]) for row in rows if row.get("kv_ready_margin_ms") not in ("", None)]
+    if not margins:
+        return "<p>No KV readiness margins were available for this run.</p>"
+    min_margin = min(margins)
+    max_margin = max(margins)
+    pad = max(50.0, (max_margin - min_margin) * 0.08)
+    y_min = min(min_margin - pad, -50.0)
+    y_max = max(max_margin + pad, 50.0)
+    scaled_min = h2d_symlog_value(y_min)
+    scaled_max = h2d_symlog_value(y_max)
+    scenario_labels = sorted({str(row.get("scenario") or "") for row in rows}, key=lambda value: (len(value), value))
+    scenario_index = {label: idx for idx, label in enumerate(scenario_labels)}
+    mode_offsets = {
+        "no_prefetch": -18.0,
+        "direct_prefetch": 0.0,
+        "projected_hardware_bypass": 18.0,
+    }
+    mode_styles = {
+        "no_prefetch": ("#2563eb", "circle", "NP"),
+        "direct_prefetch": ("#7c3aed", "square", "DP"),
+        "projected_hardware_bypass": ("#0f766e", "hollow", "HW"),
+    }
+
+    def x_pos(label: str, mode_key: str) -> float:
+        if len(scenario_labels) <= 1:
+            base = left + plot_w / 2
+        else:
+            base = left + scenario_index[label] * plot_w / (len(scenario_labels) - 1)
+        return base + mode_offsets.get(mode_key, 0.0)
+
+    def y_pos(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
+
+    def dot_svg(x: float, y: float, color: str, kind: str, title: str) -> str:
+        escaped_title = html.escape(title)
+        if kind == "square":
+            return f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" fill="{color}" opacity="0.9"><title>{escaped_title}</title></rect>'
+        if kind == "hollow":
+            return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="7" fill="#ffffff" stroke="{color}" stroke-width="3" stroke-dasharray="3 2"><title>{escaped_title}</title></circle>'
+        return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{escaped_title}</title></circle>'
+
+    zero_y = y_pos(0.0)
+    parts = [
+        '<svg viewBox="0 0 1480 560" width="100%" role="img" aria-label="Global KV readiness by mode dot plot">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
+        '<text x="22" y="280" transform="rotate(-90 22 280)" text-anchor="middle" font-size="13" font-weight="700">KV ready margin ms (symlog)</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 40}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
+        '<text x="104" y="36" font-size="13" fill="#166534" font-weight="700">above line = KV ready before replay due</text>',
+        '<text x="470" y="36" font-size="13" fill="#b91c1c" font-weight="700">below line = KV became ready after replay was due</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">HW dots are projected from measured H2D duration plus 50 ms overhead; NP and DP dots are measured.</text>',
+    ]
+
+    seen_ticks: set[int] = set()
+    for value in h2d_symlog_tick_values(y_min, y_max):
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+
+    x_tick_step = max(1, len(scenario_labels) // 12)
+    for index, label in enumerate(scenario_labels):
+        if index % x_tick_step != 0 and index != len(scenario_labels) - 1:
+            continue
+        x = x_pos(label, "")
+        parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" font-size="10">{html.escape(label)}</text>')
+
+    for row in rows:
+        margin = as_float(row.get("kv_ready_margin_ms"))
+        scenario = str(row.get("scenario") or "")
+        mode_key = canonical_mode(row.get("mode_key"))
+        if margin is None or scenario not in scenario_index:
+            continue
+        color, kind, short = mode_styles.get(mode_key, ("#64748b", "circle", "?"))
+        x = x_pos(scenario, mode_key)
+        y = y_pos(margin)
+        title = (
+            f"{scenario} {display_mode(mode_key)} | margin={margin:.3f} ms | "
+            f"source={row.get('readiness_source')} | fillers={row.get('fillers')} | "
+            f"tool_wait={row.get('tool_wait_ms')} ms | {row.get('measured_or_projected')}"
+        )
+        parts.append(dot_svg(x, y, color, kind, title))
+        parts.append(f'<text x="{x:.1f}" y="{y - 10:.1f}" text-anchor="middle" font-size="8" fill="{color}" font-weight="700">{short}</text>')
+
+    lx = left
+    ly = height - 82
+    legend_items = [
+        ("No prefetch", "no_prefetch"),
+        ("Direct prefetch", "direct_prefetch"),
+        ("Projected HW bypass", "projected_hardware_bypass"),
+    ]
+    for label, mode_key in legend_items:
+        color, kind, short = mode_styles[mode_key]
+        parts.append(dot_svg(lx, ly, color, kind, label))
+        parts.append(f'<text x="{lx + 14}" y="{ly + 4}" font-size="12">{html.escape(short)} = {html.escape(label)}</text>')
+        lx += 260
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
+    rows = global_kv_readiness_by_mode_rows(gaps)
+    if not rows:
+        return "<p>No no-prefetch, direct-prefetch, or projected hardware readiness rows were available for this run.</p>"
+    summary = global_kv_readiness_by_mode_summary_rows(rows)
+    return f"""
+    <p>This chart compares the three readiness stories directly: no prefetch, measured direct prefetch, and projected hardware bypass.</p>
+    <p class="note">Positive margin means KV became ready before the replay deadline. Negative margin means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
+    {table_html(summary, ["mode", "dots", "ready_before_replay_due", "late", "ready_pct", "median_margin_ms", "worst_lateness_ms", "evidence"])}
+    <div class="setup-diagram">{build_global_kv_readiness_by_mode_dot_plot(rows)}</div>
+    <p class="note">Exact per-dot values are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
+    """
+
+
 def stage_confidence(value: Any, source: str) -> str:
     if as_float(value) is None:
         return "missing"
@@ -5764,15 +6040,13 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
 
 
 def global_readiness_section_title(gaps: list[dict[str, Any]]) -> str:
-    has_prefetch_margins = any(as_float(row.get("prefetch_margin_ms")) is not None for row in gaps)
-    has_no_prefetch_h2d = any(
+    if global_kv_readiness_by_mode_rows(gaps):
+        return "Global KV Readiness By Mode"
+    if any(
         canonical_mode(row.get("mode")) == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
         for row in gaps
-    )
-    if has_no_prefetch_h2d and not has_prefetch_margins:
+    ):
         return "Global Replay H2D Readiness"
-    if has_no_prefetch_h2d:
-        return "Global KV Readiness"
     return "Global Prefetch Margin"
 
 
@@ -5783,10 +6057,14 @@ def global_readiness_html(gaps: list[dict[str, Any]]) -> str:
         for row in gaps
     )
     sections: list[str] = []
+    mode_rows = global_kv_readiness_by_mode_rows(gaps)
+    if mode_rows:
+        sections.append("<h3>Mode Comparison Readiness</h3>")
+        sections.append(global_kv_readiness_by_mode_html(gaps))
     if has_no_prefetch_h2d:
-        sections.append("<h3>No-Prefetch Replay H2D Readiness</h3>")
+        sections.append("<h3>No-Prefetch Replay Queue And H2D Detail</h3>")
         sections.append(global_replay_h2d_readiness_html(gaps))
-    if has_prefetch_margins:
+    if has_prefetch_margins and not mode_rows:
         sections.append("<h3>Direct-Prefetch Margin</h3>")
         sections.append(live_global_prefetch_margin_html(gaps))
     if not sections:
@@ -8251,6 +8529,10 @@ def render_html(
     grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
     grouped_hardware_projection_rows = projected_hardware_bypass_rows(grouped_comparison_rows)
+    global_mode_readiness_table_rows = global_kv_readiness_by_mode_rows(gaps)
+    global_mode_readiness_summary_table_rows = global_kv_readiness_by_mode_summary_rows(
+        global_mode_readiness_table_rows
+    )
     replay_h2d_readiness_table_rows = replay_h2d_readiness_rows(gaps)
     replay_h2d_readiness_bucket_table_rows = replay_h2d_readiness_bucket_rows(replay_h2d_readiness_table_rows)
     replay_queue_table_rows = replay_queue_timing_rows(gaps)
@@ -8466,6 +8748,10 @@ def render_html(
     {table_html(replay_h2d_readiness_table_rows)}
     <h3>Replay H2D Readiness Buckets</h3>
     {table_html(replay_h2d_readiness_bucket_table_rows)}
+    <h3>Global KV Readiness By Mode Summary</h3>
+    {table_html(global_mode_readiness_summary_table_rows)}
+    <h3>Global KV Readiness By Mode Rows</h3>
+    {table_html(global_mode_readiness_table_rows, limit=1000)}
     <h3>Replay Queue Timing Rows</h3>
     {table_html(replay_queue_table_rows, limit=1000)}
     <h3>Replay Delay Verdicts</h3>
@@ -8609,6 +8895,8 @@ def main() -> None:
     h2d_contention_events = h2d_contention_event_rows(h2d_contention_targets, h2d_activity_events)
     hardware_bypass_projection = projected_hardware_bypass_rows(all_labeled_gaps)
     hardware_bypass_projection_summary = projected_hardware_bypass_summary_rows(hardware_bypass_projection)
+    global_mode_readiness = global_kv_readiness_by_mode_rows(all_gaps)
+    global_mode_readiness_summary = global_kv_readiness_by_mode_summary_rows(global_mode_readiness)
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_verdicts = replay_delay_verdict_rows(replay_delay_breakdown)
     replay_delay_running_context = replay_delay_running_context_rows(all_labeled_gaps, all_trace_rows, h2d_activity_events)
@@ -8650,6 +8938,8 @@ def main() -> None:
     write_csv(args.out_dir / "h2d_contention_events.csv", h2d_contention_events)
     write_csv(args.out_dir / "projected_hardware_bypass.csv", hardware_bypass_projection)
     write_csv(args.out_dir / "projected_hardware_bypass_summary.csv", hardware_bypass_projection_summary)
+    write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", global_mode_readiness)
+    write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", global_mode_readiness_summary)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -8693,6 +8983,8 @@ def main() -> None:
             "h2d_contention_events": h2d_contention_events,
             "projected_hardware_bypass": hardware_bypass_projection,
             "projected_hardware_bypass_summary": hardware_bypass_projection_summary,
+            "global_kv_readiness_by_mode": global_mode_readiness,
+            "global_kv_readiness_by_mode_summary": global_mode_readiness_summary,
             "exact_kv_movement_attribution": exact_kv_rows,
             "exact_kv_movement_summary": exact_movement_summary_rows(exact_kv_rows),
             "kv_block_ledger": kv_block_rows,
