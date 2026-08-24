@@ -75,6 +75,8 @@ HARDWARE_BYPASS_LEVELS: list[tuple[str, str, float]] = [
 
 def canonical_mode(mode: Any) -> str:
     raw = str(mode or "")
+    if raw.startswith("projected_hardware"):
+        return "projected_hardware_bypass"
     if raw.startswith("deadline_priority_prefetch"):
         return "deadline_priority_prefetch"
     if raw.startswith("priority_direct_prefetch"):
@@ -96,6 +98,7 @@ def display_mode(mode: Any) -> str:
         "direct_prefetch": "Direct prefetch",
         "priority_direct_prefetch": "Priority direct prefetch",
         "deadline_priority_prefetch": "Deadline priority prefetch",
+        "projected_hardware_bypass": "Projected hardware bypass",
         "oracle_direct_load": "Oracle direct load",
         "oracle_prefetch": "Oracle prefetch",
     }
@@ -108,6 +111,7 @@ def mode_badge_style(mode: Any) -> tuple[str, str]:
         "direct_prefetch": ("#7c3aed", "#f3e8ff"),
         "priority_direct_prefetch": ("#0891b2", "#ecfeff"),
         "deadline_priority_prefetch": ("#16a34a", "#dcfce7"),
+        "projected_hardware_bypass": ("#0f766e", "#f0fdfa"),
         "oracle_direct_load": ("#ea580c", "#ffedd5"),
         "oracle_prefetch": ("#ea580c", "#ffedd5"),
     }.get(canonical_mode(mode), ("#475569", "#f8fafc"))
@@ -129,6 +133,8 @@ def display_verdict(verdict: Any) -> str:
         "prefetch_ran_but_no_host_kv": "Prefetch ran, but no host KV was available",
         "prefetch_ready_no_replay_h2d": "Prefetch ready; no replay H2D",
         "prefetch_missing_or_unfinished": "Prefetch missing or unfinished",
+        "PROJECTED HARDWARE - not measured": "Projected hardware - not measured",
+        "projected_hardware_bypass": "Projected hardware bypass",
     }
     return labels.get(str(verdict or ""), str(verdict or "unknown"))
 
@@ -1410,11 +1416,83 @@ def mode_short_label(mode: Any) -> str:
         "no_prefetch": "NP",
         "direct_prefetch": "DP",
         "deadline_priority_prefetch": "DLP",
+        "projected_hardware_bypass": "HW",
         "priority_direct_prefetch": "PDP",
         "oracle_direct_load": "ODL",
         "oracle_prefetch": "OP",
     }
     return labels.get(canonical_mode(mode), str(mode or "M")[:3].upper())
+
+
+def projected_hardware_timeline_row(
+    source_row: dict[str, Any],
+    scenario_label: str,
+) -> dict[str, Any] | None:
+    projection = next(
+        (
+            row
+            for row in projected_hardware_bypass_rows([source_row])
+            if row.get("hardware_projection") == "realistic"
+        ),
+        None,
+    )
+    if not projection:
+        return None
+    projected_start = as_float(projection.get("projected_hardware_start_ms"))
+    projected_end = as_float(projection.get("projected_hardware_end_ms"))
+    projected_duration = as_float(projection.get("projected_hardware_duration_ms"))
+    projected_margin = as_float(projection.get("projected_hardware_margin_ms"))
+    if projected_start is None or projected_end is None:
+        return None
+
+    copied = dict(source_row)
+    copied["mode"] = "projected_hardware_bypass"
+    copied["comparison_scenario"] = scenario_label
+    copied["timeline_label"] = f"{scenario_label}-HW"
+    copied["is_projected_hardware_row"] = 1
+    copied["source_measured_mode"] = display_mode(source_row.get("mode"))
+    copied["per_gap_verdict"] = "PROJECTED HARDWARE - not measured"
+    copied["final_path"] = "projected_hardware_bypass"
+    copied["lifecycle_verdict"] = "PROJECTED HARDWARE - not measured"
+    copied["lifecycle_explanation"] = (
+        "Projected row only. It estimates a hardware KV movement path using measured H2D duration plus "
+        "50 ms control overhead; it is not a measured SGLang request."
+    )
+    copied["direct_kv_h2d_start_ms"] = projected_start
+    copied["direct_kv_h2d_end_ms"] = projected_end
+    copied["direct_kv_h2d_duration_ms"] = projected_duration if projected_duration is not None else projected_end - projected_start
+    copied["direct_kv_h2d_events"] = projection.get("measured_h2d_events", "")
+    copied["prefetch_start_ms"] = projected_start
+    copied["prefetch_end_ms"] = projected_end
+    copied["prefetch_duration_ms"] = copied["direct_kv_h2d_duration_ms"]
+    copied["prefetch_margin_ms"] = projected_margin if projected_margin is not None else ""
+    copied["projected_hardware_margin_ms"] = projection.get("projected_hardware_margin_ms", "")
+    copied["projected_hardware_duration_ms"] = projection.get("projected_hardware_duration_ms", "")
+    copied["projected_hardware_start_ms"] = projection.get("projected_hardware_start_ms", "")
+    copied["projected_hardware_end_ms"] = projection.get("projected_hardware_end_ms", "")
+    copied["hardware_projection_label"] = projection.get("hardware_projection_label", "")
+    copied["measured_h2d_source"] = projection.get("measured_h2d_source", "")
+    copied["resume_start_ms"] = ""
+    copied["resume_end_ms"] = ""
+    copied["resume_ttft_ms"] = ""
+    copied["replay_sglang_receive_start_ms"] = ""
+    copied["replay_sglang_receive_end_ms"] = ""
+    copied["replay_scheduler_queue_enter_start_ms"] = ""
+    copied["replay_scheduler_queue_enter_end_ms"] = ""
+    copied["replay_scheduler_admit_start_ms"] = ""
+    copied["replay_scheduler_admit_end_ms"] = ""
+    copied["replay_model_forward_start_ms"] = ""
+    copied["replay_model_forward_end_ms"] = ""
+    copied["replay_runtime_prefill_attribution_start_ms"] = ""
+    copied["replay_runtime_prefill_attribution_end_ms"] = ""
+    copied["replay_runtime_prefill_attributed_tokens"] = ""
+    copied["replay_runtime_prefill_confidence"] = ""
+    copied["replay_kv_h2d_start_ms"] = ""
+    copied["replay_kv_h2d_end_ms"] = ""
+    copied["replay_kv_h2d_events"] = ""
+    copied["recomputed_tokens_est"] = ""
+    copied["replay_new_prefill_tokens_est"] = ""
+    return copied
 
 
 def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int) -> list[dict[str, Any]]:
@@ -1435,14 +1513,24 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
     mode_order = ["no_prefetch", "direct_prefetch", "deadline_priority_prefetch"]
     output: list[dict[str, Any]] = []
     for scenario_idx, (_key, rows_by_mode) in enumerate(complete_or_partial[:max_scenarios]):
+        scenario_label = f"C{scenario_idx:02d}"
         for mode in mode_order:
             row = rows_by_mode.get(mode)
             if not row:
                 continue
             copied = dict(row)
-            copied["comparison_scenario"] = f"C{scenario_idx:02d}"
-            copied["timeline_label"] = f"C{scenario_idx:02d}-{mode_short_label(mode)}"
+            copied["comparison_scenario"] = scenario_label
+            copied["timeline_label"] = f"{scenario_label}-{mode_short_label(mode)}"
             output.append(copied)
+        projection_source = (
+            rows_by_mode.get("deadline_priority_prefetch")
+            or rows_by_mode.get("direct_prefetch")
+            or rows_by_mode.get("no_prefetch")
+        )
+        if projection_source:
+            projected = projected_hardware_timeline_row(projection_source, scenario_label)
+            if projected:
+                output.append(projected)
     return output
 
 
@@ -1510,6 +1598,8 @@ def actual_software_ready_margin_ms(row: dict[str, Any], measured: dict[str, Any
 def projected_hardware_bypass_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for idx, row in enumerate(gaps):
+        if canonical_mode(row.get("mode")) == "projected_hardware_bypass":
+            continue
         measured = measured_kv_h2d_for_projection(row)
         measured_duration = as_float(measured.get("duration_ms"))
         if measured_duration is None:
@@ -6445,6 +6535,7 @@ def build_unified_per_gap_stack_timeline_svg(
         parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="800">{html.escape(label)}</text>')
         verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         raw_mode = str(row.get("mode") or "")
+        is_projected_hardware_row = canonical_mode(raw_mode) == "projected_hardware_bypass"
         mode_label = display_mode(raw_mode)
         parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="800" fill="{status_color}">{html.escape(verdict_label)}</text>')
         parts.append(f'<text x="12" y="{y + 52:.1f}" font-size="10" fill="#475569">mode {html.escape(mode_label)}; fillers {html.escape(case_fillers(row))}; wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
@@ -6572,6 +6663,8 @@ def build_unified_per_gap_stack_timeline_svg(
         ("remaining before-token", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
+    if any(canonical_mode(row.get("mode")) == "projected_hardware_bypass" for row in rows):
+        legend.append(("projected hardware path", unified_stack_color("projected_hardware")))
     if projected_hardware_rows:
         legend.append(("projected hardware ready", unified_stack_color("projected_hardware")))
     for legend_label, color in legend:
@@ -6885,6 +6978,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         raw_mode = str(row.get("mode") or "")
+        is_projected_hardware_row = canonical_mode(raw_mode) == "projected_hardware_bypass"
         mode_label = display_mode(raw_mode)
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(verdict_label)}</text>')
         mode_fg, mode_bg = mode_badge_style(raw_mode)
@@ -6897,6 +6991,13 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             f'<text x="{16 + badge_w / 2:.1f}" y="{y + 66:.1f}" text-anchor="middle" '
             f'font-size="10" font-weight="900" fill="{mode_fg}">mode: {html.escape(mode_label)}</text>'
         )
+        if is_projected_hardware_row:
+            source_mode = str(row.get("source_measured_mode") or "")
+            source_note = f"based on {source_mode}" if source_mode else "projected row"
+            parts.append(
+                f'<text x="16" y="{y + 78:.1f}" font-size="9" font-weight="900" fill="#0f766e">'
+                f'PROJECTED, NOT MEASURED - {html.escape(source_note)}</text>'
+            )
         parts.append(f'<text x="16" y="{y + 84:.1f}" font-size="10" fill="#475569">fillers {html.escape(case_fillers(row))} | wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
         parts.append(
             f'<text x="16" y="{y + 108:.1f}" font-size="10" fill="#475569">'
@@ -6976,6 +7077,13 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             prefetch_duration = prefetch_span[1] - prefetch_span[0]
             prefetch_margin = as_float(row.get("prefetch_margin_ms"))
             margin_text = f" | margin={display_ms(prefetch_margin)}" if prefetch_margin is not None else ""
+            prefetch_color = unified_stack_color("projected_hardware") if is_projected_hardware_row else unified_stack_color("prefetch")
+            prefetch_label = "projected HW path" if is_projected_hardware_row else "direct prefetch"
+            prefetch_title = (
+                f"{label} | PROJECTED, NOT MEASURED hardware KV path: {display_ms(prefetch_duration)}{margin_text}"
+                if is_projected_hardware_row
+                else f"{label} | direct KV prefetch attempt: {display_ms(prefetch_duration)}{margin_text}"
+            )
             draw_span(
                 parts,
                 overview_x,
@@ -6985,9 +7093,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 prefetch_span[1],
                 prefetch_y - 4,
                 main_bar_h,
-                unified_stack_color("prefetch"),
-                "direct prefetch",
-                f"{label} | direct KV prefetch attempt: {display_ms(prefetch_duration)}{margin_text}",
+                prefetch_color,
+                prefetch_label,
+                prefetch_title,
                 opacity=0.74,
                 break_long=True,
                 min_w=min_visible_bar_w,
@@ -6996,6 +7104,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         hint_h2d_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
         if hint_h2d_span:
             hint_duration = hint_h2d_span[1] - hint_h2d_span[0]
+            hint_color = unified_stack_color("projected_hardware") if is_projected_hardware_row else unified_stack_color("hint_h2d")
+            hint_label = "projected HW H2D" if is_projected_hardware_row else "hint H2D"
+            hint_title = (
+                f"{label} | PROJECTED, NOT MEASURED hardware KV H2D: {display_ms(hint_duration)} | "
+                f"estimated from measured source={row.get('measured_h2d_source', '')}"
+                if is_projected_hardware_row
+                else f"{label} | hint-side direct KV H2D: {display_ms(hint_duration)} | events={row.get('direct_kv_h2d_events', '')}"
+            )
             draw_span(
                 parts,
                 overview_x,
@@ -7005,9 +7121,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 hint_h2d_span[1],
                 prefetch_y + 20,
                 max(12.0, main_bar_h - 6),
-                unified_stack_color("hint_h2d"),
-                "hint H2D",
-                f"{label} | hint-side direct KV H2D: {display_ms(hint_duration)} | events={row.get('direct_kv_h2d_events', '')}",
+                hint_color,
+                hint_label,
+                hint_title,
                 opacity=0.92,
                 min_w=min_visible_bar_w,
                 label_min_w=78.0,
@@ -7996,16 +8112,15 @@ def grouped_mode_comparison_timeline_html(
         """
     scenario_count = len({str(row.get("comparison_scenario") or "") for row in rows})
     return f"""
-    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> are the same task/gap setup shown under no prefetch, direct prefetch, and deadline-priority prefetch.</p>
-    <p class="note">Mode order is always: no prefetch, direct prefetch, deadline priority prefetch. This makes it easier to compare whether the deadline-aware policy changed when KV movement happened, whether replay still loaded KV, and whether TTFT improved.</p>
-    <p class="note">The teal dashed marker in each row is a <strong>projected hardware bypass overlay</strong>, not a measured event. It estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead.</p>
+    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, <code>C00-DLP</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, deadline-priority prefetch, and projected hardware bypass.</p>
+    <p class="note">Mode order is always: no prefetch, direct prefetch, deadline priority prefetch, then projected hardware bypass. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead.</p>
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
-      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DLP</div></div>
+      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DLP / HW</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, projected_hardware_rows)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows)}</div>
     """
 
 
