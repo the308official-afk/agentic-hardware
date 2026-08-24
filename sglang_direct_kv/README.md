@@ -303,7 +303,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F19 | Real DeepAgents/SWE-bench tool gaps can be much shorter than the software prefetch path. | Milestone 22 bigger live run captured `12` real tool gaps across `4` SWE-bench tasks, with average gap about `11.5 ms` and max gap about `14.1 ms`. Milestone 23 live prefetch smoke matched `2` live prefetch attempts, but they took about `438 ms` and `498 ms`, with average prefetch margin about `-471 ms` and `0 / 2` finishing before resume. | This is a strong early live-traffic finding: the runtime can see useful tool-call hints, but the normal software/controller/SGLang request path is far too slow for very short resume windows. | Need a deadline-aware, hint-aware hardware/runtime path that can act on agent context quickly and predictably, instead of routing prefetch through ordinary best-effort serving work. | Strong |
 | F20 | Low 7B tool-call counts were caused by harness/parser/tool-interface issues plus model weakness, not by lack of tool traffic in the workload. | Direct-SGLang debugging found three issues: Qwen2.5 needed `--tool-call-parser qwen25`, DeepAgents tools see the repo at `/` rather than the host checkout path, and the 7B model sometimes emits unsafe empty-string `edit_file` calls. After fixes, a 4-task run produced `93` real task model requests, `49` structured tool calls, `44` trajectory prompts, and `0` prose-only tool-intent misses. | The direct SGLang path is now useful for live tool-gap/KV experiments. The remaining gap versus prior 30B/40B runs is mostly model capability and batch size. | Keep the parser/root/safe-edit safeguards on for A10G 7B runs; use Qwen3-Coder 30B/40B-class models on compatible GPUs for manager-grade SWE-bench tool diversity. | Strong |
 | F21 | Full live paired AgentBench traffic shows software prefetch usually misses the real tool-gap deadline. | Milestone 24 ran `START_INDEX=0`, `END_INDEX=15`, `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10` twice: no-prefetch captured `267` analyzed live requests and `127` tool gaps; live-prefetch captured `254` analyzed live requests and `114` tool gaps. The live-prefetch run submitted `117` hints, matched `114` prefetch attempts, but only `2 / 114` finished before resume. Average tool gap was about `19.9 ms`, while average prefetch request duration was about `629.5 ms`; `112 / 114` attempts were late. | This is the strongest live-system evidence so far: the runtime can observe the agent/tool context, but the ordinary software/controller/SGLang request path is much slower than the real resume window. The paired run was slower on average by about `130 ms`, with `105` slower pairs and only `9` faster pairs. | Need a hint-aware, deadline-aware prefetch/migration path that does not compete as an ordinary best-effort request, plus residency protection and telemetry to make useful prefetch enforceable. | Strong |
-| F22 | Software-only priority can reduce prefetch lateness but still hurt replay latency. | Latest Milestone 38 rerun compared `no_prefetch`, `direct_prefetch`, and `deadline_priority_prefetch` on 12 bursty synthetic sessions. `deadline_priority_prefetch` reduced average prefetch miss from about `68.8 s` in `direct_prefetch` to about `19.0 s`, but replay TTFT was worse: about `17.3 s` vs `7.7 s` for `no_prefetch` and `6.7 s` for `direct_prefetch`. | Simply moving an urgent prefetch/replay to the front in software is not enough if the prefetch path itself is long and serialized. Priority must be cheap, predictable, and close to the memory movement path. | Need a lower-overhead deadline-aware KV movement path below the ordinary software request queue, with priority-aware migration, residency protection, and progress telemetry. | Strong |
+| F22 | Software queue tricks are not the clean main story. | A previous priority-style software experiment reduced some prefetch lateness but increased replay latency because the prefetch path still went through expensive software/runtime work. | Simply moving urgent prefetch/replay work around in software is not enough if the path itself is long and serialized. The useful manager-facing comparison is now: no prefetch, direct software prefetch, and projected hardware bypass. | Need a lower-overhead agent-aware KV movement path below the ordinary software request queue, with priority-aware migration, residency protection, and progress telemetry. | Strong |
 
 Current strongest claim:
 
@@ -6341,18 +6341,17 @@ Important design choice:
 ```text
 This milestone avoids old prompt-based request warming.
 
-Allowed modes:
+Main modes:
   no_prefetch
   direct_prefetch
-  deadline_priority_prefetch
+  projected_hardware_bypass
 
 direct_prefetch uses the direct SGLang KV load-back trigger path. It does not
 try to warm the cache by asking SGLang to generate from a duplicate prompt.
 
-deadline_priority_prefetch uses the same direct SGLang KV load-back trigger,
-but the driver reserves the deadline window by holding low-priority filler
-traffic while the urgent hint/replay path gets a cleaner software lane. This
-emulates a deadline-aware, priority-aware hardware/runtime prefetch path.
+projected_hardware_bypass is not a measured SGLang mode. The report computes it
+from measured H2D duration and asks: if a low-overhead hardware KV movement path
+could start earlier during tool wait, would KV have been ready before replay?
 ```
 
 Main run command:
@@ -6513,21 +6512,21 @@ bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-### Milestone 38: Deadline-Priority Direct Prefetch Emulation
+### Milestone 38: Direct Prefetch vs Projected Hardware
 
 Why this milestone is needed:
 
 ```text
-So far, most prefetch attempts are best-effort. The runtime issues a useful
-hint, but that hint still competes with ordinary serving work, filler traffic,
-decode, cache lookup, and KV movement.
+We want the main manager-facing comparison to stay simple:
 
-This milestone asks:
-  what if urgent agentic KV prefetch got priority over low-value background
-  traffic near the replay deadline?
+  1. What happens with no prefetch?
+  2. What happens when software uses our direct SGLang KV prefetch hook?
+  3. What might happen if a low-overhead hardware KV movement path could do the
+     same useful copy earlier and more predictably?
 
-That is the software emulation of the hardware idea:
-  "prefetch KV for this soon-resuming agent first."
+This avoids the older deadline-priority software mode in the main report. That
+mode taught us that software priority tricks can still be expensive, but it is
+not the cleanest main comparison.
 ```
 
 What it compares:
@@ -6541,17 +6540,10 @@ direct_prefetch:
   the direct SGLang KV load-back hook is issued during tool wait.
   it competes normally with filler/background work.
 
-deadline_priority_prefetch:
-  the same direct SGLang KV load-back hook is issued.
-  the hint is issued near the start of the tool wait, not near the end.
-  the hint bypasses the driver's local low-priority concurrency gate.
-  low-priority filler traffic is held until after the replay finishes.
-  replay admission is coupled to the priority prefetch path.
-  after the prefetch finishes, replay bypasses the driver's low-priority queue
-  and is submitted immediately through the reserved path.
-  a short post-replay quiet window is kept before filler traffic resumes.
-  this emulates a deadline-aware prefetch queue / migration lane that tries to
-  make urgent KV resident, protected, and consumed before normal traffic resumes.
+projected_hardware_bypass:
+  not a measured SGLang request.
+  the report estimates when a hardware bypass path could have completed by using
+  the measured KV H2D duration plus a small fixed control overhead.
 ```
 
 Simple meaning:
@@ -6560,35 +6552,31 @@ Simple meaning:
 direct_prefetch says:
   "try to prefetch this KV sometime during the tool wait."
 
-deadline_priority_prefetch says:
-  "this KV is replay-critical, so move it early, put it in a priority lane,
-   pause low-priority background work, admit replay as soon as the KV path is
-   ready, and keep the KV useful until replay consumes it."
+projected_hardware_bypass says:
+  "if the hardware/runtime could move the same KV through a faster lower-overhead
+   path, would the KV have been ready before replay?"
 ```
 
 Timeline model:
 
 ```text
 tool wait starts
--> deadline service starts
--> priority direct KV prefetch runs
--> filler/background requests stay paused
+-> direct prefetch tries to load useful KV through SGLang
 -> replay becomes due
--> if prefetch is ready, replay is admitted immediately
--> if prefetch is not ready, replay waits for that priority prefetch
--> replay consumes the prefetched KV
--> normal filler/background work resumes
+-> replay either uses resident KV, loads KV from host, or recomputes missing KV
+-> report adds a projected hardware row using measured H2D duration
 ```
 
 What this does and does not prove:
 
 ```text
-It does prove whether prioritizing urgent hint work improves deadline margins
-inside our SGLang testbed.
+It does prove what the current software/direct-hook path does in SGLang.
 
-It does not prove that current GPU DMA hardware already has this behavior.
-The point is the opposite: we are emulating the enforcement that future
-hardware/runtime support could make cheaper and more predictable.
+It does not prove the projected hardware row as a measured hardware result.
+That row is a clearly labeled what-if estimate.
+
+The useful comparison is:
+  measured no prefetch vs measured direct prefetch vs projected hardware bypass.
 ```
 
 Main run command:
@@ -6597,10 +6585,10 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_ROOT=artifacts/results/milestone38_deadline_priority_prefetch_$(date +%Y%m%d_%H%M%S) \
+RESULT_ROOT=artifacts/results/milestone38_direct_prefetch_projection_$(date +%Y%m%d_%H%M%S) \
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch deadline_priority_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6609,9 +6597,6 @@ BURST_GAP_MS=400 \
 TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
-PRIORITY_PREFETCH_WINDOW_MS=750 \
-PRIORITY_POST_PREFETCH_QUIET_MS=750 \
-DEADLINE_RESERVE_WINDOW_MS=500 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
@@ -6632,11 +6617,11 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 EXPERIMENT_KIND=multi_session \
-REPORT_LABEL=deadline_priority_prefetch_demo_1 \
+REPORT_LABEL=direct_prefetch_projection_demo_1 \
 PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch deadline_priority_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6645,9 +6630,6 @@ BURST_GAP_MS=400 \
 TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
-PRIORITY_PREFETCH_WINDOW_MS=750 \
-PRIORITY_POST_PREFETCH_QUIET_MS=750 \
-DEADLINE_RESERVE_WINDOW_MS=500 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
@@ -6664,78 +6646,34 @@ bash scripts/run_master_report.sh \
 Important events to observe:
 
 ```text
-m38.deadline_priority_prefetch_lane.start
-  the urgent direct KV hint enters the deadline-priority lane.
-  In this emulation, it bypasses the driver's local low-priority concurrency
-  gate so it can reach SGLang sooner.
-
-m38.deadline_priority_prefetch_lane.end
-  the deadline-priority hint path finished.
-
-m38.deadline_prefetch_deadline.set
-  the driver recorded the replay deadline and decided the hint should be
-  treated as replay-critical work.
-
-m38.deadline_service.start / m38.deadline_service.end
-  the full deadline-critical service window. This includes priority prefetch,
-  temporary residency protection, priority replay admission, and the release
-  back to normal traffic.
-
-m38.deadline_low_priority_fillers.held
-  background filler traffic was paused so it does not flood the SGLang request
-  queue while the urgent prefetch/replay path is active.
-
-m38.deadline_filler_admission.blocked
-  low-priority filler requests were prevented from entering the driver request
-  stream while replay-critical prefetch/replay work had priority.
-
-m38.deadline_low_priority_fillers.released
-  filler traffic was allowed to resume after the high-priority replay path and
-  optional quiet/protection window.
-
-m38.deadline_filler_admission.released
-  low-priority filler requests were allowed back into the request stream.
-
-m38.deadline_residency_protection.start / m38.deadline_residency_protection.end
-  the emulated protection interval. During this period, low-priority filler
-  traffic stays held so the prefetched KV is less likely to be immediately
-  displaced before replay.
-
-m38.deadline_replay_admission.waiting_for_prefetch
-  replay was due, but the priority prefetch had not finished yet. The replay
-  waits for that prefetch instead of racing ahead and triggering its own
-  replay-side load/recompute path.
-
-m38.deadline_replay_admission.start / m38.deadline_replay_admission.end
-  replay entered and exited the reserved replay path. In this emulation it
-  bypasses the driver's normal low-priority request gate.
-
 m27.prefetch.start / m27.prefetch.end
   the direct SGLang KV hook attempt itself.
+
+hicache.load.start / hicache.load.end
+  SGLang-visible host-to-device KV movement.
+
+kv_pool.sample
+  SGLang KV memory-pool residency around replay/prefetch events.
 ```
 
 What to look for in `latest_master_report.html`:
 
 ```text
-Global Prefetch Margin:
-  deadline_priority_prefetch should ideally move more dots above the 0 ms line.
-
-Unified Forensic Stack Timeline:
-  deadline-priority rows should show the direct prefetch and replay path acting
-  as one coordinated service window before ordinary filler pressure resumes.
+Global KV Readiness By Mode:
+  compare no-prefetch replay H2D readiness, direct-prefetch readiness, and the
+  projected hardware bypass estimate.
 
 Grouped Mode Comparison Timeline:
   compare the same task/gap scenario across:
-    Cxx-NP  = no prefetch
-    Cxx-DP  = direct prefetch
-    Cxx-DLP = deadline-priority prefetch
-  This is the easiest view for checking whether the deadline-priority policy
-  changed the timing of prefetch H2D, replay H2D, TTFT, and KV residency for the
-  same workload setup.
+    Cxx-NP = no prefetch
+    Cxx-DP = direct prefetch
+    Cxx-HW = projected hardware bypass
+
+Unified Forensic Stack Timeline:
+  detailed measured evidence for no-prefetch and direct-prefetch rows.
 
 GPU KV Pool Residency:
-  check whether priority helped create useful residency or whether the pool was
-  still too full to keep prefetched KV useful.
+  check whether the KV pool was full or near-full around replay/prefetch events.
 ```
 
 ### Milestone 39: Projected Hardware Bypass Benefit
@@ -6743,7 +6681,7 @@ GPU KV Pool Residency:
 Why this milestone is needed:
 
 ```text
-The deadline-priority software mode is useful, but it is still expensive because
+The direct software prefetch mode is useful, but it is still expensive because
 it goes through SGLang's normal software/runtime path.
 
 This milestone asks:
@@ -6813,10 +6751,10 @@ Fresh run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_ROOT=artifacts/results/milestone38_deadline_priority_prefetch_$(date +%Y%m%d_%H%M%S) \
+RESULT_ROOT=artifacts/results/milestone38_direct_prefetch_projection_$(date +%Y%m%d_%H%M%S) \
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch deadline_priority_prefetch" \
+MODES="no_prefetch direct_prefetch" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6825,9 +6763,6 @@ BURST_GAP_MS=400 \
 TOOL_WAIT_LIST_MS="250 500" \
 PREFETCH_TIMING=early \
 HINT_DELAY_MS=10 \
-PRIORITY_PREFETCH_WINDOW_MS=750 \
-PRIORITY_POST_PREFETCH_QUIET_MS=750 \
-DEADLINE_RESERVE_WINDOW_MS=500 \
 BACKGROUND_FILLERS_PER_SESSION=4 \
 REQUEST_CONCURRENCY=8 \
 SYNTHETIC_PROMPT_TOKENS=4096 \

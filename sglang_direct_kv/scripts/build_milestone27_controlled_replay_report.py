@@ -1499,7 +1499,7 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
     scenario_to_modes: defaultdict[tuple[str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
-        if mode not in {"no_prefetch", "direct_prefetch", "deadline_priority_prefetch"}:
+        if mode not in {"no_prefetch", "direct_prefetch"}:
             continue
         scenario_to_modes[scenario_compare_key(row)][mode] = row
 
@@ -1510,7 +1510,7 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
     ]
     complete_or_partial.sort(key=lambda item: scenario_compare_sort_key(item[0]))
 
-    mode_order = ["no_prefetch", "direct_prefetch", "deadline_priority_prefetch"]
+    mode_order = ["no_prefetch", "direct_prefetch"]
     output: list[dict[str, Any]] = []
     for scenario_idx, (_key, rows_by_mode) in enumerate(complete_or_partial[:max_scenarios]):
         scenario_label = f"C{scenario_idx:02d}"
@@ -1523,8 +1523,7 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
             copied["timeline_label"] = f"{scenario_label}-{mode_short_label(mode)}"
             output.append(copied)
         projection_source = (
-            rows_by_mode.get("deadline_priority_prefetch")
-            or rows_by_mode.get("direct_prefetch")
+            rows_by_mode.get("direct_prefetch")
             or rows_by_mode.get("no_prefetch")
         )
         if projection_source:
@@ -6959,6 +6958,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     max_rows: int,
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
     projected_hardware_rows: list[dict[str, Any]] | None = None,
+    compact_projected_rows: bool = False,
 ) -> str:
     rows = gaps[:max_rows]
     if not rows:
@@ -6978,10 +6978,22 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    row_h = 1200
+    measured_row_h = 1200
+    projected_row_h = 250
     bottom = 116
     plot_w = width - left - right
-    height = top + len(rows) * row_h + bottom
+    row_heights = [
+        projected_row_h
+        if compact_projected_rows and canonical_mode(row.get("mode")) == "projected_hardware_bypass"
+        else measured_row_h
+        for row in rows
+    ]
+    row_starts: list[int] = []
+    cursor_y = top
+    for row_height in row_heights:
+        row_starts.append(cursor_y)
+        cursor_y += row_height
+    height = cursor_y + bottom
     scaled_min = h2d_symlog_value(x_min)
     scaled_max = h2d_symlog_value(x_max)
     main_bar_h = 22
@@ -7217,7 +7229,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         due = as_float(row.get("tool_gap_end_ms"))
         if due is None:
             continue
-        y = top + idx * row_h
+        y = row_starts[idx]
+        row_h = row_heights[idx]
         band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
         label = str(row.get("timeline_label") or f"G{idx:02d}")
         kv_pool_row = kv_pool_by_label.get(label, {})
@@ -7249,10 +7262,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
 
         parts.append(f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" fill="{band}"/>')
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="196" rx="8" fill="#ffffff" opacity="0.38"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="344" rx="8" fill="#fff7ed" opacity="0.42"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f0fdf4" opacity="0.70"/>')
-        parts.append(f'<rect x="{left - 2:.1f}" y="{y + 962:.1f}" width="{plot_w + 4:.1f}" height="160" rx="8" fill="#f8fafc" opacity="0.92"/>')
+        if not (compact_projected_rows and canonical_mode(row.get("mode")) == "projected_hardware_bypass"):
+            parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
+            parts.append(f'<rect x="{left - 2:.1f}" y="{y + 428:.1f}" width="{plot_w + 4:.1f}" height="344" rx="8" fill="#fff7ed" opacity="0.42"/>')
+            parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f0fdf4" opacity="0.70"/>')
+            parts.append(f'<rect x="{left - 2:.1f}" y="{y + 962:.1f}" width="{plot_w + 4:.1f}" height="160" rx="8" fill="#f8fafc" opacity="0.92"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         raw_mode = str(row.get("mode") or "")
@@ -7407,6 +7421,37 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 label_min_w=78.0,
                 font_size=9,
             )
+
+        if compact_projected_rows and is_projected_hardware_row:
+            projected_margin = as_float(row.get("projected_hardware_margin_ms") or row.get("prefetch_margin_ms"))
+            projected_duration = as_float(row.get("projected_hardware_duration_ms") or row.get("direct_kv_h2d_duration_ms"))
+            measured_source = str(row.get("measured_h2d_source") or "measured KV H2D duration")
+            margin_label = (
+                f"projected ready {display_ms(projected_margin)} before replay"
+                if projected_margin is not None and projected_margin >= 0
+                else f"projected late {display_ms(abs(projected_margin))}"
+                if projected_margin is not None
+                else "projected readiness unknown"
+            )
+            margin_color = "#16a34a" if projected_margin is not None and projected_margin >= 0 else "#dc2626"
+            parts.append(
+                f'<text x="{left + 8:.1f}" y="{y + 160:.1f}" font-size="11" font-weight="900" '
+                f'fill="#0f766e">PROJECTED, NOT MEASURED</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8:.1f}" y="{y + 180:.1f}" font-size="10" fill="#475569">'
+                f'Hardware bypass estimate uses {html.escape(measured_source)} plus fixed control overhead; detailed measured SGLang lanes are intentionally hidden.</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8:.1f}" y="{y + 202:.1f}" font-size="11" font-weight="900" '
+                f'fill="{margin_color}">{html.escape(margin_label)}</text>'
+            )
+            if projected_duration is not None:
+                parts.append(
+                    f'<text x="{left + 320:.1f}" y="{y + 202:.1f}" font-size="10" fill="#475569">'
+                    f'projected KV movement duration: {html.escape(display_ms(projected_duration))}</text>'
+                )
+            continue
 
         request_y = y + 100
         request_spans = [
@@ -8386,19 +8431,19 @@ def grouped_mode_comparison_timeline_html(
 ) -> str:
     if not rows:
         return """
-        <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in at least two of: no prefetch, direct prefetch, and deadline priority prefetch.</p>
+        <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in no prefetch and direct prefetch.</p>
         """
     scenario_count = len({str(row.get("comparison_scenario") or "") for row in rows})
     return f"""
-    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, <code>C00-DLP</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, deadline-priority prefetch, and projected hardware bypass.</p>
-    <p class="note">Mode order is always: no prefetch, direct prefetch, deadline priority prefetch, then projected hardware bypass. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead.</p>
+    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, and projected hardware bypass.</p>
+    <p class="note">Mode order is always: no prefetch, direct prefetch, then projected hardware bypass. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
-      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DLP / HW</div></div>
+      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / HW</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, compact_projected_rows=True)}</div>
     """
 
 
@@ -8791,7 +8836,7 @@ def render_html(
     <h3>Mode Summary</h3>
     {table_html(mode_rows)}
     <h3>Grouped Mode Comparison Rows</h3>
-    <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
+    <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-HW</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
     {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
     <h3>Grouped Projected Hardware Bypass Overlay Rows</h3>
     <p class="note">These are projected rows used only for the dashed teal overlay in the grouped comparison timeline. They are not measured events.</p>
