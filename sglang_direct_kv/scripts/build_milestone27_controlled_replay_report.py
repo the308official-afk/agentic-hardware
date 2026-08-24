@@ -102,6 +102,17 @@ def display_mode(mode: Any) -> str:
     return labels.get(canonical_mode(mode), str(mode or "unknown"))
 
 
+def mode_badge_style(mode: Any) -> tuple[str, str]:
+    return {
+        "no_prefetch": ("#334155", "#f1f5f9"),
+        "direct_prefetch": ("#7c3aed", "#f3e8ff"),
+        "priority_direct_prefetch": ("#0891b2", "#ecfeff"),
+        "deadline_priority_prefetch": ("#16a34a", "#dcfce7"),
+        "oracle_direct_load": ("#ea580c", "#ffedd5"),
+        "oracle_prefetch": ("#ea580c", "#ffedd5"),
+    }.get(canonical_mode(mode), ("#475569", "#f8fafc"))
+
+
 def display_verdict(verdict: Any) -> str:
     labels = {
         "no_prefetch_replay_loaded_kv": "No prefetch; replay loaded KV",
@@ -6236,6 +6247,7 @@ def unified_stack_color(kind: str) -> str:
         "recompute": "#c026d3",
         "prefill": "#eab308",
         "decode": "#dc2626",
+        "projected_hardware": "#0f766e",
         "marker": "#475569",
     }.get(kind, "#64748b")
 
@@ -6560,6 +6572,8 @@ def build_unified_per_gap_stack_timeline_svg(
         ("remaining before-token", unified_stack_color("prefill")),
         ("decode", unified_stack_color("decode")),
     ]
+    if projected_hardware_rows:
+        legend.append(("projected hardware ready", unified_stack_color("projected_hardware")))
     for legend_label, color in legend:
         parts.append(f'<rect x="{lx:.1f}" y="{legend_y:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.86"/>')
         parts.append(f'<text x="{lx + 18:.1f}" y="{legend_y + 11:.1f}" font-size="11" fill="#334155">{html.escape(legend_label)}</text>')
@@ -6573,6 +6587,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     all_kv_events: list[dict[str, Any]],
     max_rows: int,
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
+    projected_hardware_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     rows = gaps[:max_rows]
     if not rows:
@@ -6606,6 +6621,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     kv_pool_by_label = {
         str(row.get("row") or ""): row for row in (kv_pool_residency_rows or []) if str(row.get("row") or "")
     }
+    projected_by_label: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for projected in projected_hardware_rows or []:
+        row_label = str(projected.get("row") or "")
+        projection_kind = str(projected.get("hardware_projection") or "")
+        if row_label and projection_kind:
+            projected_by_label[row_label][projection_kind] = projected
 
     def overview_x(value: float) -> float:
         scaled = h2d_symlog_value(value)
@@ -6866,7 +6887,16 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         raw_mode = str(row.get("mode") or "")
         mode_label = display_mode(raw_mode)
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(verdict_label)}</text>')
-        parts.append(f'<text x="16" y="{y + 66:.1f}" font-size="11" font-weight="900" fill="#334155">mode: {html.escape(mode_label)}</text>')
+        mode_fg, mode_bg = mode_badge_style(raw_mode)
+        badge_w = max(96.0, min(240.0, len(mode_label) * 7.0 + 24.0))
+        parts.append(
+            f'<rect x="16" y="{y + 52:.1f}" width="{badge_w:.1f}" height="20" rx="6" '
+            f'fill="{mode_bg}" stroke="{mode_fg}" stroke-width="1.2" opacity="0.98"/>'
+        )
+        parts.append(
+            f'<text x="{16 + badge_w / 2:.1f}" y="{y + 66:.1f}" text-anchor="middle" '
+            f'font-size="10" font-weight="900" fill="{mode_fg}">mode: {html.escape(mode_label)}</text>'
+        )
         parts.append(f'<text x="16" y="{y + 84:.1f}" font-size="10" fill="#475569">fillers {html.escape(case_fillers(row))} | wait {html.escape(str(row.get("tool_gap_ms") or ""))} ms</text>')
         parts.append(
             f'<text x="16" y="{y + 108:.1f}" font-size="10" fill="#475569">'
@@ -7724,6 +7754,13 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         parts.append(f'<text x="{left - 10}" y="{deadline_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">deadline zoom</text>')
         hint_deadline_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
         replay_deadline_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
+        projected_realistic = projected_by_label.get(label, {}).get("realistic")
+        projected_span = None
+        if projected_realistic:
+            projected_start_abs = as_float(projected_realistic.get("projected_hardware_start_ms"))
+            projected_end_abs = as_float(projected_realistic.get("projected_hardware_end_ms"))
+            if projected_start_abs is not None and projected_end_abs is not None and projected_end_abs > projected_start_abs:
+                projected_span = (projected_start_abs - due, projected_end_abs - due)
         useful_span = hint_deadline_span or replay_deadline_span
         useful_kind = "prefetch" if hint_deadline_span else "replay"
         if useful_span is None:
@@ -7755,6 +7792,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 gap_color = "#dc2626"
                 gap_start, gap_end = 0.0, ready_ms
             dz_values = [0.0, start_ms, ready_ms]
+            if projected_span:
+                dz_values.extend(projected_span)
             if first_token is not None:
                 dz_values.append(first_token - due)
             dz_min = min(dz_values)
@@ -7806,6 +7845,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 ("readiness gap", deadline_zoom_title_y + 55),
                 ("useful KV H2D", deadline_zoom_title_y + 94),
             ]
+            if projected_span:
+                deadline_lanes.append(("projected HW", deadline_zoom_title_y + 126))
             for lane_name, lane_y in deadline_lanes:
                 parts.append(f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" font-size="9" font-weight="800" fill="#334155">{html.escape(lane_name)}</text>')
                 parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
@@ -7861,6 +7902,52 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<circle cx="{ready_x:.1f}" cy="{deadline_zoom_title_y + 60:.1f}" r="4.5" fill="{verdict_color}">'
                 f'<title>{html.escape(label)} | KV ready marker: {html.escape(verdict_text)}</title></circle>'
             )
+            if projected_span:
+                projected_start, projected_end = projected_span
+                projected_margin = as_float(projected_realistic.get("projected_hardware_margin_ms")) if projected_realistic else None
+                projected_duration = as_float(projected_realistic.get("projected_hardware_duration_ms")) if projected_realistic else None
+                projected_color = unified_stack_color("projected_hardware")
+                projected_label = short_bar_label(
+                    [
+                        "projected, not measured",
+                        f"ready {display_ms(projected_margin)}" if projected_margin is not None and projected_margin >= 0 else "",
+                        display_ms(projected_duration) if projected_duration is not None else "",
+                    ],
+                    max_chars=52,
+                )
+                px1 = deadline_x(max(dz_min, min(dz_max, projected_start)))
+                px2 = deadline_x(max(dz_min, min(dz_max, projected_end)))
+                pw = max(min_visible_bar_w, px2 - px1)
+                projected_title = (
+                    f"{label} | PROJECTED, NOT MEASURED hardware bypass | realistic projection | "
+                    f"start={display_ms(projected_start)} relative to due | end={display_ms(projected_end)} relative to due | "
+                    f"duration={display_ms(projected_duration) if projected_duration is not None else 'unknown'} | "
+                    f"margin={display_ms(projected_margin) if projected_margin is not None else 'unknown'} | "
+                    f"source={projected_realistic.get('measured_h2d_source', '') if projected_realistic else ''}"
+                )
+                parts.append(
+                    f'<rect x="{px1:.1f}" y="{deadline_zoom_title_y + 115:.1f}" width="{pw:.1f}" height="{main_bar_h:.1f}" '
+                    f'rx="4" fill="#ffffff" stroke="{projected_color}" stroke-width="2" stroke-dasharray="7 5" opacity="0.96">'
+                    f'<title>{html.escape(projected_title)}</title></rect>'
+                )
+                if pw >= 160:
+                    parts.append(
+                        f'<text x="{px1 + pw / 2:.1f}" y="{deadline_zoom_title_y + 129:.1f}" text-anchor="middle" '
+                        f'font-size="9" font-weight="900" fill="{projected_color}">{html.escape(projected_label)}</text>'
+                    )
+                else:
+                    draw_small_bar_callout(
+                        parts,
+                        px1,
+                        px1 + pw,
+                        deadline_zoom_title_y + 115,
+                        main_bar_h,
+                        projected_label,
+                        projected_title,
+                        projected_color,
+                        fill_color="#f0fdfa",
+                        text_color="#115e59",
+                    )
 
         verdict_y = y + row_h - 28
         verdict = str(row.get("lifecycle_verdict") or row.get("final_path") or row.get("per_gap_verdict") or "")
@@ -7901,6 +7988,7 @@ def grouped_mode_comparison_timeline_html(
     rows: list[dict[str, Any]],
     all_kv_events: list[dict[str, Any]],
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
+    projected_hardware_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not rows:
         return """
@@ -7910,13 +7998,14 @@ def grouped_mode_comparison_timeline_html(
     return f"""
     <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> are the same task/gap setup shown under no prefetch, direct prefetch, and deadline-priority prefetch.</p>
     <p class="note">Mode order is always: no prefetch, direct prefetch, deadline priority prefetch. This makes it easier to compare whether the deadline-aware policy changed when KV movement happened, whether replay still loaded KV, and whether TTFT improved.</p>
+    <p class="note">The teal dashed marker in each row is a <strong>projected hardware bypass overlay</strong>, not a measured event. It estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead.</p>
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
       <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DLP</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, projected_hardware_rows)}</div>
     """
 
 
@@ -8046,6 +8135,7 @@ def render_html(
     ]
     grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
+    grouped_hardware_projection_rows = projected_hardware_bypass_rows(grouped_comparison_rows)
     replay_h2d_readiness_table_rows = replay_h2d_readiness_rows(gaps)
     replay_h2d_readiness_bucket_table_rows = replay_h2d_readiness_bucket_rows(replay_h2d_readiness_table_rows)
     replay_queue_table_rows = replay_queue_timing_rows(gaps)
@@ -8225,7 +8315,7 @@ def render_html(
 
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
     <summary><h2>Grouped Mode Comparison Timeline</h2></summary>
-    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows)}
+    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows)}
   </details>
 
   {live_section}
@@ -8302,6 +8392,9 @@ def render_html(
     <h3>Grouped Mode Comparison Rows</h3>
     <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
     {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
+    <h3>Grouped Projected Hardware Bypass Overlay Rows</h3>
+    <p class="note">These are projected rows used only for the dashed teal overlay in the grouped comparison timeline. They are not measured events.</p>
+    {table_html(grouped_hardware_projection_rows, limit=1000)}
     <h3>Replay Path Proof Rows</h3>
     {table_html(replay_path_proof_rows(ledger), limit=250)}
     <h3>Replay Attribution Rows</h3>
