@@ -7608,20 +7608,6 @@ def grouped_mode_comparison_timeline_html(
         <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in at least two of: no prefetch, direct prefetch, and deadline priority prefetch.</p>
         """
     scenario_count = len({str(row.get("comparison_scenario") or "") for row in rows})
-    row_map_columns = [
-        "scenario",
-        "row",
-        "mode",
-        "task",
-        "gap",
-        "tool_wait_ms",
-        "prefetch_margin_ms",
-        "hint_h2d_events",
-        "replay_h2d_events",
-        "resume_ttft_ms",
-        "verdict",
-        "lifecycle",
-    ]
     return f"""
     <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> are the same task/gap setup shown under no prefetch, direct prefetch, and deadline-priority prefetch.</p>
     <p class="note">Mode order is always: no prefetch, direct prefetch, deadline priority prefetch. This makes it easier to compare whether the deadline-aware policy changed when KV movement happened, whether replay still loaded KV, and whether TTFT improved.</p>
@@ -7630,9 +7616,7 @@ def grouped_mode_comparison_timeline_html(
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
       <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DLP</div></div>
     </div>
-    <h3>Scenario Row Map</h3>
-    {table_html(mode_comparison_summary_rows(rows), row_map_columns, limit=120)}
-    <h3>Grouped Forensic Timeline</h3>
+    <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows)}</div>
     """
 
@@ -8002,6 +7986,9 @@ def render_html(
     {table_html(h2d_contention_event_table_rows, limit=2000)}
     <h3>Mode Summary</h3>
     {table_html(mode_rows)}
+    <h3>Grouped Mode Comparison Rows</h3>
+    <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-DLP</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
+    {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
     <h3>Replay Path Proof Rows</h3>
     {table_html(replay_path_proof_rows(ledger), limit=250)}
     <h3>Replay Attribution Rows</h3>
