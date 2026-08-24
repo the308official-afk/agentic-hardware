@@ -128,6 +128,8 @@ These are the current core claims we can safely make from the testbed so far:
 
 6. Current GPU DMA/copy engines can move memory efficiently, but they are mostly blind to agent context. They do not know that a transfer is urgent KV for a session expected to resume soon. A deadline-aware, agent-aware DMA path could prioritize the right KV transfers, throttle lower-priority movement, and expose whether the KV became resident before replay. This can reduce replay stalls and improve tail latency for tool-heavy agentic workloads.
 
+7. We are not proposing generic prefetch. We are proposing an agent-aware KV movement path where the runtime provides deadline and priority hints, and the GPU memory/copy subsystem enforces them. The DMA engine becomes aware that some copies are urgent replay-critical KV, while others are background movement. This should reduce late KV loads, wasted prefetches, replay-side reloads, and TTFT tail latency in coding-agent/SWE-bench-style workloads.
+
 Latest harsher controlled run:
 
 ```text
