@@ -59,6 +59,14 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
 | Milestone 38: Priority-Aware Direct Prefetch Emulation | Ready | [Milestone 38](#milestone-38-priority-aware-direct-prefetch-emulation) |
 
+## Milestone Run Command Convention
+
+Each new milestone section should include a `Main run command` block.
+That block is the command a colleague should run first to reproduce the milestone.
+
+If a milestone has extra smoke tests or alternate workflows, those can appear after
+the main command, but the `Main run command` should remain the primary handoff path.
+
 ## What We Are Testing
 
 Agentic workloads naturally create wait windows:
@@ -6339,7 +6347,7 @@ gets a reserved software lane. This emulates a priority-aware hardware/runtime
 prefetch path.
 ```
 
-Run through the master-report script:
+Main run command:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -6465,6 +6473,38 @@ It tells us how SGLang's KV cache pool looked when replay/prefetch/H2D events
 were happening.
 ```
 
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+AGENTIC_KV_TRACE_KV_POOL=1 \
+EXPERIMENT_KIND=multi_session \
+REPORT_LABEL=gpu_kv_pool_residency_1 \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+WORKLOAD_SOURCE=synthetic \
+SESSION_COUNT=8 \
+MODES="no_prefetch direct_prefetch" \
+ARRIVAL_SHAPE=burst \
+ARRIVAL_GAP_MS=40 \
+BURST_SIZE=4 \
+TOOL_WAIT_LIST_MS="250 500" \
+PREFETCH_TIMING=early \
+HINT_DELAY_MS=20 \
+BACKGROUND_FILLERS_PER_SESSION=2 \
+REQUEST_CONCURRENCY=4 \
+TARGET_PROMPT_TOKENS=4096 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+MAX_TIMELINE_GAPS=16 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 ### Milestone 38: Priority-Aware Direct Prefetch Emulation
 
 Why this milestone is needed:
@@ -6510,7 +6550,7 @@ The point is the opposite: we are emulating the enforcement that future
 hardware/runtime support could make cheaper and more predictable.
 ```
 
-Run the three-way priority experiment:
+Main run command:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
