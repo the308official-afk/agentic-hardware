@@ -631,6 +631,84 @@ function buildOverviewSlide(p) {
   slide.speakerNotes.textFrame.setText("[Sources]\n- User request to narrow to KV cache handling, scheduling handling, and worker selection handling.\n");
 }
 
+const definitionSections = [
+  {
+    title: "Scheduling signals in simple English",
+    subtitle: "These hints help the serving system decide when a request should run and how much capacity it may need.",
+    items: [
+      ["priority", "Tells the serving system how important a request is. Higher-priority requests may be run before lower-priority ones."],
+      ["latency_sensitivity", "Tells the system how much the request cares about speed. A highly latency-sensitive request should avoid waiting if possible."],
+      ["osl", "Usually means output sequence length or expected output length. It tells the system roughly how many tokens the model may generate, so the scheduler can plan capacity."],
+      ["prefix_id", "A label for a shared prompt prefix or workflow. If multiple requests share the same beginning, this helps the system reuse cached KV state."],
+      ["total_requests", "A hint about how many related requests are expected in the workflow. This helps the system predict future load."],
+      ["iat", "Usually means inter-arrival time. It hints how much time may pass between related requests, helping the scheduler anticipate bursts or gaps."]
+    ]
+  },
+  {
+    title: "KV and cache signals in simple English",
+    subtitle: "These hints help the serving system decide what prompt or KV work can be reused and how cache entries should be separated or retained.",
+    items: [
+      ["prompt_cache_key", "A stable key for identifying a reusable prompt prefix. If the same key appears again, the system may reuse cached prompt/KV work."],
+      ["cache_control", "Instructions about how cache should behave. For example: whether to cache, how long to keep it, or what kind of cache entry it is."],
+      ["cache_salt", "A namespace separator for cache entries. It prevents two users, tenants, or workloads from accidentally sharing the same cache entry even if their prompt text looks similar."],
+      ["speculative_prefill", "A hint to prepare or precompute part of the prompt before it is definitely needed. It can reduce latency if the prediction is right."]
+    ]
+  },
+  {
+    title: "Routing and worker signals in simple English",
+    subtitle: "These hints affect where the request goes and which worker performs each part of inference.",
+    items: [
+      ["backend_instance_id", "Directly asks for a specific backend server or model instance to handle the request."],
+      ["prefill_worker_id", "Chooses the worker that should run the prefill phase, where the prompt is processed and KV cache is built."],
+      ["decode_worker_id", "Chooses the worker that should run the decode phase, where output tokens are generated."],
+      ["dp_rank", "Means data-parallel rank. It identifies a specific replica or shard among multiple parallel workers."]
+    ]
+  },
+  {
+    title: "Affinity identity signals in simple English",
+    subtitle: "These identifiers help keep related requests connected for routing, reuse, or tracing.",
+    items: [
+      ["session_id", "A stable ID for a conversation or workflow session. It helps keep related requests together."],
+      ["parent_session_id", "Links a session to a parent session. Useful when one agent or workflow spawns another."],
+      ["prefix_id", "Identifies a shared reusable prefix. In affinity context, it helps route related requests toward cache reuse."],
+      ["traceparent", "A standard tracing header. It helps observability systems connect one request to the larger distributed trace it belongs to."]
+    ]
+  }
+];
+
+function buildDefinitionSlide(p, section, slideNumber) {
+  const slide = p.slides.add();
+  slide.background.fill = C.white;
+  addText(slide, section.title, 56, 42, 1500, 56, { size: 38, bold: true });
+  addText(slide, section.subtitle, 56, 104, 1540, 38, { size: 22, color: C.sub });
+  slide.shapes.add({
+    geometry: "straightConnector1",
+    position: { left: 56, top: 158, width: 1806, height: 0 },
+    fill: "none",
+    line: { style: "solid", fill: C.rule, width: 1 },
+  });
+
+  const top = 190;
+  const left = 72;
+  const tableW = 1776;
+  const headerH = 50;
+  const rowH = Math.floor(740 / section.items.length);
+  const signalW = 350;
+  addRect(slide, left, top, tableW, headerH, C.head, C.grid, 1);
+  addText(slide, "Signal", left + 14, top + 13, signalW - 28, 24, { size: 18, bold: true });
+  addText(slide, "Meaning", left + signalW + 14, top + 13, tableW - signalW - 28, 24, { size: 18, bold: true });
+
+  section.items.forEach((item, i) => {
+    const y = top + headerH + i * rowH;
+    addRect(slide, left, y, tableW, rowH, i % 2 === 0 ? C.white : C.alt, C.grid, 1);
+    addText(slide, item[0], left + 14, y + 14, signalW - 28, rowH - 22, { size: 19, bold: true, font: "Courier New" });
+    addText(slide, item[1], left + signalW + 14, y + 12, tableW - signalW - 28, rowH - 22, { size: 20, color: C.ink });
+  });
+
+  addDeckFooter(slide, slideNumber, "Simple-English definitions generated from the focused signal overview.");
+  slide.speakerNotes.textFrame.setText("[Sources]\n- User request to explain the focused serving-plane signals in simple English.\n");
+}
+
 function buildSchemaSlide(p, slideNumber) {
   const slide = p.slides.add();
   slide.background.fill = C.white;
@@ -751,8 +829,10 @@ async function main() {
   const p = Presentation.create({ slideSize: { width: W, height: H } });
   buildLegendSlide(p);
   buildOverviewSlide(p);
-  focusedSlides.forEach((entry, i) => buildSlide(p, entry.spec, i + 3, entry.source));
-  buildSchemaSlide(p, focusedSlides.length + 3);
+  definitionSections.forEach((section, i) => buildDefinitionSlide(p, section, i + 3));
+  const tableStart = 3 + definitionSections.length;
+  focusedSlides.forEach((entry, i) => buildSlide(p, entry.spec, tableStart + i, entry.source));
+  buildSchemaSlide(p, tableStart + focusedSlides.length);
 
   for (const [index, slide] of p.slides.items.entries()) {
     const stem = `slide-${String(index + 1).padStart(2, "0")}`;
