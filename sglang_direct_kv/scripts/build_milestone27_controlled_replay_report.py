@@ -67,7 +67,6 @@ from replay_path_classifier import (
 
 PREFETCH_MODE_NAMES = {
     "direct_prefetch",
-    "dynamo_priority_hints",
     "priority_direct_prefetch",
     "deadline_priority_prefetch",
 }
@@ -102,8 +101,8 @@ def canonical_mode(mode: Any) -> str:
 def display_mode(mode: Any) -> str:
     labels = {
         "no_prefetch": "No prefetch",
-        "direct_prefetch": "Dynamo-like direct prefetch",
-        "dynamo_priority_hints": "Dynamo priority hints",
+        "direct_prefetch": "Direct prefetch",
+        "dynamo_priority_hints": "Dynamo priority hints only",
         "priority_direct_prefetch": "Priority direct prefetch",
         "deadline_priority_prefetch": "Deadline priority prefetch",
         "projected_hardware_bypass": "Projected hardware bypass",
@@ -162,6 +161,14 @@ def display_verdict(verdict: Any) -> str:
         "prefetch_missing_or_unfinished": "Prefetch missing or unfinished",
         "PROJECTED HARDWARE - not measured": "Projected hardware - not measured",
         "projected_hardware_bypass": "Projected hardware bypass",
+        "true_kv_prefetch_success": "True KV prefetch success",
+        "hint_completed_early_but_no_kv_load_seen": "Hint early, but no KV load seen",
+        "hint_completed_early_but_replay_recomputed": "Hint early, but replay recomputed",
+        "hint_loaded_kv_but_evicted_before_replay": "Hint loaded KV, but residency was lost",
+        "hint_loaded_kv_but_replay_reloaded": "Hint loaded KV, but replay reloaded KV",
+        "hint_late": "Hint late",
+        "no_reuse_evidence": "No strong reuse evidence",
+        "no_prefetch_baseline": "No prefetch baseline",
     }
     return labels.get(str(verdict or ""), str(verdict or "unknown"))
 
@@ -191,6 +198,140 @@ def has_events(value: Any) -> bool:
         return int(value or 0) > 0
     except (TypeError, ValueError):
         return False
+
+
+def replay_recompute_seen(row: dict[str, Any]) -> bool:
+    """Return true when replay did visible prefill/recompute work after the hint."""
+    for key in (
+        "replay_runtime_prefill_attributed_tokens",
+        "replay_new_prefill_tokens_est",
+        "recomputed_tokens_est",
+        "replay_prefill_recompute_event_count",
+    ):
+        value = as_float(row.get(key))
+        if value is not None and value > 0:
+            return True
+    path = str(row.get("replay_path") or replay_path_from_evidence(row))
+    return path == "replay prefill/recompute path suspected"
+
+
+def prefetch_truth_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Classify useful KV prefetch more strictly than request-completion timing."""
+    mode = canonical_mode(row.get("mode"))
+    if mode == "no_prefetch":
+        return {
+            "prefetch_truth_verdict": "no_prefetch_baseline",
+            "prefetch_truth_short_label": "NO PREFETCH",
+            "prefetch_truth_explanation": "No prefetch hint was issued for this baseline row.",
+            "prefetch_truth_confidence": "exact",
+            "hint_completed_before_replay": "",
+            "hint_h2d_seen": "",
+            "replay_reloaded_after_hint": "",
+            "replay_recomputed_after_hint": "",
+            "true_kv_prefetch_success": "",
+        }
+    if mode == "projected_hardware_bypass":
+        return {
+            "prefetch_truth_verdict": "projected_hardware_bypass",
+            "prefetch_truth_short_label": "PROJECTED, NOT MEASURED",
+            "prefetch_truth_explanation": "This is a projected hardware counterfactual, not a measured SGLang prefetch outcome.",
+            "prefetch_truth_confidence": "projected",
+            "hint_completed_before_replay": "",
+            "hint_h2d_seen": "",
+            "replay_reloaded_after_hint": "",
+            "replay_recomputed_after_hint": "",
+            "true_kv_prefetch_success": "",
+        }
+    if mode == "dynamo_priority_hints":
+        return {
+            "prefetch_truth_verdict": "priority_hints_only_no_direct_prefetch",
+            "prefetch_truth_short_label": "PRIORITY HINTS ONLY",
+            "prefetch_truth_explanation": (
+                "This mode sends Dynamo-style priority metadata and an SGLang priority value, "
+                "but it does not issue the direct KV prefetch hook."
+            ),
+            "prefetch_truth_confidence": "exact_driver_mode",
+            "hint_completed_before_replay": "",
+            "hint_h2d_seen": "",
+            "replay_reloaded_after_hint": "",
+            "replay_recomputed_after_hint": "",
+            "true_kv_prefetch_success": "",
+        }
+
+    margin = as_float(row.get("prefetch_margin_ms"))
+    hint_completed = margin is not None
+    hint_early = bool(margin is not None and margin >= 0)
+    hint_h2d = has_events(row.get("direct_kv_h2d_events")) or has_events(row.get("lifecycle_hint_h2d_tokens"))
+    replay_h2d = has_events(row.get("replay_kv_h2d_events")) or has_events(row.get("lifecycle_replay_h2d_tokens"))
+    replay_recompute = replay_recompute_seen(row)
+    lifecycle = str(row.get("lifecycle_verdict") or "")
+    host_lost = "host_evicted" in lifecycle or "missing" in lifecycle
+    gpu_evicted_no_load = "gpu_evicted_no_replay_load" in lifecycle
+
+    if not hint_completed:
+        verdict = "no_reuse_evidence"
+        label = "NO COMPLETED HINT"
+        explanation = "The trace did not show the hint request finishing, so we cannot claim useful prefetch."
+        confidence = "exact"
+        success = 0
+    elif not hint_early:
+        verdict = "hint_late"
+        label = "HINT LATE"
+        explanation = f"The hint request finished {abs(margin):.1f} ms after replay was due."
+        confidence = "exact"
+        success = 0
+    elif hint_h2d and (host_lost or gpu_evicted_no_load):
+        verdict = "hint_loaded_kv_but_evicted_before_replay"
+        label = "HINT LOADED; RESIDENCY LOST"
+        explanation = "The hint loaded KV, but lifecycle evidence says useful residency was lost before replay could use it."
+        confidence = "direct_lifecycle_evidence"
+        success = 0
+    elif hint_h2d and replay_h2d:
+        verdict = "hint_loaded_kv_but_replay_reloaded"
+        label = "HINT LOADED; REPLAY RELOADED"
+        explanation = "The hint loaded KV, but replay still performed host-to-device KV loading, so reuse was not proven."
+        confidence = "direct_h2d_evidence"
+        success = 0
+    elif hint_early and replay_recompute:
+        verdict = "hint_completed_early_but_replay_recomputed"
+        label = "HINT EARLY; REPLAY RECOMPUTED"
+        explanation = "The hint request completed before replay, but replay still did prefill/recompute work."
+        confidence = "direct_or_estimated_replay_prefill_evidence"
+        success = 0
+    elif hint_early and not hint_h2d:
+        verdict = "hint_completed_early_but_no_kv_load_seen"
+        label = "HINT EARLY; NO KV LOAD SEEN"
+        explanation = "The hint request completed before replay, but no hint-side host-to-device KV movement was observed."
+        confidence = "exact_request_timing_no_h2d_evidence"
+        success = 0
+    elif hint_early and hint_h2d and not replay_h2d and not replay_recompute:
+        verdict = "true_kv_prefetch_success"
+        label = "TRUE KV PREFETCH"
+        explanation = "The hint loaded KV before replay, and replay showed no reload/recompute evidence for that row."
+        confidence = "strong_direct_evidence"
+        success = 1
+    else:
+        verdict = "no_reuse_evidence"
+        label = "NO STRONG REUSE EVIDENCE"
+        explanation = "The trace is not strong enough to prove that the hinted KV became useful replay residency."
+        confidence = "insufficient"
+        success = 0
+
+    return {
+        "prefetch_truth_verdict": verdict,
+        "prefetch_truth_short_label": label,
+        "prefetch_truth_explanation": explanation,
+        "prefetch_truth_confidence": confidence,
+        "hint_completed_before_replay": 1 if hint_early else 0 if hint_completed else "",
+        "hint_h2d_seen": 1 if hint_h2d else 0,
+        "replay_reloaded_after_hint": 1 if replay_h2d else 0,
+        "replay_recomputed_after_hint": 1 if replay_recompute else 0,
+        "true_kv_prefetch_success": success,
+    }
+
+
+def attach_prefetch_truth_fields(row: dict[str, Any]) -> None:
+    row.update(prefetch_truth_fields(row))
 
 
 def replay_path(row: dict[str, Any]) -> str:
@@ -1333,6 +1474,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             gap["movement_class"] = "no visible HtoD"
         gap["replay_path"] = replay_path_from_evidence(gap)
         gap["per_gap_verdict"] = per_gap_verdict(gap)
+        attach_prefetch_truth_fields(gap)
         attach_replay_path_fields(gap)
         gaps.append(gap)
     return gaps, trace_rows
@@ -1348,6 +1490,7 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         replay_ttfts = [float(row["resume_ttft_ms"]) for row in items if row.get("resume_ttft_ms") not in ("", None)]
         replay_paths = [str(row.get("replay_path") or replay_path_from_evidence(row)) for row in items]
         verdicts = [str(row.get("per_gap_verdict") or per_gap_verdict(row)) for row in items]
+        truth_verdicts = [str(row.get("prefetch_truth_verdict") or "") for row in items if row.get("prefetch_truth_verdict")]
         rows.append(
             {
                 "mode": mode,
@@ -1363,10 +1506,102 @@ def mode_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "likely_cache_hit_or_resident_gaps": replay_paths.count("likely cache hit/resident"),
                 "mostly_cache_hit_or_resident_gaps": replay_paths.count("mostly cache hit/resident"),
+                "true_kv_prefetch_successes": sum(
+                    1 for row in items if str(row.get("true_kv_prefetch_success") or "") == "1"
+                ),
+                "hint_completed_before_replay": sum(
+                    1 for row in items if str(row.get("hint_completed_before_replay") or "") == "1"
+                ),
                 "verdicts": ", ".join(f"{name}:{count}" for name, count in sorted(Counter(verdicts).items())),
+                "prefetch_truth_verdicts": ", ".join(
+                    f"{name}:{count}" for name, count in sorted(Counter(truth_verdicts).items())
+                ),
             }
         )
     return rows
+
+
+def prefetch_truth_table_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(timeline_rows_with_labels(selected_timeline_gaps(gaps, len(gaps)))):
+        mode = canonical_mode(row.get("mode"))
+        if mode == "projected_hardware_bypass":
+            continue
+        rows.append(
+            {
+                "row": row.get("timeline_label") or f"G{idx:02d}",
+                "mode_key": mode,
+                "mode": display_mode(mode),
+                "case_id": row.get("case_id", ""),
+                "session_id": row.get("session_id", ""),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "fillers": case_fillers(row),
+                "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "hint_completed_before_replay": row.get("hint_completed_before_replay", ""),
+                "hint_h2d_seen": row.get("hint_h2d_seen", ""),
+                "replay_reloaded_after_hint": row.get("replay_reloaded_after_hint", ""),
+                "replay_recomputed_after_hint": row.get("replay_recomputed_after_hint", ""),
+                "true_kv_prefetch_success": row.get("true_kv_prefetch_success", ""),
+                "prefetch_truth_verdict": row.get("prefetch_truth_verdict", ""),
+                "prefetch_truth_explanation": row.get("prefetch_truth_explanation", ""),
+                "prefetch_truth_confidence": row.get("prefetch_truth_confidence", ""),
+                "direct_kv_h2d_events": row.get("direct_kv_h2d_events", ""),
+                "replay_kv_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "replay_runtime_prefill_attributed_tokens": row.get("replay_runtime_prefill_attributed_tokens", ""),
+                "lifecycle_verdict": row.get("lifecycle_verdict", ""),
+            }
+        )
+    return rows
+
+
+def prefetch_truth_summary_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = prefetch_truth_table_rows(gaps)
+    by_mode: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_mode[str(row.get("mode") or "")].append(row)
+    output: list[dict[str, Any]] = []
+    for mode, items in sorted(by_mode.items()):
+        verdicts = Counter(str(row.get("prefetch_truth_verdict") or "") for row in items)
+        attempts = [row for row in items if row.get("prefetch_margin_ms") not in ("", None)]
+        true_successes = sum(1 for row in items if str(row.get("true_kv_prefetch_success") or "") == "1")
+        output.append(
+            {
+                "mode": mode,
+                "rows": len(items),
+                "prefetch_attempts": len(attempts),
+                "hint_completed_before_replay": sum(
+                    1 for row in items if str(row.get("hint_completed_before_replay") or "") == "1"
+                ),
+                "true_kv_prefetch_successes": true_successes,
+                "true_success_pct": round(true_successes * 100.0 / len(attempts), 2) if attempts else "",
+                "truth_verdicts": ", ".join(f"{name}:{count}" for name, count in sorted(verdicts.items()) if name),
+            }
+        )
+    return output
+
+
+def prefetch_truth_metric_cards(gaps: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    rows = [
+        row
+        for row in prefetch_truth_table_rows(gaps)
+        if str(row.get("mode_key") or "") != "no_prefetch"
+    ]
+    attempts = [row for row in rows if row.get("prefetch_margin_ms") not in ("", None)]
+    early = [row for row in rows if str(row.get("hint_completed_before_replay") or "") == "1"]
+    successes = [row for row in rows if str(row.get("true_kv_prefetch_success") or "") == "1"]
+    replay_reloaded = [row for row in rows if str(row.get("replay_reloaded_after_hint") or "") == "1"]
+    replay_recomputed = [row for row in rows if str(row.get("replay_recomputed_after_hint") or "") == "1"]
+    early_not_proven = max(0, len(early) - len(successes))
+    return [
+        ("prefetch attempts", str(len(attempts)), "Measured software hint/direct-load attempts"),
+        ("hints finished before replay", str(len(early)), "The purple path completed before the replay deadline"),
+        ("true KV prefetch successes", str(len(successes)), "Strict successes with useful KV residency/reuse evidence"),
+        ("early but not proven useful", str(early_not_proven), "Hint finished early, but replay still reloaded/recomputed or no KV load was seen"),
+        ("replay reloaded after hint", str(len(replay_reloaded)), "Replay still performed KV H2D after a prefetch-mode hint"),
+        ("replay recomputed after hint", str(len(replay_recomputed)), "Replay still did prefill/recompute work after a prefetch-mode hint"),
+    ]
 
 
 def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
@@ -2530,6 +2765,19 @@ def request_id_coverage_rows(trace_rows: list[dict[str, Any]]) -> list[dict[str,
 
 def observation_status(row: dict[str, Any]) -> tuple[str, str]:
     mode = canonical_mode(row.get("mode"))
+    truth = str(row.get("prefetch_truth_verdict") or "")
+    if mode in PREFETCH_MODE_NAMES and truth:
+        truth_styles = {
+            "true_kv_prefetch_success": ("True KV prefetch success", "#166534"),
+            "hint_completed_early_but_no_kv_load_seen": ("Hint early; no KV load seen", "#b45309"),
+            "hint_completed_early_but_replay_recomputed": ("Hint early; replay recomputed", "#b45309"),
+            "hint_loaded_kv_but_evicted_before_replay": ("Hint loaded; residency lost", "#b91c1c"),
+            "hint_loaded_kv_but_replay_reloaded": ("Hint loaded; replay reloaded", "#b45309"),
+            "hint_late": ("Hint late", "#b91c1c"),
+            "no_reuse_evidence": ("No strong reuse evidence", "#64748b"),
+        }
+        if truth in truth_styles:
+            return truth_styles[truth]
     margin = as_float(row.get("prefetch_margin_ms"))
     hint_h2d = has_events(row.get("direct_kv_h2d_events"))
     replay_h2d = has_events(row.get("replay_kv_h2d_events"))
@@ -2569,6 +2817,9 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cache_summary = row.get("replay_cache_path_summary") or ""
         lifecycle_summary = row.get("lifecycle_explanation") or ""
         status, _ = observation_status(row)
+        truth_verdict = str(row.get("prefetch_truth_verdict") or "")
+        truth_label = str(row.get("prefetch_truth_short_label") or "")
+        truth_explanation = str(row.get("prefetch_truth_explanation") or "")
         ttft_note = (
             f" Replay waited {ttft_ms:.0f} ms before first token."
             if ttft_ms is not None
@@ -2630,6 +2881,8 @@ def key_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "resume_ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else "",
                 "replay_path": path,
                 "verdict": verdict,
+                "prefetch_truth": truth_label or display_verdict(truth_verdict),
+                "prefetch_truth_explanation": truth_explanation,
             }
         )
     return output
@@ -2833,9 +3086,9 @@ def timeline_model_table_html() -> str:
         ("Initial model turn", "#2563eb", "First model request before tool wait"),
         ("Tool wait", "#d1d5db", "Agent/tool pause where prefetch could happen"),
         (
-            "Dynamo-like direct prefetch attempt",
+            "Direct prefetch attempt",
             "#a855f7",
-            "Our software baseline sends a priority-style direct KV hint and gives target replay work driver-level priority over filler traffic.",
+            "The software baseline calls our direct SGLang KV load hook during the tool wait. This is separate from Dynamo priority hints.",
         ),
         ("Hint-side KV HtoD", "#16a34a", "Prefetch path actually loaded KV from host to GPU"),
         ("Replay-side KV HtoD", "#06b6d4", "Replay itself loaded KV from host to GPU"),
@@ -3343,8 +3596,8 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     ly = height - 82
     legend_items = [
         ("No prefetch", "no_prefetch"),
-        ("Dynamo-like direct prefetch", "direct_prefetch"),
-        ("Dynamo priority hints", "dynamo_priority_hints"),
+        ("Direct prefetch", "direct_prefetch"),
+        ("Dynamo priority hints only", "dynamo_priority_hints"),
         ("Projected HW bypass", "projected_hardware_bypass"),
     ]
     for label, mode_key in legend_items:
@@ -3362,7 +3615,7 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
         return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
     summary = global_kv_readiness_by_mode_summary_rows(rows)
     return f"""
-    <p>This chart compares the readiness stories directly: no prefetch, measured direct prefetch, measured Dynamo priority hints, and projected hardware bypass.</p>
+    <p>This chart compares the readiness stories directly: no prefetch, measured direct prefetch, measured Dynamo priority hints only, and projected hardware bypass.</p>
     <p class="note">Positive margin means KV became ready before the replay deadline. Negative margin means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
     {table_html(summary, ["mode", "dots", "ready_before_replay_due", "late", "ready_pct", "median_margin_ms", "worst_lateness_ms", "evidence"])}
     <div class="setup-diagram">{build_global_kv_readiness_by_mode_dot_plot(rows)}</div>
@@ -6182,6 +6435,23 @@ def global_readiness_html(gaps: list[dict[str, Any]]) -> str:
     return "\n".join(sections)
 
 
+def prefetch_truth_check_html(gaps: list[dict[str, Any]]) -> str:
+    cards = prefetch_truth_metric_cards(gaps)
+    if not cards:
+        return "<p>No measured prefetch-mode rows were available for this run.</p>"
+    summary_rows = prefetch_truth_summary_rows(gaps)
+    return f"""
+    <p>This section is the guardrail against overclaiming. A purple prefetch bar only means the software hint/direct-load path ran. It does <strong>not</strong> automatically mean the right KV was useful at replay time.</p>
+    <p class="note">A row counts as a true KV prefetch success only when the hint completed before replay, hint-side KV H2D/residency evidence exists, and replay did not reload or recompute the same useful context. Everything else is labeled as an early hint, late hint, replay reload, replay recompute, or insufficient reuse evidence.</p>
+    <div class="metric-grid">
+      {''.join(f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div><div class="metric-value">{html.escape(value)}</div><div class="metric-sub">{html.escape(subtitle)}</div></div>' for label, value, subtitle in cards)}
+    </div>
+    <h3>Truth Verdict Summary</h3>
+    {table_html(summary_rows)}
+    <p class="note">The full per-gap truth table is in <strong>Evidence Tables / Raw Proof</strong> as <code>prefetch_truth_table.csv</code>.</p>
+    """
+
+
 def code_block(text: str) -> str:
     return f"<pre><code>{html.escape(text.strip())}</code></pre>"
 
@@ -6753,9 +7023,9 @@ def unified_stack_legend_table_html() -> str:
             "SGLang receive, scheduler queue/admit, cache lookup, or load-back decision work before useful model/KV work.",
         ),
         (
-            "Dynamo-like direct prefetch attempt",
+            "Direct prefetch attempt",
             unified_stack_color("prefetch"),
-            "The direct SGLang KV load-back hint path with driver-level priority over low-priority filler traffic. This is not a prompt-warming request.",
+            "The direct SGLang KV load-back hook path. This is not prompt warming and is separate from priority-hint-only mode.",
         ),
         (
             "Hint-side KV H2D",
@@ -6921,8 +7191,12 @@ def build_unified_per_gap_stack_timeline_svg(
         status, status_color = observation_status(row)
         parts.append(f'<rect x="0" y="{y - 8:.1f}" width="{width}" height="{row_h - 10}" fill="{band}"/>')
         parts.append(f'<text x="12" y="{y + 14:.1f}" font-size="15" font-weight="800">{html.escape(label)}</text>')
-        verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         raw_mode = str(row.get("mode") or "")
+        truth_label = str(row.get("prefetch_truth_short_label") or "")
+        if canonical_mode(raw_mode) in PREFETCH_MODE_NAMES and truth_label:
+            verdict_label = truth_label
+        else:
+            verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         is_projected_hardware_row = canonical_mode(raw_mode) == "projected_hardware_bypass"
         mode_label = display_mode(raw_mode)
         parts.append(f'<text x="12" y="{y + 34:.1f}" font-size="10" font-weight="800" fill="{status_color}">{html.escape(verdict_label)}</text>')
@@ -7491,8 +7765,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             parts.append(f'<rect x="{left - 2:.1f}" y="{y + 792:.1f}" width="{plot_w + 4:.1f}" height="150" rx="8" fill="#f0fdf4" opacity="0.70"/>')
             parts.append(f'<rect x="{left - 2:.1f}" y="{y + 962:.1f}" width="{plot_w + 4:.1f}" height="160" rx="8" fill="#f8fafc" opacity="0.92"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
-        verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         is_projected_hardware_row = canonical_mode(raw_mode) == "projected_hardware_bypass"
+        truth_label = str(row.get("prefetch_truth_short_label") or "")
+        if canonical_mode(raw_mode) in PREFETCH_MODE_NAMES and truth_label:
+            verdict_label = truth_label
+        else:
+            verdict_label = display_verdict(row.get("per_gap_verdict") or status)
         mode_label = display_mode(raw_mode)
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(verdict_label)}</text>')
         mode_fg, mode_bg = mode_badge_style(raw_mode)
@@ -8670,8 +8948,8 @@ def grouped_mode_comparison_timeline_html(
         )
     mode_key_html = '<div class="toc-pills" style="margin-top:10px;">' + "".join(mode_key_items) + "</div>"
     return f"""
-    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, <code>C00-DH</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, Dynamo priority hints, and projected hardware bypass.</p>
-    <p class="note">Mode order is always: no prefetch, direct prefetch, Dynamo priority hints, then projected hardware bypass. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
+    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, <code>C00-DH</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, Dynamo priority hints only, and projected hardware bypass.</p>
+    <p class="note">Mode order is always: no prefetch, direct prefetch, Dynamo priority hints only, then projected hardware bypass. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row.</p>
@@ -8721,8 +8999,8 @@ def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps
             "simple meaning": "When the live proxy sees a model turn produce tool calls, it emits a hint for that session.",
         },
         {
-            "part": "Dynamo-like direct prefetch attempt",
-            "simple meaning": "The controller sends a marked direct-load request and gives the hinted session priority over low-priority filler traffic where the driver can control ordering.",
+            "part": "Direct prefetch attempt",
+            "simple meaning": "The controller sends a marked direct-load request for the hinted session. Priority-hint-only mode does not do this.",
         },
         {
             "part": "Resume",
@@ -8814,6 +9092,8 @@ def render_html(
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
     grouped_hardware_projection_rows = projected_hardware_bypass_rows(grouped_comparison_rows)
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(gaps)
+    prefetch_truth_summary_table_rows = prefetch_truth_summary_rows(gaps)
+    prefetch_truth_table = prefetch_truth_table_rows(gaps)
     global_mode_readiness_table_rows = global_kv_readiness_by_mode_rows(gaps)
     global_mode_readiness_summary_table_rows = global_kv_readiness_by_mode_summary_rows(
         global_mode_readiness_table_rows
@@ -8856,6 +9136,14 @@ def render_html(
         "resume_ttft_ms",
         "replay_path",
         "per_gap_verdict",
+        "prefetch_truth_verdict",
+        "prefetch_truth_explanation",
+        "prefetch_truth_confidence",
+        "hint_completed_before_replay",
+        "hint_h2d_seen",
+        "replay_reloaded_after_hint",
+        "replay_recomputed_after_hint",
+        "true_kv_prefetch_success",
         "final_path",
         "bottleneck_label",
         "path_confidence",
@@ -8898,6 +9186,7 @@ def render_html(
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
         ("global-prefetch", global_title),
+        ("prefetch-truth", "Prefetch Truth Check"),
         ("hardware-bypass", "Projected Hardware Bypass Benefit"),
         ("h2d-pressure", "KV H2D Bandwidth Pressure"),
         ("gpu-kv-residency", "GPU KV Pool Residency"),
@@ -8947,6 +9236,11 @@ def render_html(
     <summary><h2>{html.escape(global_title)}</h2></summary>
     <p>For no-prefetch rows, this section measures replay-side KV H2D readiness. For direct-prefetch rows, it also reports the normal prefetch margin.</p>
     {global_readiness_html(gaps)}
+  </details>
+
+  <details id="prefetch-truth" class="section-card theme-observations">
+    <summary><h2>Prefetch Truth Check</h2></summary>
+    {prefetch_truth_check_html(gaps)}
   </details>
 
   <details id="hardware-bypass" class="section-card theme-directkv">
@@ -9005,7 +9299,7 @@ def render_html(
   <details id="observations" class="section-card theme-observations">
     <summary><h2>Key Observations Per Gap/Session</h2></summary>
     <p>This section translates the timeline rows into plain English. It uses the same compact row names as the chart, so <code>G00</code> here means the same <code>G00</code> in the timeline.</p>
-    {table_html(key_observation_rows(interesting), ["row", "mode", "status", "what happened", "why it matters", "tool_wait_ms", "resume_ttft_ms", "replay_path", "verdict"])}
+    {table_html(key_observation_rows(interesting), ["row", "mode", "status", "prefetch_truth", "what happened", "why it matters", "prefetch_truth_explanation", "tool_wait_ms", "resume_ttft_ms", "replay_path", "verdict"])}
   </details>
 
   <details id="evidence-audit" class="section-card theme-profiled">
@@ -9026,6 +9320,11 @@ def render_html(
     <p class="note">These long tables are grouped here so the main report stays chart-first. Use this section when you want to audit the exact measured values behind the charts.</p>
     <h3>Detailed KV Block Lifecycle Column Guide</h3>
     {table_html(detailed_kv_lifecycle_column_guide_rows(), ["column", "meaning"])}
+    <h3>Prefetch Truth Summary</h3>
+    <p class="note">This table distinguishes early hint completion from true useful KV prefetch. A true success needs KV residency/reuse evidence, not just an early purple bar.</p>
+    {table_html(prefetch_truth_summary_table_rows)}
+    <h3>Prefetch Truth Rows</h3>
+    {table_html(prefetch_truth_table, limit=1000)}
     <h3>Detailed KV Block Lifecycle Rows</h3>
     <p class="note">The H2D timing columns come from SGLang-visible KV movement hooks. Recompute timing is labeled <code>_est</code> because it is inferred from replay prefill/TTFT counters rather than from a physical block-level recompute event.</p>
     {table_html(detailed_kv_lifecycle_table_rows(gaps, kv_block_rows), limit=1000)}
@@ -9186,6 +9485,8 @@ def main() -> None:
     global_mode_readiness = global_kv_readiness_by_mode_rows(all_gaps)
     global_mode_readiness_summary = global_kv_readiness_by_mode_summary_rows(global_mode_readiness)
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(all_gaps)
+    prefetch_truth_table = prefetch_truth_table_rows(all_gaps)
+    prefetch_truth_summary = prefetch_truth_summary_rows(all_gaps)
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_verdicts = replay_delay_verdict_rows(replay_delay_breakdown)
     replay_delay_running_context = replay_delay_running_context_rows(all_labeled_gaps, all_trace_rows, h2d_activity_events)
@@ -9230,6 +9531,8 @@ def main() -> None:
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", global_mode_readiness)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", global_mode_readiness_summary)
     write_csv(args.out_dir / "dynamo_priority_hint_translation.csv", dynamo_priority_rows)
+    write_csv(args.out_dir / "prefetch_truth_table.csv", prefetch_truth_table)
+    write_csv(args.out_dir / "prefetch_truth_summary.csv", prefetch_truth_summary)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -9276,6 +9579,8 @@ def main() -> None:
             "global_kv_readiness_by_mode": global_mode_readiness,
             "global_kv_readiness_by_mode_summary": global_mode_readiness_summary,
             "dynamo_priority_hint_translation": dynamo_priority_rows,
+            "prefetch_truth_table": prefetch_truth_table,
+            "prefetch_truth_summary": prefetch_truth_summary,
             "exact_kv_movement_attribution": exact_kv_rows,
             "exact_kv_movement_summary": exact_movement_summary_rows(exact_kv_rows),
             "kv_block_ledger": kv_block_rows,

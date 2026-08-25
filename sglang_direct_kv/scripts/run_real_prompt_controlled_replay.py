@@ -330,10 +330,11 @@ async def main_async() -> None:
     parser.add_argument(
         "--priority-direct-prefetch",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "For direct_prefetch and dynamo_priority_hints, give the prefetch/replay "
-            "path a local driver priority window over filler traffic."
+            "Legacy option for direct_prefetch only: give the direct KV hook/replay "
+            "path a local driver priority window over filler traffic. Disabled by default "
+            "so direct_prefetch means direct KV prefetch only."
         ),
     )
     parser.add_argument(
@@ -429,14 +430,17 @@ async def main_async() -> None:
         def dynamo_mode_enabled() -> bool:
             return args.mode == DYNAMO_PRIORITY_MODE
 
+        def direct_kv_prefetch_mode_enabled() -> bool:
+            return args.mode in {"direct_prefetch", "oracle_prefetch"}
+
         def priority_direct_enabled() -> bool:
-            return args.mode in {"direct_prefetch", DYNAMO_PRIORITY_MODE} and args.priority_direct_prefetch
+            return args.mode == "direct_prefetch" and args.priority_direct_prefetch
 
         def priority_policy_name() -> str:
             if dynamo_mode_enabled():
-                return "dynamo_agent_hints_to_sglang_priority"
+                return "dynamo_agent_hints_to_sglang_priority_only"
             if priority_direct_enabled():
-                return "dynamo_like_direct_prefetch"
+                return "legacy_driver_priority_direct_prefetch"
             return "none"
 
         def dynamo_agent_priority(phase: str, pair: ReplayPair) -> str:
@@ -730,7 +734,7 @@ async def main_async() -> None:
             )
             hint_task: asyncio.Task[None] | None = None
             hint_offset_ms: float | None = None
-            if args.mode != "no_prefetch":
+            if direct_kv_prefetch_mode_enabled():
                 if args.mode == "oracle_prefetch":
                     hint_offset_ms = max(tool_start_offset_ms, replay_due_ms - args.oracle_lead_ms)
                     timing = "oracle_before_resume"
@@ -762,6 +766,21 @@ async def main_async() -> None:
                     await issue_prefetch(pair, replay_due_ms)
 
                 hint_task = asyncio.create_task(hint_runner())
+            elif dynamo_mode_enabled():
+                write_trace_event(
+                    {
+                        "event": "m27.dynamo_priority_hints.ready",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "tool_start_offset_ms": round(tool_start_offset_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "priority_policy": priority_policy_name(),
+                        "meaning": (
+                            "Dynamo-style priority metadata will be attached to replay/filler "
+                            "requests. No direct KV prefetch hook is issued in this mode."
+                        ),
+                    }
+                )
             pressure_tasks = [
                 asyncio.create_task(
                     run_filler(
@@ -794,7 +813,13 @@ async def main_async() -> None:
                     "mode": args.mode,
                     "replay_due_offset_ms": round(replay_due_ms, 3),
                     "prefetch_hint_submitted": bool(hint_task is not None),
-                    "expected_reuse": "high" if args.mode != "no_prefetch" else "baseline",
+                    "expected_reuse": (
+                        "direct_prefetch_attempted"
+                        if hint_task is not None
+                        else "priority_hint_only"
+                        if dynamo_mode_enabled()
+                        else "baseline"
+                    ),
                     "gpu_resident_tokens": "unknown",
                     "host_resident_tokens": "unknown",
                     "missing_tokens": "unknown",

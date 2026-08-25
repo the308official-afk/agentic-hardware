@@ -136,7 +136,7 @@ apply_pressure_profile() {
       ;;
   esac
 
-  set_default MODES "no_prefetch direct_prefetch"
+  set_default MODES "no_prefetch direct_prefetch dynamo_priority_hints"
 }
 
 apply_pressure_profile
