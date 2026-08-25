@@ -1,0 +1,402 @@
+{
+  "schema_version": "0.1",
+  "purpose": "Recommended machine-readable structure for describing how canonical harness signals are passed across LLM inference networks.",
+  "support_levels": {
+    "native": "Harness has a first-class documented or explicit field for this signal.",
+    "partial": "Harness has a nearby equivalent, but semantics are not identical.",
+    "pass_through": "Harness can carry the field to a downstream provider/backend but does not interpret it natively.",
+    "custom": "Requires user middleware, processor logic, or custom adapter code.",
+    "provider_dependent": "Available only when the selected model/provider/runtime exposes it.",
+    "internal": "Used internally but not exposed as a stable public signal.",
+    "none": "No support identified in the comparison source."
+  },
+  "transport_types": [
+    "request_body",
+    "http_header",
+    "metadata",
+    "provider_config",
+    "extra_body",
+    "middleware",
+    "trace_context",
+    "response_body",
+    "internal_state"
+  ],
+  "canonical_signal_shape": {
+    "id": "string: stable snake_case canonical id",
+    "category": "string: scheduling | reasoning | cache | identity | lifecycle | routing | observability",
+    "label": "string: human-readable signal name",
+    "semantic": "string: what this signal means independent of any harness",
+    "direction": "request | response | both",
+    "recommended_type": "string | integer | number | boolean | enum | object | array",
+    "unit": "optional string such as tokens, milliseconds, seconds, rank, id",
+    "harnesses": [
+      {
+        "name": "string: harness name",
+        "support": "native | partial | pass_through | custom | provider_dependent | internal | none",
+        "field_path": "optional string: dot path, header name, or metadata key",
+        "transport": "optional transport type",
+        "example": "optional simplified payload fragment",
+        "notes": "optional caveat"
+      }
+    ]
+  },
+  "examples": [
+    {
+      "id": "soft_priority",
+      "category": "scheduling",
+      "label": "Soft priority",
+      "semantic": "A scheduler hint used to prefer one request over another without requiring absolute isolation.",
+      "direction": "request",
+      "recommended_type": "integer",
+      "unit": "priority_rank",
+      "harnesses": [
+        {
+          "name": "Dynamo",
+          "support": "native",
+          "field_path": "nvext.agent_hints.priority",
+          "transport": "request_body",
+          "example": {
+            "nvext": {
+              "agent_hints": {
+                "priority": 10
+              }
+            }
+          }
+        },
+        {
+          "name": "NeMo Agent Toolkit",
+          "support": "native",
+          "field_path": "priority",
+          "transport": "request_body",
+          "example": {
+            "priority": 10
+          },
+          "notes": "Emitted by the adapter/profiler path in the comparison source."
+        },
+        {
+          "name": "Qwen Code",
+          "support": "pass_through",
+          "field_path": "extra_body",
+          "transport": "extra_body",
+          "example": {
+            "extra_body": {
+              "nvext": {
+                "agent_hints": {
+                  "priority": 10
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Deep Agents",
+          "support": "custom",
+          "field_path": "middleware",
+          "transport": "middleware"
+        },
+        {
+          "name": "Claude Code",
+          "support": "none"
+        },
+        {
+          "name": "Codex",
+          "support": "none"
+        },
+        {
+          "name": "DeepSeek Harness",
+          "support": "none"
+        }
+      ]
+    },
+    {
+      "id": "reasoning_effort_level",
+      "category": "reasoning",
+      "label": "Reasoning effort level",
+      "semantic": "Requested amount of model reasoning compute or thinking depth.",
+      "direction": "request",
+      "recommended_type": "enum",
+      "allowed_values_normalized": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "harnesses": [
+        {
+          "name": "Claude Code",
+          "support": "native",
+          "field_path": "output_config.effort",
+          "transport": "request_body",
+          "example": {
+            "output_config": {
+              "effort": "high"
+            }
+          }
+        },
+        {
+          "name": "Codex",
+          "support": "native",
+          "field_path": "reasoning.effort",
+          "transport": "request_body",
+          "example": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        },
+        {
+          "name": "DeepSeek Harness",
+          "support": "native",
+          "field_path": "reasoningEffort",
+          "transport": "request_body",
+          "example": {
+            "reasoningEffort": "high"
+          }
+        },
+        {
+          "name": "Qwen Code",
+          "support": "native",
+          "field_path": "model.reasoningEffort",
+          "transport": "provider_config",
+          "example": {
+            "model": {
+              "reasoningEffort": "high"
+            }
+          }
+        },
+        {
+          "name": "NeMo Agent Toolkit",
+          "support": "provider_dependent",
+          "transport": "provider_config"
+        },
+        {
+          "name": "Deep Agents",
+          "support": "provider_dependent",
+          "transport": "provider_config"
+        },
+        {
+          "name": "Dynamo",
+          "support": "none",
+          "notes": "The comparison distinguishes max_thinking_tokens from abstract reasoning effort."
+        }
+      ]
+    },
+    {
+      "id": "cache_ttl",
+      "category": "cache",
+      "label": "Cache TTL",
+      "semantic": "Requested retention period for a prompt/cache entry.",
+      "direction": "request",
+      "recommended_type": "string",
+      "unit": "duration",
+      "harnesses": [
+        {
+          "name": "Claude Code",
+          "support": "native",
+          "field_path": "cache_control.ttl",
+          "transport": "request_body",
+          "example": {
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        },
+        {
+          "name": "NeMo Agent Toolkit",
+          "support": "partial",
+          "field_path": "nvext.cache_control.ttl",
+          "transport": "request_body",
+          "example": {
+            "nvext": {
+              "cache_control": {
+                "type": "ephemeral",
+                "ttl": "5m"
+              }
+            }
+          },
+          "notes": "Marked experimental in the comparison source."
+        },
+        {
+          "name": "Qwen Code",
+          "support": "provider_dependent",
+          "field_path": "cacheRetention",
+          "transport": "provider_config"
+        },
+        {
+          "name": "Codex",
+          "support": "none",
+          "notes": "No explicit TTL in the comparison source."
+        },
+        {
+          "name": "Dynamo",
+          "support": "none",
+          "notes": "No current public TTL field in the comparison source."
+        }
+      ]
+    },
+    {
+      "id": "session_id",
+      "category": "identity",
+      "label": "Session ID",
+      "semantic": "Stable request grouping key for session affinity, tracing, or workflow continuity.",
+      "direction": "both",
+      "recommended_type": "string",
+      "unit": "id",
+      "harnesses": [
+        {
+          "name": "Dynamo",
+          "support": "native",
+          "field_path": "X-Dynamo-Session-ID",
+          "transport": "http_header",
+          "example": {
+            "headers": {
+              "X-Dynamo-Session-ID": "session_123"
+            }
+          }
+        },
+        {
+          "name": "Claude Code",
+          "support": "native",
+          "field_path": "x-claude-code-session-id",
+          "transport": "http_header"
+        },
+        {
+          "name": "Codex",
+          "support": "native",
+          "field_path": "thread-id | metadata.session_id | metadata.thread_id",
+          "transport": "metadata"
+        },
+        {
+          "name": "DeepSeek Harness",
+          "support": "native",
+          "field_path": "x-deepseek-harness-session-id",
+          "transport": "http_header"
+        },
+        {
+          "name": "Deep Agents",
+          "support": "native",
+          "field_path": "thread_id",
+          "transport": "metadata"
+        },
+        {
+          "name": "Qwen Code",
+          "support": "internal",
+          "field_path": "internal session id",
+          "transport": "internal_state"
+        }
+      ]
+    },
+    {
+      "id": "direct_backend_selection",
+      "category": "routing",
+      "label": "Direct backend selection",
+      "semantic": "Hard placement hint binding a request to a specific backend instance.",
+      "direction": "request",
+      "recommended_type": "string",
+      "unit": "backend_id",
+      "harnesses": [
+        {
+          "name": "Dynamo",
+          "support": "native",
+          "field_path": "backend_instance_id",
+          "transport": "request_body",
+          "example": {
+            "backend_instance_id": "backend-a"
+          }
+        },
+        {
+          "name": "NeMo Agent Toolkit",
+          "support": "pass_through",
+          "transport": "request_body"
+        },
+        {
+          "name": "Qwen Code",
+          "support": "pass_through",
+          "field_path": "extra_body.backend_instance_id",
+          "transport": "extra_body"
+        },
+        {
+          "name": "Deep Agents",
+          "support": "custom",
+          "transport": "middleware"
+        },
+        {
+          "name": "Claude Code",
+          "support": "none"
+        },
+        {
+          "name": "Codex",
+          "support": "none"
+        },
+        {
+          "name": "DeepSeek Harness",
+          "support": "none"
+        }
+      ]
+    },
+    {
+      "id": "cache_read_tokens",
+      "category": "observability",
+      "label": "Cache read tokens",
+      "semantic": "Number of input tokens served from prompt/cache reuse.",
+      "direction": "response",
+      "recommended_type": "integer",
+      "unit": "tokens",
+      "harnesses": [
+        {
+          "name": "DeepSeek Harness",
+          "support": "native",
+          "field_path": "cacheReadTokens",
+          "transport": "response_body",
+          "example": {
+            "usage": {
+              "cacheReadTokens": 2048
+            }
+          }
+        },
+        {
+          "name": "Codex",
+          "support": "provider_dependent",
+          "field_path": "cached input-token usage",
+          "transport": "response_body"
+        },
+        {
+          "name": "Claude Code",
+          "support": "provider_dependent",
+          "field_path": "cache-read and cache-creation usage",
+          "transport": "response_body"
+        },
+        {
+          "name": "Dynamo",
+          "support": "provider_dependent",
+          "field_path": "metrics/backend response",
+          "transport": "response_body"
+        },
+        {
+          "name": "Deep Agents",
+          "support": "provider_dependent",
+          "field_path": "provider trace",
+          "transport": "trace_context"
+        },
+        {
+          "name": "Qwen Code",
+          "support": "provider_dependent",
+          "field_path": "cache metrics",
+          "transport": "response_body"
+        }
+      ]
+    }
+  ],
+  "recommendations": [
+    "Use one canonical signal id per row in the slide tables.",
+    "Keep support='none' in JSON even if slides display '-' for readability.",
+    "Store exact harness field names in field_path and keep normalized semantics in semantic.",
+    "Separate request signals from response signals; do not mix routing hints with observability feedback.",
+    "Represent pass-through and custom middleware separately from native support.",
+    "For provider-dependent fields, include provider/model constraints when known."
+  ]
+}
