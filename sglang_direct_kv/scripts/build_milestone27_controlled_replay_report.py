@@ -3730,10 +3730,15 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     plot_h = height - top - bottom
     values: list[float] = []
     for row in usable:
-        for key in ("replay_start_relative_ms", "kv_ready_relative_ms"):
-            value = as_float(row.get(key))
-            if value is not None:
-                values.append(value)
+        replay_relative = as_float(row.get("replay_start_relative_ms"))
+        kv_ready_margin = as_float(row.get("kv_ready_margin_ms"))
+        kv_ready_relative = as_float(row.get("kv_ready_relative_ms"))
+        if replay_relative is not None:
+            values.append(-replay_relative)
+        if kv_ready_margin is not None:
+            values.append(kv_ready_margin)
+        elif kv_ready_relative is not None:
+            values.append(-kv_ready_relative)
     if not values:
         return "<p>No replay-start or KV-ready timing values were available for this run.</p>"
     v_min = min(values)
@@ -3770,16 +3775,22 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
 
     zero_y = y_pos(0.0)
+    green_top = top
+    green_height = max(0.0, zero_y - top)
+    red_top = zero_y
+    red_height = max(0.0, top + plot_h - zero_y)
     parts = [
         '<svg viewBox="0 0 1480 620" width="100%" role="img" aria-label="Replay start versus KV readiness by mode">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<rect x="{left}" y="{green_top:.1f}" width="{plot_w}" height="{green_height:.1f}" fill="#dcfce7" opacity="0.35"><title>deadline met region: above zero means early</title></rect>',
+        f'<rect x="{left}" y="{red_top:.1f}" width="{plot_w}" height="{red_height:.1f}" fill="#fee2e2" opacity="0.32"><title>deadline missed region: below zero means late</title></rect>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
-        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
-        '<text x="22" y="305" transform="rotate(-90 22 305)" text-anchor="middle" font-size="13" font-weight="700">time relative to replay due ms (symlog)</text>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
+        '<text x="22" y="305" transform="rotate(-90 22 305)" text-anchor="middle" font-size="13" font-weight="700">deadline margin ms (symlog)</text>',
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
-        '<text x="104" y="34" font-size="13" fill="#b91c1c" font-weight="700">above line = after replay due / late</text>',
-        '<text x="470" y="34" font-size="13" fill="#166534" font-weight="700">below line = before replay due / early</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">This chart plots event_time - replay_due. Positive values are late. Circle = replay request started; square = useful KV became ready; connector = time between replay start and KV readiness.</text>',
+        '<text x="104" y="34" font-size="13" fill="#166534" font-weight="700">above line = early / deadline met</text>',
+        '<text x="470" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late / deadline missed</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">This chart plots deadline_margin = replay_due - event_time. Circle = replay request start margin; square = useful KV ready margin. Higher is better.</text>',
     ]
     seen_ticks: set[int] = set()
     for value in h2d_symlog_tick_values(y_min, y_max):
@@ -3807,26 +3818,34 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         color = mode_colors.get(mode_key, "#64748b")
         x = x_pos(scenario, mode_key)
         replay_rel = as_float(row.get("replay_start_relative_ms"))
+        replay_margin = -replay_rel if replay_rel is not None else None
+        kv_margin = as_float(row.get("kv_ready_margin_ms"))
         kv_rel = as_float(row.get("kv_ready_relative_ms"))
+        if kv_margin is None and kv_rel is not None:
+            kv_margin = -kv_rel
         title_base = (
             f"{scenario} {display_mode(mode_key)} | fillers={row.get('fillers')} | "
             f"tool_wait={row.get('tool_wait_ms')} ms"
         )
-        if replay_rel is not None and kv_rel is not None:
-            y1 = y_pos(replay_rel)
-            y2 = y_pos(kv_rel)
+        if replay_margin is not None and kv_margin is not None:
+            y1 = y_pos(replay_margin)
+            y2 = y_pos(kv_margin)
             parts.append(
                 f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" '
                 f'stroke="{color}" stroke-width="2" opacity="0.35"><title>{html.escape(title_base)} | replay-to-KV={row.get("replay_start_to_kv_ready_ms")} ms</title></line>'
             )
-        if replay_rel is not None:
-            y = y_pos(replay_rel)
-            title = f"{title_base} | replay start={replay_rel:.3f} ms relative to due"
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{html.escape(title)}</title></circle>')
-        if kv_rel is not None:
-            y = y_pos(kv_rel)
+        if replay_margin is not None:
+            y = y_pos(replay_margin)
             title = (
-                f"{title_base} | KV ready={kv_rel:.3f} ms relative to due | "
+                f"{title_base} | replay start margin={replay_margin:.3f} ms "
+                f"(positive=started before due, negative=started late)"
+            )
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{html.escape(title)}</title></circle>')
+        if kv_margin is not None:
+            y = y_pos(kv_margin)
+            title = (
+                f"{title_base} | KV ready margin={kv_margin:.3f} ms "
+                f"(positive=ready before due, negative=ready late) | "
                 f"source={row.get('readiness_source')} | {row.get('measured_or_projected')}"
             )
             parts.append(
@@ -3863,8 +3882,8 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     <p class="note">For Dynamo priority hints only, no artificial direct-prefetch H2D is counted. Its KV-ready dot uses replay-side H2D finish only. If replay-side H2D is not observed, the replay-start dot can still appear while the KV-ready dot is omitted.</p>
     <h3>Replay Start Lateness Summary</h3>
     {table_html(replay_start_summary, ["mode", "dots", "replay_started_on_or_before_due", "replay_started_late", "late_pct", "median_replay_start_relative_ms", "worst_replay_start_lateness_ms"])}
-    <h3>Replay Start vs KV Ready</h3>
-    <p class="note">This chart plots event time minus replay due. Above zero means the event happened after replay was due, so it was late. Below zero means the event happened before replay was due, so it was early. Circle = replay request start. Square = useful KV ready. A vertical connector means both were observed/projected for the same mode and scenario.</p>
+    <h3>Replay Deadline Margin vs KV Readiness Margin</h3>
+    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means early/good. Below zero means late/bad. Circle = replay request start margin. Square = useful KV ready margin. For projected hardware, the square is projected KV readiness; the circle is still the measured replay-start timing from the source run.</p>
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
     <h3>KV Readiness Margin</h3>
     <p class="note">This existing chart keeps the old margin convention: positive means KV became ready before the replay deadline; negative means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
