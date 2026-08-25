@@ -65,7 +65,12 @@ from replay_path_classifier import (
     instrumentation_coverage_rows,
 )
 
-PREFETCH_MODE_NAMES = {"direct_prefetch", "priority_direct_prefetch", "deadline_priority_prefetch"}
+PREFETCH_MODE_NAMES = {
+    "direct_prefetch",
+    "dynamo_priority_hints",
+    "priority_direct_prefetch",
+    "deadline_priority_prefetch",
+}
 HARDWARE_BYPASS_LEVELS: list[tuple[str, str, float]] = [
     ("best_case", "Best case: measured H2D only", 0.0),
     ("realistic", "Realistic: measured H2D + 50 ms", 50.0),
@@ -79,6 +84,8 @@ def canonical_mode(mode: Any) -> str:
         return "projected_hardware_bypass"
     if raw.startswith("deadline_priority_prefetch"):
         return "deadline_priority_prefetch"
+    if raw.startswith("dynamo_priority_hints"):
+        return "dynamo_priority_hints"
     if raw.startswith("priority_direct_prefetch"):
         return "priority_direct_prefetch"
     if raw.startswith("direct_prefetch"):
@@ -96,6 +103,7 @@ def display_mode(mode: Any) -> str:
     labels = {
         "no_prefetch": "No prefetch",
         "direct_prefetch": "Dynamo-like direct prefetch",
+        "dynamo_priority_hints": "Dynamo priority hints",
         "priority_direct_prefetch": "Priority direct prefetch",
         "deadline_priority_prefetch": "Deadline priority prefetch",
         "projected_hardware_bypass": "Projected hardware bypass",
@@ -109,12 +117,31 @@ def mode_badge_style(mode: Any) -> tuple[str, str]:
     return {
         "no_prefetch": ("#334155", "#f1f5f9"),
         "direct_prefetch": ("#7c3aed", "#f3e8ff"),
+        "dynamo_priority_hints": ("#b45309", "#fffbeb"),
         "priority_direct_prefetch": ("#0891b2", "#ecfeff"),
         "deadline_priority_prefetch": ("#16a34a", "#dcfce7"),
         "projected_hardware_bypass": ("#0f766e", "#f0fdfa"),
         "oracle_direct_load": ("#ea580c", "#ffedd5"),
         "oracle_prefetch": ("#ea580c", "#ffedd5"),
     }.get(canonical_mode(mode), ("#475569", "#f8fafc"))
+
+
+def mode_row_background_style(mode: Any, row_index: int = 0) -> tuple[str, str, float]:
+    """Return a subtle row tint, left accent color, and opacity for mode grouping."""
+    canonical = canonical_mode(mode)
+    base = {
+        "no_prefetch": ("#f8fafc", "#64748b", 0.92),
+        "direct_prefetch": ("#f0f9ff", "#0284c7", 0.88),
+        "dynamo_priority_hints": ("#fffbeb", "#f59e0b", 0.90),
+        "priority_direct_prefetch": ("#ecfeff", "#0891b2", 0.88),
+        "deadline_priority_prefetch": ("#f0fdf4", "#16a34a", 0.88),
+        "projected_hardware_bypass": ("#ecfdf5", "#0f766e", 0.92),
+        "oracle_direct_load": ("#fff7ed", "#ea580c", 0.88),
+        "oracle_prefetch": ("#fff7ed", "#ea580c", 0.88),
+    }.get(canonical)
+    if base:
+        return base
+    return ("#ffffff" if row_index % 2 == 0 else "#eef4fb", "#cbd5e1", 0.92)
 
 
 def display_verdict(verdict: Any) -> str:
@@ -990,6 +1017,14 @@ def per_gap_verdict(row: dict[str, Any]) -> str:
 
 
 def trace_request_windows(trace_rows: list[dict[str, Any]], base_ts: float) -> dict[tuple[str, str], dict[str, Any]]:
+    bridge_fields = [
+        "hint_source",
+        "dynamo_agent_priority",
+        "sglang_priority",
+        "deadline_offset_ms",
+        "priority_translation",
+        "priority_policy",
+    ]
     windows: dict[tuple[str, str], dict[str, Any]] = {}
     for row in trace_rows:
         if row.get("event") not in {"m27.request.submitted", "m27.request.start", "m27.request.end"}:
@@ -1008,6 +1043,9 @@ def trace_request_windows(trace_rows: list[dict[str, Any]], base_ts: float) -> d
                 "prompt_hash": row.get("prompt_hash", ""),
             },
         )
+        for field in bridge_fields:
+            if row.get(field) not in ("", None):
+                item[field] = row.get(field)
         if row.get("event") == "m27.request.submitted":
             item["submitted_ms"] = rel_ms(row.get("ts_ns"), base_ts)
         elif row.get("event") == "m27.request.start":
@@ -1275,6 +1313,14 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "pre_replay_host_resident_tokens": checkpoint.get("host_resident_tokens", ""),
             "pre_replay_missing_tokens": checkpoint.get("missing_tokens", ""),
             "pre_replay_protected_tokens": checkpoint.get("protected_tokens", ""),
+            "hint_source": p_start.get("hint_source") or hint.get("hint_source") or replay.get("hint_source", ""),
+            "hint_dynamo_agent_priority": p_start.get("dynamo_agent_priority") or hint.get("dynamo_agent_priority", ""),
+            "hint_sglang_priority": p_start.get("sglang_priority") or hint.get("sglang_priority", ""),
+            "hint_priority_translation": p_start.get("priority_translation") or hint.get("priority_translation", ""),
+            "replay_hint_source": replay.get("hint_source", ""),
+            "replay_dynamo_agent_priority": replay.get("dynamo_agent_priority", ""),
+            "replay_sglang_priority": replay.get("sglang_priority", ""),
+            "replay_priority_translation": replay.get("priority_translation", ""),
             **lifecycle_summary,
         }
         if has_events(gap["direct_kv_h2d_events"]) and has_events(gap["replay_kv_h2d_events"]):
@@ -1328,8 +1374,9 @@ def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
     ranks = {
         "no_prefetch": 0,
         "direct_prefetch": 1,
-        "deadline_priority_prefetch": 2,
-        "priority_direct_prefetch": 3,
+        "dynamo_priority_hints": 2,
+        "deadline_priority_prefetch": 3,
+        "priority_direct_prefetch": 4,
         "oracle_prefetch": 4,
         "oracle_direct_load": 4,
     }
@@ -1395,26 +1442,35 @@ def timeline_rows_with_labels(rows: list[dict[str, Any]], prefix: str = "G") -> 
     return labeled
 
 
-def scenario_compare_key(row: dict[str, Any]) -> tuple[str, str, str]:
+def scenario_compare_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
     return (
         str(row.get("task_index") or ""),
         str(row.get("gap_order_in_task") or ""),
         str(row.get("tool_gap_ms") or ""),
+        str(case_fillers(row) or ""),
     )
 
 
-def scenario_compare_sort_key(key: tuple[str, str, str]) -> tuple[int, int, float, str]:
-    task, gap, wait = key
+def scenario_compare_sort_key(key: tuple[str, str, str, str]) -> tuple[int, int, float, float, str]:
+    task, gap, wait, fillers = key
     task_rank = int(task) if str(task).isdigit() else 10**9
     gap_rank = int(gap) if str(gap).isdigit() else 10**9
     wait_rank = as_float(wait)
-    return task_rank, gap_rank, wait_rank if wait_rank is not None else 10**12, "|".join(key)
+    filler_rank = as_float(fillers)
+    return (
+        task_rank,
+        gap_rank,
+        wait_rank if wait_rank is not None else 10**12,
+        filler_rank if filler_rank is not None else 10**12,
+        "|".join(key),
+    )
 
 
 def mode_short_label(mode: Any) -> str:
     labels = {
         "no_prefetch": "NP",
         "direct_prefetch": "DP",
+        "dynamo_priority_hints": "DH",
         "deadline_priority_prefetch": "DLP",
         "projected_hardware_bypass": "HW",
         "priority_direct_prefetch": "PDP",
@@ -1496,10 +1552,10 @@ def projected_hardware_timeline_row(
 
 
 def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int) -> list[dict[str, Any]]:
-    scenario_to_modes: defaultdict[tuple[str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
-        if mode not in {"no_prefetch", "direct_prefetch"}:
+        if mode not in {"no_prefetch", "direct_prefetch", "dynamo_priority_hints"}:
             continue
         scenario_to_modes[scenario_compare_key(row)][mode] = row
 
@@ -1510,7 +1566,7 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
     ]
     complete_or_partial.sort(key=lambda item: scenario_compare_sort_key(item[0]))
 
-    mode_order = ["no_prefetch", "direct_prefetch"]
+    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints"]
     output: list[dict[str, Any]] = []
     for scenario_idx, (_key, rows_by_mode) in enumerate(complete_or_partial[:max_scenarios]):
         scenario_label = f"C{scenario_idx:02d}"
@@ -1523,7 +1579,8 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
             copied["timeline_label"] = f"{scenario_label}-{mode_short_label(mode)}"
             output.append(copied)
         projection_source = (
-            rows_by_mode.get("direct_prefetch")
+            rows_by_mode.get("dynamo_priority_hints")
+            or rows_by_mode.get("direct_prefetch")
             or rows_by_mode.get("no_prefetch")
         )
         if projection_source:
@@ -1554,6 +1611,37 @@ def mode_comparison_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, A
             }
         )
     return output
+
+
+def dynamo_priority_hint_translation_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in gaps:
+        if canonical_mode(row.get("mode")) != "dynamo_priority_hints":
+            continue
+        rows.append(
+            {
+                "row": row.get("timeline_label", ""),
+                "case_id": row.get("case_id", ""),
+                "session_id": row.get("session_id", ""),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "fillers": case_fillers(row),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "hint_source": row.get("hint_source", ""),
+                "hint_dynamo_agent_priority": row.get("hint_dynamo_agent_priority", ""),
+                "hint_sglang_priority": row.get("hint_sglang_priority", ""),
+                "hint_priority_translation": row.get("hint_priority_translation", ""),
+                "replay_dynamo_agent_priority": row.get("replay_dynamo_agent_priority", ""),
+                "replay_sglang_priority": row.get("replay_sglang_priority", ""),
+                "replay_priority_translation": row.get("replay_priority_translation", ""),
+                "prefetch_margin_ms": row.get("prefetch_margin_ms", ""),
+                "direct_kv_h2d_events": row.get("direct_kv_h2d_events", ""),
+                "replay_kv_h2d_events": row.get("replay_kv_h2d_events", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "verdict": display_verdict(row.get("per_gap_verdict", "")),
+            }
+        )
+    return rows
 
 
 def measured_kv_h2d_for_projection(row: dict[str, Any]) -> dict[str, Any]:
@@ -2690,6 +2778,7 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
     by_mode = {canonical_mode(row.get("mode")): row for row in mode_rows}
     no_prefetch = by_mode.get("no_prefetch", {})
     direct = by_mode.get("direct_prefetch", {})
+    dynamo = by_mode.get("dynamo_priority_hints", {})
     deadline = by_mode.get("deadline_priority_prefetch", {})
     priority = by_mode.get("priority_direct_prefetch", {})
     cards = [
@@ -2707,6 +2796,13 @@ def metric_cards_html(mode_rows: list[dict[str, Any]]) -> str:
                 ("deadline-prefetch avg TTFT", f"{deadline.get('avg_resume_ttft_ms', '')} ms"),
                 ("deadline late prefetches", deadline.get("late_prefetches", "")),
                 ("deadline H2D gaps", deadline.get("hint_h2d_gaps", "")),
+            ]
+        )
+    if dynamo:
+        cards.extend(
+            [
+                ("Dynamo-hint avg TTFT", f"{dynamo.get('avg_resume_ttft_ms', '')} ms"),
+                ("Dynamo-hint late prefetches", dynamo.get("late_prefetches", "")),
             ]
         )
     if priority:
@@ -3003,13 +3099,14 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
             )
         return None, "", "", "No replay-side KV H2D was observed."
     if mode in PREFETCH_MODE_NAMES:
+        mode_label = display_mode(mode)
         direct_end = as_float(row.get("direct_kv_h2d_end_ms"))
         if direct_end is not None and has_events(row.get("direct_kv_h2d_events")):
             return (
                 round(due - direct_end, 3),
                 "measured",
                 "hint-side direct KV H2D",
-                "Dynamo-like direct prefetch: readiness is when hint-side KV H2D finished.",
+                f"{mode_label}: readiness is when hint-side KV H2D finished.",
             )
         replay_end = as_float(row.get("replay_kv_h2d_end_ms"))
         if replay_end is not None and has_events(row.get("replay_kv_h2d_events")):
@@ -3017,7 +3114,7 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
                 round(due - replay_end, 3),
                 "measured fallback",
                 "replay-side KV H2D",
-                "Dynamo-like direct prefetch did not produce visible hint-side H2D, so readiness falls back to replay-side KV H2D.",
+                f"{mode_label} did not produce visible hint-side H2D, so readiness falls back to replay-side KV H2D.",
             )
         prefetch_margin = as_float(row.get("prefetch_margin_ms"))
         if prefetch_margin is not None:
@@ -3025,30 +3122,30 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
                 round(prefetch_margin, 3),
                 "measured request path",
                 "prefetch request completion",
-                "Dynamo-like direct prefetch had no visible H2D, so this uses the measured prefetch request completion margin.",
+                f"{mode_label} had no visible H2D, so this uses the measured prefetch request completion margin.",
             )
         return None, "", "", "No hint-side or replay-side KV H2D was observed."
     return None, "", "", f"Mode {mode} is not included in this readiness comparison."
 
 
 def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    scenario_to_modes: defaultdict[tuple[str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
-        if mode in {"no_prefetch", "direct_prefetch"}:
+        if mode in {"no_prefetch", "direct_prefetch", "dynamo_priority_hints"}:
             scenario_to_modes[scenario_compare_key(row)][mode] = row
 
     scenarios = [
         (key, rows_by_mode)
         for key, rows_by_mode in scenario_to_modes.items()
-        if "no_prefetch" in rows_by_mode or "direct_prefetch" in rows_by_mode
+        if any(mode in rows_by_mode for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints"))
     ]
     scenarios.sort(key=lambda item: scenario_compare_sort_key(item[0]))
 
     output: list[dict[str, Any]] = []
     for scenario_idx, (key, rows_by_mode) in enumerate(scenarios):
         scenario_label = f"C{scenario_idx:02d}"
-        for mode in ("no_prefetch", "direct_prefetch"):
+        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints"):
             row = rows_by_mode.get(mode)
             if not row:
                 continue
@@ -3060,10 +3157,10 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                     "scenario": scenario_label,
                     "mode": display_mode(mode),
                     "mode_key": mode,
-                    "task": row.get("task_index", key[1]),
-                    "gap": row.get("gap_order_in_task", key[2]),
-                    "tool_wait_ms": row.get("tool_gap_ms", key[0]),
-                    "fillers": case_fillers(row),
+                    "task": row.get("task_index", key[0]),
+                    "gap": row.get("gap_order_in_task", key[1]),
+                    "tool_wait_ms": row.get("tool_gap_ms", key[2]),
+                    "fillers": case_fillers(row) or key[3],
                     "kv_ready_margin_ms": margin,
                     "ready_before_replay_due": 1 if margin >= 0 else 0,
                     "evidence_kind": evidence_kind,
@@ -3073,7 +3170,11 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                 }
             )
 
-        projection_source = rows_by_mode.get("direct_prefetch") or rows_by_mode.get("no_prefetch")
+        projection_source = (
+            rows_by_mode.get("dynamo_priority_hints")
+            or rows_by_mode.get("direct_prefetch")
+            or rows_by_mode.get("no_prefetch")
+        )
         if projection_source:
             projections = projected_hardware_bypass_rows([projection_source])
             realistic = next((row for row in projections if row.get("hardware_projection") == "realistic"), None)
@@ -3085,10 +3186,10 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                             "scenario": scenario_label,
                             "mode": "Projected hardware bypass",
                             "mode_key": "projected_hardware_bypass",
-                            "task": realistic.get("task", key[1]),
-                            "gap": realistic.get("gap", key[2]),
-                            "tool_wait_ms": realistic.get("tool_wait_ms", key[0]),
-                            "fillers": case_fillers(projection_source),
+                            "task": realistic.get("task", key[0]),
+                            "gap": realistic.get("gap", key[1]),
+                            "tool_wait_ms": realistic.get("tool_wait_ms", key[2]),
+                            "fillers": case_fillers(projection_source) or key[3],
                             "kv_ready_margin_ms": round(margin, 3),
                             "ready_before_replay_due": 1 if margin >= 0 else 0,
                             "evidence_kind": "projected",
@@ -3104,7 +3205,7 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
 
 
 def global_kv_readiness_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "direct_prefetch", "projected_hardware_bypass"]
+    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -3156,13 +3257,15 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     scenario_labels = sorted({str(row.get("scenario") or "") for row in rows}, key=lambda value: (len(value), value))
     scenario_index = {label: idx for idx, label in enumerate(scenario_labels)}
     mode_offsets = {
-        "no_prefetch": -18.0,
-        "direct_prefetch": 0.0,
-        "projected_hardware_bypass": 18.0,
+        "no_prefetch": -27.0,
+        "direct_prefetch": -9.0,
+        "dynamo_priority_hints": 9.0,
+        "projected_hardware_bypass": 27.0,
     }
     mode_styles = {
         "no_prefetch": ("#2563eb", "circle", "NP"),
         "direct_prefetch": ("#7c3aed", "square", "DP"),
+        "dynamo_priority_hints": ("#f59e0b", "diamond", "DH"),
         "projected_hardware_bypass": ("#0f766e", "hollow", "HW"),
     }
 
@@ -3181,6 +3284,9 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
         escaped_title = html.escape(title)
         if kind == "square":
             return f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" fill="{color}" opacity="0.9"><title>{escaped_title}</title></rect>'
+        if kind == "diamond":
+            points = f"{x:.1f},{y - 8:.1f} {x + 8:.1f},{y:.1f} {x:.1f},{y + 8:.1f} {x - 8:.1f},{y:.1f}"
+            return f'<polygon points="{points}" fill="{color}" opacity="0.95"><title>{escaped_title}</title></polygon>'
         if kind == "hollow":
             return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="7" fill="#ffffff" stroke="{color}" stroke-width="3" stroke-dasharray="3 2"><title>{escaped_title}</title></circle>'
         return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{escaped_title}</title></circle>'
@@ -3195,7 +3301,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 40}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="36" font-size="13" fill="#166534" font-weight="700">above line = KV ready before replay due</text>',
         '<text x="470" y="36" font-size="13" fill="#b91c1c" font-weight="700">below line = KV became ready after replay was due</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">HW dots are projected from measured H2D duration plus 50 ms overhead; NP and DP dots are measured.</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">HW dots are projected from measured H2D duration plus 50 ms overhead; NP, DP, and DH dots are measured.</text>',
     ]
 
     seen_ticks: set[int] = set()
@@ -3238,6 +3344,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     legend_items = [
         ("No prefetch", "no_prefetch"),
         ("Dynamo-like direct prefetch", "direct_prefetch"),
+        ("Dynamo priority hints", "dynamo_priority_hints"),
         ("Projected HW bypass", "projected_hardware_bypass"),
     ]
     for label, mode_key in legend_items:
@@ -3252,10 +3359,10 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
 def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     rows = global_kv_readiness_by_mode_rows(gaps)
     if not rows:
-        return "<p>No no-prefetch, direct-prefetch, or projected hardware readiness rows were available for this run.</p>"
+        return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
     summary = global_kv_readiness_by_mode_summary_rows(rows)
     return f"""
-    <p>This chart compares the three readiness stories directly: no prefetch, measured direct prefetch, and projected hardware bypass.</p>
+    <p>This chart compares the readiness stories directly: no prefetch, measured direct prefetch, measured Dynamo priority hints, and projected hardware bypass.</p>
     <p class="note">Positive margin means KV became ready before the replay deadline. Negative margin means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
     {table_html(summary, ["mode", "dots", "ready_before_replay_due", "late", "ready_pct", "median_margin_ms", "worst_lateness_ms", "evidence"])}
     <div class="setup-diagram">{build_global_kv_readiness_by_mode_dot_plot(rows)}</div>
@@ -6984,6 +7091,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     top = 194
     measured_row_h = 1200
     projected_row_h = 250
+    scenario_gap_h = 44 if any(str(row.get("comparison_scenario") or "") for row in rows) else 0
     bottom = 116
     plot_w = width - left - right
     row_heights = [
@@ -6994,9 +7102,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     ]
     row_starts: list[int] = []
     cursor_y = top
-    for row_height in row_heights:
+    previous_scenario = ""
+    for idx, row_height in enumerate(row_heights):
+        scenario = str(rows[idx].get("comparison_scenario") or "")
+        if idx > 0 and scenario_gap_h and scenario and scenario != previous_scenario:
+            cursor_y += scenario_gap_h
         row_starts.append(cursor_y)
         cursor_y += row_height
+        previous_scenario = scenario
     height = cursor_y + bottom
     scaled_min = h2d_symlog_value(x_min)
     scaled_max = h2d_symlog_value(x_max)
@@ -7179,6 +7292,62 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             f'font-weight="900" fill="{text_color}">{html.escape(label)}</text>'
         )
 
+    def draw_overview_span(
+        parts: list[str],
+        start: float,
+        end: float,
+        y: float,
+        h: float,
+        color: str,
+        label: str,
+        title: str,
+        opacity: float = 0.86,
+        min_w: float = min_visible_bar_w,
+        break_long: bool = True,
+        label_min_w: float = 118.0,
+        font_size: int = 10,
+        callout_fill: str = "#ffffff",
+        callout_text: str = "#0f172a",
+    ) -> None:
+        clipped_start = max(x_min, min(x_max, start))
+        clipped_end = max(x_min, min(x_max, end))
+        if clipped_end <= clipped_start:
+            return
+        x1 = overview_x(clipped_start)
+        x2 = overview_x(clipped_end)
+        w = max(min_w, x2 - x1)
+        draw_span(
+            parts,
+            overview_x,
+            x_min,
+            x_max,
+            start,
+            end,
+            y,
+            h,
+            color,
+            label,
+            title,
+            opacity=opacity,
+            min_w=min_w,
+            break_long=break_long,
+            label_min_w=label_min_w,
+            font_size=font_size,
+        )
+        if label and w < label_min_w:
+            draw_small_bar_callout(
+                parts,
+                x1,
+                x1 + w,
+                y,
+                h,
+                label,
+                title,
+                color,
+                fill_color=callout_fill,
+                text_color=callout_text,
+            )
+
     def draw_overview_marker(parts: list[str], value: float, y1: float, y2: float, color: str, title: str) -> None:
         if value < x_min or value > x_max:
             return
@@ -7187,6 +7356,32 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="{color}" stroke-width="2.2">'
             f'<title>{html.escape(title)}</title></line>'
         )
+
+    def draw_overview_local_axis(parts: list[str], row_y: float) -> None:
+        """Draw compact replay-relative timestamps for the per-row overview lanes."""
+        axis_y = row_y + 10.0
+        label_y = row_y + 3.0
+        last_label_x = -10**9
+        parts.append(
+            f'<line x1="{left:.1f}" y1="{axis_y:.1f}" x2="{left + plot_w:.1f}" y2="{axis_y:.1f}" '
+            f'stroke="#cbd5e1" stroke-width="0.9" opacity="0.72"/>'
+        )
+        for value in ticks:
+            if value < x_min or value > x_max:
+                continue
+            x = overview_x(value)
+            if x - last_label_x < 72:
+                continue
+            label = f"{int(value)} ms" if abs(value) < 1000 else f"{value / 1000:.0f} s"
+            parts.append(
+                f'<line x1="{x:.1f}" y1="{axis_y - 4:.1f}" x2="{x:.1f}" y2="{axis_y + 4:.1f}" '
+                f'stroke="#94a3b8" stroke-width="0.8" opacity="0.8"/>'
+            )
+            parts.append(
+                f'<text x="{x:.1f}" y="{label_y:.1f}" text-anchor="middle" font-size="8" '
+                f'font-weight="800" fill="#64748b">{html.escape(label)}</text>'
+            )
+            last_label_x = x
 
     zero_x = overview_x(0.0)
     legend = [
@@ -7235,7 +7430,24 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             continue
         y = row_starts[idx]
         row_h = row_heights[idx]
-        band = "#ffffff" if idx % 2 == 0 else "#eef4fb"
+        raw_mode = str(row.get("mode") or "")
+        scenario = str(row.get("comparison_scenario") or "")
+        previous_scenario_for_row = str(rows[idx - 1].get("comparison_scenario") or "") if idx > 0 else ""
+        if idx > 0 and scenario_gap_h and scenario and scenario != previous_scenario_for_row:
+            sep_y = y - scenario_gap_h / 2.0
+            parts.append(
+                f'<line x1="18" y1="{sep_y:.1f}" x2="{width - 24}" y2="{sep_y:.1f}" '
+                f'stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 8" opacity="0.65"/>'
+            )
+            parts.append(
+                f'<rect x="18" y="{sep_y - 13:.1f}" width="92" height="24" rx="12" '
+                f'fill="#ffffff" stroke="#cbd5e1" opacity="0.98"/>'
+            )
+            parts.append(
+                f'<text x="64" y="{sep_y + 4:.1f}" text-anchor="middle" font-size="11" '
+                f'font-weight="900" fill="#334155">{html.escape(scenario)}</text>'
+            )
+        band, mode_accent, band_opacity = mode_row_background_style(raw_mode, idx)
         label = str(row.get("timeline_label") or f"G{idx:02d}")
         kv_pool_row = kv_pool_by_label.get(label, {})
         status, status_color = observation_status(row)
@@ -7264,7 +7476,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         zoom = zoom_bounds(row, row_events, due)
         replay_zoom = replay_zoom_bounds(row, due)
 
-        parts.append(f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" fill="{band}"/>')
+        parts.append(
+            f'<rect x="0" y="{y - 10:.1f}" width="{width}" height="{row_h - 12}" '
+            f'fill="{band}" opacity="{band_opacity:.2f}"/>'
+        )
+        parts.append(
+            f'<rect x="0" y="{y - 10:.1f}" width="9" height="{row_h - 12}" '
+            f'fill="{mode_accent}" opacity="0.92"/>'
+        )
         parts.append(f'<rect x="{left - 2:.1f}" y="{y + 10:.1f}" width="{plot_w + 4:.1f}" height="196" rx="8" fill="#ffffff" opacity="0.38"/>')
         if not (compact_projected_rows and canonical_mode(row.get("mode")) == "projected_hardware_bypass"):
             parts.append(f'<rect x="{left - 2:.1f}" y="{y + 228:.1f}" width="{plot_w + 4:.1f}" height="170" rx="8" fill="#f8fafc" opacity="0.80"/>')
@@ -7273,7 +7492,6 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             parts.append(f'<rect x="{left - 2:.1f}" y="{y + 962:.1f}" width="{plot_w + 4:.1f}" height="160" rx="8" fill="#f8fafc" opacity="0.92"/>')
         parts.append(f'<text x="16" y="{y + 18:.1f}" font-size="16" font-weight="900">{html.escape(label)}</text>')
         verdict_label = display_verdict(row.get("per_gap_verdict") or status)
-        raw_mode = str(row.get("mode") or "")
         is_projected_hardware_row = canonical_mode(raw_mode) == "projected_hardware_bypass"
         mode_label = display_mode(raw_mode)
         parts.append(f'<text x="16" y="{y + 42:.1f}" font-size="10" font-weight="900" fill="{status_color}">{html.escape(verdict_label)}</text>')
@@ -7354,6 +7572,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             ("request path", y + 100),
             ("replay summary", y + 136),
         ]
+        draw_overview_local_axis(parts, y + 12)
         for lane_label, lane_y in overview_lanes:
             parts.append(f'<text x="{left - 10}" y="{lane_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="800" fill="#334155">{html.escape(lane_label)}</text>')
             parts.append(f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>')
@@ -7365,7 +7584,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             (_relative_span(row, "resume_start_ms", "resume_end_ms", due), unified_stack_color("decode"), "resume", "resume request wall time", 0.70),
         ]:
             if span:
-                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], overview_y - 4, main_bar_h, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity, break_long=True)
+                draw_overview_span(parts, span[0], span[1], overview_y - 4, main_bar_h, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", opacity=opacity)
 
         prefetch_y = y + 64
         prefetch_span = _relative_span(row, "prefetch_start_ms", "prefetch_end_ms", due)
@@ -7380,11 +7599,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 if is_projected_hardware_row
                 else f"{label} | direct KV prefetch attempt: {display_ms(prefetch_duration)}{margin_text}"
             )
-            draw_span(
+            draw_overview_span(
                 parts,
-                overview_x,
-                x_min,
-                x_max,
                 prefetch_span[0],
                 prefetch_span[1],
                 prefetch_y - 4,
@@ -7394,8 +7610,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 prefetch_title,
                 opacity=0.74,
                 break_long=True,
-                min_w=min_visible_bar_w,
                 label_min_w=118.0,
+                callout_fill="#f5f3ff",
+                callout_text="#4c1d95",
             )
         hint_h2d_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
         if hint_h2d_span:
@@ -7408,11 +7625,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 if is_projected_hardware_row
                 else f"{label} | hint-side direct KV H2D: {display_ms(hint_duration)} | events={row.get('direct_kv_h2d_events', '')}"
             )
-            draw_span(
+            draw_overview_span(
                 parts,
-                overview_x,
-                x_min,
-                x_max,
                 hint_h2d_span[0],
                 hint_h2d_span[1],
                 prefetch_y + 20,
@@ -7421,9 +7635,10 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 hint_label,
                 hint_title,
                 opacity=0.92,
-                min_w=min_visible_bar_w,
                 label_min_w=78.0,
                 font_size=9,
+                callout_fill="#ecfdf5",
+                callout_text="#14532d",
             )
 
         if compact_projected_rows and is_projected_hardware_row:
@@ -7466,12 +7681,24 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         ]
         for span, color, span_label, title in request_spans:
             if span:
-                draw_span(parts, overview_x, x_min, x_max, span[0], span[1], request_y - 4, main_bar_h, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}", break_long=True)
+                draw_overview_span(parts, span[0], span[1], request_y - 4, main_bar_h, color, span_label, f"{label} | {title}: {display_ms(span[1] - span[0])}")
 
         replay_y = y + 136
         replay_h2d = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
         if replay_h2d:
-            draw_span(parts, overview_x, x_min, x_max, replay_h2d[0], replay_h2d[1], replay_y - 6, main_bar_h, unified_stack_color("h2d"), "", f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}", min_w=min_visible_bar_w)
+            draw_overview_span(
+                parts,
+                replay_h2d[0],
+                replay_h2d[1],
+                replay_y - 6,
+                main_bar_h,
+                unified_stack_color("h2d"),
+                "replay H2D",
+                f"{label} | replay-side KV H2D: {display_ms(replay_h2d[1] - replay_h2d[0])}",
+                label_min_w=82.0,
+                callout_fill="#ecfeff",
+                callout_text="#155e75",
+            )
         first_token = first_token_ms(row)
         replay_start = as_float(row.get("resume_start_ms"))
         if first_token is not None and replay_start is not None:
@@ -7499,11 +7726,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 else:
                     recompute_end_rel = min(first_token_rel, cursor_rel + recompute_ms)
                     timing_source = "fallback_replay_counter_estimate"
-                draw_span(
+                draw_overview_span(
                     parts,
-                    overview_x,
-                    x_min,
-                    x_max,
                     cursor_rel,
                     recompute_end_rel,
                     replay_y + 18,
@@ -7513,17 +7737,15 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     f"{label} | replay prefill/recompute attribution: {display_ms(recompute_end_rel - cursor_rel)} | tokens={compact_token_count(recompute_tokens)} | timing={timing_source}",
                     opacity=0.82,
                     break_long=True,
-                    min_w=min_visible_bar_w,
+                    callout_fill="#fdf4ff",
+                    callout_text="#86198f",
                 )
                 cursor_rel = recompute_end_rel
             replay_h2d_end_rel = replay_h2d[1] if replay_h2d else None
             remaining_start_rel = max(candidate for candidate in [cursor_rel, replay_h2d_end_rel] if candidate is not None)
             if first_token_rel > remaining_start_rel:
-                draw_span(
+                draw_overview_span(
                     parts,
-                    overview_x,
-                    x_min,
-                    x_max,
                     remaining_start_rel,
                     first_token_rel,
                     replay_y + 46,
@@ -7533,14 +7755,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     f"{label} | remaining before-first-token work: {display_ms(first_token_rel - remaining_start_rel)}",
                     opacity=0.84,
                     break_long=True,
-                    min_w=min_visible_bar_w,
+                    callout_fill="#fefce8",
+                    callout_text="#854d0e",
                 )
             elif recompute_tokens <= 0 and not has_runtime_prefill_timing:
-                draw_span(
+                draw_overview_span(
                     parts,
-                    overview_x,
-                    x_min,
-                    x_max,
                     prefill_start_rel,
                     first_token_rel,
                     replay_y + 46,
@@ -7550,13 +7770,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     f"{label} | time to first token: {display_ms(first_token_rel - prefill_start_rel)}",
                     opacity=0.84,
                     break_long=True,
-                    min_w=min_visible_bar_w,
+                    callout_fill="#fefce8",
+                    callout_text="#854d0e",
                 )
             draw_overview_marker(parts, first_token_rel, replay_y - 5, replay_y + 30, unified_stack_color("prefill"), f"{label} | first token: {display_ms(first_token_rel)} relative to due")
         if first_token is not None and as_float(row.get("resume_end_ms")) is not None:
             decode_span = (first_token - due, (as_float(row.get("resume_end_ms")) or first_token) - due)
             if decode_span[1] > decode_span[0]:
-                draw_span(parts, overview_x, x_min, x_max, decode_span[0], decode_span[1], replay_y + 74, main_bar_h, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78, break_long=True)
+                draw_overview_span(parts, decode_span[0], decode_span[1], replay_y + 74, main_bar_h, unified_stack_color("decode"), "decode", f"{label} | decode after first token: {display_ms(decode_span[1] - decode_span[0])}", opacity=0.78)
 
         zoom_title_y = y + 252
         parts.append(f'<text x="{left - 10}" y="{zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">KV zoom</text>')
@@ -8438,13 +8659,27 @@ def grouped_mode_comparison_timeline_html(
         <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in no prefetch and direct prefetch.</p>
         """
     scenario_count = len({str(row.get("comparison_scenario") or "") for row in rows})
+    mode_key_items = []
+    for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"):
+        fg, badge_bg = mode_badge_style(mode)
+        row_bg, accent, opacity = mode_row_background_style(mode)
+        mode_key_items.append(
+            f'<span class="pill" style="background:{row_bg}; border:1px solid {accent}; color:{fg};">'
+            f'<span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:{accent};margin-right:6px;"></span>'
+            f'{html.escape(display_mode(mode))}</span>'
+        )
+    mode_key_html = '<div class="toc-pills" style="margin-top:10px;">' + "".join(mode_key_items) + "</div>"
     return f"""
-    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, and projected hardware bypass.</p>
-    <p class="note">Mode order is always: no prefetch, direct prefetch, then projected hardware bypass. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
+    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, <code>C00-DH</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, Dynamo priority hints, and projected hardware bypass.</p>
+    <p class="note">Mode order is always: no prefetch, direct prefetch, Dynamo priority hints, then projected hardware bypass. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
+    <h3>Legend / How To Read This Timeline</h3>
+    {unified_stack_legend_table_html()}
+    <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row.</p>
+    {mode_key_html}
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
-      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / HW</div></div>
+      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DH / HW</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, compact_projected_rows=True)}</div>
@@ -8578,6 +8813,7 @@ def render_html(
     grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
     grouped_hardware_projection_rows = projected_hardware_bypass_rows(grouped_comparison_rows)
+    dynamo_priority_rows = dynamo_priority_hint_translation_rows(gaps)
     global_mode_readiness_table_rows = global_kv_readiness_by_mode_rows(gaps)
     global_mode_readiness_summary_table_rows = global_kv_readiness_by_mode_summary_rows(
         global_mode_readiness_table_rows
@@ -8839,6 +9075,9 @@ def render_html(
     {table_html(h2d_contention_event_table_rows, limit=2000)}
     <h3>Mode Summary</h3>
     {table_html(mode_rows)}
+    <h3>Dynamo Priority Hint Translation Rows</h3>
+    <p class="note">These rows show the bridge used by <code>dynamo_priority_hints</code>: the emitted <code>custom_params.nvext.agent_hints</code> priority and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
+    {table_html(dynamo_priority_rows, limit=1000)}
     <h3>Grouped Mode Comparison Rows</h3>
     <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-HW</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
     {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
@@ -8946,6 +9185,7 @@ def main() -> None:
     hardware_bypass_projection_summary = projected_hardware_bypass_summary_rows(hardware_bypass_projection)
     global_mode_readiness = global_kv_readiness_by_mode_rows(all_gaps)
     global_mode_readiness_summary = global_kv_readiness_by_mode_summary_rows(global_mode_readiness)
+    dynamo_priority_rows = dynamo_priority_hint_translation_rows(all_gaps)
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
     replay_delay_verdicts = replay_delay_verdict_rows(replay_delay_breakdown)
     replay_delay_running_context = replay_delay_running_context_rows(all_labeled_gaps, all_trace_rows, h2d_activity_events)
@@ -8989,6 +9229,7 @@ def main() -> None:
     write_csv(args.out_dir / "projected_hardware_bypass_summary.csv", hardware_bypass_projection_summary)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", global_mode_readiness)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", global_mode_readiness_summary)
+    write_csv(args.out_dir / "dynamo_priority_hint_translation.csv", dynamo_priority_rows)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
     write_csv(args.out_dir / "instrumentation_coverage.csv", instrumentation_coverage_rows(all_gaps, ledger))
     write_csv(args.out_dir / "request_id_coverage_report.csv", request_coverage)
@@ -9034,6 +9275,7 @@ def main() -> None:
             "projected_hardware_bypass_summary": hardware_bypass_projection_summary,
             "global_kv_readiness_by_mode": global_mode_readiness,
             "global_kv_readiness_by_mode_summary": global_mode_readiness_summary,
+            "dynamo_priority_hint_translation": dynamo_priority_rows,
             "exact_kv_movement_attribution": exact_kv_rows,
             "exact_kv_movement_summary": exact_movement_summary_rows(exact_kv_rows),
             "kv_block_ledger": kv_block_rows,

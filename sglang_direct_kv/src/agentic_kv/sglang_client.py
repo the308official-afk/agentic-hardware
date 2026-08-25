@@ -24,6 +24,7 @@ class SGLangClient:
         prompt: str,
         max_tokens: int,
         temperature: float,
+        extra_body: dict[str, Any] | None = None,
     ) -> CompletionTiming:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -32,6 +33,8 @@ class SGLangClient:
             "temperature": temperature,
             "stream": True,
         }
+        if extra_body:
+            payload.update(extra_body)
         url = f"{self.base_url}/chat/completions"
         start = time.perf_counter()
         first_token_time: Optional[float] = None

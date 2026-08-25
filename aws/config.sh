@@ -17,7 +17,7 @@ if [[ -n "${AGENTIC_HW_SERVERS:-}" ]]; then
   read -r -a SERVERS <<< "${AGENTIC_HW_SERVERS}"
 else
   SERVERS=(
-    "54.88.160.191"
+    "44.201.74.148"
   )
 fi
 

@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
+DYNAMO_PRIORITY_MODE = "dynamo_priority_hints"
 
 
 class NoopAsyncContext:
@@ -229,6 +230,7 @@ async def chat_once(
     max_tokens: int,
     label: str,
     custom_params: dict[str, Any],
+    request_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "model": model,
@@ -238,6 +240,8 @@ async def chat_once(
         "stream": True,
         "custom_params": custom_params,
     }
+    if request_extra:
+        payload.update(request_extra)
     start_perf = time.perf_counter()
     start_ns = time.time_ns()
     first_token_perf: float | None = None
@@ -306,7 +310,7 @@ async def main_async() -> None:
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
     parser.add_argument(
         "--mode",
-        choices=("no_prefetch", "direct_prefetch", "oracle_prefetch"),
+        choices=("no_prefetch", "direct_prefetch", DYNAMO_PRIORITY_MODE, "oracle_prefetch"),
         default="no_prefetch",
     )
     parser.add_argument("--workload-jsonl", type=Path)
@@ -328,9 +332,27 @@ async def main_async() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "For direct_prefetch, emulate Dynamo-like priority hints by giving the "
-            "prefetch/replay path a local driver priority window over filler traffic."
+            "For direct_prefetch and dynamo_priority_hints, give the prefetch/replay "
+            "path a local driver priority window over filler traffic."
         ),
+    )
+    parser.add_argument(
+        "--dynamo-high-priority",
+        type=int,
+        default=100,
+        help="SGLang priority value used for urgent Dynamo-style agent hints.",
+    )
+    parser.add_argument(
+        "--dynamo-normal-priority",
+        type=int,
+        default=0,
+        help="SGLang priority value used for normal requests.",
+    )
+    parser.add_argument(
+        "--dynamo-low-priority",
+        type=int,
+        default=-100,
+        help="SGLang priority value used for low-priority background filler requests.",
     )
     parser.add_argument(
         "--priority-prefetch-head-start-ms",
@@ -391,6 +413,9 @@ async def main_async() -> None:
             "priority_replay_guard_ms": args.priority_replay_guard_ms,
             "priority_replay_release_ms": args.priority_replay_release_ms,
             "priority_filler_stagger_ms": args.priority_filler_stagger_ms,
+            "dynamo_high_priority": args.dynamo_high_priority,
+            "dynamo_normal_priority": args.dynamo_normal_priority,
+            "dynamo_low_priority": args.dynamo_low_priority,
         }
     )
 
@@ -401,6 +426,76 @@ async def main_async() -> None:
             if delay > 0:
                 await asyncio.sleep(delay)
 
+        def dynamo_mode_enabled() -> bool:
+            return args.mode == DYNAMO_PRIORITY_MODE
+
+        def priority_direct_enabled() -> bool:
+            return args.mode in {"direct_prefetch", DYNAMO_PRIORITY_MODE} and args.priority_direct_prefetch
+
+        def priority_policy_name() -> str:
+            if dynamo_mode_enabled():
+                return "dynamo_agent_hints_to_sglang_priority"
+            if priority_direct_enabled():
+                return "dynamo_like_direct_prefetch"
+            return "none"
+
+        def dynamo_agent_priority(phase: str, pair: ReplayPair) -> str:
+            if phase in {"hint_prefetch", "replay"}:
+                return "high"
+            if phase == "pressure_filler" or pair.priority == "low":
+                return "low"
+            return "normal"
+
+        def sglang_priority_value(agent_priority: str) -> int:
+            if agent_priority == "high":
+                return args.dynamo_high_priority
+            if agent_priority == "low":
+                return args.dynamo_low_priority
+            return args.dynamo_normal_priority
+
+        def dynamo_hint_bridge(
+            pair: ReplayPair,
+            phase: str,
+            label: str,
+            p_hash: str,
+            deadline_ms: float | None,
+        ) -> tuple[dict[str, Any], dict[str, Any]]:
+            if not dynamo_mode_enabled():
+                return {}, {}
+            agent_priority = dynamo_agent_priority(phase, pair)
+            sglang_priority = sglang_priority_value(agent_priority)
+            hint_action = {
+                "hint_prefetch": "prefetch_kv",
+                "replay": "consume_kv",
+                "pressure_filler": "background_work",
+            }.get(phase, "normal_request")
+            hints = {
+                "schema": "nvext.agent_hints",
+                "session_id": pair.session_id,
+                "request_id": label,
+                "phase": phase,
+                "task_index": pair.task_index,
+                "prompt_hash": p_hash,
+                "priority": agent_priority,
+                "deadline_offset_ms": round(deadline_ms, 3) if deadline_ms is not None else "",
+                "expected_action": hint_action,
+                "reuse_confidence": 0.95 if phase in {"hint_prefetch", "replay"} else 0.2,
+                "kv_cache_relevant": phase in {"hint_prefetch", "replay"},
+            }
+            bridge = {
+                "hint_source": "custom_params.nvext.agent_hints",
+                "dynamo_agent_priority": agent_priority,
+                "sglang_priority": sglang_priority,
+                "deadline_offset_ms": round(deadline_ms, 3) if deadline_ms is not None else "",
+                "priority_translation": (
+                    f"nvext.agent_hints.priority={agent_priority} -> "
+                    f"SGLang priority={sglang_priority}"
+                ),
+                "nvext_agent_hints": hints,
+            }
+            request_extra = {"priority": sglang_priority}
+            return request_extra, bridge
+
         async def run_request(
             pair: ReplayPair,
             prompt: str,
@@ -409,8 +504,10 @@ async def main_async() -> None:
             max_tokens: int,
             *,
             use_concurrency_limit: bool = True,
+            deadline_ms: float | None = None,
         ) -> dict[str, Any]:
             p_hash = prompt_hash(prompt)
+            request_extra, bridge_metadata = dynamo_hint_bridge(pair, phase, label, p_hash, deadline_ms)
             write_trace_event(
                 {
                     "event": "m27.request.submitted",
@@ -421,6 +518,7 @@ async def main_async() -> None:
                     "prompt_hash": p_hash,
                     "prompt_chars": len(prompt),
                     "uses_driver_concurrency_gate": use_concurrency_limit,
+                    **bridge_metadata,
                 }
             )
             limiter = sem if use_concurrency_limit else NoopAsyncContext()
@@ -435,8 +533,28 @@ async def main_async() -> None:
                         "prompt_hash": p_hash,
                         "prompt_chars": len(prompt),
                         "uses_driver_concurrency_gate": use_concurrency_limit,
+                        **bridge_metadata,
                     }
                 )
+                params = agentic_params(pair, phase, args.mode, label, p_hash)
+                if bridge_metadata:
+                    params["nvext"] = {"agent_hints": bridge_metadata["nvext_agent_hints"]}
+                    params["dynamo_priority_bridge"] = {
+                        "hint_source": bridge_metadata["hint_source"],
+                        "dynamo_agent_priority": bridge_metadata["dynamo_agent_priority"],
+                        "sglang_priority": bridge_metadata["sglang_priority"],
+                        "deadline_offset_ms": bridge_metadata["deadline_offset_ms"],
+                        "priority_translation": bridge_metadata["priority_translation"],
+                    }
+                    params["agentic_kv"].update(
+                        {
+                            "hint_source": bridge_metadata["hint_source"],
+                            "dynamo_agent_priority": bridge_metadata["dynamo_agent_priority"],
+                            "sglang_priority": bridge_metadata["sglang_priority"],
+                            "deadline_offset_ms": bridge_metadata["deadline_offset_ms"],
+                            "priority_translation": bridge_metadata["priority_translation"],
+                        }
+                    )
                 row = await chat_once(
                     client,
                     args.base_url,
@@ -444,7 +562,8 @@ async def main_async() -> None:
                     prompt,
                     max_tokens,
                     label,
-                    agentic_params(pair, phase, args.mode, label, p_hash),
+                    params,
+                    request_extra,
                 )
                 row.update(
                     {
@@ -455,6 +574,7 @@ async def main_async() -> None:
                         "tool_names": pair.tool_names,
                         "priority": pair.priority,
                         "source": pair.source,
+                        **{k: v for k, v in bridge_metadata.items() if k != "nvext_agent_hints"},
                     }
                 )
                 rows.append(row)
@@ -468,13 +588,11 @@ async def main_async() -> None:
                         "prompt_hash": p_hash,
                         "ttft_ms": row["ttft_ms"],
                         "total_latency_ms": row["total_latency_ms"],
+                        **bridge_metadata,
                     }
                 )
                 print(json.dumps(row, sort_keys=True), flush=True)
                 return row
-
-        def priority_direct_enabled() -> bool:
-            return args.mode == "direct_prefetch" and args.priority_direct_prefetch
 
         async def wait_for_priority_filler_slot(
             pair: ReplayPair,
@@ -506,7 +624,7 @@ async def main_async() -> None:
                     "earliest_offset_ms": round(earliest_offset_ms, 3),
                     "guard_start_offset_ms": round(guard_start_ms, 3),
                     "guard_end_offset_ms": round(guard_end_ms, 3),
-                    "priority_policy": "dynamo_like_direct_prefetch",
+                    "priority_policy": priority_policy_name(),
                 }
             )
             await sleep_until(earliest_offset_ms)
@@ -554,11 +672,11 @@ async def main_async() -> None:
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "prefetch_action": "direct_load",
-                "prompt_hash": base_hash,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "priority_policy": "dynamo_like_direct_prefetch" if priority_direct_enabled() else "none",
-            }
-        )
+                    "prompt_hash": base_hash,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "priority_policy": priority_policy_name(),
+                }
+            )
             await run_request(
                 pair,
                 trigger_prompt,
@@ -566,6 +684,7 @@ async def main_async() -> None:
                 f"{pair.session_id}_direct_prefetch",
                 args.prefetch_max_tokens,
                 use_concurrency_limit=not priority_direct_enabled(),
+                deadline_ms=replay_due_ms,
             )
             write_trace_event(
                 {
@@ -573,11 +692,11 @@ async def main_async() -> None:
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "prefetch_action": "direct_load",
-                "prompt_hash": base_hash,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "priority_policy": "dynamo_like_direct_prefetch" if priority_direct_enabled() else "none",
-            }
-        )
+                    "prompt_hash": base_hash,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "priority_policy": priority_policy_name(),
+                }
+            )
 
         async def run_pair(pair: ReplayPair, index: int) -> None:
             arrival_ms = index * 40.0
@@ -634,7 +753,7 @@ async def main_async() -> None:
                         "tool_start_offset_ms": round(tool_start_offset_ms, 3),
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "reuse_confidence": round(rng.uniform(0.72, 0.95), 3),
-                        "priority_policy": "dynamo_like_direct_prefetch" if priority_direct_enabled() else "none",
+                        "priority_policy": priority_policy_name(),
                     }
                 )
 
@@ -665,7 +784,7 @@ async def main_async() -> None:
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "guard_ms": args.priority_replay_guard_ms,
                         "release_ms": args.priority_replay_release_ms,
-                        "priority_policy": "dynamo_like_direct_prefetch",
+                        "priority_policy": priority_policy_name(),
                     }
                 )
             write_trace_event(
@@ -697,6 +816,7 @@ async def main_async() -> None:
                 f"{pair.session_id}_replay",
                 args.max_tokens,
                 use_concurrency_limit=not priority_direct_enabled(),
+                deadline_ms=replay_due_ms,
             )
             write_trace_event(
                 {
