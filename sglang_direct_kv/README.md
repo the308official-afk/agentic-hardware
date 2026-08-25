@@ -58,6 +58,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
 | Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
 | Milestone 38: Dynamo-Like Direct Prefetch vs Projected Hardware | Ready | [Milestone 38](#milestone-38-dynamo-like-direct-prefetch-vs-projected-hardware) |
+| Milestone 38B: Dynamo Priority Hint Bridge | Ready | [Milestone 38B](#milestone-38b-dynamo-priority-hint-bridge) |
 | Milestone 39: Projected Hardware Bypass Benefit | Ready | [Milestone 39](#milestone-39-projected-hardware-bypass-benefit) |
 
 ## Milestone Run Command Convention
@@ -132,6 +133,13 @@ These are the current core claims we can safely make from the testbed so far:
 7. We are not proposing generic prefetch. We are proposing an agent-aware KV movement path where the runtime provides deadline and priority hints, and the GPU memory/copy subsystem enforces them. The DMA engine becomes aware that some copies are urgent replay-critical KV, while others are background movement. This should reduce late KV loads, wasted prefetches, replay-side reloads, and TTFT tail latency in coding-agent/SWE-bench-style workloads.
 
 8. Simply forcing priority in software can be expensive. The Milestone 38 deadline-priority emulation gave urgent KV work special treatment, but it still had to pass through SGLang's normal software/runtime path. That path added enough overhead that replay TTFT became worse in the latest stress run. This strengthens the hardware argument: we need a faster, lower-overhead, deadline-aware KV movement path, not just a software queueing trick.
+
+9. The Dynamo priority-hint bridge lets us test a stronger software baseline:
+   agent hints are emitted as `custom_params.nvext.agent_hints` and translated
+   into SGLang's native `priority` field. If this still misses replay deadlines
+   under KV-pool pressure, the claim becomes sharper: existing priority hints
+   help express intent, but they still need a low-overhead KV movement and
+   residency enforcement path closer to the memory system.
 
 Latest harsher controlled run:
 
@@ -4998,6 +5006,15 @@ direct_prefetch:
     - low-priority filler launches are held near the replay deadline
     - the target replay uses the priority driver lane instead of waiting behind fillers
 
+dynamo_priority_hints:
+  emits a Dynamo-style hint payload under custom_params.nvext.agent_hints.
+  the proxy driver translates that hint into SGLang's native priority field:
+    - urgent prefetch/replay requests get high priority
+    - background filler pressure gets low priority
+    - SGLang is launched with priority scheduling enabled for this mode
+  this is the closest current-software baseline for "Dynamo hint -> SGLang
+  priority scheduling" without using the full Dynamo stack.
+
 oracle_prefetch:
   optional advanced mode for later sensitivity studies.
   excluded from the default run so the main report stays simple.
@@ -5013,11 +5030,14 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
 MAX_PAIRS=12 \
-MODES="no_prefetch direct_prefetch" \
+MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 64" \
 PREFETCH_TIMING=near_resume \
 PRIORITY_DIRECT_PREFETCH=1 \
+DYNAMO_HIGH_PRIORITY=100 \
+DYNAMO_NORMAL_PRIORITY=0 \
+DYNAMO_LOW_PRIORITY=-100 \
 PRIORITY_PREFETCH_HEAD_START_MS=50 \
 PRIORITY_REPLAY_GUARD_MS=120 \
 PRIORITY_REPLAY_RELEASE_MS=80 \
@@ -5035,10 +5055,13 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=12 \
-MODES="no_prefetch direct_prefetch" \
+MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 64" \
 PRIORITY_DIRECT_PREFETCH=1 \
+DYNAMO_HIGH_PRIORITY=100 \
+DYNAMO_NORMAL_PRIORITY=0 \
+DYNAMO_LOW_PRIORITY=-100 \
 PRIORITY_PREFETCH_HEAD_START_MS=50 \
 PRIORITY_REPLAY_GUARD_MS=120 \
 PRIORITY_REPLAY_RELEASE_MS=80 \
@@ -5058,12 +5081,15 @@ LATEST_REPORT_ROOT=artifacts/results \
 MAX_PAIRS=1 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
 SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
-MODES="no_prefetch direct_prefetch" \
+MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100" \
 FILLER_LIST="0 64 128" \
 FILLER_PROMPT_TOKENS=2048 \
 FILLER_DIVERGE_EARLY=1 \
 PRIORITY_DIRECT_PREFETCH=1 \
+DYNAMO_HIGH_PRIORITY=100 \
+DYNAMO_NORMAL_PRIORITY=0 \
+DYNAMO_LOW_PRIORITY=-100 \
 REQUEST_CONCURRENCY=8 \
 MAX_TOTAL_TOKENS=24576 \
 HICACHE_SIZE_GB=8 \
@@ -5093,6 +5119,10 @@ m27.session.start
 m27.request.start / m27.request.end
   Turn A, prefetch hint, filler pressure, or Turn B was sent to SGLang.
 
+m27.request.submitted
+  For dynamo_priority_hints, this includes the Dynamo-style hint source,
+  the translated SGLang priority value, and replay deadline metadata.
+
 m27.tool_wait.start
   The controlled tool-wait window begins.
 
@@ -5117,8 +5147,24 @@ artifacts/results/<run>/<case>/m27_copy_telemetry.jsonl
 artifacts/results/<run>/<case>/m27_metrics.jsonl
 artifacts/results/<run>/controlled_replay_report/controlled_replay_report.html
 artifacts/results/<run>/controlled_replay_report/controlled_replay_gaps.csv
+artifacts/results/<run>/controlled_replay_report/dynamo_priority_hint_translation.csv
 artifacts/results/latest_controlled_replay_report.html
 artifacts/results/latest_master_report.html
+```
+
+Dynamo priority hint translation proof:
+
+```text
+The report appendix includes "Dynamo Priority Hint Translation Rows".
+This table shows, per gap:
+  custom_params.nvext.agent_hints priority
+  translated SGLang priority integer
+  whether the hint/replay used high priority
+  whether background filler traffic used low priority
+
+This keeps the claim precise:
+we are not running full Dynamo here; we are emulating the Dynamo hint contract
+and mapping it onto SGLang's native priority field.
 ```
 
 Investigate whether replay reused GPU KV, loaded KV from host, or recomputed:
@@ -6691,6 +6737,7 @@ Grouped Mode Comparison Timeline:
   compare the same task/gap scenario across:
     Cxx-NP = no prefetch
     Cxx-DP = direct prefetch
+    Cxx-DH = Dynamo priority hints, if MODES includes dynamo_priority_hints
     Cxx-HW = projected hardware bypass
 
 Unified Forensic Stack Timeline:
@@ -6698,6 +6745,77 @@ Unified Forensic Stack Timeline:
 
 GPU KV Pool Residency:
   check whether the KV pool was full or near-full around replay/prefetch events.
+```
+
+### Milestone 38B: Dynamo Priority Hint Bridge
+
+Why this milestone is needed:
+
+```text
+SGLang can accept request priority directly. Dynamo-style frontends can express
+agent/session intent as hints. This milestone connects those ideas without
+starting the full Dynamo stack:
+
+  custom_params.nvext.agent_hints
+    -> proxy-driver translation
+    -> SGLang priority integer
+    -> SGLang priority scheduler
+```
+
+What this mode means:
+
+```text
+dynamo_priority_hints:
+  sends a Dynamo-style agent hint with phase, session, deadline, and priority.
+  maps high-priority prefetch/replay work to SGLang priority=100.
+  maps background filler pressure to SGLang priority=-100.
+  launches SGLang with --enable-priority-scheduling for this mode.
+```
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=dynamo_priority_hints_compare_1 \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+WORKLOAD_SOURCE=synthetic \
+MAX_TIMELINE_GAPS=32 \
+MAX_PAIRS=2 \
+MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+TOOL_WAIT_LIST_MS=500 \
+FILLER_LIST="12 16 24" \
+REQUEST_CONCURRENCY=4 \
+FILLER_PROMPT_TOKENS=1024 \
+SYNTHETIC_PROMPT_TOKENS=4096 \
+SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+PRIORITY_DIRECT_PREFETCH=1 \
+DYNAMO_HIGH_PRIORITY=100 \
+DYNAMO_NORMAL_PRIORITY=0 \
+DYNAMO_LOW_PRIORITY=-100 \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+What to look for:
+
+```text
+Grouped Mode Comparison Timeline:
+  Cxx-DH rows show the measured Dynamo-priority-hint path.
+
+Global KV Readiness By Mode:
+  DH dots show whether the Dynamo-priority-hint path finished useful KV
+  readiness before replay.
+
+Evidence Tables / Raw Proof:
+  Dynamo Priority Hint Translation Rows show the exact hint-to-priority mapping.
 ```
 
 ### Milestone 39: Projected Hardware Bypass Benefit
