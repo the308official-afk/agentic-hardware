@@ -6738,8 +6738,26 @@ What to look for in `latest_master_report.html`:
 
 ```text
 Global KV Readiness By Mode:
-  compare no-prefetch replay H2D readiness, direct-prefetch readiness,
-  Dynamo-priority-hint readiness, and the projected hardware bypass estimate.
+  compare replay-start timing and KV-ready timing across modes.
+
+  circle = when the replay request started relative to replay due.
+  square = when useful KV became ready relative to replay due.
+
+  no_prefetch:
+    KV-ready uses replay-side H2D finish, if replay H2D is observed.
+
+  direct_prefetch:
+    KV-ready uses hint-side direct KV H2D if it completed before replay;
+    otherwise it falls back to replay-side H2D or measured prefetch completion.
+
+  dynamo_priority_hints:
+    no artificial/direct-prefetch H2D is credited.
+    KV-ready uses replay-side H2D finish only, if replay H2D is observed.
+
+  projected_hardware_bypass:
+    KV-ready is projected, not measured.
+    It estimates a low-overhead hardware path using measured H2D duration
+    plus fixed control overhead.
 
 Grouped Mode Comparison Timeline:
   compare the same task/gap scenario across:

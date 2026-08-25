@@ -3336,7 +3336,7 @@ def replay_h2d_readiness_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[st
     return output
 
 
-def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, str]:
+def mode_kv_ready_timing(row: dict[str, Any]) -> tuple[float | None, str, str, str]:
     due = as_float(row.get("tool_gap_end_ms"))
     if due is None:
         return None, "", "", "missing replay due"
@@ -3345,40 +3345,73 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
         h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
         if h2d_end is not None and has_events(row.get("replay_kv_h2d_events")):
             return (
-                round(due - h2d_end, 3),
+                h2d_end,
                 "measured",
                 "replay-side KV H2D",
                 "No prefetch: readiness is when replay-side KV H2D finished.",
             )
         return None, "", "", "No replay-side KV H2D was observed."
+    if mode == "dynamo_priority_hints":
+        h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+        if h2d_end is not None and has_events(row.get("replay_kv_h2d_events")):
+            return (
+                h2d_end,
+                "measured",
+                "replay-side KV H2D",
+                (
+                    "Dynamo priority hints only: no direct KV prefetch hook is counted. "
+                    "Readiness is when the prioritized replay path finished replay-side KV H2D."
+                ),
+            )
+        return None, "", "", "Dynamo priority hints only: no replay-side KV H2D was observed."
     if mode in PREFETCH_MODE_NAMES:
         mode_label = display_mode(mode)
         direct_end = as_float(row.get("direct_kv_h2d_end_ms"))
-        if direct_end is not None and has_events(row.get("direct_kv_h2d_events")):
+        replay_start = as_float(row.get("resume_start_ms"))
+        if (
+            direct_end is not None
+            and has_events(row.get("direct_kv_h2d_events"))
+            and (replay_start is None or direct_end <= replay_start)
+        ):
             return (
-                round(due - direct_end, 3),
+                direct_end,
                 "measured",
                 "hint-side direct KV H2D",
-                f"{mode_label}: readiness is when hint-side KV H2D finished.",
+                f"{mode_label}: readiness is when hint-side direct KV H2D finished before replay started.",
             )
         replay_end = as_float(row.get("replay_kv_h2d_end_ms"))
         if replay_end is not None and has_events(row.get("replay_kv_h2d_events")):
             return (
-                round(due - replay_end, 3),
+                replay_end,
                 "measured fallback",
                 "replay-side KV H2D",
-                f"{mode_label} did not produce visible hint-side H2D, so readiness falls back to replay-side KV H2D.",
+                f"{mode_label}: useful readiness falls back to replay-side KV H2D.",
+            )
+        if direct_end is not None and has_events(row.get("direct_kv_h2d_events")):
+            return (
+                direct_end,
+                "measured late hint-side H2D",
+                "hint-side direct KV H2D",
+                f"{mode_label}: hint-side KV H2D finished after replay started, so this is counted as late readiness.",
             )
         prefetch_margin = as_float(row.get("prefetch_margin_ms"))
         if prefetch_margin is not None:
             return (
-                round(prefetch_margin, 3),
+                due - prefetch_margin,
                 "measured request path",
                 "prefetch request completion",
                 f"{mode_label} had no visible H2D, so this uses the measured prefetch request completion margin.",
             )
         return None, "", "", "No hint-side or replay-side KV H2D was observed."
     return None, "", "", f"Mode {mode} is not included in this readiness comparison."
+
+
+def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, str]:
+    due = as_float(row.get("tool_gap_end_ms"))
+    ready, evidence_kind, source, meaning = mode_kv_ready_timing(row)
+    if due is None or ready is None:
+        return None, evidence_kind, source, meaning
+    return round(due - ready, 3), evidence_kind, source, meaning
 
 
 def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3405,6 +3438,16 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
             margin, evidence_kind, source, meaning = mode_readiness_margin(row)
             if margin is None:
                 continue
+            due = as_float(row.get("tool_gap_end_ms"))
+            replay_start = as_float(row.get("resume_start_ms"))
+            kv_ready, _, _, _ = mode_kv_ready_timing(row)
+            replay_start_relative = (
+                round(replay_start - due, 3) if due is not None and replay_start is not None else ""
+            )
+            kv_ready_relative = round(kv_ready - due, 3) if due is not None and kv_ready is not None else ""
+            replay_start_to_kv_ready = (
+                round(kv_ready - replay_start, 3) if kv_ready is not None and replay_start is not None else ""
+            )
             output.append(
                 {
                     "scenario": scenario_label,
@@ -3415,7 +3458,13 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                     "tool_wait_ms": row.get("tool_gap_ms", key[2]),
                     "fillers": case_fillers(row) or key[3],
                     "kv_ready_margin_ms": margin,
+                    "kv_ready_relative_ms": kv_ready_relative,
+                    "replay_start_relative_ms": replay_start_relative,
+                    "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
                     "ready_before_replay_due": 1 if margin >= 0 else 0,
+                    "replay_started_before_or_at_due": (
+                        1 if replay_start_relative not in ("", None) and float(replay_start_relative) <= 0 else 0
+                    ),
                     "evidence_kind": evidence_kind,
                     "readiness_source": source,
                     "measured_or_projected": "measured",
@@ -3434,6 +3483,22 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
             if realistic:
                 margin = as_float(realistic.get("projected_hardware_margin_ms"))
                 if margin is not None:
+                    due = as_float(projection_source.get("tool_gap_end_ms"))
+                    replay_start = as_float(projection_source.get("resume_start_ms"))
+                    projected_ready = as_float(realistic.get("projected_hardware_end_ms"))
+                    replay_start_relative = (
+                        round(replay_start - due, 3) if due is not None and replay_start is not None else ""
+                    )
+                    kv_ready_relative = (
+                        round(projected_ready - due, 3)
+                        if due is not None and projected_ready is not None
+                        else round(-margin, 3)
+                    )
+                    replay_start_to_kv_ready = (
+                        round(projected_ready - replay_start, 3)
+                        if projected_ready is not None and replay_start is not None
+                        else ""
+                    )
                     output.append(
                         {
                             "scenario": scenario_label,
@@ -3444,7 +3509,16 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                             "tool_wait_ms": realistic.get("tool_wait_ms", key[2]),
                             "fillers": case_fillers(projection_source) or key[3],
                             "kv_ready_margin_ms": round(margin, 3),
+                            "kv_ready_relative_ms": kv_ready_relative,
+                            "replay_start_relative_ms": replay_start_relative,
+                            "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
                             "ready_before_replay_due": 1 if margin >= 0 else 0,
+                            "replay_started_before_or_at_due": (
+                                1
+                                if replay_start_relative not in ("", None)
+                                and float(replay_start_relative) <= 0
+                                else 0
+                            ),
                             "evidence_kind": "projected",
                             "readiness_source": "projected hardware H2D",
                             "measured_or_projected": "projected, not measured",
@@ -3609,14 +3683,191 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     return "\n".join(parts)
 
 
+def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    output: list[dict[str, Any]] = []
+    for mode in mode_order:
+        items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
+        values = [
+            float(row["replay_start_relative_ms"])
+            for row in items
+            if row.get("replay_start_relative_ms") not in ("", None)
+        ]
+        if not values:
+            continue
+        late = [value for value in values if value > 0]
+        on_time = [value for value in values if value <= 0]
+        output.append(
+            {
+                "mode": display_mode(mode),
+                "dots": len(values),
+                "replay_started_on_or_before_due": len(on_time),
+                "replay_started_late": len(late),
+                "late_pct": round(len(late) * 100.0 / len(values), 2) if values else "",
+                "median_replay_start_relative_ms": round(median(values), 3),
+                "worst_replay_start_lateness_ms": round(max(late), 3) if late else "",
+            }
+        )
+    return output
+
+
+def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
+    usable = [
+        row
+        for row in rows
+        if row.get("replay_start_relative_ms") not in ("", None)
+        or row.get("kv_ready_relative_ms") not in ("", None)
+    ]
+    if not usable:
+        return "<p>No replay-start or KV-ready timing rows were available for this run.</p>"
+    width = 1480
+    height = 620
+    left = 96
+    right = 52
+    top = 88
+    bottom = 138
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    values: list[float] = []
+    for row in usable:
+        for key in ("replay_start_relative_ms", "kv_ready_relative_ms"):
+            value = as_float(row.get(key))
+            if value is not None:
+                values.append(value)
+    if not values:
+        return "<p>No replay-start or KV-ready timing values were available for this run.</p>"
+    v_min = min(values)
+    v_max = max(values)
+    pad = max(50.0, (v_max - v_min) * 0.08)
+    y_min = min(v_min - pad, -50.0)
+    y_max = max(v_max + pad, 50.0)
+    scaled_min = h2d_symlog_value(y_min)
+    scaled_max = h2d_symlog_value(y_max)
+    scenario_labels = sorted({str(row.get("scenario") or "") for row in usable}, key=lambda value: (len(value), value))
+    scenario_index = {label: idx for idx, label in enumerate(scenario_labels)}
+    mode_offsets = {
+        "no_prefetch": -30.0,
+        "direct_prefetch": -10.0,
+        "dynamo_priority_hints": 10.0,
+        "projected_hardware_bypass": 30.0,
+    }
+    mode_colors = {
+        "no_prefetch": "#2563eb",
+        "direct_prefetch": "#7c3aed",
+        "dynamo_priority_hints": "#f59e0b",
+        "projected_hardware_bypass": "#0f766e",
+    }
+
+    def x_pos(label: str, mode_key: str) -> float:
+        if len(scenario_labels) <= 1:
+            base = left + plot_w / 2
+        else:
+            base = left + scenario_index[label] * plot_w / (len(scenario_labels) - 1)
+        return base + mode_offsets.get(mode_key, 0.0)
+
+    def y_pos(value: float) -> float:
+        scaled = h2d_symlog_value(value)
+        return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
+
+    zero_y = y_pos(0.0)
+    parts = [
+        '<svg viewBox="0 0 1480 620" width="100%" role="img" aria-label="Replay start versus KV readiness by mode">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
+        '<text x="22" y="305" transform="rotate(-90 22 305)" text-anchor="middle" font-size="13" font-weight="700">time relative to replay due ms (symlog)</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
+        '<text x="104" y="34" font-size="13" fill="#166534" font-weight="700">above line = before replay due</text>',
+        '<text x="430" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = after replay due</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">circle = replay request started; square = useful KV became ready; connector = time between replay start and KV readiness.</text>',
+    ]
+    seen_ticks: set[int] = set()
+    for value in h2d_symlog_tick_values(y_min, y_max):
+        rounded = int(round(value))
+        if rounded in seen_ticks:
+            continue
+        seen_ticks.add(rounded)
+        y = y_pos(value)
+        parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
+
+    x_tick_step = max(1, len(scenario_labels) // 12)
+    for index, label in enumerate(scenario_labels):
+        if index % x_tick_step != 0 and index != len(scenario_labels) - 1:
+            continue
+        x = x_pos(label, "")
+        parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
+        parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" font-size="10">{html.escape(label)}</text>')
+
+    for row in usable:
+        scenario = str(row.get("scenario") or "")
+        mode_key = canonical_mode(row.get("mode_key"))
+        if scenario not in scenario_index:
+            continue
+        color = mode_colors.get(mode_key, "#64748b")
+        x = x_pos(scenario, mode_key)
+        replay_rel = as_float(row.get("replay_start_relative_ms"))
+        kv_rel = as_float(row.get("kv_ready_relative_ms"))
+        title_base = (
+            f"{scenario} {display_mode(mode_key)} | fillers={row.get('fillers')} | "
+            f"tool_wait={row.get('tool_wait_ms')} ms"
+        )
+        if replay_rel is not None and kv_rel is not None:
+            y1 = y_pos(replay_rel)
+            y2 = y_pos(kv_rel)
+            parts.append(
+                f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" '
+                f'stroke="{color}" stroke-width="2" opacity="0.35"><title>{html.escape(title_base)} | replay-to-KV={row.get("replay_start_to_kv_ready_ms")} ms</title></line>'
+            )
+        if replay_rel is not None:
+            y = y_pos(replay_rel)
+            title = f"{title_base} | replay start={replay_rel:.3f} ms relative to due"
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{html.escape(title)}</title></circle>')
+        if kv_rel is not None:
+            y = y_pos(kv_rel)
+            title = (
+                f"{title_base} | KV ready={kv_rel:.3f} ms relative to due | "
+                f"source={row.get('readiness_source')} | {row.get('measured_or_projected')}"
+            )
+            parts.append(
+                f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" '
+                f'fill="{color}" opacity="0.55" stroke="{color}" stroke-width="2"><title>{html.escape(title)}</title></rect>'
+            )
+
+    lx = left
+    ly = height - 100
+    legend_modes = [
+        ("NP", "No prefetch", "no_prefetch"),
+        ("DP", "Direct prefetch", "direct_prefetch"),
+        ("DH", "Dynamo priority hints only", "dynamo_priority_hints"),
+        ("HW", "Projected hardware bypass", "projected_hardware_bypass"),
+    ]
+    for short, label, mode_key in legend_modes:
+        color = mode_colors[mode_key]
+        parts.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="6.5" fill="{color}"/>')
+        parts.append(f'<rect x="{lx + 20:.1f}" y="{ly - 6:.1f}" width="12" height="12" rx="2" fill="{color}" opacity="0.55" stroke="{color}" stroke-width="2"/>')
+        parts.append(f'<text x="{lx + 42}" y="{ly + 4}" font-size="12">{html.escape(short)} = {html.escape(label)}</text>')
+        lx += 310
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
 def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     rows = global_kv_readiness_by_mode_rows(gaps)
     if not rows:
         return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
     summary = global_kv_readiness_by_mode_summary_rows(rows)
+    replay_start_summary = global_replay_start_by_mode_summary_rows(rows)
     return f"""
-    <p>This chart compares the readiness stories directly: no prefetch, measured direct prefetch, measured Dynamo priority hints only, and projected hardware bypass.</p>
-    <p class="note">Positive margin means KV became ready before the replay deadline. Negative margin means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
+    <p>This section separates two questions: did the replay request itself start on time, and did useful KV become ready on time?</p>
+    <p class="note">For Dynamo priority hints only, no artificial direct-prefetch H2D is counted. Its KV-ready dot uses replay-side H2D finish only. If replay-side H2D is not observed, the replay-start dot can still appear while the KV-ready dot is omitted.</p>
+    <h3>Replay Start Lateness Summary</h3>
+    {table_html(replay_start_summary, ["mode", "dots", "replay_started_on_or_before_due", "replay_started_late", "late_pct", "median_replay_start_relative_ms", "worst_replay_start_lateness_ms"])}
+    <h3>Replay Start vs KV Ready</h3>
+    <p class="note">This chart uses time relative to replay due. Circle = replay request start. Square = useful KV ready. A vertical connector means both were observed/projected for the same mode and scenario.</p>
+    <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
+    <h3>KV Readiness Margin</h3>
+    <p class="note">This existing chart keeps the old margin convention: positive means KV became ready before the replay deadline; negative means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
     {table_html(summary, ["mode", "dots", "ready_before_replay_due", "late", "ready_pct", "median_margin_ms", "worst_lateness_ms", "evidence"])}
     <div class="setup-diagram">{build_global_kv_readiness_by_mode_dot_plot(rows)}</div>
     <p class="note">Exact per-dot values are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
@@ -9098,6 +9349,9 @@ def render_html(
     global_mode_readiness_summary_table_rows = global_kv_readiness_by_mode_summary_rows(
         global_mode_readiness_table_rows
     )
+    global_replay_start_summary_table_rows = global_replay_start_by_mode_summary_rows(
+        global_mode_readiness_table_rows
+    )
     replay_h2d_readiness_table_rows = replay_h2d_readiness_rows(gaps)
     replay_h2d_readiness_bucket_table_rows = replay_h2d_readiness_bucket_rows(replay_h2d_readiness_table_rows)
     replay_queue_table_rows = replay_queue_timing_rows(gaps)
@@ -9334,6 +9588,8 @@ def render_html(
     {table_html(replay_h2d_readiness_bucket_table_rows)}
     <h3>Global KV Readiness By Mode Summary</h3>
     {table_html(global_mode_readiness_summary_table_rows)}
+    <h3>Global Replay Start By Mode Summary</h3>
+    {table_html(global_replay_start_summary_table_rows)}
     <h3>Global KV Readiness By Mode Rows</h3>
     {table_html(global_mode_readiness_table_rows, limit=1000)}
     <h3>Replay Queue Timing Rows</h3>
@@ -9484,6 +9740,7 @@ def main() -> None:
     hardware_bypass_projection_summary = projected_hardware_bypass_summary_rows(hardware_bypass_projection)
     global_mode_readiness = global_kv_readiness_by_mode_rows(all_gaps)
     global_mode_readiness_summary = global_kv_readiness_by_mode_summary_rows(global_mode_readiness)
+    global_replay_start_summary = global_replay_start_by_mode_summary_rows(global_mode_readiness)
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(all_gaps)
     prefetch_truth_table = prefetch_truth_table_rows(all_gaps)
     prefetch_truth_summary = prefetch_truth_summary_rows(all_gaps)
@@ -9530,6 +9787,7 @@ def main() -> None:
     write_csv(args.out_dir / "projected_hardware_bypass_summary.csv", hardware_bypass_projection_summary)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", global_mode_readiness)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", global_mode_readiness_summary)
+    write_csv(args.out_dir / "global_replay_start_by_mode_summary.csv", global_replay_start_summary)
     write_csv(args.out_dir / "dynamo_priority_hint_translation.csv", dynamo_priority_rows)
     write_csv(args.out_dir / "prefetch_truth_table.csv", prefetch_truth_table)
     write_csv(args.out_dir / "prefetch_truth_summary.csv", prefetch_truth_summary)
@@ -9578,6 +9836,7 @@ def main() -> None:
             "projected_hardware_bypass_summary": hardware_bypass_projection_summary,
             "global_kv_readiness_by_mode": global_mode_readiness,
             "global_kv_readiness_by_mode_summary": global_mode_readiness_summary,
+            "global_replay_start_by_mode_summary": global_replay_start_summary,
             "dynamo_priority_hint_translation": dynamo_priority_rows,
             "prefetch_truth_table": prefetch_truth_table,
             "prefetch_truth_summary": prefetch_truth_summary,
