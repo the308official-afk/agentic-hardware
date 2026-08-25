@@ -6742,6 +6742,8 @@ Global KV Readiness By Mode:
 
   circle = when the replay request started relative to replay due.
   square = when useful KV became ready relative to replay due.
+  above zero = late, because the event happened after replay was due.
+  below zero = early, because the event happened before replay was due.
 
   no_prefetch:
     KV-ready uses replay-side H2D finish, if replay H2D is observed.

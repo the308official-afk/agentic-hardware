@@ -3777,9 +3777,9 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms replay due</text>',
         '<text x="22" y="305" transform="rotate(-90 22 305)" text-anchor="middle" font-size="13" font-weight="700">time relative to replay due ms (symlog)</text>',
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
-        '<text x="104" y="34" font-size="13" fill="#166534" font-weight="700">above line = before replay due</text>',
-        '<text x="430" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = after replay due</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">circle = replay request started; square = useful KV became ready; connector = time between replay start and KV readiness.</text>',
+        '<text x="104" y="34" font-size="13" fill="#b91c1c" font-weight="700">above line = after replay due / late</text>',
+        '<text x="470" y="34" font-size="13" fill="#166534" font-weight="700">below line = before replay due / early</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">This chart plots event_time - replay_due. Positive values are late. Circle = replay request started; square = useful KV became ready; connector = time between replay start and KV readiness.</text>',
     ]
     seen_ticks: set[int] = set()
     for value in h2d_symlog_tick_values(y_min, y_max):
@@ -3864,7 +3864,7 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     <h3>Replay Start Lateness Summary</h3>
     {table_html(replay_start_summary, ["mode", "dots", "replay_started_on_or_before_due", "replay_started_late", "late_pct", "median_replay_start_relative_ms", "worst_replay_start_lateness_ms"])}
     <h3>Replay Start vs KV Ready</h3>
-    <p class="note">This chart uses time relative to replay due. Circle = replay request start. Square = useful KV ready. A vertical connector means both were observed/projected for the same mode and scenario.</p>
+    <p class="note">This chart plots event time minus replay due. Above zero means the event happened after replay was due, so it was late. Below zero means the event happened before replay was due, so it was early. Circle = replay request start. Square = useful KV ready. A vertical connector means both were observed/projected for the same mode and scenario.</p>
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
     <h3>KV Readiness Margin</h3>
     <p class="note">This existing chart keeps the old margin convention: positive means KV became ready before the replay deadline; negative means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
