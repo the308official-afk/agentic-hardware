@@ -8052,7 +8052,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    measured_row_h = 1200
+    measured_row_h = 1340
     projected_row_h = 250
     scenario_gap_h = 44 if any(str(row.get("comparison_scenario") or "") for row in rows) else 0
     bottom = 116
@@ -8377,8 +8377,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
         '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
-        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, an expanded replay zoom, a GPU KV-pool residency zoom, and a KV readiness deadline zoom.</text>',
-        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give dense KV, replay, pool pressure, and deadline activity room to breathe.</text>',
+        '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, an expanded replay zoom, GPU/tool-wait pressure zooms, and a KV readiness deadline zoom.</text>',
+        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give dense KV, replay, pool pressure, tool-wait activity, and deadline activity room to breathe.</text>',
         f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
         f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
     ]
@@ -9397,7 +9397,88 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         f'font-size="8" font-weight="900" fill="#991b1b">peak {label_text}</text>'
                     )
 
-        deadline_zoom_title_y = y + 988
+        tool_wait_zoom_title_y = y + 982
+        parts.append(f'<text x="{left - 10}" y="{tool_wait_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">tool wait GPU activity</text>')
+        tool_wait_activity = tool_wait_activity_by_label.get(label, {})
+        if not tool_wait_activity:
+            parts.append(
+                f'<text x="{left + 8}" y="{tool_wait_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
+                f'GPU activity during tool wait</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{tool_wait_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'No SGLang-visible scheduler/model/KV-pool samples were attributed to this tool-wait window.</text>'
+            )
+            parts.append(f'<line x1="{left}" y1="{tool_wait_zoom_title_y + 62:.1f}" x2="{left + plot_w}" y2="{tool_wait_zoom_title_y + 62:.1f}" stroke="#dbe4ee"/>')
+        else:
+            activity_verdict = str(tool_wait_activity.get("tool_wait_activity_verdict") or "unknown")
+            max_pool = as_float(tool_wait_activity.get("max_kv_pool_usage_pct"))
+            avg_pool = as_float(tool_wait_activity.get("avg_kv_pool_usage_pct"))
+            kv_events = int(as_float(tool_wait_activity.get("kv_movement_events")) or 0)
+            scheduler_events = int(as_float(tool_wait_activity.get("scheduler_events")) or 0)
+            prefill_events = int(as_float(tool_wait_activity.get("prefill_events")) or 0)
+            decode_events = int(as_float(tool_wait_activity.get("decode_events")) or 0)
+            h2d_events = int(as_float(tool_wait_activity.get("h2d_events")) or 0)
+            d2h_events = int(as_float(tool_wait_activity.get("d2h_events")) or 0)
+            evict_events = int(as_float(tool_wait_activity.get("gpu_evict_events")) or 0)
+            pool_text = f"max pool {max_pool:.1f}%" if max_pool is not None else "no pool sample"
+            if avg_pool is not None:
+                pool_text += f", avg {avg_pool:.1f}%"
+            activity_title = (
+                f"GPU activity during tool wait: {activity_verdict}. "
+                f"scheduler={scheduler_events}, prefill={prefill_events}, decode={decode_events}, "
+                f"KV movement={kv_events}, H2D={h2d_events}, D2H={d2h_events}, evict={evict_events}, {pool_text}."
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{tool_wait_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
+                f'GPU activity during tool wait</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{tool_wait_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'{html.escape(activity_title[:210])}</text>'
+            )
+            count_items = [
+                ("scheduler", scheduler_events, unified_stack_color("scheduler")),
+                ("prefill", prefill_events, unified_stack_color("recompute")),
+                ("decode", decode_events, unified_stack_color("decode")),
+                ("KV movement", kv_events, unified_stack_color("h2d")),
+            ]
+            count_max = max([count for _, count, _ in count_items] + [1])
+            count_x = left + 140
+            count_w = plot_w * 0.44
+            pool_x0 = left + plot_w * 0.66
+            pool_w = plot_w * 0.28
+            lane_top = tool_wait_zoom_title_y + 35
+            for lane_idx, (name, count, color) in enumerate(count_items):
+                lane_y = lane_top + lane_idx * 20
+                parts.append(f'<text x="{left + 8}" y="{lane_y + 11:.1f}" font-size="9" font-weight="800" fill="#334155">{html.escape(name)}</text>')
+                parts.append(f'<rect x="{count_x:.1f}" y="{lane_y:.1f}" width="{count_w:.1f}" height="14" rx="4" fill="#e2e8f0" opacity="0.58"/>')
+                bar_w = 0.0 if count <= 0 else max(8.0, count_w * count / count_max)
+                if bar_w > 0:
+                    parts.append(
+                        f'<rect x="{count_x:.1f}" y="{lane_y:.1f}" width="{bar_w:.1f}" height="14" rx="4" fill="{color}" opacity="0.82">'
+                        f'<title>{html.escape(label)} | tool wait {name}: {count} events</title></rect>'
+                    )
+                parts.append(f'<text x="{count_x + count_w + 8:.1f}" y="{lane_y + 11:.1f}" font-size="9" font-weight="800" fill="#334155">{count}</text>')
+            parts.append(f'<text x="{pool_x0:.1f}" y="{lane_top + 11:.1f}" font-size="9" font-weight="800" fill="#334155">KV pool occupancy</text>')
+            parts.append(f'<rect x="{pool_x0:.1f}" y="{lane_top + 24:.1f}" width="{pool_w:.1f}" height="22" rx="5" fill="#e2e8f0" opacity="0.68"/>')
+            if max_pool is not None:
+                pool_bar_w = max(3.0, min(pool_w, pool_w * max_pool / 100.0))
+                pool_color = kv_pool_heat_color(max_pool)
+                parts.append(
+                    f'<rect x="{pool_x0:.1f}" y="{lane_top + 24:.1f}" width="{pool_bar_w:.1f}" height="22" rx="5" fill="{pool_color}" opacity="0.86">'
+                    f'<title>{html.escape(label)} | max SGLang KV-pool during tool wait: {max_pool:.3f}%</title></rect>'
+                )
+                parts.append(
+                    f'<text x="{pool_x0 + min(pool_w - 24, max(24, pool_bar_w - 28)):.1f}" y="{lane_top + 39:.1f}" '
+                    f'text-anchor="middle" font-size="9" font-weight="900" fill="#0f172a">{max_pool:.0f}%</text>'
+                )
+            parts.append(
+                f'<text x="{pool_x0:.1f}" y="{lane_top + 68:.1f}" font-size="9" font-weight="800" fill="#475569">'
+                f'H2D {h2d_events} | D2H {d2h_events} | evict {evict_events} | {html.escape(activity_verdict)}</text>'
+            )
+
+        deadline_zoom_title_y = y + 1128
         parts.append(f'<text x="{left - 10}" y="{deadline_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">deadline zoom</text>')
         hint_deadline_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
         replay_deadline_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
@@ -9618,8 +9699,8 @@ def unified_per_gap_forensic_stack_html(
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
-    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, a GPU KV-pool residency zoom, and a deadline zoom for KV readiness.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the GPU pool zoom to see whether SGLang's KV pool was nearly full around the replay. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due.</p>
+    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, GPU/tool-wait pressure zooms, and a deadline zoom for KV readiness.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the GPU pool zoom to see whether SGLang's KV pool was nearly full around the replay. Use the tool-wait GPU activity zoom to see whether scheduler/model/KV activity was already busy during the pause. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">When prefetch-side H2D exists, the replay zoom becomes a two-window broken-axis view: the left window shows the earlier green prefetch KV H2D, the right window shows replay execution, and the break marker shows the long elapsed time compressed between them.</p>
@@ -9637,6 +9718,7 @@ def grouped_mode_comparison_timeline_html(
     all_kv_events: list[dict[str, Any]],
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
     projected_hardware_rows: list[dict[str, Any]] | None = None,
+    tool_wait_activity_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not rows:
         return """
@@ -9658,7 +9740,7 @@ def grouped_mode_comparison_timeline_html(
     <p class="note">Mode order is always: no prefetch, direct prefetch, Dynamo priority hints only, then projected hardware bypass. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
-    <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row.</p>
+    <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row. Measured rows also show the same tool-wait GPU activity zoom as the unified forensic timeline.</p>
     {mode_key_html}
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
@@ -9666,7 +9748,7 @@ def grouped_mode_comparison_timeline_html(
       <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DH / HW</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, compact_projected_rows=True)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, projected_hardware_rows=projected_hardware_rows, tool_wait_activity_rows=tool_wait_activity_rows, compact_projected_rows=True)}</div>
     """
 
 
@@ -9806,6 +9888,16 @@ def render_html(
     grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
     grouped_hardware_projection_rows = projected_hardware_bypass_rows(grouped_comparison_rows)
+    grouped_tool_wait_activity_rows = tool_wait_gpu_activity_rows(
+        [
+            row
+            for row in grouped_comparison_rows
+            if canonical_mode(row.get("mode")) != "projected_hardware_bypass"
+        ],
+        trace_rows,
+        all_kv_movement_events,
+        kv_pool_sample_rows,
+    )
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(gaps)
     prefetch_truth_summary_table_rows = prefetch_truth_summary_rows(gaps)
     prefetch_truth_table = prefetch_truth_table_rows(gaps)
@@ -10015,7 +10107,7 @@ def render_html(
 
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
     <summary><h2>Grouped Mode Comparison Timeline</h2></summary>
-    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows)}
+    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows)}
   </details>
 
   {live_section}
