@@ -3436,14 +3436,14 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
             if not row:
                 continue
             margin, evidence_kind, source, meaning = mode_readiness_margin(row)
-            if margin is None:
-                continue
             due = as_float(row.get("tool_gap_end_ms"))
             replay_start = as_float(row.get("resume_start_ms"))
             kv_ready, _, _, _ = mode_kv_ready_timing(row)
             replay_start_relative = (
                 round(replay_start - due, 3) if due is not None and replay_start is not None else ""
             )
+            if margin is None and replay_start_relative == "":
+                continue
             kv_ready_relative = round(kv_ready - due, 3) if due is not None and kv_ready is not None else ""
             replay_start_to_kv_ready = (
                 round(kv_ready - replay_start, 3) if kv_ready is not None and replay_start is not None else ""
@@ -3457,11 +3457,11 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                     "gap": row.get("gap_order_in_task", key[1]),
                     "tool_wait_ms": row.get("tool_gap_ms", key[2]),
                     "fillers": case_fillers(row) or key[3],
-                    "kv_ready_margin_ms": margin,
+                    "kv_ready_margin_ms": margin if margin is not None else "",
                     "kv_ready_relative_ms": kv_ready_relative,
                     "replay_start_relative_ms": replay_start_relative,
                     "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
-                    "ready_before_replay_due": 1 if margin >= 0 else 0,
+                    "ready_before_replay_due": "" if margin is None else 1 if margin >= 0 else 0,
                     "replay_started_before_or_at_due": (
                         1 if replay_start_relative not in ("", None) and float(replay_start_relative) <= 0 else 0
                     ),
@@ -3472,62 +3472,66 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                 }
             )
 
-        projection_source = (
-            rows_by_mode.get("dynamo_priority_hints")
-            or rows_by_mode.get("direct_prefetch")
-            or rows_by_mode.get("no_prefetch")
-        )
-        if projection_source:
-            projections = projected_hardware_bypass_rows([projection_source])
+        projection_source = None
+        realistic = None
+        for candidate_mode in ("direct_prefetch", "no_prefetch", "dynamo_priority_hints"):
+            candidate = rows_by_mode.get(candidate_mode)
+            if not candidate:
+                continue
+            projections = projected_hardware_bypass_rows([candidate])
             realistic = next((row for row in projections if row.get("hardware_projection") == "realistic"), None)
             if realistic:
-                margin = as_float(realistic.get("projected_hardware_margin_ms"))
-                if margin is not None:
-                    due = as_float(projection_source.get("tool_gap_end_ms"))
-                    replay_start = as_float(projection_source.get("resume_start_ms"))
-                    projected_ready = as_float(realistic.get("projected_hardware_end_ms"))
-                    replay_start_relative = (
-                        round(replay_start - due, 3) if due is not None and replay_start is not None else ""
-                    )
-                    kv_ready_relative = (
-                        round(projected_ready - due, 3)
-                        if due is not None and projected_ready is not None
-                        else round(-margin, 3)
-                    )
-                    replay_start_to_kv_ready = (
-                        round(projected_ready - replay_start, 3)
-                        if projected_ready is not None and replay_start is not None
-                        else ""
-                    )
-                    output.append(
-                        {
-                            "scenario": scenario_label,
-                            "mode": "Projected hardware bypass",
-                            "mode_key": "projected_hardware_bypass",
-                            "task": realistic.get("task", key[0]),
-                            "gap": realistic.get("gap", key[1]),
-                            "tool_wait_ms": realistic.get("tool_wait_ms", key[2]),
-                            "fillers": case_fillers(projection_source) or key[3],
-                            "kv_ready_margin_ms": round(margin, 3),
-                            "kv_ready_relative_ms": kv_ready_relative,
-                            "replay_start_relative_ms": replay_start_relative,
-                            "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
-                            "ready_before_replay_due": 1 if margin >= 0 else 0,
-                            "replay_started_before_or_at_due": (
-                                1
-                                if replay_start_relative not in ("", None)
-                                and float(replay_start_relative) <= 0
-                                else 0
-                            ),
-                            "evidence_kind": "projected",
-                            "readiness_source": "projected hardware H2D",
-                            "measured_or_projected": "projected, not measured",
-                            "simple_meaning": (
-                                "Projected hardware bypass: assumes the urgent KV copy starts at the tool-wait boundary "
-                                "and pays measured H2D time plus 50 ms overhead."
-                            ),
-                        }
-                    )
+                projection_source = candidate
+                break
+        if projection_source and realistic:
+            margin = as_float(realistic.get("projected_hardware_margin_ms"))
+            if margin is not None:
+                due = as_float(projection_source.get("tool_gap_end_ms"))
+                replay_start = as_float(projection_source.get("resume_start_ms"))
+                projected_ready = as_float(realistic.get("projected_hardware_end_ms"))
+                replay_start_relative = (
+                    round(replay_start - due, 3) if due is not None and replay_start is not None else ""
+                )
+                kv_ready_relative = (
+                    round(projected_ready - due, 3)
+                    if due is not None and projected_ready is not None
+                    else round(-margin, 3)
+                )
+                replay_start_to_kv_ready = (
+                    round(projected_ready - replay_start, 3)
+                    if projected_ready is not None and replay_start is not None
+                    else ""
+                )
+                output.append(
+                    {
+                        "scenario": scenario_label,
+                        "mode": "Projected hardware bypass",
+                        "mode_key": "projected_hardware_bypass",
+                        "task": realistic.get("task", key[0]),
+                        "gap": realistic.get("gap", key[1]),
+                        "tool_wait_ms": realistic.get("tool_wait_ms", key[2]),
+                        "fillers": case_fillers(projection_source) or key[3],
+                        "kv_ready_margin_ms": round(margin, 3),
+                        "kv_ready_relative_ms": kv_ready_relative,
+                        "replay_start_relative_ms": replay_start_relative,
+                        "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
+                        "ready_before_replay_due": 1 if margin >= 0 else 0,
+                        "replay_started_before_or_at_due": (
+                            1
+                            if replay_start_relative not in ("", None)
+                            and float(replay_start_relative) <= 0
+                            else 0
+                        ),
+                        "evidence_kind": "projected",
+                        "readiness_source": "projected hardware H2D",
+                        "measured_or_projected": "projected, not measured",
+                        "simple_meaning": (
+                            "Projected hardware bypass: assumes the urgent KV copy starts at the tool-wait boundary "
+                            "and pays measured H2D time plus 50 ms overhead. The measured H2D duration is taken "
+                            "from the best available measured H2D source for the same scenario."
+                        ),
+                    }
+                )
     return output
 
 
@@ -3790,7 +3794,7 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="34" font-size="13" fill="#166534" font-weight="700">above line = early / deadline met</text>',
         '<text x="470" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late / deadline missed</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">This chart plots deadline_margin = replay_due - event_time. Circle = replay request start margin; square = useful KV ready margin. Higher is better.</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">Circle = replay request start margin; square = useful KV ready margin. A circle near 0 only means replay started near its deadline. Higher is better.</text>',
     ]
     seen_ticks: set[int] = set()
     for value in h2d_symlog_tick_values(y_min, y_max):
@@ -3883,7 +3887,7 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     <h3>Replay Start Lateness Summary</h3>
     {table_html(replay_start_summary, ["mode", "dots", "replay_started_on_or_before_due", "replay_started_late", "late_pct", "median_replay_start_relative_ms", "worst_replay_start_lateness_ms"])}
     <h3>Replay Deadline Margin vs KV Readiness Margin</h3>
-    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means early/good. Below zero means late/bad. Circle = replay request start margin. Square = useful KV ready margin. For projected hardware, the square is projected KV readiness; the circle is still the measured replay-start timing from the source run.</p>
+    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means early/good. Below zero means late/bad. Circle = replay request start margin. Square = useful KV ready margin. A circle near the zero line only means the replay request started near its deadline; it does not mean KV was ready. For Dynamo priority hints only, the square is omitted when no replay-side KV H2D readiness was observed. For projected hardware, the square is projected KV readiness; the circle is still the measured replay-start timing from the source run.</p>
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
     <h3>KV Readiness Margin</h3>
     <p class="note">This existing chart keeps the old margin convention: positive means KV became ready before the replay deadline; negative means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
