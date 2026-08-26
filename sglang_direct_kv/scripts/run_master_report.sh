@@ -14,7 +14,9 @@ PRESSURE_PROFILE="${PRESSURE_PROFILE:-medium}"
 WORKLOAD_SOURCE="${WORKLOAD_SOURCE:-real}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-1}"
-export AGENTIC_KV_TRACE_KV_POOL
+AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
+GPU_UTIL_SAMPLE_INTERVAL_MS="${GPU_UTIL_SAMPLE_INTERVAL_MS:-100}"
+export AGENTIC_KV_TRACE_KV_POOL AGENTIC_KV_GPU_UTIL_SAMPLER GPU_UTIL_SAMPLE_INTERVAL_MS
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -151,6 +153,9 @@ MULTI_SESSION_RUN_ROOT="${MULTI_SESSION_ROOT:-${RUNS_ROOT}/multi_session/${REPOR
 SCRATCH_LATEST_ROOT="${REPORT_DIR}/_latest_scratch"
 RUN_CONFIG_ENV="${REPORT_DIR}/run_config.env"
 RUN_ENV_JSON="${REPORT_DIR}/run_environment.json"
+GPU_UTIL_CSV="${REPORT_DIR}/gpu_utilization_samples.csv"
+GPU_UTIL_LOG="${REPORT_DIR}/gpu_utilization_sampler.log"
+GPU_UTIL_SAMPLER_PID=""
 
 discover_controlled_root() {
   if [[ -n "${CONTROLLED_ROOT:-}" ]]; then
@@ -247,6 +252,34 @@ clean_toplevel() {
   fi
 }
 
+start_gpu_util_sampler() {
+  if [[ "${BUILD_ONLY}" == "1" || "${DRY_RUN}" == "1" || "${AGENTIC_KV_GPU_UTIL_SAMPLER}" != "1" ]]; then
+    return
+  fi
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "GPU util sampler disabled: nvidia-smi not found."
+    return
+  fi
+  mkdir -p "$(dirname "${GPU_UTIL_CSV}")"
+  echo "Starting GPU util sampler: ${GPU_UTIL_CSV}"
+  "${PYTHON_BIN}" scripts/sample_gpu_utilization.py \
+    --out "${GPU_UTIL_CSV}" \
+    --interval-ms "${GPU_UTIL_SAMPLE_INTERVAL_MS}" >"${GPU_UTIL_LOG}" 2>&1 &
+  GPU_UTIL_SAMPLER_PID="$!"
+}
+
+stop_gpu_util_sampler() {
+  if [[ -n "${GPU_UTIL_SAMPLER_PID}" ]]; then
+    if kill -0 "${GPU_UTIL_SAMPLER_PID}" >/dev/null 2>&1; then
+      kill "${GPU_UTIL_SAMPLER_PID}" >/dev/null 2>&1 || true
+      wait "${GPU_UTIL_SAMPLER_PID}" >/dev/null 2>&1 || true
+    fi
+    GPU_UTIL_SAMPLER_PID=""
+  fi
+}
+
+trap stop_gpu_util_sampler EXIT
+
 write_run_config() {
   mkdir -p "${REPORT_DIR}"
   {
@@ -284,6 +317,9 @@ write_run_config() {
     echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
     echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER:-}"
     echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL:-}"
+    echo "AGENTIC_KV_GPU_UTIL_SAMPLER=${AGENTIC_KV_GPU_UTIL_SAMPLER:-}"
+    echo "GPU_UTIL_SAMPLE_INTERVAL_MS=${GPU_UTIL_SAMPLE_INTERVAL_MS:-}"
+    echo "GPU_UTIL_CSV=${GPU_UTIL_CSV:-}"
     echo "SESSION_COUNT=${SESSION_COUNT:-}"
     echo "ARRIVAL_SHAPE=${ARRIVAL_SHAPE:-}"
     echo "ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS:-}"
@@ -358,6 +394,9 @@ write_manifest() {
   MEM_FRACTION_STATIC_VALUE="${MEM_FRACTION_STATIC:-}" \
   AGENTIC_KV_TRACE_SCHEDULER_VALUE="${AGENTIC_KV_TRACE_SCHEDULER:-}" \
   AGENTIC_KV_TRACE_KV_POOL_VALUE="${AGENTIC_KV_TRACE_KV_POOL:-}" \
+  AGENTIC_KV_GPU_UTIL_SAMPLER_VALUE="${AGENTIC_KV_GPU_UTIL_SAMPLER:-}" \
+  GPU_UTIL_SAMPLE_INTERVAL_MS_VALUE="${GPU_UTIL_SAMPLE_INTERVAL_MS:-}" \
+  GPU_UTIL_CSV_VALUE="${GPU_UTIL_CSV:-}" \
   SESSION_COUNT_VALUE="${SESSION_COUNT:-}" \
   ARRIVAL_SHAPE_VALUE="${ARRIVAL_SHAPE:-}" \
   ARRIVAL_GAP_MS_VALUE="${ARRIVAL_GAP_MS:-}" \
@@ -420,6 +459,9 @@ manifest = {
         "mem_fraction_static": os.environ.get("MEM_FRACTION_STATIC_VALUE", ""),
         "agentic_kv_trace_scheduler": os.environ.get("AGENTIC_KV_TRACE_SCHEDULER_VALUE", ""),
         "agentic_kv_trace_kv_pool": os.environ.get("AGENTIC_KV_TRACE_KV_POOL_VALUE", ""),
+        "agentic_kv_gpu_util_sampler": os.environ.get("AGENTIC_KV_GPU_UTIL_SAMPLER_VALUE", ""),
+        "gpu_util_sample_interval_ms": os.environ.get("GPU_UTIL_SAMPLE_INTERVAL_MS_VALUE", ""),
+        "gpu_util_csv": os.environ.get("GPU_UTIL_CSV_VALUE", ""),
         "session_count": os.environ.get("SESSION_COUNT_VALUE", ""),
         "arrival_shape": os.environ.get("ARRIVAL_SHAPE_VALUE", ""),
         "arrival_gap_ms": os.environ.get("ARRIVAL_GAP_MS_VALUE", ""),
@@ -489,6 +531,9 @@ HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}
 MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}
 AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER:-}
 AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL:-}
+AGENTIC_KV_GPU_UTIL_SAMPLER=${AGENTIC_KV_GPU_UTIL_SAMPLER:-}
+GPU_UTIL_SAMPLE_INTERVAL_MS=${GPU_UTIL_SAMPLE_INTERVAL_MS:-}
+GPU_UTIL_CSV=${GPU_UTIL_CSV}
 SESSION_COUNT=${SESSION_COUNT:-}
 ARRIVAL_SHAPE=${ARRIVAL_SHAPE:-}
 ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS:-}
@@ -522,7 +567,7 @@ run_controlled() {
     "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
   )
   local knob
-  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS SYNTHETIC_PROMPT_TOKENS SYNTHETIC_REPLAY_SUFFIX_TOKENS FILLER_DIVERGE_EARLY REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC AGENTIC_KV_TRACE_KV_POOL PRIORITY_DIRECT_PREFETCH PRIORITY_PREFETCH_HEAD_START_MS PRIORITY_REPLAY_GUARD_MS PRIORITY_REPLAY_RELEASE_MS PRIORITY_FILLER_STAGGER_MS DYNAMO_HIGH_PRIORITY DYNAMO_NORMAL_PRIORITY DYNAMO_LOW_PRIORITY; do
+  for knob in MAX_PAIRS MODES TOOL_WAIT_LIST_MS FILLER_LIST FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS SYNTHETIC_PROMPT_TOKENS SYNTHETIC_REPLAY_SUFFIX_TOKENS FILLER_DIVERGE_EARLY REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC AGENTIC_KV_TRACE_KV_POOL AGENTIC_KV_GPU_UTIL_SAMPLER GPU_UTIL_SAMPLE_INTERVAL_MS PRIORITY_DIRECT_PREFETCH PRIORITY_PREFETCH_HEAD_START_MS PRIORITY_REPLAY_GUARD_MS PRIORITY_REPLAY_RELEASE_MS PRIORITY_FILLER_STAGGER_MS DYNAMO_HIGH_PRIORITY DYNAMO_NORMAL_PRIORITY DYNAMO_LOW_PRIORITY; do
     if [[ -n "${!knob+x}" ]]; then
       env_args+=("${knob}=${!knob}")
     fi
@@ -572,7 +617,7 @@ run_multi_session() {
     "WORKLOAD_SOURCE=${WORKLOAD_SOURCE}"
   )
   local knob
-  for knob in SESSION_COUNT MODES ARRIVAL_SHAPE ARRIVAL_GAP_MS ARRIVAL_GAP_RANGE_MS BURST_SIZE BURST_GAP_MS TOOL_WAIT_LIST_MS TOOL_WAIT_JITTER_MS PREFETCH_TIMING HINT_DELAY_MS PREFETCH_LEAD_MS PRIORITY_PREFETCH_WINDOW_MS PRIORITY_POST_PREFETCH_QUIET_MS DEADLINE_RESERVE_WINDOW_MS BACKGROUND_FILLERS_PER_SESSION FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS SYNTHETIC_PROMPT_TOKENS SYNTHETIC_REPLAY_SUFFIX_TOKENS REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC AGENTIC_KV_TRACE_KV_POOL; do
+  for knob in SESSION_COUNT MODES ARRIVAL_SHAPE ARRIVAL_GAP_MS ARRIVAL_GAP_RANGE_MS BURST_SIZE BURST_GAP_MS TOOL_WAIT_LIST_MS TOOL_WAIT_JITTER_MS PREFETCH_TIMING HINT_DELAY_MS PREFETCH_LEAD_MS PRIORITY_PREFETCH_WINDOW_MS PRIORITY_POST_PREFETCH_QUIET_MS DEADLINE_RESERVE_WINDOW_MS BACKGROUND_FILLERS_PER_SESSION FILLER_PROMPT_TOKENS TARGET_PROMPT_TOKENS SYNTHETIC_PROMPT_TOKENS SYNTHETIC_REPLAY_SUFFIX_TOKENS REQUEST_CONCURRENCY MAX_TOTAL_TOKENS HICACHE_SIZE_GB MEM_FRACTION_STATIC AGENTIC_KV_TRACE_KV_POOL AGENTIC_KV_GPU_UTIL_SAMPLER GPU_UTIL_SAMPLE_INTERVAL_MS; do
     if [[ -n "${!knob+x}" ]]; then
       env_args+=("${knob}=${!knob}")
     fi
@@ -600,7 +645,8 @@ build_report() {
         --out-dir "${REPORT_DIR}/report" \
         --latest-root "${build_latest_root}" \
         --max-timeline-gaps "${MAX_TIMELINE_GAPS}" \
-        --run-environment-json "${RUN_ENV_JSON}"
+        --run-environment-json "${RUN_ENV_JSON}" \
+        --gpu-util-csv "${GPU_UTIL_CSV}"
       ;;
     live)
       CONTROLLED_RUN_ROOT="$(discover_controlled_root)"
@@ -618,6 +664,7 @@ build_report() {
       LATEST_REPORT_ROOT="${build_latest_root}" \
       MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS}" \
       RUN_ENV_JSON="${RUN_ENV_JSON}" \
+      GPU_UTIL_CSV="${GPU_UTIL_CSV}" \
       bash scripts/build_latest_master_with_live_direct.sh
       mkdir -p "${REPORT_DIR}/report"
       cp -f "${build_latest_root}/latest_master_report.html" "${REPORT_DIR}/report/controlled_replay_report.html"
@@ -636,6 +683,7 @@ build_report() {
       LATEST_REPORT_ROOT="${build_latest_root}" \
       MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS}" \
       RUN_ENV_JSON="${RUN_ENV_JSON}" \
+      GPU_UTIL_CSV="${GPU_UTIL_CSV}" \
       bash scripts/build_latest_master_with_live_direct.sh
       mkdir -p "${REPORT_DIR}/report"
       cp -f "${build_latest_root}/latest_master_report.html" "${REPORT_DIR}/report/controlled_replay_report.html"
@@ -650,7 +698,8 @@ build_report() {
         --out-dir "${REPORT_DIR}/report" \
         --latest-root "${build_latest_root}" \
         --max-timeline-gaps "${MAX_TIMELINE_GAPS}" \
-        --run-environment-json "${RUN_ENV_JSON}"
+        --run-environment-json "${RUN_ENV_JSON}" \
+        --gpu-util-csv "${GPU_UTIL_CSV}"
       ;;
   esac
 
@@ -664,7 +713,7 @@ build_report() {
   fi
 
   cp -f "${built_report}" "${REPORT_DIR}/master_report.html"
-  for artifact in controlled_replay_report.json controlled_replay_gaps.csv replay_path_ledger.csv hardware_counterfactual.csv instrumentation_coverage.csv request_id_coverage_report.csv exact_kv_movement_attribution.csv exact_kv_movement_summary.csv kv_block_ledger.csv kv_block_ledger.json kv_block_lifecycle_summary.csv kv_block_gap_summary.csv; do
+  for artifact in controlled_replay_report.json controlled_replay_gaps.csv replay_path_ledger.csv hardware_counterfactual.csv instrumentation_coverage.csv request_id_coverage_report.csv exact_kv_movement_attribution.csv exact_kv_movement_summary.csv kv_block_ledger.csv kv_block_ledger.json kv_block_lifecycle_summary.csv kv_block_gap_summary.csv gpu_utilization_samples.csv; do
     if [[ -f "${REPORT_DIR}/report/${artifact}" ]]; then
       cp -f "${REPORT_DIR}/report/${artifact}" "${REPORT_DIR}/${artifact}"
     fi
@@ -682,6 +731,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 mkdir -p "${REPORT_DIR}" "${RUNS_ROOT}/controlled" "${RUNS_ROOT}/live" "${RUNS_ROOT}/multi_session" "${SCRATCH_LATEST_ROOT}"
+start_gpu_util_sampler
 
 case "${EXPERIMENT_KIND}" in
   controlled)
@@ -699,6 +749,7 @@ case "${EXPERIMENT_KIND}" in
     ;;
 esac
 
+stop_gpu_util_sampler
 build_report
 clean_toplevel
 

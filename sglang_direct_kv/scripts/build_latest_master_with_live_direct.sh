@@ -6,6 +6,7 @@ LIVE_DIRECT_ROOT="${LIVE_DIRECT_ROOT:-}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-32}"
 RUN_ENV_JSON="${RUN_ENV_JSON:-}"
+GPU_UTIL_CSV="${GPU_UTIL_CSV:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,6 +88,9 @@ echo "LATEST_REPORT_ROOT=${LATEST_REPORT_ROOT}"
 extra_args=()
 if [[ -n "${RUN_ENV_JSON}" ]]; then
   extra_args+=(--run-environment-json "${RUN_ENV_JSON}")
+fi
+if [[ -n "${GPU_UTIL_CSV}" ]]; then
+  extra_args+=(--gpu-util-csv "${GPU_UTIL_CSV}")
 fi
 
 "${PYTHON_BIN}" scripts/build_milestone27_controlled_replay_report.py \

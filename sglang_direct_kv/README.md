@@ -6418,6 +6418,8 @@ source .venv/bin/activate
 
 AGENTIC_KV_TRACE_SCHEDULER=1 \
 AGENTIC_KV_TRACE_KV_POOL=1 \
+AGENTIC_KV_GPU_UTIL_SAMPLER=1 \
+GPU_UTIL_SAMPLE_INTERVAL_MS=100 \
 EXPERIMENT_KIND=multi_session \
 REPORT_LABEL=multi_session_agentic_replay_1 \
 PRESSURE_PROFILE=custom \
@@ -6451,6 +6453,8 @@ source .venv/bin/activate
 
 AGENTIC_KV_TRACE_SCHEDULER=1 \
 AGENTIC_KV_TRACE_KV_POOL=1 \
+AGENTIC_KV_GPU_UTIL_SAMPLER=1 \
+GPU_UTIL_SAMPLE_INTERVAL_MS=100 \
 EXPERIMENT_KIND=multi_session \
 REPORT_LABEL=multi_session_smoke_1 \
 PRESSURE_PROFILE=custom \
@@ -6807,6 +6811,9 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 AGENTIC_KV_TRACE_SCHEDULER=1 \
+AGENTIC_KV_TRACE_KV_POOL=1 \
+AGENTIC_KV_GPU_UTIL_SAMPLER=1 \
+GPU_UTIL_SAMPLE_INTERVAL_MS=100 \
 EXPERIMENT_KIND=controlled \
 REPORT_LABEL=dynamo_priority_hints_compare_1 \
 PRESSURE_PROFILE=custom \
@@ -6830,6 +6837,19 @@ DYNAMO_NORMAL_PRIORITY=0 \
 DYNAMO_LOW_PRIORITY=-100 \
 bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+GPU activity note:
+
+```text
+AGENTIC_KV_TRACE_KV_POOL=1 records direct SGLang KV-pool occupancy.
+AGENTIC_KV_GPU_UTIL_SAMPLER=1 records lightweight nvidia-smi samples during
+the run. The report uses those samples to show whole-GPU compute/memory
+activity during tool waits.
+
+Important: SGLang scheduler, KV pool, and KV movement rows are direct hooks.
+GPU compute/memory utilization is sampled whole-GPU telemetry, not exact
+per-request kernel attribution.
 ```
 
 What to look for:

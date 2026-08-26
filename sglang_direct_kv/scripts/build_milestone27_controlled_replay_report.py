@@ -77,6 +77,13 @@ HARDWARE_BYPASS_LEVELS: list[tuple[str, str, float]] = [
 ]
 
 
+def read_csv_rows(path: Path | None) -> list[dict[str, Any]]:
+    if path is None or not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
 def canonical_mode(mode: Any) -> str:
     raw = str(mode or "")
     if raw.startswith("projected_hardware"):
@@ -5144,6 +5151,30 @@ def kv_pool_heat_color(usage_pct: float | None) -> str:
     return "#22c55e"
 
 
+def gpu_compute_heat_color(util_pct: float | None) -> str:
+    if util_pct is None:
+        return "#cbd5e1"
+    if util_pct >= 90.0:
+        return "#dc2626"
+    if util_pct >= 70.0:
+        return "#f97316"
+    if util_pct >= 40.0:
+        return "#eab308"
+    return "#22c55e"
+
+
+def gpu_memory_heat_color(util_pct: float | None) -> str:
+    if util_pct is None:
+        return "#cbd5e1"
+    if util_pct >= 80.0:
+        return "#1d4ed8"
+    if util_pct >= 50.0:
+        return "#2563eb"
+    if util_pct >= 20.0:
+        return "#38bdf8"
+    return "#bae6fd"
+
+
 def nearest_kv_pool_sample(
     samples: list[dict[str, Any]],
     target_ms: Any,
@@ -5429,11 +5460,29 @@ def _tool_wait_activity_verdict(
     decode_events: int,
     kv_movement_events: int,
     max_running_requests: float | None,
+    max_gpu_compute_util: float | None = None,
+    max_gpu_memory_util: float | None = None,
 ) -> str:
     running = max_running_requests or 0.0
-    if (max_pool is not None and max_pool >= 95.0) or kv_movement_events >= 20 or running >= 8:
+    compute = max_gpu_compute_util or 0.0
+    memory = max_gpu_memory_util or 0.0
+    if (
+        (max_pool is not None and max_pool >= 95.0)
+        or kv_movement_events >= 20
+        or running >= 8
+        or compute >= 90.0
+        or memory >= 90.0
+    ):
         return "very busy"
-    if (max_pool is not None and max_pool >= 85.0) or kv_movement_events > 0 or scheduler_events > 0 or prefill_events > 0 or decode_events > 0:
+    if (
+        (max_pool is not None and max_pool >= 85.0)
+        or kv_movement_events > 0
+        or scheduler_events > 0
+        or prefill_events > 0
+        or decode_events > 0
+        or compute >= 50.0
+        or memory >= 50.0
+    ):
         return "busy"
     return "quiet"
 
@@ -5445,6 +5494,7 @@ def _tool_wait_activity_bins(
     bases: dict[str, float],
     start_ms: float,
     end_ms: float,
+    gpu_util_window: list[dict[str, Any]] | None = None,
     bin_count: int = 36,
 ) -> list[dict[str, Any]]:
     """Build compact, timestamped tool-wait activity bins for report rendering."""
@@ -5479,8 +5529,30 @@ def _tool_wait_activity_bins(
             for sample in pool_bin
             if as_float(sample.get("kv_pool_usage_pct")) is not None
         ]
+        gpu_bin = [
+            sample
+            for sample in (gpu_util_window or [])
+            if (
+                as_float(sample.get("aligned_ms")) is not None
+                and bin_start <= (as_float(sample.get("aligned_ms")) or 0.0) <= bin_end
+            )
+        ]
+        gpu_compute_values = [
+            as_float(sample.get("utilization_gpu_pct"))
+            for sample in gpu_bin
+            if as_float(sample.get("utilization_gpu_pct")) is not None
+        ]
+        gpu_memory_values = [
+            as_float(sample.get("utilization_memory_pct"))
+            for sample in gpu_bin
+            if as_float(sample.get("utilization_memory_pct")) is not None
+        ]
         max_pool = max(pool_values) if pool_values else None
         avg_pool = mean(pool_values) if pool_values else None
+        max_gpu_compute = max(gpu_compute_values) if gpu_compute_values else None
+        avg_gpu_compute = mean(gpu_compute_values) if gpu_compute_values else None
+        max_gpu_memory = max(gpu_memory_values) if gpu_memory_values else None
+        avg_gpu_memory = mean(gpu_memory_values) if gpu_memory_values else None
         bins.append(
             {
                 "start_rel_ms": round(bin_start - end_ms, 3),
@@ -5496,6 +5568,11 @@ def _tool_wait_activity_bins(
                 "pool_samples": len(pool_bin),
                 "max_pool_usage_pct": round(max_pool, 3) if max_pool is not None else "",
                 "avg_pool_usage_pct": round(avg_pool, 3) if avg_pool is not None else "",
+                "gpu_util_samples": len(gpu_bin),
+                "max_gpu_compute_util_pct": round(max_gpu_compute, 3) if max_gpu_compute is not None else "",
+                "avg_gpu_compute_util_pct": round(avg_gpu_compute, 3) if avg_gpu_compute is not None else "",
+                "max_gpu_memory_util_pct": round(max_gpu_memory, 3) if max_gpu_memory is not None else "",
+                "avg_gpu_memory_util_pct": round(avg_gpu_memory, 3) if avg_gpu_memory is not None else "",
             }
         )
     return bins
@@ -5506,10 +5583,12 @@ def tool_wait_gpu_activity_rows(
     trace_rows: list[dict[str, Any]],
     all_kv_events: list[dict[str, Any]],
     kv_pool_samples: list[dict[str, Any]],
+    gpu_util_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Summarize SGLang-visible scheduler/model/KV activity during each tool wait."""
+    """Summarize SGLang-visible and coarse whole-GPU activity during each tool wait."""
 
     bases = trace_base_by_case(trace_rows)
+    gpu_util_rows = gpu_util_rows or []
     trace_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in trace_rows:
         case_id = _trace_row_case_id(row)
@@ -5527,6 +5606,22 @@ def tool_wait_gpu_activity_rows(
         case_id = str(sample.get("case_id") or "")
         if case_id:
             pool_by_case[case_id].append(sample)
+
+    def gpu_samples_for_window(case_id: str, start: float, end: float) -> list[dict[str, Any]]:
+        base = bases.get(case_id)
+        if base is None:
+            return []
+        samples: list[dict[str, Any]] = []
+        for sample in gpu_util_rows:
+            ts = as_float(sample.get("ts_ns"))
+            if ts is None:
+                continue
+            local_ms = (ts / 1_000_000_000.0 - base) * 1000.0
+            if start <= local_ms <= end:
+                item = dict(sample)
+                item["aligned_ms"] = round(local_ms, 3)
+                samples.append(item)
+        return samples
 
     rows: list[dict[str, Any]] = []
     for gap in gaps:
@@ -5590,6 +5685,31 @@ def tool_wait_gpu_activity_rows(
         max_pool = max(pool_values) if pool_values else None
         avg_pool = mean(pool_values) if pool_values else None
         near_full_samples = sum(1 for value in pool_values if value >= 95.0)
+        gpu_util_window = gpu_samples_for_window(case_id, start, end)
+        gpu_compute_values = [
+            as_float(sample.get("utilization_gpu_pct"))
+            for sample in gpu_util_window
+            if as_float(sample.get("utilization_gpu_pct")) is not None
+        ]
+        gpu_memory_values = [
+            as_float(sample.get("utilization_memory_pct"))
+            for sample in gpu_util_window
+            if as_float(sample.get("utilization_memory_pct")) is not None
+        ]
+        gpu_memory_used_values = [
+            as_float(sample.get("memory_used_mib"))
+            for sample in gpu_util_window
+            if as_float(sample.get("memory_used_mib")) is not None
+        ]
+        gpu_memory_total_values = [
+            as_float(sample.get("memory_total_mib"))
+            for sample in gpu_util_window
+            if as_float(sample.get("memory_total_mib")) is not None
+        ]
+        max_gpu_compute_util = max(gpu_compute_values) if gpu_compute_values else None
+        avg_gpu_compute_util = mean(gpu_compute_values) if gpu_compute_values else None
+        max_gpu_memory_util = max(gpu_memory_values) if gpu_memory_values else None
+        avg_gpu_memory_util = mean(gpu_memory_values) if gpu_memory_values else None
         max_running_requests = max(running_request_values) if running_request_values else None
         kv_movement_events = len(movement_window)
         activity_bins = _tool_wait_activity_bins(
@@ -5599,6 +5719,7 @@ def tool_wait_gpu_activity_rows(
             bases,
             start,
             end,
+            gpu_util_window=gpu_util_window,
         )
         verdict = _tool_wait_activity_verdict(
             max_pool,
@@ -5607,12 +5728,19 @@ def tool_wait_gpu_activity_rows(
             decode_events,
             kv_movement_events,
             max_running_requests,
+            max_gpu_compute_util=max_gpu_compute_util,
+            max_gpu_memory_util=max_gpu_memory_util,
         )
         pool_phrase = f"max KV pool {max_pool:.1f}%" if max_pool is not None else "no KV-pool sample"
+        gpu_phrase = (
+            f"sampled GPU compute max/avg {max_gpu_compute_util:.0f}%/{avg_gpu_compute_util:.0f}%"
+            if max_gpu_compute_util is not None and avg_gpu_compute_util is not None
+            else "no sampled GPU compute"
+        )
         simple_meaning = (
             f"During the tool wait, SGLang-visible activity showed {scheduler_events} scheduler events, "
             f"{prefill_events} prefill events, {decode_events} decode events, and {kv_movement_events} KV movement events; "
-            f"{pool_phrase}."
+            f"{pool_phrase}; {gpu_phrase}."
         )
         rows.append(
             {
@@ -5644,15 +5772,26 @@ def tool_wait_gpu_activity_rows(
                 "max_kv_pool_usage_pct": round(max_pool, 3) if max_pool is not None else "",
                 "avg_kv_pool_usage_pct": round(avg_pool, 3) if avg_pool is not None else "",
                 "near_full_pool_samples": near_full_samples,
+                "gpu_util_samples": len(gpu_util_window),
+                "max_gpu_compute_util_pct": round(max_gpu_compute_util, 3) if max_gpu_compute_util is not None else "",
+                "avg_gpu_compute_util_pct": round(avg_gpu_compute_util, 3) if avg_gpu_compute_util is not None else "",
+                "max_gpu_memory_util_pct": round(max_gpu_memory_util, 3) if max_gpu_memory_util is not None else "",
+                "avg_gpu_memory_util_pct": round(avg_gpu_memory_util, 3) if avg_gpu_memory_util is not None else "",
+                "max_gpu_memory_used_mib": round(max(gpu_memory_used_values), 3) if gpu_memory_used_values else "",
+                "avg_gpu_memory_used_mib": round(mean(gpu_memory_used_values), 3) if gpu_memory_used_values else "",
+                "gpu_memory_total_mib": round(max(gpu_memory_total_values), 3) if gpu_memory_total_values else "",
                 "tool_wait_activity_verdict": verdict,
                 "tool_wait_activity_bins_json": json.dumps(activity_bins, separators=(",", ":")),
                 "simple_meaning": simple_meaning,
                 "evidence": (
-                    "direct_sglang_trace_and_kv_pool_samples"
-                    if trace_window or pool_window or movement_window
+                    "direct_sglang_trace_plus_sampled_gpu_utilization"
+                    if trace_window or pool_window or movement_window or gpu_util_window
                     else "no_sglang_visible_activity_in_tool_wait_window"
                 ),
-                "scope_note": "SGLang-visible activity only; not full hardware GPU utilization.",
+                "scope_note": (
+                    "SGLang scheduler/KV rows are direct hooks. GPU compute/memory utilization is sampled "
+                    "whole-GPU nvidia-smi telemetry, not per-request kernel attribution."
+                ),
             }
         )
     return rows
@@ -5662,7 +5801,7 @@ def build_tool_wait_gpu_activity_svg(rows: list[dict[str, Any]], max_rows: int =
     plotted = rows[:max_rows]
     if not plotted:
         return "<p>No tool-wait GPU activity rows were available.</p>"
-    width = 1500
+    width = 1600
     row_h = 34
     left = 205
     right = 52
@@ -5684,13 +5823,16 @@ def build_tool_wait_gpu_activity_svg(rows: list[dict[str, Any]], max_rows: int =
         count = as_float(value) or 0.0
         return max(0.0, count * (plot_w * 0.58) / max_count)
 
-    pool_x = left + plot_w * 0.66
-    pool_w = plot_w * 0.30
+    gpu_x = left + plot_w * 0.58
+    gpu_w = plot_w * 0.16
+    pool_x = left + plot_w * 0.78
+    pool_w = plot_w * 0.17
     parts = [
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="SGLang-visible GPU activity during tool wait">',
-        '<text x="12" y="24" font-size="18" font-weight="900" fill="#0f172a">SGLang-visible activity during tool wait</text>',
-        '<text x="12" y="44" font-size="11" fill="#475569">Left stacked bars count trace events during the tool pause. Right heat bars show max SGLang KV-pool occupancy during the same pause.</text>',
+        '<text x="12" y="24" font-size="18" font-weight="900" fill="#0f172a">GPU activity during tool wait</text>',
+        '<text x="12" y="44" font-size="11" fill="#475569">Left stacked bars count direct SGLang trace events. Middle bars show sampled whole-GPU compute/memory utilization. Right bars show direct SGLang KV-pool occupancy.</text>',
         f'<text x="{left:.1f}" y="{top - 10}" font-size="10" font-weight="900" fill="#334155">event counts during tool wait</text>',
+        f'<text x="{gpu_x:.1f}" y="{top - 10}" font-size="10" font-weight="900" fill="#334155">sampled GPU compute / memory</text>',
         f'<text x="{pool_x:.1f}" y="{top - 10}" font-size="10" font-weight="900" fill="#334155">max KV-pool occupancy during tool wait</text>',
     ]
     for idx, row in enumerate(plotted):
@@ -5722,6 +5864,33 @@ def build_tool_wait_gpu_activity_svg(rows: list[dict[str, Any]], max_rows: int =
                         f'font-weight="900" fill="#ffffff">{int(value)}</text>'
                     )
                 x += w + 2
+        gpu_compute = as_float(row.get("max_gpu_compute_util_pct"))
+        gpu_memory = as_float(row.get("max_gpu_memory_util_pct"))
+        for lane_idx, (metric, short_name, color_fn) in enumerate(
+            [
+                (gpu_compute, "C", gpu_compute_heat_color),
+                (gpu_memory, "M", gpu_memory_heat_color),
+            ]
+        ):
+            gy = y - 12 + lane_idx * 11
+            parts.append(
+                f'<rect x="{gpu_x:.1f}" y="{gy:.1f}" width="{gpu_w:.1f}" height="9" rx="3" '
+                f'fill="#e2e8f0" opacity="0.62"/>'
+            )
+            if metric is not None:
+                gw = max(3.0, min(gpu_w, gpu_w * metric / 100.0))
+                color = color_fn(metric)
+                title = f"{label} | sampled whole-GPU {short_name} utilization during tool wait | max={metric:.1f}%"
+                parts.append(
+                    f'<rect x="{gpu_x:.1f}" y="{gy:.1f}" width="{gw:.1f}" height="9" rx="3" '
+                    f'fill="{color}" opacity="0.88"><title>{html.escape(title)}</title></rect>'
+                )
+                parts.append(
+                    f'<text x="{gpu_x + gpu_w + 5:.1f}" y="{gy + 8:.1f}" font-size="8" font-weight="900" '
+                    f'fill="#334155">{short_name} {metric:.0f}%</text>'
+                )
+            elif lane_idx == 0:
+                parts.append(f'<text x="{gpu_x:.1f}" y="{gy + 8:.1f}" font-size="8" fill="#64748b">no GPU sample</text>')
         pool = as_float(row.get("max_kv_pool_usage_pct"))
         if pool is not None:
             pw = max(2.0, min(pool_w, pool_w * pool / 100.0))
@@ -5750,7 +5919,11 @@ def build_tool_wait_gpu_activity_svg(rows: list[dict[str, Any]], max_rows: int =
     for _, name, color in count_keys:
         parts.append(f'<rect x="{x:.1f}" y="{legend_y - 10:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.82"/>')
         parts.append(f'<text x="{x + 18:.1f}" y="{legend_y:.1f}" font-size="10" fill="#334155">{html.escape(name)}</text>')
-        x += 180
+        x += 155
+    for name, color in [("sampled GPU compute", "#0f766e"), ("sampled GPU memory", "#2563eb"), ("SGLang KV pool", "#f97316")]:
+        parts.append(f'<rect x="{x:.1f}" y="{legend_y - 10:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.82"/>')
+        parts.append(f'<text x="{x + 18:.1f}" y="{legend_y:.1f}" font-size="10" fill="#334155">{html.escape(name)}</text>')
+        x += 190
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -5766,14 +5939,18 @@ def tool_wait_gpu_activity_html(rows: list[dict[str, Any]]) -> str:
         ("very busy tool waits", counts.get("very busy", 0)),
         ("busy tool waits", counts.get("busy", 0)),
         ("quiet tool waits", counts.get("quiet", 0)),
+        (
+            "with sampled GPU utilization",
+            f"{sum(1 for row in rows if as_float(row.get('gpu_util_samples')))} / {len(rows)}",
+        ),
     ]
     cards_html = "<div class=\"cards\">" + "\n".join(
         f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
         for label, value in cards
     ) + "</div>"
     return f"""
-    <p>This section answers: while the agent was waiting on the tool, was SGLang visibly busy with scheduler/model work, KV movement, or a full KV pool?</p>
-    <p class="note">This is direct SGLang-visible activity, not total GPU utilization and not a full hardware DMA-lane profiler.</p>
+    <p>This section answers: while the agent was waiting on the tool, was SGLang visibly busy, was the KV pool full, and was the whole GPU compute path busy?</p>
+    <p class="note">Scheduler/KV-pool/KV-movement rows are direct SGLang hooks. GPU compute and memory utilization come from lightweight <code>nvidia-smi</code> sampling, so they are whole-GPU telemetry, not per-request kernel attribution.</p>
     {cards_html}
     <div class="setup-diagram">{build_tool_wait_gpu_activity_svg(rows)}</div>
     """
@@ -8124,7 +8301,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    measured_row_h = 1340
+    measured_row_h = 1388
     projected_row_h = 250
     scenario_gap_h = 44 if any(str(row.get("comparison_scenario") or "") for row in rows) else 0
     bottom = 116
@@ -9496,10 +9673,25 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             pool_text = f"max pool {max_pool:.1f}%" if max_pool is not None else "no pool sample"
             if avg_pool is not None:
                 pool_text += f", avg {avg_pool:.1f}%"
+            max_gpu_compute = as_float(tool_wait_activity.get("max_gpu_compute_util_pct"))
+            avg_gpu_compute = as_float(tool_wait_activity.get("avg_gpu_compute_util_pct"))
+            max_gpu_memory = as_float(tool_wait_activity.get("max_gpu_memory_util_pct"))
+            avg_gpu_memory = as_float(tool_wait_activity.get("avg_gpu_memory_util_pct"))
+            gpu_compute_text = (
+                f"sampled GPU compute max {max_gpu_compute:.0f}%, avg {avg_gpu_compute:.0f}%"
+                if max_gpu_compute is not None and avg_gpu_compute is not None
+                else "no sampled GPU compute"
+            )
+            gpu_memory_text = (
+                f"sampled GPU memory max {max_gpu_memory:.0f}%, avg {avg_gpu_memory:.0f}%"
+                if max_gpu_memory is not None and avg_gpu_memory is not None
+                else "no sampled GPU memory"
+            )
             activity_title = (
                 f"GPU activity during tool wait: {activity_verdict}. "
                 f"scheduler={scheduler_events}, prefill={prefill_events}, decode={decode_events}, "
-                f"KV movement={kv_events}, H2D={h2d_events}, D2H={d2h_events}, evict={evict_events}, {pool_text}."
+                f"KV movement={kv_events}, H2D={h2d_events}, D2H={d2h_events}, evict={evict_events}, "
+                f"{pool_text}; {gpu_compute_text}; {gpu_memory_text}."
             )
             parts.append(
                 f'<text x="{left + 8}" y="{tool_wait_zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">'
@@ -9520,6 +9712,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             lane_gap = 16
             lane_h = 10
             lane_defs = [
+                ("gpu_compute", "GPU compute", "#0f766e"),
+                ("gpu_memory", "GPU memory", "#2563eb"),
                 ("pool", "KV pool", "#94a3b8"),
                 ("scheduler_events", "scheduler", unified_stack_color("scheduler")),
                 ("prefill_events", "prefill", unified_stack_color("recompute")),
@@ -9544,18 +9738,19 @@ def build_unified_per_gap_stack_timeline_svg_v2(
 
             for tick_value in [rel_min, rel_min + (rel_max - rel_min) * 0.5, rel_max]:
                 tx = tw_x(tick_value)
+                tick_bottom = lane_top + len(lane_defs) * lane_gap + 4
                 parts.append(
-                    f'<line x1="{tx:.1f}" y1="{lane_top - 10:.1f}" x2="{tx:.1f}" y2="{lane_top + 78:.1f}" '
+                    f'<line x1="{tx:.1f}" y1="{lane_top - 10:.1f}" x2="{tx:.1f}" y2="{tick_bottom:.1f}" '
                     f'stroke="#e5e7eb" stroke-width="1"/>'
                 )
                 parts.append(
-                    f'<text x="{tx:.1f}" y="{lane_top + 92:.1f}" text-anchor="middle" font-size="8" fill="#64748b">'
+                    f'<text x="{tx:.1f}" y="{tick_bottom + 14:.1f}" text-anchor="middle" font-size="8" fill="#64748b">'
                     f'{html.escape(display_ms(tick_value))}</text>'
                 )
             if rel_min <= 0 <= rel_max:
                 zx = tw_x(0.0)
                 parts.append(
-                    f'<line x1="{zx:.1f}" y1="{lane_top - 12:.1f}" x2="{zx:.1f}" y2="{lane_top + 78:.1f}" '
+                    f'<line x1="{zx:.1f}" y1="{lane_top - 12:.1f}" x2="{zx:.1f}" y2="{lane_top + len(lane_defs) * lane_gap + 4:.1f}" '
                     f'stroke="#111827" stroke-width="1.5"/>'
                 )
                 parts.append(f'<text x="{zx - 4:.1f}" y="{lane_top - 16:.1f}" text-anchor="end" font-size="8" font-weight="900" fill="#111827">replay due</text>')
@@ -9578,7 +9773,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         int(as_float(item.get(key)) or 0)
                         for item in activity_bins
                         for key, _, _ in lane_defs
-                        if key != "pool"
+                        if key not in {"pool", "gpu_compute", "gpu_memory"}
                     ]
                     + [1]
                 )
@@ -9590,9 +9785,48 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     x1 = tw_x(start_rel)
                     x2 = tw_x(end_rel)
                     bin_w = max(2.0, x2 - x1 - 1.0)
+                    gpu_compute = as_float(item.get("max_gpu_compute_util_pct"))
+                    if gpu_compute is not None:
+                        compute_y = lane_top
+                        compute_color = gpu_compute_heat_color(gpu_compute)
+                        title = (
+                            f"{label} | sampled whole-GPU compute utilization during tool wait | "
+                            f"{display_ms(start_rel)} -> {display_ms(end_rel)} relative to replay due | "
+                            f"max={gpu_compute:.1f}% | avg={item.get('avg_gpu_compute_util_pct', '')}% | "
+                            f"samples={item.get('gpu_util_samples', '')}"
+                        )
+                        parts.append(
+                            f'<rect x="{x1:.1f}" y="{compute_y:.1f}" width="{bin_w:.1f}" height="{lane_h:.1f}" rx="2" '
+                            f'fill="{compute_color}" opacity="0.82"><title>{html.escape(title)}</title></rect>'
+                        )
+                        if bin_w >= 28:
+                            text_color = "#ffffff" if gpu_compute >= 70.0 else "#111827"
+                            parts.append(
+                                f'<text x="{x1 + bin_w / 2:.1f}" y="{compute_y + 8:.1f}" text-anchor="middle" '
+                                f'font-size="6.5" font-weight="900" fill="{text_color}">{gpu_compute:.0f}%</text>'
+                            )
+                    gpu_memory = as_float(item.get("max_gpu_memory_util_pct"))
+                    if gpu_memory is not None:
+                        memory_y = lane_top + lane_gap
+                        memory_color = gpu_memory_heat_color(gpu_memory)
+                        title = (
+                            f"{label} | sampled whole-GPU memory utilization during tool wait | "
+                            f"{display_ms(start_rel)} -> {display_ms(end_rel)} relative to replay due | "
+                            f"max={gpu_memory:.1f}% | avg={item.get('avg_gpu_memory_util_pct', '')}% | "
+                            f"samples={item.get('gpu_util_samples', '')}"
+                        )
+                        parts.append(
+                            f'<rect x="{x1:.1f}" y="{memory_y:.1f}" width="{bin_w:.1f}" height="{lane_h:.1f}" rx="2" '
+                            f'fill="{memory_color}" opacity="0.82"><title>{html.escape(title)}</title></rect>'
+                        )
+                        if bin_w >= 28:
+                            parts.append(
+                                f'<text x="{x1 + bin_w / 2:.1f}" y="{memory_y + 8:.1f}" text-anchor="middle" '
+                                f'font-size="6.5" font-weight="900" fill="#ffffff">{gpu_memory:.0f}%</text>'
+                            )
                     pool_usage = as_float(item.get("max_pool_usage_pct"))
                     if pool_usage is not None:
-                        pool_y = lane_top
+                        pool_y = lane_top + 2 * lane_gap
                         pool_color = kv_pool_heat_color(pool_usage)
                         title = (
                             f"{label} | tool-wait KV pool | {display_ms(start_rel)} -> {display_ms(end_rel)} relative to replay due | "
@@ -9608,7 +9842,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                                 f'<text x="{x1 + bin_w / 2:.1f}" y="{pool_y + 8:.1f}" text-anchor="middle" '
                                 f'font-size="6.5" font-weight="900" fill="{text_color}">{pool_usage:.0f}%</text>'
                             )
-                    for lane_idx, (key, name, color) in enumerate(lane_defs[1:], start=1):
+                    for lane_idx, (key, name, color) in enumerate(lane_defs[3:], start=3):
                         count = int(as_float(item.get(key)) or 0)
                         if count <= 0:
                             continue
@@ -9633,12 +9867,13 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                                 f'font-size="6.5" font-weight="900" fill="#0f172a">{count}</text>'
                             )
             parts.append(
-                f'<text x="{lane_left:.1f}" y="{lane_top + 108:.1f}" font-size="8" font-weight="800" fill="#475569">'
+                f'<text x="{lane_left:.1f}" y="{lane_top + len(lane_defs) * lane_gap + 30:.1f}" font-size="8" font-weight="800" fill="#475569">'
                 f'totals: scheduler {scheduler_events}, prefill {prefill_events}, decode {decode_events}, '
-                f'KV movement {kv_events} (H2D {h2d_events}, D2H {d2h_events}, evict {evict_events}); {html.escape(pool_text)}</text>'
+                f'KV movement {kv_events} (H2D {h2d_events}, D2H {d2h_events}, evict {evict_events}); '
+                f'{html.escape(pool_text)}; {html.escape(gpu_compute_text)}; {html.escape(gpu_memory_text)}</text>'
             )
 
-        deadline_zoom_title_y = y + 1128
+        deadline_zoom_title_y = y + 1176
         parts.append(f'<text x="{left - 10}" y="{deadline_zoom_title_y + 9:.1f}" text-anchor="end" font-size="10" font-weight="900" fill="#334155">deadline zoom</text>')
         hint_deadline_span = _relative_span(row, "direct_kv_h2d_start_ms", "direct_kv_h2d_end_ms", due)
         replay_deadline_span = _relative_span(row, "replay_kv_h2d_start_ms", "replay_kv_h2d_end_ms", due)
@@ -10001,6 +10236,7 @@ def render_html(
     kv_block_rows: list[dict[str, Any]] | None = None,
     exact_kv_movement_rows: list[dict[str, Any]] | None = None,
     trace_rows: list[dict[str, Any]] | None = None,
+    gpu_util_rows: list[dict[str, Any]] | None = None,
     run_environment: dict[str, Any] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
@@ -10009,6 +10245,7 @@ def render_html(
     kv_block_rows = kv_block_rows or []
     exact_kv_movement_rows = exact_kv_movement_rows or []
     trace_rows = trace_rows or []
+    gpu_util_rows = gpu_util_rows or []
     run_environment = run_environment or {}
     all_timeline_rows = timeline_rows_with_labels(selected_timeline_gaps(gaps, len(gaps)))
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
@@ -10038,6 +10275,7 @@ def render_html(
         trace_rows,
         all_kv_movement_events,
         kv_pool_sample_rows,
+        gpu_util_rows,
     )
     interesting_kv_pool_residency_rows = [
         row for row in kv_pool_residency_rows if str(row.get("row") or "") in interesting_labels
@@ -10057,6 +10295,7 @@ def render_html(
         trace_rows,
         all_kv_movement_events,
         kv_pool_sample_rows,
+        gpu_util_rows,
     )
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(gaps)
     prefetch_truth_summary_table_rows = prefetch_truth_summary_rows(gaps)
@@ -10418,6 +10657,7 @@ def main() -> None:
     parser.add_argument("--live-direct-root", type=Path)
     parser.add_argument("--max-timeline-gaps", type=int, default=18)
     parser.add_argument("--run-environment-json", type=Path)
+    parser.add_argument("--gpu-util-csv", type=Path)
     args = parser.parse_args()
 
     all_gaps: list[dict[str, Any]] = []
@@ -10445,6 +10685,7 @@ def main() -> None:
     kv_block_lifecycle_by_gap = block_lifecycle_by_gap_rows(all_gaps, kv_block_rows)
     exact_kv_rows = exact_movement_rows(normalized_kv_events)
     request_coverage = request_id_coverage_rows(all_trace_rows)
+    gpu_util_rows = read_csv_rows(args.gpu_util_csv)
     h2d_readiness = replay_h2d_readiness_rows(all_gaps)
     queue_timing = replay_queue_timing_rows(all_gaps)
     all_labeled_gaps = timeline_rows_with_labels(selected_timeline_gaps(all_gaps, len(all_gaps)))
@@ -10482,6 +10723,7 @@ def main() -> None:
         all_trace_rows,
         all_kv_movement_events,
         kv_pool_sample_rows,
+        gpu_util_rows,
     )
     evidence_audit = audit_report_data(
         {
@@ -10506,6 +10748,7 @@ def main() -> None:
     write_csv(args.out_dir / "replay_delay_gap_verdicts.csv", replay_delay_gap_verdicts)
     write_csv(args.out_dir / "kv_pool_samples.csv", kv_pool_sample_rows)
     write_csv(args.out_dir / "kv_pool_residency_by_gap.csv", kv_pool_residency_rows)
+    write_csv(args.out_dir / "gpu_utilization_samples.csv", gpu_util_rows)
     write_csv(args.out_dir / "tool_wait_gpu_activity.csv", tool_wait_activity)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "all_aligned_kv_movement_events.csv", all_kv_movement_events)
@@ -10555,6 +10798,7 @@ def main() -> None:
             "replay_delay_gap_verdicts": replay_delay_gap_verdicts,
             "kv_pool_samples": kv_pool_sample_rows,
             "kv_pool_residency_by_gap": kv_pool_residency_rows,
+            "gpu_utilization_samples": gpu_util_rows,
             "tool_wait_gpu_activity": tool_wait_activity,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
@@ -10604,6 +10848,7 @@ def main() -> None:
         kv_block_rows=kv_block_rows,
         exact_kv_movement_rows=exact_kv_rows,
         trace_rows=all_trace_rows,
+        gpu_util_rows=gpu_util_rows,
         run_environment=load_json(args.run_environment_json),
     )
     report_path = args.out_dir / "controlled_replay_report.html"
