@@ -3494,7 +3494,7 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
 
         projection_source = None
         realistic = None
-        for candidate_mode in ("direct_prefetch", "no_prefetch", "dynamo_priority_hints"):
+        for candidate_mode in ("dynamo_priority_hints", "no_prefetch", "direct_prefetch"):
             candidate = rows_by_mode.get(candidate_mode)
             if not candidate:
                 continue
@@ -3861,6 +3861,11 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         "dynamo_priority_hints": "#f59e0b",
         "projected_hardware_bypass": "#0f766e",
     }
+    present_modes = {
+        canonical_mode(row.get("mode_key"))
+        for row in usable
+        if canonical_mode(row.get("mode_key")) in mode_colors
+    }
     max_offset = max(abs(value) for value in mode_offsets.values())
     base_left = left + max_offset + 18
     base_right = left + plot_w - max_offset - 18
@@ -3964,10 +3969,14 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     parts.append(f'<rect x="{lx + 300:.1f}" y="{legend_y - 10:.1f}" width="12" height="12" rx="2" fill="#0f172a" opacity="0.45" stroke="#0f172a" stroke-width="2"/>')
     parts.append(f'<text x="{lx + 320}" y="{legend_y}" font-size="12" fill="#334155">KV ready</text>')
     legend_modes = [
-        ("NP", "No prefetch", "no_prefetch"),
-        ("DP", "Direct prefetch", "direct_prefetch"),
-        ("DH", "Dynamo priority hints only", "dynamo_priority_hints"),
-        ("HW", "Projected hardware bypass", "projected_hardware_bypass"),
+        (short, label, mode_key)
+        for short, label, mode_key in [
+            ("NP", "No prefetch", "no_prefetch"),
+            ("DP", "Direct prefetch", "direct_prefetch"),
+            ("DH", "Dynamo priority hints only", "dynamo_priority_hints"),
+            ("HW", "Projected hardware bypass", "projected_hardware_bypass"),
+        ]
+        if mode_key in present_modes
     ]
     lx = left + 24
     ly = legend_y + 42
@@ -7477,7 +7486,7 @@ def reproduce_controlled_replay_html(result_root: Path) -> str:
             ("UPDATE_LATEST", run_config.get("UPDATE_LATEST") or "1"),
             ("MAX_TIMELINE_GAPS", run_config.get("MAX_TIMELINE_GAPS") or "24"),
             ("MAX_PAIRS", run_config.get("MAX_PAIRS") or "2"),
-            ("MODES", run_config.get("MODES") or "no_prefetch"),
+            ("MODES", run_config.get("MODES") or "no_prefetch dynamo_priority_hints"),
             ("TOOL_WAIT_LIST_MS", run_config.get("TOOL_WAIT_LIST_MS") or "500"),
             ("FILLER_LIST", run_config.get("FILLER_LIST") or "8 12 16 24 32"),
             ("REQUEST_CONCURRENCY", run_config.get("REQUEST_CONCURRENCY") or "4"),
@@ -10117,11 +10126,21 @@ def grouped_mode_comparison_timeline_html(
 ) -> str:
     if not rows:
         return """
-        <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in no prefetch and direct prefetch.</p>
+        <p>No grouped mode comparison rows were available. This section appears when the same task/gap scenario exists in at least two measured modes.</p>
         """
     scenario_count = len({str(row.get("comparison_scenario") or "") for row in rows})
+    present_modes = {
+        canonical_mode(row.get("mode"))
+        for row in rows
+        if canonical_mode(row.get("mode")) != "projected_hardware_bypass"
+    }
+    mode_order = [
+        mode
+        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass")
+        if mode == "projected_hardware_bypass" or mode in present_modes
+    ]
     mode_key_items = []
-    for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"):
+    for mode in mode_order:
         fg, badge_bg = mode_badge_style(mode)
         row_bg, accent, opacity = mode_row_background_style(mode)
         mode_key_items.append(
@@ -10130,9 +10149,14 @@ def grouped_mode_comparison_timeline_html(
             f'{html.escape(display_mode(mode))}</span>'
         )
     mode_key_html = '<div class="toc-pills" style="margin-top:10px;">' + "".join(mode_key_items) + "</div>"
+    mode_examples = ", ".join(
+        f"<code>C00-{mode_short_label(mode)}</code>"
+        for mode in mode_order
+    )
+    mode_names = ", ".join(display_mode(mode) for mode in mode_order)
     return f"""
-    <p>This view groups the same controlled scenario across modes. For example, <code>C00-NP</code>, <code>C00-DP</code>, <code>C00-DH</code>, and <code>C00-HW</code> are the same task/gap setup shown under no prefetch, direct prefetch, Dynamo priority hints only, and projected hardware bypass.</p>
-    <p class="note">Mode order is always: no prefetch, direct prefetch, Dynamo priority hints only, then projected hardware bypass. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
+    <p>This view groups the same controlled scenario across modes. For example, {mode_examples} are the same task/gap setup shown under {html.escape(mode_names)}.</p>
+    <p class="note">Current manager-facing default is: no prefetch, Dynamo priority hints only, then projected hardware bypass. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row. Measured rows also show the same tool-wait GPU activity zoom as the unified forensic timeline.</p>
@@ -10140,7 +10164,7 @@ def grouped_mode_comparison_timeline_html(
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
-      <div class="card"><div class="label">modes shown</div><div class="value">NP / DP / DH / HW</div></div>
+      <div class="card"><div class="label">modes shown</div><div class="value">{html.escape(' / '.join(mode_short_label(mode) for mode in mode_order))}</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, projected_hardware_rows=projected_hardware_rows, tool_wait_activity_rows=tool_wait_activity_rows, compact_projected_rows=True)}</div>
@@ -10205,7 +10229,7 @@ def live_direct_prefetch_html(live_run: dict[str, Any] | None, max_timeline_gaps
     return f"""
   <details id="live-direct" class="section-card theme-profiled">
     <summary><h2>Live AgentBench Direct Prefetch</h2></summary>
-    <p class="note">This section is the real live workload check. It uses only direct prefetch mode: real AgentBench/DeepAgents tool calls create live gaps, and the controller tries to trigger direct SGLang KV load-back during those gaps.</p>
+    <p class="note">This section is the legacy real live workload check. It uses the direct-prefetch hook path and is kept for comparison, but the current manager-facing default focuses on no prefetch, Dynamo priority hints only, and projected hardware bypass.</p>
     <h3>Live Summary</h3>
     {cards_html}
     <h3>How This Live Run Works</h3>
@@ -10598,7 +10622,7 @@ def render_html(
     <p class="note">These rows show the bridge used by <code>dynamo_priority_hints</code>: the emitted <code>custom_params.nvext.agent_hints</code> priority and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
     {table_html(dynamo_priority_rows, limit=1000)}
     <h3>Grouped Mode Comparison Rows</h3>
-    <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DP</code>, and <code>C00-HW</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
+    <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DH</code>, and <code>C00-HW</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
     {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
     <h3>Grouped Projected Hardware Bypass Overlay Rows</h3>
     <p class="note">These are projected rows used only for the dashed teal overlay in the grouped comparison timeline. They are not measured events.</p>

@@ -2,10 +2,10 @@
 set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen2.5-Coder-7B-Instruct}"
-RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone38_direct_prefetch_projection_$(date +%Y%m%d_%H%M%S)}"
+RESULT_ROOT="${RESULT_ROOT:-artifacts/results/milestone38_dynamo_hints_projection_$(date +%Y%m%d_%H%M%S)}"
 LATEST_REPORT_ROOT="${LATEST_REPORT_ROOT:-artifacts/results}"
 WORKLOAD_SOURCE="${WORKLOAD_SOURCE:-synthetic}"
-MODES="${MODES:-no_prefetch direct_prefetch}"
+MODES="${MODES:-no_prefetch dynamo_priority_hints}"
 SESSION_COUNT="${SESSION_COUNT:-12}"
 ARRIVAL_SHAPE="${ARRIVAL_SHAPE:-burst}"
 ARRIVAL_GAP_MS="${ARRIVAL_GAP_MS:-40}"
@@ -58,8 +58,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${DIRECT_ROOT}"
 
-echo "Milestone 38: Direct Prefetch vs Projected Hardware"
-echo "This measures no_prefetch and direct_prefetch. The report adds projected hardware rows from measured KV H2D durations."
+echo "Milestone 38: Dynamo Priority Hints vs Projected Hardware"
+echo "This measures no_prefetch and dynamo_priority_hints. The report adds projected hardware rows from measured KV H2D durations."
 echo "Projected hardware rows are estimates, not measured SGLang requests."
 
 bash scripts/run_milestone36_multi_session_agentic_replay.sh "${MODEL}"

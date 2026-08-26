@@ -57,7 +57,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 35: Instrumentation Evidence Audit | Ready | [Milestone 35](#milestone-35-instrumentation-evidence-audit) |
 | Milestone 36: Multi-Session Agentic Replay Forensics | Ready | [Milestone 36](#milestone-36-multi-session-agentic-replay-forensics) |
 | Milestone 37: GPU KV Pool Residency Telemetry | Ready | [Milestone 37](#milestone-37-gpu-kv-pool-residency-telemetry) |
-| Milestone 38: Direct Prefetch, Dynamo Priority Hints, And Projected Hardware | Ready | [Milestone 38](#milestone-38-direct-prefetch-dynamo-priority-hints-and-projected-hardware) |
+| Milestone 38: Dynamo Priority Hints And Projected Hardware | Ready | [Milestone 38](#milestone-38-dynamo-priority-hints-and-projected-hardware) |
 | Milestone 38B: Dynamo Priority Hint Bridge | Ready | [Milestone 38B](#milestone-38b-dynamo-priority-hint-bridge) |
 | Milestone 39: Projected Hardware Bypass Benefit | Ready | [Milestone 39](#milestone-39-projected-hardware-bypass-benefit) |
 
@@ -311,7 +311,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F19 | Real DeepAgents/SWE-bench tool gaps can be much shorter than the software prefetch path. | Milestone 22 bigger live run captured `12` real tool gaps across `4` SWE-bench tasks, with average gap about `11.5 ms` and max gap about `14.1 ms`. Milestone 23 live prefetch smoke matched `2` live prefetch attempts, but they took about `438 ms` and `498 ms`, with average prefetch margin about `-471 ms` and `0 / 2` finishing before resume. | This is a strong early live-traffic finding: the runtime can see useful tool-call hints, but the normal software/controller/SGLang request path is far too slow for very short resume windows. | Need a deadline-aware, hint-aware hardware/runtime path that can act on agent context quickly and predictably, instead of routing prefetch through ordinary best-effort serving work. | Strong |
 | F20 | Low 7B tool-call counts were caused by harness/parser/tool-interface issues plus model weakness, not by lack of tool traffic in the workload. | Direct-SGLang debugging found three issues: Qwen2.5 needed `--tool-call-parser qwen25`, DeepAgents tools see the repo at `/` rather than the host checkout path, and the 7B model sometimes emits unsafe empty-string `edit_file` calls. After fixes, a 4-task run produced `93` real task model requests, `49` structured tool calls, `44` trajectory prompts, and `0` prose-only tool-intent misses. | The direct SGLang path is now useful for live tool-gap/KV experiments. The remaining gap versus prior 30B/40B runs is mostly model capability and batch size. | Keep the parser/root/safe-edit safeguards on for A10G 7B runs; use Qwen3-Coder 30B/40B-class models on compatible GPUs for manager-grade SWE-bench tool diversity. | Strong |
 | F21 | Full live paired AgentBench traffic shows software prefetch usually misses the real tool-gap deadline. | Milestone 24 ran `START_INDEX=0`, `END_INDEX=15`, `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10` twice: no-prefetch captured `267` analyzed live requests and `127` tool gaps; live-prefetch captured `254` analyzed live requests and `114` tool gaps. The live-prefetch run submitted `117` hints, matched `114` prefetch attempts, but only `2 / 114` finished before resume. Average tool gap was about `19.9 ms`, while average prefetch request duration was about `629.5 ms`; `112 / 114` attempts were late. | This is the strongest live-system evidence so far: the runtime can observe the agent/tool context, but the ordinary software/controller/SGLang request path is much slower than the real resume window. The paired run was slower on average by about `130 ms`, with `105` slower pairs and only `9` faster pairs. | Need a hint-aware, deadline-aware prefetch/migration path that does not compete as an ordinary best-effort request, plus residency protection and telemetry to make useful prefetch enforceable. | Strong |
-| F22 | Direct KV prefetch and Dynamo priority hints test different software baselines. | `direct_prefetch` calls our direct SGLang KV load hook during tool wait. `dynamo_priority_hints` sends Dynamo-style priority metadata and an SGLang priority value, but does not issue the direct KV prefetch hook. | This keeps the comparison clean: one mode tests explicit KV movement, one mode tests priority hints only, and projected hardware estimates a lower-overhead memory path. | If both measured software paths still miss deadlines under pressure, the issue is not just lack of hints; it is lack of a low-overhead memory-system enforcement path. | Strong |
+| F22 | Dynamo priority hints and projected hardware test two different questions. | `dynamo_priority_hints` sends Dynamo-style priority metadata and an SGLang priority value, but does not issue our artificial direct KV prefetch hook. `projected_hardware_bypass` estimates a lower-overhead memory path from measured H2D durations. | This keeps the current manager-facing comparison clean: priority hints today vs. a projected memory-system enforcement path. | If priority hints still miss deadlines but projected hardware could meet them, the issue is not just lack of hints; it is lack of a low-overhead memory-system enforcement path. | Strong |
 
 Current strongest claim:
 
@@ -5027,7 +5027,7 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_JSONL=/path/to/real_prompt_pairs.jsonl \
 MAX_PAIRS=12 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 64" \
 PREFETCH_TIMING=near_resume \
@@ -5052,7 +5052,7 @@ RESULT_ROOT=artifacts/results/milestone27_real_prompt_controlled_replay_$(date +
 LATEST_REPORT_ROOT=artifacts/results \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=12 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 64" \
 PRIORITY_DIRECT_PREFETCH=0 \
@@ -5078,7 +5078,7 @@ LATEST_REPORT_ROOT=artifacts/results \
 MAX_PAIRS=1 \
 SYNTHETIC_PROMPT_TOKENS=4096 \
 SYNTHETIC_REPLAY_SUFFIX_TOKENS=256 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100" \
 FILLER_LIST="0 64 128" \
 FILLER_PROMPT_TOKENS=2048 \
@@ -5291,7 +5291,7 @@ MAX_TIMELINE_GAPS=32 \
 AGENTBENCH_ROOT=~/kv_cache_offloading \
 TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
 MAX_PAIRS=8 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
 FILLER_LIST="16 32" \
 REQUEST_CONCURRENCY=4 \
@@ -6399,11 +6399,11 @@ This milestone avoids old prompt-based request warming.
 
 Main modes:
   no_prefetch
-  direct_prefetch
+  dynamo_priority_hints
   projected_hardware_bypass
 
-direct_prefetch uses the direct SGLang KV load-back trigger path. It does not
-try to warm the cache by asking SGLang to generate from a duplicate prompt.
+dynamo_priority_hints sends Dynamo-style priority metadata and an SGLang
+priority value. It does not issue our artificial direct KV prefetch hook.
 
 projected_hardware_bypass is not a measured SGLang mode. The report computes it
 from measured H2D duration and asks: if a low-overhead hardware KV movement path
@@ -6426,7 +6426,7 @@ PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=real \
 SESSION_COUNT=16 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 ARRIVAL_SHAPE=staggered \
 ARRIVAL_GAP_MS=120 \
 TOOL_WAIT_LIST_MS="100 250 500 1000" \
@@ -6461,7 +6461,7 @@ PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
 SESSION_COUNT=4 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
 BURST_SIZE=4 \
@@ -6554,7 +6554,7 @@ PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
 SESSION_COUNT=8 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
 BURST_SIZE=4 \
@@ -6572,7 +6572,7 @@ bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-### Milestone 38: Direct Prefetch, Dynamo Priority Hints, And Projected Hardware
+### Milestone 38: Dynamo Priority Hints And Projected Hardware
 
 Why this milestone is needed:
 
@@ -6580,15 +6580,14 @@ Why this milestone is needed:
 We want the main manager-facing comparison to stay simple:
 
   1. What happens with no prefetch?
-  2. What happens when software directly asks SGLang to load KV during tool wait?
-  3. What happens when software sends Dynamo-style priority hints only?
-  4. What might happen if a low-overhead hardware KV movement path could do the
+  2. What happens when software sends Dynamo-style priority hints only?
+  3. What might happen if a low-overhead hardware KV movement path could do the
      same useful copy earlier and more predictably?
 
-This avoids mixing priority hints with explicit KV prefetch. The main measured
-software modes are now separate:
+This avoids mixing priority hints with our explicit direct KV prefetch hook.
+The main measured software modes are now:
 
-  direct_prefetch = explicit direct KV load hook
+  no_prefetch = no hint help
   dynamo_priority_hints = priority metadata only, no direct KV hook
 ```
 
@@ -6598,11 +6597,6 @@ What it compares:
 no_prefetch:
   no hint is issued.
   replay pays whatever KV load/recompute cost exists.
-
-direct_prefetch:
-  the direct SGLang KV load-back hook is issued during tool wait.
-  this tests whether an explicit software KV-load request can make KV ready
-  before replay.
 
 dynamo_priority_hints:
   sends Dynamo-style agent priority metadata and an SGLang priority value.
@@ -6617,10 +6611,6 @@ projected_hardware_bypass:
 Simple meaning:
 
 ```text
-direct_prefetch says:
-  "this session is likely to resume soon; call SGLang's direct KV load path
-   during the tool wait."
-
 dynamo_priority_hints says:
   "this request is high priority and replay-critical, but let today's SGLang
    priority scheduler decide how to act on that request metadata."
@@ -6634,7 +6624,6 @@ Timeline model:
 
 ```text
 tool wait starts
--> direct prefetch tries to load useful KV through SGLang
 -> Dynamo priority hints mode sends priority metadata but no direct KV hook
 -> replay becomes due
 -> replay either uses resident KV, loads KV from host, or recomputes missing KV
@@ -6644,15 +6633,13 @@ tool wait starts
 What this does and does not prove:
 
 ```text
-It does prove what the current software/direct-hook path does in SGLang.
-It also proves what SGLang priority hints alone do without our direct hook.
+It proves what SGLang priority hints alone do without our direct KV hook.
 
 It does not prove the projected hardware row as a measured hardware result.
 That row is a clearly labeled what-if estimate.
 
 The useful comparison is:
-  measured no prefetch vs measured direct prefetch vs measured priority hints
-  vs projected hardware bypass.
+  measured no prefetch vs measured priority hints vs projected hardware bypass.
 ```
 
 Main run command:
@@ -6661,10 +6648,10 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_ROOT=artifacts/results/milestone38_direct_prefetch_projection_$(date +%Y%m%d_%H%M%S) \
+RESULT_ROOT=artifacts/results/milestone38_dynamo_hints_projection_$(date +%Y%m%d_%H%M%S) \
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6685,7 +6672,7 @@ MAX_TOTAL_TOKENS=12288 \
 HICACHE_SIZE_GB=16 \
 MEM_FRACTION_STATIC=0.72 \
 MAX_TIMELINE_GAPS=32 \
-bash scripts/run_milestone38_priority_direct_prefetch.sh \
+bash scripts/run_milestone38_dynamo_hints_projection.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
@@ -6696,11 +6683,11 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 EXPERIMENT_KIND=multi_session \
-REPORT_LABEL=direct_prefetch_projection_demo_1 \
+REPORT_LABEL=dynamo_hints_projection_demo_1 \
 PRESSURE_PROFILE=custom \
 UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6752,10 +6739,6 @@ Global KV Readiness By Mode:
   no_prefetch:
     KV-ready uses replay-side H2D finish, if replay H2D is observed.
 
-  direct_prefetch:
-    KV-ready uses hint-side direct KV H2D if it completed before replay;
-    otherwise it falls back to replay-side H2D or measured prefetch completion.
-
   dynamo_priority_hints:
     no artificial/direct-prefetch H2D is credited.
     KV-ready uses replay-side H2D finish only, if replay H2D is observed.
@@ -6768,12 +6751,11 @@ Global KV Readiness By Mode:
 Grouped Mode Comparison Timeline:
   compare the same task/gap scenario across:
     Cxx-NP = no prefetch
-    Cxx-DP = direct prefetch
     Cxx-DH = Dynamo priority hints only, if MODES includes dynamo_priority_hints
     Cxx-HW = projected hardware bypass
 
 Unified Forensic Stack Timeline:
-  detailed measured evidence for no-prefetch and direct-prefetch rows.
+  detailed measured evidence for no-prefetch and Dynamo-priority-hints rows.
 
 GPU KV Pool Residency:
   check whether the KV pool was full or near-full around replay/prefetch events.
@@ -6821,7 +6803,7 @@ UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
 MAX_TIMELINE_GAPS=32 \
 MAX_PAIRS=2 \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS=500 \
 FILLER_LIST="12 16 24" \
 REQUEST_CONCURRENCY=4 \
@@ -6941,10 +6923,10 @@ Fresh run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_ROOT=artifacts/results/milestone38_direct_prefetch_projection_$(date +%Y%m%d_%H%M%S) \
+RESULT_ROOT=artifacts/results/milestone38_dynamo_hints_projection_$(date +%Y%m%d_%H%M%S) \
 LATEST_REPORT_ROOT=artifacts/results \
 WORKLOAD_SOURCE=synthetic \
-MODES="no_prefetch direct_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints" \
 SESSION_COUNT=12 \
 ARRIVAL_SHAPE=burst \
 ARRIVAL_GAP_MS=40 \
@@ -6962,7 +6944,7 @@ MAX_TOTAL_TOKENS=12288 \
 HICACHE_SIZE_GB=16 \
 MEM_FRACTION_STATIC=0.72 \
 MAX_TIMELINE_GAPS=32 \
-bash scripts/run_milestone38_priority_direct_prefetch.sh \
+bash scripts/run_milestone38_dynamo_hints_projection.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
