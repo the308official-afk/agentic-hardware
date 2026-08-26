@@ -3982,19 +3982,10 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     rows = global_kv_readiness_by_mode_rows(gaps)
     if not rows:
         return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
-    first_token_summary = global_first_token_by_mode_summary_rows(rows)
-    status_rows = global_replay_vs_kv_status_rows(rows)
     return f"""
-    <p>This section separates two questions: when did the replay produce its first useful output token, and did useful KV become ready before that replay deadline?</p>
-    <p class="note">For Dynamo priority hints only, no artificial direct-prefetch H2D is counted. Its KV-ready square uses replay-side H2D finish only. If replay-side H2D is not observed, the first-token circle can still appear while the KV-ready square is omitted.</p>
-    <h3>First Token Lateness Summary</h3>
-    {table_html(first_token_summary, ["mode", "circles", "first_token_on_or_before_due", "first_token_late", "late_pct", "median_first_token_relative_ms", "worst_first_token_lateness_ms"])}
     <h3>Replay First Token vs KV Ready</h3>
-    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means the event happened before the replay deadline. Below zero means it happened after the replay deadline. Circle = first replay token produced. Square = useful KV became ready, usually when host-to-device KV load finished. For Dynamo priority hints only, the square appears only when replay-side KV H2D was observed. For projected hardware, the square is projected, not measured.</p>
+    <p class="note">Circle = first replay token produced. Square = useful KV became ready. Above zero means the event happened before the replay deadline; below zero means it happened after the deadline. For Dynamo priority hints only, the square appears only when replay-side KV H2D was observed. For projected hardware, the square is projected, not measured.</p>
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
-    <h3>Dot Availability</h3>
-    {table_html(status_rows, ["mode", "first_token_circles", "kv_ready_squares", "missing_kv_ready_squares", "meaning"])}
-    <p class="note">Exact per-dot values are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     """
 
 
