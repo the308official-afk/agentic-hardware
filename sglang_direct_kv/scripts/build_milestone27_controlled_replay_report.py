@@ -6786,9 +6786,8 @@ def global_readiness_html(gaps: list[dict[str, Any]]) -> str:
     sections: list[str] = []
     mode_rows = global_kv_readiness_by_mode_rows(gaps)
     if mode_rows:
-        sections.append("<h3>Mode Comparison Readiness</h3>")
         sections.append(global_kv_readiness_by_mode_html(gaps))
-    if has_no_prefetch_h2d:
+    if has_no_prefetch_h2d and not mode_rows:
         sections.append("<h3>No-Prefetch Replay Queue And H2D Detail</h3>")
         sections.append(global_replay_h2d_readiness_html(gaps))
     if has_prefetch_margins and not mode_rows:
@@ -9599,9 +9598,9 @@ def render_html(
     {manager_setup_html(run_environment)}
   </details>
 
-  <details id="global-prefetch" class="section-card theme-global">
+  <details id="global-prefetch" class="section-card theme-global" open>
     <summary><h2>{html.escape(global_title)}</h2></summary>
-    <p>For no-prefetch rows, this section measures replay-side KV H2D readiness. For direct-prefetch rows, it also reports the normal prefetch margin.</p>
+    <p>This section compares when the first replay token appeared and when useful KV became ready.</p>
     {global_readiness_html(gaps)}
   </details>
 
