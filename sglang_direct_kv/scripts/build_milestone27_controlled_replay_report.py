@@ -617,9 +617,26 @@ def telemetry_events_by_session(
                     "batch_request_prefill_attribution": row.get("batch_request_prefill_attribution", ""),
                     "host_index_count": row.get("host_index_count", ""),
                     "device_index_count": row.get("device_index_count", ""),
-                    "priority_queue_audit": context.get("priority_queue_audit", "") if isinstance(context, dict) else "",
-                    "priority_receive_order": context.get("priority_receive_order", "") if isinstance(context, dict) else "",
-                    "priority_admission_order": context.get("priority_admission_order", "") if isinstance(context, dict) else "",
+                    "priority_queue_audit": (
+                        row.get("priority_queue_audit", "")
+                        or (context.get("priority_queue_audit", "") if isinstance(context, dict) else "")
+                    ),
+                    "priority_queue_snapshots": (
+                        row.get("priority_queue_snapshots", "")
+                        or (context.get("priority_queue_snapshots", "") if isinstance(context, dict) else "")
+                    ),
+                    "priority_receive_order": (
+                        row.get("priority_receive_order", "")
+                        or (context.get("priority_receive_order", "") if isinstance(context, dict) else "")
+                    ),
+                    "priority_admission_order": (
+                        row.get("priority_admission_order", "")
+                        or (context.get("priority_admission_order", "") if isinstance(context, dict) else "")
+                    ),
+                    "priority_admission_sequence": (
+                        row.get("priority_admission_sequence", "")
+                        or (context.get("priority_admission_sequence", "") if isinstance(context, dict) else "")
+                    ),
                     "request_priority": request_priority,
                     "request_dynamo_priority": request_dynamo_priority,
                 }
@@ -913,6 +930,83 @@ def _priority_target_from_event(event: dict[str, Any]) -> tuple[str, int | None]
     return "", None
 
 
+def _priority_event_aliases(item: Any) -> set[str]:
+    if not isinstance(item, dict):
+        return set()
+    aliases = item.get("matched_aliases") or item.get("priority_aliases") or []
+    if isinstance(aliases, str):
+        aliases = [part.strip() for part in aliases.split(";") if part.strip()]
+    if not isinstance(aliases, list):
+        aliases = []
+    out = {str(alias) for alias in aliases if alias not in (None, "", [], {})}
+    item_id = _priority_event_id(item)
+    if item_id:
+        out.add(f"id:{item_id}")
+        out.add(item_id)
+    session = item.get("agent_session_id") or item.get("session_id")
+    phase = item.get("agent_phase") or item.get("dynamo_hint_phase")
+    case_id = item.get("agent_case_id")
+    gap_id = item.get("agent_gap_id")
+    if session and phase:
+        out.add(f"session_phase:{session}:{phase}")
+    if case_id not in (None, "") and gap_id not in (None, "") and phase:
+        out.add(f"case_gap_phase:{case_id}:{gap_id}:{phase}")
+    return out
+
+
+def _priority_items_match(
+    item: Any,
+    *,
+    target_id: str,
+    priority: int | None,
+    target_aliases: set[str],
+) -> tuple[bool, str]:
+    if not isinstance(item, dict):
+        return False, ""
+    item_id = _priority_event_id(item)
+    if target_id and item_id == target_id:
+        return True, "request_id"
+    item_aliases = _priority_event_aliases(item)
+    alias_overlap = item_aliases.intersection(target_aliases)
+    if alias_overlap:
+        return True, sorted(alias_overlap)[0]
+    item_priority = _priority_event_priority(item)
+    if not target_id and not target_aliases and priority is not None and item_priority == priority:
+        return True, "priority_only"
+    return False, ""
+
+
+def _priority_snapshot_matches(
+    snapshot: Any,
+    *,
+    target_id: str,
+    priority: int | None,
+    target_aliases: set[str],
+) -> tuple[bool, str]:
+    if not isinstance(snapshot, dict):
+        return False, ""
+    if snapshot.get("target_position") not in (None, "", [], {}):
+        snap_id = str(snapshot.get("request_id") or "")
+        if target_id and snap_id == target_id:
+            return True, str(snapshot.get("target_matched_by") or "request_id")
+        snap_priority = _priority_int(snapshot.get("request_priority"))
+        matched_by = str(snapshot.get("target_matched_by") or "")
+        if matched_by and (not target_id or snap_id == target_id or snap_priority == priority):
+            return True, matched_by
+    for item in snapshot.get("queue_head_sample") or []:
+        matched, reason = _priority_items_match(
+            item,
+            target_id=target_id,
+            priority=priority,
+            target_aliases=target_aliases,
+        )
+        if matched:
+            return True, reason
+    if not target_id and priority is not None and _priority_int(snapshot.get("request_priority")) == priority:
+        return True, "priority_only"
+    return False, ""
+
+
 def summarize_priority_queue_effectiveness(
     events: list[dict[str, Any]],
     target_request_id: Any = "",
@@ -920,12 +1014,26 @@ def summarize_priority_queue_effectiveness(
 ) -> dict[str, Any]:
     target_id = str(target_request_id or "")
     priority = _priority_int(target_priority)
+    target_aliases: set[str] = set()
     for event in events:
         event_id, event_priority = _priority_target_from_event(event)
         if not target_id and event_id:
             target_id = event_id
         if priority is None and event_priority is not None:
             priority = event_priority
+        for key in ("priority_receive_order", "priority_admission_order", "priority_admission_sequence"):
+            values = event.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                matched, _ = _priority_items_match(
+                    item,
+                    target_id=target_id,
+                    priority=priority,
+                    target_aliases=target_aliases,
+                )
+                if matched:
+                    target_aliases.update(_priority_event_aliases(item))
 
     queue_audit: dict[str, Any] = {}
     receive_seen = False
@@ -933,19 +1041,26 @@ def summarize_priority_queue_effectiveness(
     admitted_seen = False
     lower_priority_admitted_before = 0
     admitted_before_sample: list[str] = []
+    queue_snapshot_count = 0
+    queue_names_seen: list[str] = []
+    target_matched_by = ""
+    admission_seq = ""
 
     for event in sorted(events, key=lambda item: as_float(item.get("start_or_end_ms")) or 0.0):
         receive_order = event.get("priority_receive_order")
         if isinstance(receive_order, list):
-            receive_seen = receive_seen or any(
-                (target_id and _priority_event_id(item) == target_id)
-                or (
-                    not target_id
-                    and priority is not None
-                    and _priority_event_priority(item) == priority
+            for item in receive_order:
+                matched, reason = _priority_items_match(
+                    item,
+                    target_id=target_id,
+                    priority=priority,
+                    target_aliases=target_aliases,
                 )
-                for item in receive_order
-            )
+                if matched:
+                    receive_seen = True
+                    if not target_matched_by:
+                        target_matched_by = reason
+                    target_aliases.update(_priority_event_aliases(item))
 
         audit = event.get("priority_queue_audit")
         if isinstance(audit, dict) and (
@@ -959,22 +1074,64 @@ def summarize_priority_queue_effectiveness(
             queue_seen = True
             if not queue_audit:
                 queue_audit = audit
+            if not target_matched_by:
+                target_matched_by = str(audit.get("target_matched_by") or "priority_audit")
 
-        admission_order = event.get("priority_admission_order")
+        snapshots = event.get("priority_queue_snapshots")
+        if isinstance(snapshots, list):
+            queue_snapshot_count += len(snapshots)
+            for snapshot in snapshots:
+                if not isinstance(snapshot, dict):
+                    continue
+                queue_name = str(snapshot.get("queue_name") or "")
+                if queue_name and queue_name not in queue_names_seen:
+                    queue_names_seen.append(queue_name)
+                matched, reason = _priority_snapshot_matches(
+                    snapshot,
+                    target_id=target_id,
+                    priority=priority,
+                    target_aliases=target_aliases,
+                )
+                if not matched:
+                    continue
+                queue_seen = True
+                if not target_matched_by:
+                    target_matched_by = reason
+                if not queue_audit:
+                    queue_audit = {
+                        "queue_name": snapshot.get("queue_name", ""),
+                        "queue_len": snapshot.get("queue_len", ""),
+                        "request_id": snapshot.get("request_id", ""),
+                        "request_priority": snapshot.get("request_priority", ""),
+                        "queue_position": snapshot.get("target_position", ""),
+                        "target_matched_by": reason or snapshot.get("target_matched_by", ""),
+                        "lower_priority_ahead": snapshot.get("lower_priority_ahead", ""),
+                        "higher_priority_ahead": snapshot.get("higher_priority_ahead", ""),
+                        "same_or_higher_priority_ahead": snapshot.get("same_or_higher_priority_ahead", ""),
+                    }
+
+        admission_order = event.get("priority_admission_sequence") or event.get("priority_admission_order")
         if not isinstance(admission_order, list):
             continue
         for item in admission_order:
-            item_id = _priority_event_id(item)
             item_priority = _priority_event_priority(item)
-            if (target_id and item_id == target_id) or (
-                not target_id and priority is not None and item_priority == priority
-            ):
+            matched, reason = _priority_items_match(
+                item,
+                target_id=target_id,
+                priority=priority,
+                target_aliases=target_aliases,
+            )
+            if matched:
                 admitted_seen = True
+                if not target_matched_by:
+                    target_matched_by = reason
+                if item.get("admission_seq") not in (None, ""):
+                    admission_seq = str(item.get("admission_seq"))
                 break
             if priority is not None and item_priority is not None and item_priority < priority:
                 lower_priority_admitted_before += 1
                 if len(admitted_before_sample) < 5:
-                    admitted_before_sample.append(f"{item_id or 'unknown'}:{item_priority}")
+                    admitted_before_sample.append(f"{_priority_event_id(item) or 'unknown'}:{item_priority}")
         if admitted_seen:
             break
 
@@ -992,14 +1149,25 @@ def summarize_priority_queue_effectiveness(
         verdict = "lower_priority_ahead_but_not_admitted_first"
         meaning = "Lower-priority requests were ahead in the queue, but the trace did not show them admitted before the target."
     elif admitted_seen:
-        verdict = "priority_admission_order_clean"
+        verdict = "priority_honored_in_admission_order"
         meaning = "The target priority request appeared in the admission trace without lower-priority requests admitted ahead of it."
     elif queue_seen:
-        verdict = "priority_queue_position_observed"
-        meaning = "SGLang queue position was observed, but admission order was not fully captured."
+        verdict = "priority_seen_in_scheduler_queue"
+        meaning = "The target priority request appeared in SGLang scheduler queue snapshots, but admission order was not fully captured."
     else:
-        verdict = "priority_receive_observed"
+        verdict = "priority_seen_at_receive_only"
         meaning = "SGLang received the priority request, but queue/admission effect was not fully captured."
+
+    if admitted_seen:
+        proof_strength = "strong: admission order observed"
+    elif queue_seen:
+        proof_strength = "medium: queue snapshot observed"
+    elif receive_seen:
+        proof_strength = "weak: receive only"
+    elif priority is not None:
+        proof_strength = "weak: priority attached only"
+    else:
+        proof_strength = "none"
 
     return {
         "priority_request_id": target_id,
@@ -1015,6 +1183,11 @@ def summarize_priority_queue_effectiveness(
         "priority_same_or_higher_ahead": queue_audit.get("same_or_higher_priority_ahead", "") if queue_audit else "",
         "priority_lower_admitted_before": lower_priority_admitted_before,
         "priority_lower_admitted_before_sample": "; ".join(admitted_before_sample),
+        "priority_queue_snapshot_count": queue_snapshot_count,
+        "priority_queue_names_seen": "; ".join(queue_names_seen[:8]),
+        "priority_target_matched_by": target_matched_by,
+        "priority_admission_seq": admission_seq,
+        "priority_scheduler_proof_strength": proof_strength,
         "priority_queue_effectiveness_verdict": verdict,
         "priority_queue_effectiveness_meaning": meaning,
     }
@@ -1645,6 +1818,11 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_priority_same_or_higher_ahead": replay_queue_summary["priority_same_or_higher_ahead"],
             "replay_priority_lower_admitted_before": replay_queue_summary["priority_lower_admitted_before"],
             "replay_priority_lower_admitted_before_sample": replay_queue_summary["priority_lower_admitted_before_sample"],
+            "replay_priority_queue_snapshot_count": replay_queue_summary["priority_queue_snapshot_count"],
+            "replay_priority_queue_names_seen": replay_queue_summary["priority_queue_names_seen"],
+            "replay_priority_target_matched_by": replay_queue_summary["priority_target_matched_by"],
+            "replay_priority_admission_seq": replay_queue_summary["priority_admission_seq"],
+            "replay_priority_scheduler_proof_strength": replay_queue_summary["priority_scheduler_proof_strength"],
             "replay_priority_queue_effectiveness_verdict": replay_queue_summary["priority_queue_effectiveness_verdict"],
             "replay_priority_queue_effectiveness_meaning": replay_queue_summary["priority_queue_effectiveness_meaning"],
             "replay_model_forward_event_count": replay_prefill_summary["event_count"],
@@ -2110,8 +2288,13 @@ def dynamo_priority_queue_effectiveness_column_guide_rows() -> list[dict[str, st
         {"column": "replay_sglang_priority", "meaning": "Priority value attached to the replay/resume request."},
         {"column": "priority_receive_seen", "meaning": "Whether SGLang-side tracing saw this priority request arrive."},
         {"column": "priority_queue_position", "meaning": "Where the request appeared in the observed scheduler queue. 0 means queue head."},
+        {"column": "priority_queue_snapshot_count", "meaning": "How many internal scheduler queue snapshots were captured while tracking this request."},
+        {"column": "priority_queue_names_seen", "meaning": "Which SGLang queue-like structures were inspected."},
+        {"column": "priority_target_matched_by", "meaning": "How the report matched the priority request inside the queue, such as request id, session/gap alias, or priority-only fallback."},
+        {"column": "priority_admission_seq", "meaning": "Captured scheduler admission sequence number for the priority request, when available."},
         {"column": "priority_lower_ahead", "meaning": "How many lower-priority requests were ahead when the queue snapshot was observed."},
         {"column": "priority_lower_admitted_before", "meaning": "How many lower-priority requests were admitted before this priority request in the captured admission order."},
+        {"column": "priority_scheduler_proof_strength", "meaning": "How strong the proof is: receive only, queue snapshot observed, or admission order observed."},
         {"column": "priority_queue_effectiveness_verdict", "meaning": "Simple verdict: whether the priority was merely attached, partially observed, or actually reflected in admission order."},
         {"column": "simple_meaning", "meaning": "Plain-English explanation of the verdict."},
     ]
@@ -2141,11 +2324,16 @@ def dynamo_priority_queue_effectiveness_rows(gaps: list[dict[str, Any]]) -> list
                 "priority_queue_name": row.get("replay_priority_queue_name", ""),
                 "priority_queue_len": row.get("replay_priority_queue_len", ""),
                 "priority_queue_position": row.get("replay_priority_queue_position", ""),
+                "priority_queue_snapshot_count": row.get("replay_priority_queue_snapshot_count", ""),
+                "priority_queue_names_seen": row.get("replay_priority_queue_names_seen", ""),
+                "priority_target_matched_by": row.get("replay_priority_target_matched_by", ""),
+                "priority_admission_seq": row.get("replay_priority_admission_seq", ""),
                 "priority_lower_ahead": row.get("replay_priority_lower_ahead", ""),
                 "priority_higher_ahead": row.get("replay_priority_higher_ahead", ""),
                 "priority_same_or_higher_ahead": row.get("replay_priority_same_or_higher_ahead", ""),
                 "priority_lower_admitted_before": row.get("replay_priority_lower_admitted_before", ""),
                 "priority_lower_admitted_before_sample": row.get("replay_priority_lower_admitted_before_sample", ""),
+                "priority_scheduler_proof_strength": row.get("replay_priority_scheduler_proof_strength", ""),
                 "priority_queue_effectiveness_verdict": row.get("replay_priority_queue_effectiveness_verdict", ""),
                 "simple_meaning": row.get("replay_priority_queue_effectiveness_meaning", ""),
                 "resume_ttft_ms": row.get("resume_ttft_ms", ""),

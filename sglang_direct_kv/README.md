@@ -6804,7 +6804,7 @@ UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
 MAX_TIMELINE_GAPS=32 \
 MAX_PAIRS=2 \
-MODES="no_prefetch dynamo_priority_hints" \
+MODES="no_prefetch dynamo_priority_hints projected_hardware" \
 TOOL_WAIT_LIST_MS=500 \
 FILLER_LIST="12 16 24" \
 REQUEST_CONCURRENCY=4 \
@@ -6862,11 +6862,13 @@ That alone does not prove:
 So this milestone also records a priority queue audit:
   client submit request_id + priority
   SGLang receive request_id + priority
-  scheduler queue context
-  queue position when visible
+  scheduler queue snapshots from queue-like SGLang structures
+  queue name, queue length, and queue position when visible
+  queue head sample with request ids, priorities, and session/gap aliases
   how many lower-priority requests were ahead
-  scheduler admission order
+  scheduler admission sequence/order when visible
   whether lower-priority requests were admitted before this request
+  proof strength: receive-only, queue-snapshot observed, or admission-order observed
 
 This lets us distinguish two cases:
 
@@ -6877,6 +6879,26 @@ This lets us distinguish two cases:
   hint attached and honored:
     scheduler traces show the high-priority request being received/admitted
     ahead of lower-priority work.
+```
+
+How to read the audit:
+
+```text
+priority_seen_at_receive_only:
+  SGLang received the priority metadata, but the trace did not prove queue
+  movement.
+
+priority_seen_in_scheduler_queue:
+  The priority request appeared inside a captured scheduler queue snapshot.
+  This is stronger than receive-only, but still may not prove admission order.
+
+priority_honored_in_admission_order:
+  The priority request appeared in the scheduler admission trace without
+  lower-priority requests admitted before it.
+
+lower_priority_admitted_before_target:
+  The trace found lower-priority work admitted before the high-priority replay.
+  This means the hint was not fully enforced by the software scheduler.
 ```
 
 New output files:
@@ -6900,6 +6922,10 @@ Important:
 Old reports cannot prove priority queue effectiveness because the scheduler
 queue/admission hooks were not present when those traces were captured.
 Rerun this milestone to populate the new queue-effectiveness evidence.
+
+This audit is intentionally conservative. If it cannot see SGLang's exact queue
+internals for a given version, it will say "receive only" or "queue snapshot
+observed" instead of claiming that priority was fully honored.
 ```
 
 ### Milestone 39: Projected Hardware Bypass Benefit

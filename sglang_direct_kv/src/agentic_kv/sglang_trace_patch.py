@@ -23,6 +23,8 @@ _AGENT_BY_NODE_ID: dict[str, dict[str, Any]] = {}
 _AGENT_BY_INDEX_SIG: dict[str, dict[str, Any]] = {}
 _NODE_RESIDENCY_BY_ID: dict[str, dict[str, Any]] = {}
 _REQUEST_INTAKE_BY_RID: dict[str, dict[str, Any]] = {}
+_PRIORITY_REQUESTS_BY_ALIAS: dict[str, dict[str, Any]] = {}
+_PRIORITY_ADMISSION_SEQ = 0
 
 
 def _first_int(value: Any, *keys: str) -> int | None:
@@ -550,6 +552,8 @@ def _request_like_context(req: Any) -> dict[str, Any]:
             except Exception:
                 pass
     _enrich_request_prefill_attribution(context)
+    _apply_priority_registry(context)
+    _remember_priority_request_context(context)
     return {key: value for key, value in context.items() if value not in (None, "", [], {})}
 
 
@@ -736,6 +740,152 @@ def _request_identity(request: dict[str, Any]) -> str:
     return ""
 
 
+def _priority_aliases(request: dict[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    identity = _request_identity(request)
+    if identity:
+        aliases.add(f"id:{identity}")
+    for key in (
+        "request_id",
+        "agent_request_id",
+        "dynamo_hint_request_id",
+        "rid",
+        "req_pool_idx",
+        "agent_label",
+    ):
+        value = request.get(key)
+        if value not in (None, "", [], {}):
+            aliases.add(f"{key}:{value}")
+    session = request.get("agent_session_id") or request.get("session_id")
+    phase = request.get("agent_phase") or request.get("dynamo_hint_phase")
+    case_id = request.get("agent_case_id")
+    gap_id = request.get("agent_gap_id")
+    prompt_hash = request.get("agent_prompt_hash")
+    if session and phase:
+        aliases.add(f"session_phase:{session}:{phase}")
+    if session and prompt_hash:
+        aliases.add(f"session_prompt:{session}:{prompt_hash}")
+    if case_id not in (None, "", [], {}) and gap_id not in (None, "", [], {}) and phase:
+        aliases.add(f"case_gap_phase:{case_id}:{gap_id}:{phase}")
+    for key in ("input_ids", "origin_input_ids", "fill_ids"):
+        value = request.get(key)
+        signature = ""
+        if isinstance(value, dict):
+            signature = _index_signature(value)
+            if not signature and value.get("sha1_16"):
+                signature = f"{value.get('index_count') or value.get('count') or ''}:{value.get('sha1_16')}"
+        if signature:
+            aliases.add(f"{key}:{signature}")
+    return {alias for alias in aliases if alias}
+
+
+def _priority_alias_overlap(left: dict[str, Any], right: dict[str, Any]) -> tuple[bool, str]:
+    shared = sorted(_priority_aliases(left).intersection(_priority_aliases(right)))
+    if shared:
+        return True, shared[0]
+    return False, ""
+
+
+def _remember_priority_request_context(request: dict[str, Any]) -> None:
+    if not request:
+        return
+    priority = _priority_value_from_request(request)
+    if priority is None and not _copy_agent_context(request) and not _priority_aliases(request):
+        return
+    now_ns = time.perf_counter_ns()
+    stored = dict(request)
+    stored["remembered_priority"] = priority if priority is not None else ""
+    stored["priority_aliases"] = sorted(_priority_aliases(request))[:32]
+    stored["last_seen_ns"] = now_ns
+    for alias in _priority_aliases(stored):
+        previous = _PRIORITY_REQUESTS_BY_ALIAS.get(alias, {})
+        merged = dict(previous)
+        merged.update({key: value for key, value in stored.items() if value not in (None, "", [], {})})
+        merged["first_seen_ns"] = previous.get("first_seen_ns", now_ns)
+        merged["last_seen_ns"] = now_ns
+        _PRIORITY_REQUESTS_BY_ALIAS[alias] = merged
+
+
+def _apply_priority_registry(request: dict[str, Any]) -> None:
+    if not request:
+        return
+    for alias in _priority_aliases(request):
+        stored = _PRIORITY_REQUESTS_BY_ALIAS.get(alias)
+        if not stored:
+            continue
+        for key, value in stored.items():
+            if key in {"first_seen_ns", "last_seen_ns", "priority_aliases"}:
+                continue
+            if request.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                request[key] = value
+        return
+
+
+def _priority_entry_summary(entry: dict[str, Any], position: int) -> dict[str, Any]:
+    priority = _priority_value_from_request(entry)
+    summary = {
+        "position": position,
+        "request_id": _request_identity(entry),
+        "priority": priority if priority is not None else "",
+        "agent_session_id": entry.get("agent_session_id") or entry.get("session_id", ""),
+        "agent_phase": entry.get("agent_phase") or entry.get("dynamo_hint_phase", ""),
+        "agent_case_id": entry.get("agent_case_id", ""),
+        "agent_gap_id": entry.get("agent_gap_id", ""),
+        "aliases": sorted(_priority_aliases(entry))[:8],
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "", [], {})}
+
+
+def _priority_histogram(entries: list[dict[str, Any]]) -> dict[str, int]:
+    hist: dict[str, int] = {}
+    for entry in entries:
+        priority = _priority_value_from_request(entry)
+        key = "none" if priority is None else str(priority)
+        hist[key] = hist.get(key, 0) + 1
+    return hist
+
+
+def _queue_names() -> tuple[str, ...]:
+    configured = os.environ.get("AGENTIC_KV_PRIORITY_QUEUE_ATTRS", "").strip()
+    if configured:
+        return tuple(name.strip() for name in configured.split(",") if name.strip())
+    return (
+        "waiting_queue",
+        "req_queue",
+        "waiting_requests",
+        "waiting_req_list",
+        "waiting_reqs",
+        "queue",
+        "priority_queue",
+        "prefill_queue",
+        "decode_queue",
+        "grammar_queue",
+        "running_queue",
+    )
+
+
+def _queue_candidate_objects(obj: Any) -> list[tuple[str, Any]]:
+    candidates: list[tuple[str, Any]] = [("self", obj)]
+    for attr in (
+        "req_queue",
+        "scheduler",
+        "policy_scheduler",
+        "tree_cache",
+        "router",
+        "tokenizer_manager",
+        "tp_worker",
+    ):
+        if not hasattr(obj, attr):
+            continue
+        try:
+            child = getattr(obj, attr)
+        except Exception:
+            continue
+        if child is not None:
+            candidates.append((attr, child))
+    return candidates
+
+
 def _queue_items(obj: Any) -> tuple[str, list[Any]]:
     for attr in (
         "waiting_queue",
@@ -756,53 +906,110 @@ def _queue_items(obj: Any) -> tuple[str, list[Any]]:
     return "", []
 
 
+def _priority_queue_snapshots(obj: Any, request: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    target = request or {}
+    target_priority = _priority_value_from_request(target)
+    snapshots: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    max_items = int(os.environ.get("AGENTIC_KV_PRIORITY_QUEUE_SNAPSHOT_LIMIT", "64"))
+    head_limit = int(os.environ.get("AGENTIC_KV_PRIORITY_QUEUE_HEAD_SAMPLE", "12"))
+    for owner_name, owner in _queue_candidate_objects(obj):
+        for attr in _queue_names():
+            if not hasattr(owner, attr):
+                continue
+            try:
+                queue_obj = getattr(owner, attr)
+                raw_items = list(queue_obj)
+            except Exception:
+                continue
+            queue_key = f"{owner_name}.{attr}:{id(queue_obj)}"
+            if queue_key in seen_ids:
+                continue
+            seen_ids.add(queue_key)
+            entries = [_request_like_context(item) for item in raw_items[:max_items]]
+            target_position: int | None = None
+            target_matched_by = ""
+            for idx, entry in enumerate(entries):
+                matched, matched_by = _priority_alias_overlap(target, entry)
+                if matched:
+                    target_position = idx
+                    target_matched_by = matched_by
+                    break
+            ahead = entries[:target_position] if target_position is not None else entries
+            lower_priority_ahead = 0
+            higher_priority_ahead = 0
+            same_or_higher_priority_ahead = 0
+            for entry in ahead:
+                priority = _priority_value_from_request(entry)
+                if priority is None or target_priority is None:
+                    continue
+                if priority < target_priority:
+                    lower_priority_ahead += 1
+                elif priority > target_priority:
+                    higher_priority_ahead += 1
+                    same_or_higher_priority_ahead += 1
+                else:
+                    same_or_higher_priority_ahead += 1
+            snapshots.append(
+                {
+                    "queue_name": f"{owner_name}.{attr}",
+                    "queue_len": len(raw_items),
+                    "captured_len": len(entries),
+                    "request_id": _request_identity(target),
+                    "request_priority": target_priority if target_priority is not None else "",
+                    "target_position": target_position if target_position is not None else "",
+                    "target_matched_by": target_matched_by,
+                    "lower_priority_ahead": lower_priority_ahead if target_priority is not None else "",
+                    "higher_priority_ahead": higher_priority_ahead if target_priority is not None else "",
+                    "same_or_higher_priority_ahead": same_or_higher_priority_ahead if target_priority is not None else "",
+                    "priority_histogram": _priority_histogram(entries),
+                    "queue_head_sample": [_priority_entry_summary(entry, idx) for idx, entry in enumerate(entries[:head_limit])],
+                }
+            )
+    return snapshots[: int(os.environ.get("AGENTIC_KV_PRIORITY_QUEUE_MAX_SNAPSHOTS", "24"))]
+
+
 def _priority_queue_audit_context(obj: Any, request: dict[str, Any]) -> dict[str, Any]:
-    queue_name, raw_items = _queue_items(obj)
-    if not raw_items:
+    snapshots = _priority_queue_snapshots(obj, request)
+    if not snapshots:
         return {}
-    entries = [_request_like_context(item) for item in raw_items]
-    target_id = _request_identity(request)
-    target_priority = _priority_value_from_request(request)
-    position: int | None = None
-    for idx, entry in enumerate(entries):
-        entry_id = _request_identity(entry)
-        if target_id and entry_id == target_id:
-            position = idx
-            break
-    ahead = entries[:position] if position is not None else entries
-    lower_priority_ahead = 0
-    higher_priority_ahead = 0
-    same_or_higher_priority_ahead = 0
-    for entry in ahead:
-        priority = _priority_value_from_request(entry)
-        if priority is None or target_priority is None:
-            continue
-        if priority < target_priority:
-            lower_priority_ahead += 1
-        elif priority > target_priority:
-            higher_priority_ahead += 1
-            same_or_higher_priority_ahead += 1
-        else:
-            same_or_higher_priority_ahead += 1
+    target_snapshots = [snapshot for snapshot in snapshots if snapshot.get("target_position") not in ("", None)]
+    best = target_snapshots[0] if target_snapshots else max(snapshots, key=lambda item: int(item.get("queue_len") or 0))
     return {
-        "queue_name": queue_name,
-        "queue_len": len(entries),
-        "request_id": target_id,
-        "request_priority": target_priority if target_priority is not None else "",
-        "queue_position": position if position is not None else "",
-        "lower_priority_ahead": lower_priority_ahead if target_priority is not None else "",
-        "higher_priority_ahead": higher_priority_ahead if target_priority is not None else "",
-        "same_or_higher_priority_ahead": same_or_higher_priority_ahead if target_priority is not None else "",
-        "queue_head_sample": [
-            {
-                "request_id": _request_identity(entry),
-                "priority": _priority_value_from_request(entry),
-                "agent_session_id": entry.get("agent_session_id") or entry.get("session_id", ""),
-                "agent_phase": entry.get("agent_phase") or entry.get("dynamo_hint_phase", ""),
-            }
-            for entry in entries[:8]
-        ],
+        "queue_name": best.get("queue_name", ""),
+        "queue_len": best.get("queue_len", ""),
+        "request_id": best.get("request_id", _request_identity(request)),
+        "request_priority": best.get("request_priority", _priority_value_from_request(request) or ""),
+        "queue_position": best.get("target_position", ""),
+        "target_matched_by": best.get("target_matched_by", ""),
+        "lower_priority_ahead": best.get("lower_priority_ahead", ""),
+        "higher_priority_ahead": best.get("higher_priority_ahead", ""),
+        "same_or_higher_priority_ahead": best.get("same_or_higher_priority_ahead", ""),
+        "priority_histogram": best.get("priority_histogram", {}),
+        "queue_head_sample": best.get("queue_head_sample", []),
     }
+
+
+def _priority_admission_context(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    global _PRIORITY_ADMISSION_SEQ
+    out: list[dict[str, Any]] = []
+    for position, request in enumerate(requests[:32]):
+        _PRIORITY_ADMISSION_SEQ += 1
+        priority = _priority_value_from_request(request)
+        out.append(
+            {
+                "admission_seq": _PRIORITY_ADMISSION_SEQ,
+                "position": position,
+                "request_id": _request_identity(request),
+                "priority": priority if priority is not None else "",
+                "agent_session_id": request.get("agent_session_id") or request.get("session_id", ""),
+                "agent_phase": request.get("agent_phase") or request.get("dynamo_hint_phase", ""),
+                "agent_case_id": request.get("agent_case_id", ""),
+                "agent_gap_id": request.get("agent_gap_id", ""),
+                "matched_aliases": sorted(_priority_aliases(request))[:8],
+            }
+        )
+    return out
 
 
 def _priority_order_context(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -814,6 +1021,9 @@ def _priority_order_context(requests: list[dict[str, Any]]) -> list[dict[str, An
                 "priority": _priority_value_from_request(request),
                 "agent_session_id": request.get("agent_session_id") or request.get("session_id", ""),
                 "agent_phase": request.get("agent_phase") or request.get("dynamo_hint_phase", ""),
+                "agent_case_id": request.get("agent_case_id", ""),
+                "agent_gap_id": request.get("agent_gap_id", ""),
+                "aliases": sorted(_priority_aliases(request))[:8],
             }
         )
     return out
@@ -1288,6 +1498,9 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         priority_audit = _priority_queue_audit_context(self_obj, context["request"])
         if priority_audit:
             context["priority_queue_audit"] = priority_audit
+        priority_snapshots = _priority_queue_snapshots(self_obj, context["request"])
+        if priority_snapshots:
+            context["priority_queue_snapshots"] = priority_snapshots
         scheduler_state = _scheduler_state_summary(self_obj)
         if scheduler_state:
             context["scheduler_state"] = scheduler_state
@@ -1298,6 +1511,7 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         context["requests"] = _requests_from_value(_arg_value(args, kwargs, 0, "recv_reqs"))
         if context["requests"]:
             context["priority_receive_order"] = _priority_order_context(context["requests"])
+            context["priority_queue_snapshots"] = _priority_queue_snapshots(self_obj, context["requests"][0])
         scheduler_state = _scheduler_state_summary(self_obj)
         if scheduler_state:
             context["scheduler_state"] = scheduler_state
@@ -1317,6 +1531,8 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         if isinstance(requests, list):
             context["requests"] = requests
             context["priority_admission_order"] = _priority_order_context(requests)
+            context["priority_admission_sequence"] = _priority_admission_context(requests)
+            context["priority_queue_snapshots"] = _priority_queue_snapshots(self_obj, requests[0] if requests else None)
         scheduler_state = _scheduler_state_summary(self_obj)
         if scheduler_state:
             context["scheduler_state"] = scheduler_state
@@ -1789,6 +2005,16 @@ def _scheduler_telemetry_event(
             for batch_key in ("request_count", "forward_mode", "extend_num_tokens", "seq_lens_sum", "bs", "batch_size"):
                 if batch.get(batch_key) not in (None, "", [], {}):
                     event[f"{prefix}_{batch_key}"] = batch[batch_key]
+    for key in (
+        "priority_queue_audit",
+        "priority_queue_snapshots",
+        "priority_receive_order",
+        "priority_admission_order",
+        "priority_admission_sequence",
+    ):
+        value = context.get(key)
+        if value not in (None, "", [], {}):
+            event[key] = value
     if duration_ms is not None:
         event["duration_ms"] = duration_ms
     return {key: value for key, value in event.items() if value not in (None, "", [], {})}
