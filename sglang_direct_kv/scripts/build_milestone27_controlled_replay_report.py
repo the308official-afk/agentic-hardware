@@ -3715,6 +3715,35 @@ def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list
     return output
 
 
+def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    output: list[dict[str, Any]] = []
+    for mode in mode_order:
+        items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
+        if not items:
+            continue
+        replay_dots = sum(1 for row in items if row.get("replay_start_relative_ms") not in ("", None))
+        kv_squares = sum(1 for row in items if row.get("kv_ready_margin_ms") not in ("", None))
+        if mode == "dynamo_priority_hints":
+            meaning = "priority request timing only; KV square appears only when replay-side H2D was measured"
+        elif mode == "projected_hardware_bypass":
+            meaning = "projected KV-ready square, not measured hardware"
+        elif mode == "direct_prefetch":
+            meaning = "measured direct-prefetch or replay-side KV readiness when observed"
+        else:
+            meaning = "measured replay start and replay-side KV readiness when observed"
+        output.append(
+            {
+                "mode": display_mode(mode),
+                "replay_start_circles": replay_dots,
+                "kv_ready_squares": kv_squares,
+                "missing_kv_ready_squares": max(0, replay_dots - kv_squares),
+                "meaning": meaning,
+            }
+        )
+    return output
+
+
 def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     usable = [
         row
@@ -3779,22 +3808,15 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         return top + (scaled_max - scaled) * plot_h / (scaled_max - scaled_min)
 
     zero_y = y_pos(0.0)
-    green_top = top
-    green_height = max(0.0, zero_y - top)
-    red_top = zero_y
-    red_height = max(0.0, top + plot_h - zero_y)
     parts = [
         '<svg viewBox="0 0 1480 620" width="100%" role="img" aria-label="Replay start versus KV readiness by mode">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
-        f'<rect x="{left}" y="{green_top:.1f}" width="{plot_w}" height="{green_height:.1f}" fill="#dcfce7" opacity="0.35"><title>deadline met region: above zero means early</title></rect>',
-        f'<rect x="{left}" y="{red_top:.1f}" width="{plot_w}" height="{red_height:.1f}" fill="#fee2e2" opacity="0.32"><title>deadline missed region: below zero means late</title></rect>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
         f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
         '<text x="22" y="305" transform="rotate(-90 22 305)" text-anchor="middle" font-size="13" font-weight="700">deadline margin ms (symlog)</text>',
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
-        '<text x="104" y="34" font-size="13" fill="#166534" font-weight="700">above line = early / deadline met</text>',
-        '<text x="470" y="34" font-size="13" fill="#b91c1c" font-weight="700">below line = late / deadline missed</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">Circle = replay request start margin; square = useful KV ready margin. A circle near 0 only means replay started near its deadline. Higher is better.</text>',
+        '<text x="104" y="34" font-size="13" fill="#111827" font-weight="700">above 0 ms = before deadline; below 0 ms = after deadline</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">Circle = replay request started. Square = useful KV became ready. This chart intentionally omits prefetch-issued timing.</text>',
     ]
     seen_ticks: set[int] = set()
     for value in h2d_symlog_tick_values(y_min, y_max):
@@ -3879,20 +3901,18 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     rows = global_kv_readiness_by_mode_rows(gaps)
     if not rows:
         return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
-    summary = global_kv_readiness_by_mode_summary_rows(rows)
     replay_start_summary = global_replay_start_by_mode_summary_rows(rows)
+    status_rows = global_replay_vs_kv_status_rows(rows)
     return f"""
     <p>This section separates two questions: did the replay request itself start on time, and did useful KV become ready on time?</p>
     <p class="note">For Dynamo priority hints only, no artificial direct-prefetch H2D is counted. Its KV-ready dot uses replay-side H2D finish only. If replay-side H2D is not observed, the replay-start dot can still appear while the KV-ready dot is omitted.</p>
     <h3>Replay Start Lateness Summary</h3>
     {table_html(replay_start_summary, ["mode", "dots", "replay_started_on_or_before_due", "replay_started_late", "late_pct", "median_replay_start_relative_ms", "worst_replay_start_lateness_ms"])}
-    <h3>Replay Deadline Margin vs KV Readiness Margin</h3>
-    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means early/good. Below zero means late/bad. Circle = replay request start margin. Square = useful KV ready margin. A circle near the zero line only means the replay request started near its deadline; it does not mean KV was ready. For Dynamo priority hints only, the square is omitted when no replay-side KV H2D readiness was observed. For projected hardware, the square is projected KV readiness; the circle is still the measured replay-start timing from the source run.</p>
+    <h3>Replay Start vs KV Ready</h3>
+    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means the event happened before the replay deadline. Below zero means it happened after the replay deadline. Circle = replay request started. Square = useful KV became ready, usually when host-to-device KV load finished. For Dynamo priority hints only, the square appears only when replay-side KV H2D was observed. For projected hardware, the square is projected, not measured.</p>
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
-    <h3>KV Readiness Margin</h3>
-    <p class="note">This existing chart keeps the old margin convention: positive means KV became ready before the replay deadline; negative means the replay deadline passed first. The projected hardware bypass series is intentionally marked as projected, not measured.</p>
-    {table_html(summary, ["mode", "dots", "ready_before_replay_due", "late", "ready_pct", "median_margin_ms", "worst_lateness_ms", "evidence"])}
-    <div class="setup-diagram">{build_global_kv_readiness_by_mode_dot_plot(rows)}</div>
+    <h3>Dot Availability</h3>
+    {table_html(status_rows, ["mode", "replay_start_circles", "kv_ready_squares", "missing_kv_ready_squares", "meaning"])}
     <p class="note">Exact per-dot values are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     """
 
