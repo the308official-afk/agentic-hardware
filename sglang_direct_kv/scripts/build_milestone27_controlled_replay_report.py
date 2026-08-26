@@ -5438,6 +5438,69 @@ def _tool_wait_activity_verdict(
     return "quiet"
 
 
+def _tool_wait_activity_bins(
+    trace_window: list[dict[str, Any]],
+    movement_window: list[dict[str, Any]],
+    pool_window: list[dict[str, Any]],
+    bases: dict[str, float],
+    start_ms: float,
+    end_ms: float,
+    bin_count: int = 36,
+) -> list[dict[str, Any]]:
+    """Build compact, timestamped tool-wait activity bins for report rendering."""
+
+    if end_ms <= start_ms:
+        return []
+    count = max(1, min(bin_count, int(max(1.0, end_ms - start_ms) // 25) or 1))
+    span = end_ms - start_ms
+    bins: list[dict[str, Any]] = []
+    for idx in range(count):
+        bin_start = start_ms + span * idx / count
+        bin_end = start_ms + span * (idx + 1) / count
+        if idx == count - 1:
+            bin_end = end_ms
+        trace_bin: list[dict[str, Any]] = []
+        for row in trace_window:
+            local_ms = trace_local_ms(row, bases)
+            if local_ms is not None and bin_start <= local_ms <= bin_end:
+                trace_bin.append(row)
+        movement_bin = kv_events_overlap_window(movement_window, bin_start, bin_end)
+        movement_counts = Counter(str(event.get("movement_kind") or "") for event in movement_bin)
+        pool_bin = [
+            sample
+            for sample in pool_window
+            if (
+                as_float(sample.get("aligned_ms")) is not None
+                and bin_start <= (as_float(sample.get("aligned_ms")) or 0.0) <= bin_end
+            )
+        ]
+        pool_values = [
+            as_float(sample.get("kv_pool_usage_pct"))
+            for sample in pool_bin
+            if as_float(sample.get("kv_pool_usage_pct")) is not None
+        ]
+        max_pool = max(pool_values) if pool_values else None
+        avg_pool = mean(pool_values) if pool_values else None
+        bins.append(
+            {
+                "start_rel_ms": round(bin_start - end_ms, 3),
+                "end_rel_ms": round(bin_end - end_ms, 3),
+                "scheduler_events": sum(1 for row in trace_bin if _trace_event_is_scheduler(row)),
+                "prefill_events": sum(1 for row in trace_bin if _trace_event_is_prefill(row)),
+                "decode_events": sum(1 for row in trace_bin if _trace_event_is_decode(row)),
+                "kv_movement_events": len(movement_bin),
+                "h2d_events": movement_counts.get("H2D", 0),
+                "d2h_events": movement_counts.get("D2H", 0),
+                "gpu_evict_events": movement_counts.get("GPU evict", 0),
+                "host_evict_events": movement_counts.get("host evict", 0),
+                "pool_samples": len(pool_bin),
+                "max_pool_usage_pct": round(max_pool, 3) if max_pool is not None else "",
+                "avg_pool_usage_pct": round(avg_pool, 3) if avg_pool is not None else "",
+            }
+        )
+    return bins
+
+
 def tool_wait_gpu_activity_rows(
     gaps: list[dict[str, Any]],
     trace_rows: list[dict[str, Any]],
@@ -5529,6 +5592,14 @@ def tool_wait_gpu_activity_rows(
         near_full_samples = sum(1 for value in pool_values if value >= 95.0)
         max_running_requests = max(running_request_values) if running_request_values else None
         kv_movement_events = len(movement_window)
+        activity_bins = _tool_wait_activity_bins(
+            trace_window,
+            movement_window,
+            pool_window,
+            bases,
+            start,
+            end,
+        )
         verdict = _tool_wait_activity_verdict(
             max_pool,
             scheduler_events,
@@ -5574,6 +5645,7 @@ def tool_wait_gpu_activity_rows(
                 "avg_kv_pool_usage_pct": round(avg_pool, 3) if avg_pool is not None else "",
                 "near_full_pool_samples": near_full_samples,
                 "tool_wait_activity_verdict": verdict,
+                "tool_wait_activity_bins_json": json.dumps(activity_bins, separators=(",", ":")),
                 "simple_meaning": simple_meaning,
                 "evidence": (
                     "direct_sglang_trace_and_kv_pool_samples"
@@ -9437,45 +9509,133 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<text x="{left + 8}" y="{tool_wait_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
                 f'{html.escape(activity_title[:210])}</text>'
             )
-            count_items = [
-                ("scheduler", scheduler_events, unified_stack_color("scheduler")),
-                ("prefill", prefill_events, unified_stack_color("recompute")),
-                ("decode", decode_events, unified_stack_color("decode")),
-                ("KV movement", kv_events, unified_stack_color("h2d")),
+            try:
+                activity_bins = json.loads(str(tool_wait_activity.get("tool_wait_activity_bins_json") or "[]"))
+            except json.JSONDecodeError:
+                activity_bins = []
+            activity_bins = [item for item in activity_bins if isinstance(item, dict)]
+            lane_left = left + 88
+            lane_w = plot_w - 112
+            lane_top = tool_wait_zoom_title_y + 38
+            lane_gap = 16
+            lane_h = 10
+            lane_defs = [
+                ("pool", "KV pool", "#94a3b8"),
+                ("scheduler_events", "scheduler", unified_stack_color("scheduler")),
+                ("prefill_events", "prefill", unified_stack_color("recompute")),
+                ("decode_events", "decode", unified_stack_color("decode")),
+                ("kv_movement_events", "KV movement", unified_stack_color("h2d")),
             ]
-            count_max = max([count for _, count, _ in count_items] + [1])
-            count_x = left + 140
-            count_w = plot_w * 0.44
-            pool_x0 = left + plot_w * 0.66
-            pool_w = plot_w * 0.28
-            lane_top = tool_wait_zoom_title_y + 35
-            for lane_idx, (name, count, color) in enumerate(count_items):
-                lane_y = lane_top + lane_idx * 20
-                parts.append(f'<text x="{left + 8}" y="{lane_y + 11:.1f}" font-size="9" font-weight="800" fill="#334155">{html.escape(name)}</text>')
-                parts.append(f'<rect x="{count_x:.1f}" y="{lane_y:.1f}" width="{count_w:.1f}" height="14" rx="4" fill="#e2e8f0" opacity="0.58"/>')
-                bar_w = 0.0 if count <= 0 else max(8.0, count_w * count / count_max)
-                if bar_w > 0:
-                    parts.append(
-                        f'<rect x="{count_x:.1f}" y="{lane_y:.1f}" width="{bar_w:.1f}" height="14" rx="4" fill="{color}" opacity="0.82">'
-                        f'<title>{html.escape(label)} | tool wait {name}: {count} events</title></rect>'
-                    )
-                parts.append(f'<text x="{count_x + count_w + 8:.1f}" y="{lane_y + 11:.1f}" font-size="9" font-weight="800" fill="#334155">{count}</text>')
-            parts.append(f'<text x="{pool_x0:.1f}" y="{lane_top + 11:.1f}" font-size="9" font-weight="800" fill="#334155">KV pool occupancy</text>')
-            parts.append(f'<rect x="{pool_x0:.1f}" y="{lane_top + 24:.1f}" width="{pool_w:.1f}" height="22" rx="5" fill="#e2e8f0" opacity="0.68"/>')
-            if max_pool is not None:
-                pool_bar_w = max(3.0, min(pool_w, pool_w * max_pool / 100.0))
-                pool_color = kv_pool_heat_color(max_pool)
+            rel_values: list[float] = []
+            for item in activity_bins:
+                start_rel = as_float(item.get("start_rel_ms"))
+                end_rel = as_float(item.get("end_rel_ms"))
+                if start_rel is not None:
+                    rel_values.append(start_rel)
+                if end_rel is not None:
+                    rel_values.append(end_rel)
+            rel_min = min(rel_values) if rel_values else -(as_float(tool_wait_activity.get("tool_wait_duration_ms")) or 1.0)
+            rel_max = max(rel_values) if rel_values else 0.0
+            if rel_max <= rel_min:
+                rel_max = rel_min + 1.0
+
+            def tw_x(value: float) -> float:
+                return lane_left + lane_w * (value - rel_min) / (rel_max - rel_min)
+
+            for tick_value in [rel_min, rel_min + (rel_max - rel_min) * 0.5, rel_max]:
+                tx = tw_x(tick_value)
                 parts.append(
-                    f'<rect x="{pool_x0:.1f}" y="{lane_top + 24:.1f}" width="{pool_bar_w:.1f}" height="22" rx="5" fill="{pool_color}" opacity="0.86">'
-                    f'<title>{html.escape(label)} | max SGLang KV-pool during tool wait: {max_pool:.3f}%</title></rect>'
+                    f'<line x1="{tx:.1f}" y1="{lane_top - 10:.1f}" x2="{tx:.1f}" y2="{lane_top + 78:.1f}" '
+                    f'stroke="#e5e7eb" stroke-width="1"/>'
                 )
                 parts.append(
-                    f'<text x="{pool_x0 + min(pool_w - 24, max(24, pool_bar_w - 28)):.1f}" y="{lane_top + 39:.1f}" '
-                    f'text-anchor="middle" font-size="9" font-weight="900" fill="#0f172a">{max_pool:.0f}%</text>'
+                    f'<text x="{tx:.1f}" y="{lane_top + 92:.1f}" text-anchor="middle" font-size="8" fill="#64748b">'
+                    f'{html.escape(display_ms(tick_value))}</text>'
                 )
+            if rel_min <= 0 <= rel_max:
+                zx = tw_x(0.0)
+                parts.append(
+                    f'<line x1="{zx:.1f}" y1="{lane_top - 12:.1f}" x2="{zx:.1f}" y2="{lane_top + 78:.1f}" '
+                    f'stroke="#111827" stroke-width="1.5"/>'
+                )
+                parts.append(f'<text x="{zx - 4:.1f}" y="{lane_top - 16:.1f}" text-anchor="end" font-size="8" font-weight="900" fill="#111827">replay due</text>')
+
+            for lane_idx, (key, name, color) in enumerate(lane_defs):
+                lane_y = lane_top + lane_idx * lane_gap
+                parts.append(f'<text x="{left + 8}" y="{lane_y + 8:.1f}" font-size="8" font-weight="900" fill="#334155">{html.escape(name)}</text>')
+                parts.append(
+                    f'<line x1="{lane_left:.1f}" y1="{lane_y + lane_h / 2:.1f}" x2="{lane_left + lane_w:.1f}" '
+                    f'y2="{lane_y + lane_h / 2:.1f}" stroke="#dbe4ee" stroke-width="1"/>'
+                )
+            if not activity_bins:
+                parts.append(
+                    f'<text x="{lane_left:.1f}" y="{lane_top + 42:.1f}" font-size="10" fill="#64748b">'
+                    f'No timestamped tool-wait activity bins were available.</text>'
+                )
+            else:
+                max_activity_count = max(
+                    [
+                        int(as_float(item.get(key)) or 0)
+                        for item in activity_bins
+                        for key, _, _ in lane_defs
+                        if key != "pool"
+                    ]
+                    + [1]
+                )
+                for item in activity_bins:
+                    start_rel = as_float(item.get("start_rel_ms"))
+                    end_rel = as_float(item.get("end_rel_ms"))
+                    if start_rel is None or end_rel is None or end_rel <= start_rel:
+                        continue
+                    x1 = tw_x(start_rel)
+                    x2 = tw_x(end_rel)
+                    bin_w = max(2.0, x2 - x1 - 1.0)
+                    pool_usage = as_float(item.get("max_pool_usage_pct"))
+                    if pool_usage is not None:
+                        pool_y = lane_top
+                        pool_color = kv_pool_heat_color(pool_usage)
+                        title = (
+                            f"{label} | tool-wait KV pool | {display_ms(start_rel)} -> {display_ms(end_rel)} relative to replay due | "
+                            f"max={pool_usage:.3f}% | avg={item.get('avg_pool_usage_pct', '')}% | samples={item.get('pool_samples', '')}"
+                        )
+                        parts.append(
+                            f'<rect x="{x1:.1f}" y="{pool_y:.1f}" width="{bin_w:.1f}" height="{lane_h:.1f}" rx="2" '
+                            f'fill="{pool_color}" opacity="0.82"><title>{html.escape(title)}</title></rect>'
+                        )
+                        if bin_w >= 28:
+                            text_color = "#ffffff" if pool_usage >= 85.0 else "#111827"
+                            parts.append(
+                                f'<text x="{x1 + bin_w / 2:.1f}" y="{pool_y + 8:.1f}" text-anchor="middle" '
+                                f'font-size="6.5" font-weight="900" fill="{text_color}">{pool_usage:.0f}%</text>'
+                            )
+                    for lane_idx, (key, name, color) in enumerate(lane_defs[1:], start=1):
+                        count = int(as_float(item.get(key)) or 0)
+                        if count <= 0:
+                            continue
+                        lane_y = lane_top + lane_idx * lane_gap
+                        opacity = min(0.95, 0.42 + 0.53 * count / max_activity_count)
+                        title = (
+                            f"{label} | tool-wait {name} | {count} events | "
+                            f"{display_ms(start_rel)} -> {display_ms(end_rel)} relative to replay due"
+                        )
+                        if key == "kv_movement_events":
+                            title += (
+                                f" | H2D={item.get('h2d_events', 0)} D2H={item.get('d2h_events', 0)} "
+                                f"GPU evict={item.get('gpu_evict_events', 0)} host evict={item.get('host_evict_events', 0)}"
+                            )
+                        parts.append(
+                            f'<rect x="{x1:.1f}" y="{lane_y:.1f}" width="{bin_w:.1f}" height="{lane_h:.1f}" rx="2" '
+                            f'fill="{color}" opacity="{opacity:.2f}"><title>{html.escape(title)}</title></rect>'
+                        )
+                        if bin_w >= 20:
+                            parts.append(
+                                f'<text x="{x1 + bin_w / 2:.1f}" y="{lane_y + 8:.1f}" text-anchor="middle" '
+                                f'font-size="6.5" font-weight="900" fill="#0f172a">{count}</text>'
+                            )
             parts.append(
-                f'<text x="{pool_x0:.1f}" y="{lane_top + 68:.1f}" font-size="9" font-weight="800" fill="#475569">'
-                f'H2D {h2d_events} | D2H {d2h_events} | evict {evict_events} | {html.escape(activity_verdict)}</text>'
+                f'<text x="{lane_left:.1f}" y="{lane_top + 108:.1f}" font-size="8" font-weight="800" fill="#475569">'
+                f'totals: scheduler {scheduler_events}, prefill {prefill_events}, decode {decode_events}, '
+                f'KV movement {kv_events} (H2D {h2d_events}, D2H {d2h_events}, evict {evict_events}); {html.escape(pool_text)}</text>'
             )
 
         deadline_zoom_title_y = y + 1128
