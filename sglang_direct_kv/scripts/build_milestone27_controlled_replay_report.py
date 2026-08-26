@@ -558,6 +558,25 @@ def telemetry_events_by_session(
     for row in trace_rows:
         if row.get("event") not in event_names:
             continue
+        context = context_from_trace_event(row)
+        request = nested_request(context) if isinstance(context, dict) else {}
+        request_priority = ""
+        request_dynamo_priority = ""
+        if isinstance(context, dict):
+            request_priority = (
+                request.get("sglang_priority")
+                if request.get("sglang_priority") not in (None, "")
+                else request.get("priority")
+                if request.get("priority") not in (None, "")
+                else context.get("sglang_priority", "")
+            )
+            request_dynamo_priority = (
+                request.get("dynamo_agent_priority")
+                if request.get("dynamo_agent_priority") not in (None, "")
+                else request.get("dynamo_hint_priority")
+                if request.get("dynamo_hint_priority") not in (None, "")
+                else context.get("dynamo_agent_priority", "")
+            )
         for session_id in _agent_sessions_for_event(row):
             if "::live_prefetch::" in session_id:
                 continue
@@ -598,6 +617,11 @@ def telemetry_events_by_session(
                     "batch_request_prefill_attribution": row.get("batch_request_prefill_attribution", ""),
                     "host_index_count": row.get("host_index_count", ""),
                     "device_index_count": row.get("device_index_count", ""),
+                    "priority_queue_audit": context.get("priority_queue_audit", "") if isinstance(context, dict) else "",
+                    "priority_receive_order": context.get("priority_receive_order", "") if isinstance(context, dict) else "",
+                    "priority_admission_order": context.get("priority_admission_order", "") if isinstance(context, dict) else "",
+                    "request_priority": request_priority,
+                    "request_dynamo_priority": request_dynamo_priority,
                 }
             )
     return by_session
@@ -831,7 +855,178 @@ def first_category_window(events: list[dict[str, Any]], categories: set[str]) ->
     }
 
 
-def summarize_scheduler_queue_path(events: list[dict[str, Any]], replay_start_ms: Any, replay_due_ms: Any) -> dict[str, Any]:
+def _priority_int(value: Any) -> int | None:
+    try:
+        if value not in (None, ""):
+            return int(value)
+    except (TypeError, ValueError):
+        pass
+    text = str(value or "").lower()
+    if text == "high":
+        return 100
+    if text == "normal":
+        return 0
+    if text == "low":
+        return -100
+    return None
+
+
+def _priority_event_id(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("request_id", "agent_request_id", "dynamo_hint_request_id", "rid", "req_pool_idx"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            return str(value)
+    session = item.get("agent_session_id") or item.get("session_id")
+    phase = item.get("agent_phase") or item.get("dynamo_hint_phase")
+    label = item.get("agent_label")
+    if session or phase or label:
+        return "|".join(str(part) for part in (session, phase, label) if part not in (None, ""))
+    return ""
+
+
+def _priority_event_priority(item: Any) -> int | None:
+    if not isinstance(item, dict):
+        return None
+    for key in (
+        "priority",
+        "sglang_priority",
+        "request_priority",
+        "dynamo_agent_priority",
+        "dynamo_hint_priority",
+    ):
+        priority = _priority_int(item.get(key))
+        if priority is not None:
+            return priority
+    return None
+
+
+def _priority_target_from_event(event: dict[str, Any]) -> tuple[str, int | None]:
+    request_id = str(event.get("request_id") or "")
+    priority = _priority_event_priority(event)
+    if request_id or priority is not None:
+        return request_id, priority
+    audit = event.get("priority_queue_audit")
+    if isinstance(audit, dict):
+        return str(audit.get("request_id") or ""), _priority_int(audit.get("request_priority"))
+    return "", None
+
+
+def summarize_priority_queue_effectiveness(
+    events: list[dict[str, Any]],
+    target_request_id: Any = "",
+    target_priority: Any = "",
+) -> dict[str, Any]:
+    target_id = str(target_request_id or "")
+    priority = _priority_int(target_priority)
+    for event in events:
+        event_id, event_priority = _priority_target_from_event(event)
+        if not target_id and event_id:
+            target_id = event_id
+        if priority is None and event_priority is not None:
+            priority = event_priority
+
+    queue_audit: dict[str, Any] = {}
+    receive_seen = False
+    queue_seen = False
+    admitted_seen = False
+    lower_priority_admitted_before = 0
+    admitted_before_sample: list[str] = []
+
+    for event in sorted(events, key=lambda item: as_float(item.get("start_or_end_ms")) or 0.0):
+        receive_order = event.get("priority_receive_order")
+        if isinstance(receive_order, list):
+            receive_seen = receive_seen or any(
+                (target_id and _priority_event_id(item) == target_id)
+                or (
+                    not target_id
+                    and priority is not None
+                    and _priority_event_priority(item) == priority
+                )
+                for item in receive_order
+            )
+
+        audit = event.get("priority_queue_audit")
+        if isinstance(audit, dict) and (
+            (target_id and str(audit.get("request_id") or "") == target_id)
+            or (
+                not target_id
+                and priority is not None
+                and _priority_int(audit.get("request_priority")) == priority
+            )
+        ):
+            queue_seen = True
+            if not queue_audit:
+                queue_audit = audit
+
+        admission_order = event.get("priority_admission_order")
+        if not isinstance(admission_order, list):
+            continue
+        for item in admission_order:
+            item_id = _priority_event_id(item)
+            item_priority = _priority_event_priority(item)
+            if (target_id and item_id == target_id) or (
+                not target_id and priority is not None and item_priority == priority
+            ):
+                admitted_seen = True
+                break
+            if priority is not None and item_priority is not None and item_priority < priority:
+                lower_priority_admitted_before += 1
+                if len(admitted_before_sample) < 5:
+                    admitted_before_sample.append(f"{item_id or 'unknown'}:{item_priority}")
+        if admitted_seen:
+            break
+
+    lower_ahead = queue_audit.get("lower_priority_ahead", "") if queue_audit else ""
+    if priority is None:
+        verdict = "priority_not_observed"
+        meaning = "The report did not observe a priority value for this replay request."
+    elif not receive_seen and not queue_seen and not admitted_seen:
+        verdict = "priority_attached_but_no_scheduler_proof"
+        meaning = "The client attached priority, but this run did not expose enough SGLang scheduler events to prove queue behavior."
+    elif lower_priority_admitted_before:
+        verdict = "lower_priority_admitted_before_target"
+        meaning = "SGLang admitted at least one lower-priority request before this priority request, so the hint was not fully enforced."
+    elif lower_ahead not in ("", None) and int(as_float(lower_ahead) or 0) > 0:
+        verdict = "lower_priority_ahead_but_not_admitted_first"
+        meaning = "Lower-priority requests were ahead in the queue, but the trace did not show them admitted before the target."
+    elif admitted_seen:
+        verdict = "priority_admission_order_clean"
+        meaning = "The target priority request appeared in the admission trace without lower-priority requests admitted ahead of it."
+    elif queue_seen:
+        verdict = "priority_queue_position_observed"
+        meaning = "SGLang queue position was observed, but admission order was not fully captured."
+    else:
+        verdict = "priority_receive_observed"
+        meaning = "SGLang received the priority request, but queue/admission effect was not fully captured."
+
+    return {
+        "priority_request_id": target_id,
+        "priority_value": priority if priority is not None else "",
+        "priority_receive_seen": int(receive_seen),
+        "priority_queue_seen": int(queue_seen),
+        "priority_admitted_seen": int(admitted_seen),
+        "priority_queue_name": queue_audit.get("queue_name", "") if queue_audit else "",
+        "priority_queue_len": queue_audit.get("queue_len", "") if queue_audit else "",
+        "priority_queue_position": queue_audit.get("queue_position", "") if queue_audit else "",
+        "priority_lower_ahead": lower_ahead,
+        "priority_higher_ahead": queue_audit.get("higher_priority_ahead", "") if queue_audit else "",
+        "priority_same_or_higher_ahead": queue_audit.get("same_or_higher_priority_ahead", "") if queue_audit else "",
+        "priority_lower_admitted_before": lower_priority_admitted_before,
+        "priority_lower_admitted_before_sample": "; ".join(admitted_before_sample),
+        "priority_queue_effectiveness_verdict": verdict,
+        "priority_queue_effectiveness_meaning": meaning,
+    }
+
+
+def summarize_scheduler_queue_path(
+    events: list[dict[str, Any]],
+    replay_start_ms: Any,
+    replay_due_ms: Any,
+    target_request_id: Any = "",
+    target_priority: Any = "",
+) -> dict[str, Any]:
     received = first_category_window(events, {"request_received", "sglang_receive"})
     queued = first_category_window(events, {"entered_scheduler_queue", "scheduler_queue_enter"})
     admitted = first_category_window(
@@ -858,6 +1053,7 @@ def summarize_scheduler_queue_path(events: list[dict[str, Any]], replay_start_ms
         queue_to_admit = round(float(admitted["start_ms"]) - float(queued["end_ms"]), 3)
     if as_float(admitted.get("start_ms")) is not None:
         admit_to_h2d = ""
+    priority_summary = summarize_priority_queue_effectiveness(events, target_request_id, target_priority)
     return {
         "received_start_ms": received["start_ms"],
         "received_end_ms": received["end_ms"],
@@ -876,6 +1072,7 @@ def summarize_scheduler_queue_path(events: list[dict[str, Any]], replay_start_ms
         "submit_to_scheduler_queue_ms": submit_to_queue,
         "scheduler_queue_to_admit_ms": queue_to_admit,
         "admit_to_h2d_ms": admit_to_h2d,
+        **priority_summary,
     }
 
 
@@ -1307,7 +1504,13 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         replay_cache_summary = summarize_cache_path(replay_cache_events, replay.get("start_ms"), replay.get("ttft_ms", ""))
         lifecycle_summary = summarize_kv_lifecycle(lifecycle_by_session.get(session, []))
         replay_scheduler_summary = summarize_timed_events(replay_scheduler_events)
-        replay_queue_summary = summarize_scheduler_queue_path(replay_scheduler_events, replay.get("start_ms", ""), due_ms)
+        replay_queue_summary = summarize_scheduler_queue_path(
+            replay_scheduler_events,
+            replay.get("start_ms", ""),
+            due_ms,
+            replay.get("label") or replay.get("request_id") or "",
+            replay.get("sglang_priority", ""),
+        )
         replay_prefill_summary = summarize_timed_events(replay_prefill_events)
         replay_prefill_attribution = summarize_prefill_runtime_attribution(replay_prefill_events, session)
         replay_prefill_end_ms = ""
@@ -1429,6 +1632,21 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_submit_to_scheduler_queue_ms": replay_queue_summary["submit_to_scheduler_queue_ms"],
             "replay_scheduler_queue_to_admit_ms": replay_queue_summary["scheduler_queue_to_admit_ms"],
             "replay_scheduler_admit_to_h2d_ms": admit_to_h2d_ms,
+            "replay_priority_request_id": replay_queue_summary["priority_request_id"],
+            "replay_priority_value": replay_queue_summary["priority_value"],
+            "replay_priority_receive_seen": replay_queue_summary["priority_receive_seen"],
+            "replay_priority_queue_seen": replay_queue_summary["priority_queue_seen"],
+            "replay_priority_admitted_seen": replay_queue_summary["priority_admitted_seen"],
+            "replay_priority_queue_name": replay_queue_summary["priority_queue_name"],
+            "replay_priority_queue_len": replay_queue_summary["priority_queue_len"],
+            "replay_priority_queue_position": replay_queue_summary["priority_queue_position"],
+            "replay_priority_lower_ahead": replay_queue_summary["priority_lower_ahead"],
+            "replay_priority_higher_ahead": replay_queue_summary["priority_higher_ahead"],
+            "replay_priority_same_or_higher_ahead": replay_queue_summary["priority_same_or_higher_ahead"],
+            "replay_priority_lower_admitted_before": replay_queue_summary["priority_lower_admitted_before"],
+            "replay_priority_lower_admitted_before_sample": replay_queue_summary["priority_lower_admitted_before_sample"],
+            "replay_priority_queue_effectiveness_verdict": replay_queue_summary["priority_queue_effectiveness_verdict"],
+            "replay_priority_queue_effectiveness_meaning": replay_queue_summary["priority_queue_effectiveness_meaning"],
             "replay_model_forward_event_count": replay_prefill_summary["event_count"],
             "replay_model_forward_start_ms": replay_prefill_summary["start_ms"],
             "replay_model_forward_end_ms": replay_prefill_summary["end_ms"],
@@ -1462,6 +1680,10 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "pre_replay_missing_tokens": checkpoint.get("missing_tokens", ""),
             "pre_replay_protected_tokens": checkpoint.get("protected_tokens", ""),
             "hint_source": p_start.get("hint_source") or hint.get("hint_source") or replay.get("hint_source", ""),
+            "initial_hint_source": current.get("hint_source", ""),
+            "initial_dynamo_agent_priority": current.get("dynamo_agent_priority", ""),
+            "initial_sglang_priority": current.get("sglang_priority", ""),
+            "initial_priority_translation": current.get("priority_translation", ""),
             "hint_dynamo_agent_priority": p_start.get("dynamo_agent_priority") or hint.get("dynamo_agent_priority", ""),
             "hint_sglang_priority": p_start.get("sglang_priority") or hint.get("sglang_priority", ""),
             "hint_priority_translation": p_start.get("priority_translation") or hint.get("priority_translation", ""),
@@ -1820,15 +2042,6 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
             copied["comparison_scenario"] = scenario_label
             copied["timeline_label"] = f"{scenario_label}-{mode_short_label(mode)}"
             output.append(copied)
-        projection_source = (
-            rows_by_mode.get("dynamo_priority_hints")
-            or rows_by_mode.get("direct_prefetch")
-            or rows_by_mode.get("no_prefetch")
-        )
-        if projection_source:
-            projected = projected_hardware_timeline_row(projection_source, scenario_label)
-            if projected:
-                output.append(projected)
     return output
 
 
@@ -1869,6 +2082,10 @@ def dynamo_priority_hint_translation_rows(gaps: list[dict[str, Any]]) -> list[di
                 "gap": row.get("gap_order_in_task", ""),
                 "fillers": case_fillers(row),
                 "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "initial_hint_source": row.get("initial_hint_source", ""),
+                "initial_dynamo_agent_priority": row.get("initial_dynamo_agent_priority", ""),
+                "initial_sglang_priority": row.get("initial_sglang_priority", ""),
+                "initial_priority_translation": row.get("initial_priority_translation", ""),
                 "hint_source": row.get("hint_source", ""),
                 "hint_dynamo_agent_priority": row.get("hint_dynamo_agent_priority", ""),
                 "hint_sglang_priority": row.get("hint_sglang_priority", ""),
@@ -1884,6 +2101,195 @@ def dynamo_priority_hint_translation_rows(gaps: list[dict[str, Any]]) -> list[di
             }
         )
     return rows
+
+
+def dynamo_priority_queue_effectiveness_column_guide_rows() -> list[dict[str, str]]:
+    return [
+        {"column": "row", "meaning": "Timeline row, for example C03-DH or G07."},
+        {"column": "initial_sglang_priority", "meaning": "Priority value attached to the first model turn before the tool wait."},
+        {"column": "replay_sglang_priority", "meaning": "Priority value attached to the replay/resume request."},
+        {"column": "priority_receive_seen", "meaning": "Whether SGLang-side tracing saw this priority request arrive."},
+        {"column": "priority_queue_position", "meaning": "Where the request appeared in the observed scheduler queue. 0 means queue head."},
+        {"column": "priority_lower_ahead", "meaning": "How many lower-priority requests were ahead when the queue snapshot was observed."},
+        {"column": "priority_lower_admitted_before", "meaning": "How many lower-priority requests were admitted before this priority request in the captured admission order."},
+        {"column": "priority_queue_effectiveness_verdict", "meaning": "Simple verdict: whether the priority was merely attached, partially observed, or actually reflected in admission order."},
+        {"column": "simple_meaning", "meaning": "Plain-English explanation of the verdict."},
+    ]
+
+
+def dynamo_priority_queue_effectiveness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in gaps:
+        if canonical_mode(row.get("mode")) != "dynamo_priority_hints":
+            continue
+        rows.append(
+            {
+                "row": row.get("timeline_label", ""),
+                "case_id": row.get("case_id", ""),
+                "session_id": row.get("session_id", ""),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "fillers": case_fillers(row),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "initial_sglang_priority": row.get("initial_sglang_priority", ""),
+                "replay_sglang_priority": row.get("replay_sglang_priority", ""),
+                "priority_request_id": row.get("replay_priority_request_id", ""),
+                "priority_value_seen_by_scheduler": row.get("replay_priority_value", ""),
+                "priority_receive_seen": row.get("replay_priority_receive_seen", ""),
+                "priority_queue_seen": row.get("replay_priority_queue_seen", ""),
+                "priority_admitted_seen": row.get("replay_priority_admitted_seen", ""),
+                "priority_queue_name": row.get("replay_priority_queue_name", ""),
+                "priority_queue_len": row.get("replay_priority_queue_len", ""),
+                "priority_queue_position": row.get("replay_priority_queue_position", ""),
+                "priority_lower_ahead": row.get("replay_priority_lower_ahead", ""),
+                "priority_higher_ahead": row.get("replay_priority_higher_ahead", ""),
+                "priority_same_or_higher_ahead": row.get("replay_priority_same_or_higher_ahead", ""),
+                "priority_lower_admitted_before": row.get("replay_priority_lower_admitted_before", ""),
+                "priority_lower_admitted_before_sample": row.get("replay_priority_lower_admitted_before_sample", ""),
+                "priority_queue_effectiveness_verdict": row.get("replay_priority_queue_effectiveness_verdict", ""),
+                "simple_meaning": row.get("replay_priority_queue_effectiveness_meaning", ""),
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "per_gap_verdict": display_verdict(row.get("per_gap_verdict", "")),
+            }
+        )
+    return rows
+
+
+def dynamo_hint_kv_lifecycle_audit_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Explain what happened to KV in Dynamo-priority-hints-only rows.
+
+    This mode intentionally does not issue our direct SGLang KV prefetch hook. The
+    audit therefore checks the replay/cache lifecycle evidence instead of treating
+    "no hint H2D" as a failure by itself.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(gaps):
+        if canonical_mode(row.get("mode")) != "dynamo_priority_hints":
+            continue
+
+        host_write_tokens = as_float(row.get("lifecycle_host_write_tokens")) or 0.0
+        gpu_evict_tokens = as_float(row.get("lifecycle_gpu_evict_tokens")) or 0.0
+        host_evict_tokens = as_float(row.get("lifecycle_host_evict_tokens")) or 0.0
+        hint_h2d_tokens = as_float(row.get("lifecycle_hint_h2d_tokens")) or 0.0
+        replay_h2d_tokens = as_float(row.get("lifecycle_replay_h2d_tokens")) or 0.0
+        replay_h2d_events = as_float(row.get("replay_kv_h2d_events")) or 0.0
+        gpu_hit_tokens = as_float(row.get("gpu_resident_hit_tokens")) or 0.0
+        initial_match_tokens = as_float(row.get("replay_initial_cached_prefix_tokens")) or 0.0
+        final_cached_tokens = as_float(row.get("replay_final_cached_prefix_tokens")) or 0.0
+        recomputed_tokens = (
+            as_float(row.get("recomputed_tokens_est"))
+            or as_float(row.get("replay_new_prefill_tokens_est"))
+            or 0.0
+        )
+        lifecycle_verdict = str(row.get("lifecycle_verdict") or "")
+        final_path = str(row.get("final_path") or "")
+
+        if replay_h2d_events > 0 or replay_h2d_tokens > 0:
+            audit_verdict = "replay_loaded_kv_from_host"
+            explanation = (
+                "Dynamo priority hints did not run a direct prefetch, but replay found host-side KV and "
+                "loaded it from host to GPU during the replay path."
+            )
+            confidence = "direct_h2d_evidence"
+        elif hint_h2d_tokens > 0:
+            audit_verdict = "unexpected_hint_side_h2d"
+            explanation = (
+                "A hint-side H2D movement was observed even though this mode is intended to send priority "
+                "hints only. This row should be inspected for mode contamination."
+            )
+            confidence = "direct_h2d_evidence_requires_review"
+        elif host_write_tokens > 0 and host_evict_tokens > 0:
+            audit_verdict = "host_copy_lost_before_replay"
+            explanation = (
+                "The target KV was written to host HiCache, but host-cache pressure evicted it before replay. "
+                "Replay therefore had no useful host copy to load and fell back to partial reuse/recompute."
+            )
+            confidence = "direct_lifecycle_evidence"
+        elif host_write_tokens > 0 and gpu_evict_tokens > 0 and replay_h2d_tokens == 0:
+            audit_verdict = "host_backed_path_not_used"
+            explanation = (
+                "The target KV was written to host and evicted from GPU, but replay did not show a host-to-GPU "
+                "load-back. That means the host-backed path was not useful for this replay."
+            )
+            confidence = "direct_lifecycle_evidence"
+        elif gpu_hit_tokens > 0 and recomputed_tokens <= max(128.0, gpu_hit_tokens * 0.10):
+            audit_verdict = "mostly_gpu_resident"
+            explanation = (
+                "Replay had enough GPU-resident KV that no host-to-device reload was needed. This is the "
+                "benign no-H2D case: the KV was already available on GPU."
+            )
+            confidence = "direct_prefix_counter_evidence"
+        elif recomputed_tokens > 0:
+            audit_verdict = "recomputed_without_host_load"
+            explanation = (
+                "No replay-side H2D was observed, but replay still had to rebuild/prefill missing tokens. "
+                "This suggests the useful KV was not available from host or GPU when replay needed it."
+            )
+            confidence = "direct_prefix_counter_plus_no_h2d"
+        elif "host_evicted" in lifecycle_verdict or "missing" in lifecycle_verdict:
+            audit_verdict = "host_copy_lost_before_replay"
+            explanation = (
+                "The lifecycle verdict says the useful KV became unavailable before replay, so no replay "
+                "H2D load could happen."
+            )
+            confidence = "lifecycle_verdict"
+        else:
+            audit_verdict = "inconclusive_no_h2d"
+            explanation = (
+                "No hint-side or replay-side H2D was observed, but the available counters do not fully prove "
+                "whether the KV was already resident, lost, or bypassed by policy."
+            )
+            confidence = "insufficient_evidence"
+
+        rows.append(
+            {
+                "row": row.get("timeline_label") or f"G{idx:02d}",
+                "case_id": row.get("case_id", ""),
+                "session_id": row.get("session_id", ""),
+                "task": row.get("task_index", ""),
+                "gap": row.get("gap_order_in_task", ""),
+                "fillers": case_fillers(row),
+                "tool_wait_ms": row.get("tool_gap_ms", ""),
+                "audit_verdict": audit_verdict,
+                "plain_explanation": explanation,
+                "evidence_confidence": confidence,
+                "lifecycle_verdict": lifecycle_verdict,
+                "final_path": final_path,
+                "host_write_tokens": round(host_write_tokens, 3) if host_write_tokens else "",
+                "gpu_evict_tokens": round(gpu_evict_tokens, 3) if gpu_evict_tokens else "",
+                "host_evict_tokens": round(host_evict_tokens, 3) if host_evict_tokens else "",
+                "hint_h2d_tokens": round(hint_h2d_tokens, 3) if hint_h2d_tokens else "",
+                "replay_h2d_tokens": round(replay_h2d_tokens, 3) if replay_h2d_tokens else "",
+                "replay_h2d_events": int(replay_h2d_events) if replay_h2d_events else "",
+                "gpu_resident_hit_tokens": round(gpu_hit_tokens, 3) if gpu_hit_tokens else "",
+                "replay_initial_match_tokens": round(initial_match_tokens, 3) if initial_match_tokens else "",
+                "replay_final_cached_tokens": round(final_cached_tokens, 3) if final_cached_tokens else "",
+                "recomputed_tokens_est": round(recomputed_tokens, 3) if recomputed_tokens else "",
+                "resume_ttft_ms": row.get("resume_ttft_ms", ""),
+                "hint_priority_translation": row.get("hint_priority_translation", ""),
+                "replay_priority_translation": row.get("replay_priority_translation", ""),
+            }
+        )
+    return rows
+
+
+def dynamo_hint_kv_lifecycle_audit_column_guide_rows() -> list[dict[str, str]]:
+    return [
+        {"column": "row", "meaning": "Timeline row, such as C03-DH or G03."},
+        {"column": "audit_verdict", "meaning": "Plain verdict for why Dynamo priority hints did or did not show useful KV H2D."},
+        {"column": "plain_explanation", "meaning": "Simple English explanation of the KV lifecycle for that row."},
+        {"column": "evidence_confidence", "meaning": "How direct the evidence is. Direct lifecycle or H2D evidence is stronger than inference."},
+        {"column": "lifecycle_verdict", "meaning": "The lower-level KV lifecycle verdict from our block/gap ledger."},
+        {"column": "final_path", "meaning": "Replay path classification, such as loaded from host, recompute, or partial prefix miss."},
+        {"column": "host_write_tokens", "meaning": "Approximate KV tokens/indices that were backed up from GPU to host HiCache."},
+        {"column": "gpu_evict_tokens", "meaning": "Approximate KV tokens/indices that left GPU residency."},
+        {"column": "host_evict_tokens", "meaning": "Approximate KV tokens/indices whose host copy was later evicted."},
+        {"column": "hint_h2d_tokens", "meaning": "KV loaded host-to-GPU by a hint/prefetch path. This should usually be blank for Dynamo-hints-only mode."},
+        {"column": "replay_h2d_tokens", "meaning": "KV loaded host-to-GPU by the replay request itself."},
+        {"column": "gpu_resident_hit_tokens", "meaning": "Tokens SGLang found already reusable in the GPU/cache path near replay."},
+        {"column": "recomputed_tokens_est", "meaning": "Estimated tokens replay had to rebuild/prefill instead of loading from host."},
+    ]
 
 
 def measured_kv_h2d_for_projection(row: dict[str, Any]) -> dict[str, Any]:
@@ -7774,6 +8180,150 @@ def short_bar_label(parts: list[str], max_chars: int = 42) -> str:
     return label[: max_chars - 1].rstrip() + "..."
 
 
+def boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+TARGET_KV_RESIDENCY_STATES = [
+    ("known_gpu", "known on GPU", "target_known_gpu"),
+    ("known_host", "known host-only", "target_host_only"),
+    ("inferred_host", "inferred host-backed", "target_inferred_host"),
+    ("missing", "known missing/lost", "target_missing"),
+    ("hint_reload", "hint H2D reload", "target_hint_h2d"),
+    ("replay_reload", "replay H2D reload", "target_replay_h2d"),
+]
+
+
+def target_kv_block_token_count(row: dict[str, Any]) -> float:
+    for key in ("token_count", "replay_host_load_tokens", "replay_new_prefill_tokens_est"):
+        value = as_float(row.get(key))
+        if value is not None and value > 0:
+            return value
+    start = as_float(row.get("token_start"))
+    end = as_float(row.get("token_end"))
+    if start is not None and end is not None and end > start:
+        return end - start
+    return 0.0
+
+
+def target_kv_relative_ms(row: dict[str, Any], key: str) -> float | None:
+    value = as_float(row.get(key))
+    due = as_float(row.get("replay_due_ms"))
+    if value is None or due is None:
+        return None
+    return value - due
+
+
+def target_kv_relative_times(rows: list[dict[str, Any]]) -> list[float]:
+    times: list[float] = []
+    for row in rows:
+        for key in (
+            "first_write_host_ms",
+            "first_evict_gpu_ms",
+            "first_evict_host_ms",
+            "h2d_start_ms",
+            "h2d_end_ms",
+            "replay_start_ms",
+            "first_token_ms",
+            "replay_end_ms",
+        ):
+            value = target_kv_relative_ms(row, key)
+            if value is not None:
+                times.append(value)
+    return times
+
+
+def target_kv_state_at_relative(row: dict[str, Any], rel_ms: float) -> str:
+    h2d_start = target_kv_relative_ms(row, "h2d_start_ms")
+    h2d_end = target_kv_relative_ms(row, "h2d_end_ms")
+    loaded_by_hint = boolish(row.get("loaded_by_hint"))
+    loaded_by_replay = boolish(row.get("loaded_by_replay"))
+    if h2d_start is not None and h2d_end is not None and h2d_start <= rel_ms <= h2d_end:
+        return "hint_reload" if loaded_by_hint else "replay_reload"
+    if h2d_end is not None and rel_ms > h2d_end:
+        return "known_gpu"
+
+    host_evict = target_kv_relative_ms(row, "first_evict_host_ms")
+    gpu_evict = target_kv_relative_ms(row, "first_evict_gpu_ms")
+    write_host = target_kv_relative_ms(row, "first_write_host_ms")
+    if host_evict is not None and rel_ms >= host_evict:
+        return "missing"
+    if gpu_evict is not None and rel_ms >= gpu_evict:
+        return "known_host"
+    if write_host is not None and rel_ms >= write_host:
+        return "known_gpu"
+
+    if h2d_start is not None and rel_ms < h2d_start:
+        return "inferred_host"
+
+    current_state = str(row.get("current_state") or "").upper()
+    if current_state in {"RELOADED_TO_GPU", "GPU_AND_HOST", "HOST_RESIDENT", "HOST_ONLY"}:
+        return "inferred_host"
+    if current_state in {"GPU_RESIDENT", "GPU_ONLY"}:
+        return "known_gpu"
+    if current_state in {"MISSING", "LOST"} or boolish(row.get("lost_before_replay")):
+        return "missing"
+    return "inferred_host"
+
+
+def target_kv_state_plain_meaning(state: str) -> str:
+    return {
+        "known_gpu": "Direct evidence says the target KV was available on GPU.",
+        "known_host": "Direct evidence says the target KV had left GPU but still had a host copy.",
+        "inferred_host": "Later replay loaded this KV from host, but earlier host-write/evict timing was not directly seen.",
+        "missing": "Direct evidence says the useful target KV copy was lost.",
+        "hint_reload": "The prefetch/hint path was loading target KV from host to GPU.",
+        "replay_reload": "The replay request itself was loading target KV from host to GPU.",
+    }.get(state, "Target KV residency state.")
+
+
+def target_kv_state_is_inferred(state: str) -> bool:
+    return state == "inferred_host"
+
+
+def target_kv_residency_segments(
+    rows: list[dict[str, Any]],
+    start_rel_ms: float,
+    end_rel_ms: float,
+) -> list[dict[str, Any]]:
+    if not rows or end_rel_ms <= start_rel_ms:
+        return []
+    boundaries = {start_rel_ms, end_rel_ms}
+    for value in target_kv_relative_times(rows):
+        if start_rel_ms <= value <= end_rel_ms:
+            boundaries.add(value)
+    sorted_boundaries = sorted(boundaries)
+    segments: list[dict[str, Any]] = []
+    for start, end in zip(sorted_boundaries, sorted_boundaries[1:]):
+        if end <= start:
+            continue
+        midpoint = (start + end) / 2.0
+        counts: Counter[str] = Counter()
+        tokens: Counter[str] = Counter()
+        for row in rows:
+            state = target_kv_state_at_relative(row, midpoint)
+            counts[state] += 1
+            tokens[state] += int(round(target_kv_block_token_count(row)))
+        signature = tuple((state, counts[state], tokens[state]) for state, _, _ in TARGET_KV_RESIDENCY_STATES)
+        if segments and segments[-1]["signature"] == signature:
+            segments[-1]["end_ms"] = end
+        else:
+            segments.append(
+                {
+                    "start_ms": start,
+                    "end_ms": end,
+                    "counts": counts,
+                    "tokens": tokens,
+                    "signature": signature,
+                }
+            )
+    return segments
+
+
 def target_replay_h2d_summary(
     row: dict[str, Any],
     row_events: list[dict[str, Any]],
@@ -7941,6 +8491,14 @@ def unified_stack_color(kind: str) -> str:
         "recompute": "#c026d3",
         "prefill": "#eab308",
         "decode": "#dc2626",
+        "target_known_gpu": "#64748b",
+        "target_gpu_host": "#64748b",
+        "target_gpu_only": "#2563eb",
+        "target_inferred_host": "#0f766e",
+        "target_host_only": "#f59e0b",
+        "target_missing": "#ef4444",
+        "target_hint_h2d": "#16a34a",
+        "target_replay_h2d": "#06b6d4",
         "projected_hardware": "#0f766e",
         "marker": "#475569",
     }.get(kind, "#64748b")
@@ -7992,6 +8550,11 @@ def unified_stack_legend_table_html() -> str:
             "Evict",
             unified_stack_color("evict"),
             "KV leaves GPU residency. A host copy may still exist unless host eviction also happens.",
+        ),
+        (
+            "Target KV residency strip",
+            unified_stack_color("target_known_gpu"),
+            "The per-row residency strip shows the target request's KV story: known on GPU, known host-only, inferred host-backed, missing/lost, and exact H2D reload events.",
         ),
         (
             "Prefill / recompute",
@@ -8288,6 +8851,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     all_kv_events: list[dict[str, Any]],
     max_rows: int,
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
+    kv_block_lifecycle_rows: list[dict[str, Any]] | None = None,
     projected_hardware_rows: list[dict[str, Any]] | None = None,
     tool_wait_activity_rows: list[dict[str, Any]] | None = None,
     compact_projected_rows: bool = False,
@@ -8310,7 +8874,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     left = 330
     right = 56
     top = 194
-    measured_row_h = 1388
+    measured_row_h = 1608
     projected_row_h = 250
     scenario_gap_h = 44 if any(str(row.get("comparison_scenario") or "") for row in rows) else 0
     bottom = 116
@@ -8345,6 +8909,11 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     tool_wait_activity_by_label = {
         str(row.get("row") or ""): row for row in (tool_wait_activity_rows or []) if str(row.get("row") or "")
     }
+    kv_lifecycle_by_label: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for lifecycle_row in kv_block_lifecycle_rows or []:
+        row_label = str(lifecycle_row.get("row") or "")
+        if row_label:
+            kv_lifecycle_by_label[row_label].append(lifecycle_row)
     projected_by_label: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for projected in projected_hardware_rows or []:
         row_label = str(projected.get("row") or "")
@@ -10081,6 +10650,163 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                         text_color="#115e59",
                     )
 
+        target_residency_title_y = y + 1350
+        parts.append(
+            f'<text x="{left - 10}" y="{target_residency_title_y + 9:.1f}" text-anchor="end" '
+            f'font-size="10" font-weight="900" fill="#334155">target KV residency</text>'
+        )
+        lifecycle_blocks = kv_lifecycle_by_label.get(label, [])
+        if canonical_mode(row.get("mode")) == "projected_hardware_bypass":
+            parts.append(
+                f'<text x="{left + 8}" y="{target_residency_title_y + 8:.1f}" font-size="10" '
+                f'fill="#64748b">Projected hardware rows do not have measured per-block residency.</text>'
+            )
+        elif not lifecycle_blocks:
+            parts.append(
+                f'<text x="{left + 8}" y="{target_residency_title_y + 8:.1f}" font-size="10" '
+                f'fill="#64748b">No target block lifecycle rows were available for this gap.</text>'
+            )
+            parts.append(
+                f'<line x1="{left}" y1="{target_residency_title_y + 48:.1f}" x2="{left + plot_w}" '
+                f'y2="{target_residency_title_y + 48:.1f}" stroke="#dbe4ee"/>'
+            )
+        else:
+            rel_values = [0.0]
+            if zoom:
+                rel_values.extend([zoom[0], zoom[1]])
+            else:
+                wait_ms = as_float(row.get("tool_wait_ms")) or 500.0
+                rel_values.extend([-max(wait_ms, 500.0), 1000.0])
+            rel_values.extend(target_kv_relative_times(lifecycle_blocks))
+            finite_rel = [value for value in rel_values if math.isfinite(value)]
+            residency_min = min(finite_rel) if finite_rel else -500.0
+            residency_max = max(finite_rel) if finite_rel else 1000.0
+            if zoom and residency_max - residency_min > 120_000.0:
+                residency_min, residency_max = zoom
+            residency_min = min(residency_min, 0.0)
+            residency_max = max(residency_max, 0.0)
+            residency_span = max(1.0, residency_max - residency_min)
+            residency_pad = max(20.0, residency_span * 0.04)
+            residency_min -= residency_pad
+            residency_max += residency_pad
+
+            def residency_x(value: float) -> float:
+                return local_zoom_x(value, residency_min, residency_max, left, plot_w)
+
+            parts.append(
+                f'<text x="{left + 8}" y="{target_residency_title_y - 10:.1f}" font-size="10" '
+                f'font-weight="800" fill="#475569">Target request KV availability zoom</text>'
+            )
+            parts.append(
+                f'<text x="{left + 8}" y="{target_residency_title_y + 8:.1f}" font-size="10" fill="#64748b">'
+                f'Simplified from {len(lifecycle_blocks)} logical KV blocks. Solid bars are directly observed; dashed bars are inferred from later replay H2D.</text>'
+            )
+            for tick_value in [
+                residency_min,
+                residency_min + residency_span * 0.25,
+                residency_min + residency_span * 0.5,
+                residency_min + residency_span * 0.75,
+                residency_max,
+            ]:
+                tx = residency_x(tick_value)
+                parts.append(
+                    f'<line x1="{tx:.1f}" y1="{target_residency_title_y + 32:.1f}" '
+                    f'x2="{tx:.1f}" y2="{target_residency_title_y + 160:.1f}" stroke="#e5e7eb"/>'
+                )
+                parts.append(
+                    f'<text x="{tx:.1f}" y="{target_residency_title_y + 176:.1f}" text-anchor="middle" '
+                    f'font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>'
+                )
+            if residency_min <= 0 <= residency_max:
+                zx = residency_x(0.0)
+                parts.append(
+                    f'<line x1="{zx:.1f}" y1="{target_residency_title_y + 30:.1f}" '
+                    f'x2="{zx:.1f}" y2="{target_residency_title_y + 160:.1f}" '
+                    f'stroke="#111827" stroke-width="1.8"/>'
+                )
+                parts.append(
+                    f'<text x="{zx + 5:.1f}" y="{target_residency_title_y + 44:.1f}" '
+                    f'font-size="9" font-weight="900" fill="#111827">due</text>'
+                )
+
+            lane_top = target_residency_title_y + 48
+            lane_gap = 19
+            state_lane_y = {
+                state: lane_top + idx * lane_gap
+                for idx, (state, _name, _color_kind) in enumerate(TARGET_KV_RESIDENCY_STATES)
+            }
+            for state, state_name, _color_kind in TARGET_KV_RESIDENCY_STATES:
+                lane_y = state_lane_y[state]
+                parts.append(
+                    f'<text x="{left - 10}" y="{lane_y + 8:.1f}" text-anchor="end" '
+                    f'font-size="8.5" font-weight="800" fill="#334155">{html.escape(state_name)}</text>'
+                )
+                parts.append(
+                    f'<line x1="{left}" y1="{lane_y + 5:.1f}" x2="{left + plot_w}" '
+                    f'y2="{lane_y + 5:.1f}" stroke="#dbe4ee"/>'
+                )
+
+            segments = target_kv_residency_segments(lifecycle_blocks, residency_min, residency_max)
+            for segment in segments:
+                seg_start = max(residency_min, min(residency_max, float(segment["start_ms"])))
+                seg_end = max(residency_min, min(residency_max, float(segment["end_ms"])))
+                if seg_end <= seg_start:
+                    continue
+                x1 = residency_x(seg_start)
+                x2 = residency_x(seg_end)
+                width_px = max(min_visible_event_w, x2 - x1)
+                counts: Counter[str] = segment["counts"]
+                tokens: Counter[str] = segment["tokens"]
+                for state, state_name, color_kind in TARGET_KV_RESIDENCY_STATES:
+                    count = counts.get(state, 0)
+                    if count <= 0:
+                        continue
+                    lane_y = state_lane_y[state]
+                    token_count = tokens.get(state, 0)
+                    color = unified_stack_color(color_kind)
+                    inferred = target_kv_state_is_inferred(state)
+                    title = (
+                        f"{label} | target KV availability | state={state_name} | "
+                        f"blocks={count} | tokens={compact_token_count(token_count)} | "
+                        f"time={display_ms(seg_start)}->{display_ms(seg_end)} relative to replay due | "
+                        f"{target_kv_state_plain_meaning(state)}"
+                    )
+                    fill = "#f0fdfa" if inferred else color
+                    stroke = color if inferred else "none"
+                    stroke_attr = f' stroke="{stroke}" stroke-width="2" stroke-dasharray="6 4"' if inferred else ""
+                    parts.append(
+                        f'<rect x="{x1:.1f}" y="{lane_y:.1f}" width="{width_px:.1f}" height="13" rx="3" '
+                        f'fill="{fill}" opacity="0.9"{stroke_attr}><title>{html.escape(title)}</title></rect>'
+                    )
+                    if width_px >= 118:
+                        label_text = short_bar_label(
+                            [f"{count} blk", compact_token_count(token_count)],
+                            max_chars=28,
+                        )
+                        parts.append(
+                            f'<text x="{x1 + width_px / 2:.1f}" y="{lane_y + 9.5:.1f}" text-anchor="middle" '
+                            f'font-size="8" font-weight="900" fill="#0f172a">{html.escape(label_text)}</text>'
+                        )
+
+            summary_counts: Counter[str] = Counter()
+            summary_tokens: Counter[str] = Counter()
+            for block in lifecycle_blocks:
+                state = target_kv_state_at_relative(block, 0.0)
+                summary_counts[state] += 1
+                summary_tokens[state] += int(round(target_kv_block_token_count(block)))
+            summary_parts = []
+            for state, state_name, _color_kind in TARGET_KV_RESIDENCY_STATES:
+                count = summary_counts.get(state, 0)
+                if count:
+                    summary_parts.append(
+                            f"{state_name}: {count} blk/{compact_token_count(summary_tokens.get(state, 0))}"
+                        )
+            if summary_parts:
+                parts.append(
+                    f'<text x="{left + 8}" y="{target_residency_title_y + 196:.1f}" font-size="9" '
+                    f'font-weight="800" fill="#475569">at replay due: {html.escape("; ".join(summary_parts))}</text>'
+                )
+
         verdict_y = y + row_h - 28
         verdict = str(row.get("lifecycle_verdict") or row.get("final_path") or row.get("per_gap_verdict") or "")
         explanation = str(row.get("lifecycle_explanation") or row.get("replay_cache_path_summary") or "")
@@ -10099,20 +10825,22 @@ def unified_per_gap_forensic_stack_html(
     max_rows: int,
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
     tool_wait_activity_rows: list[dict[str, Any]] | None = None,
+    kv_block_lifecycle_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
     return f"""
-    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, GPU/tool-wait pressure zooms, and a deadline zoom for KV readiness.</p>
-    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the GPU pool zoom to see whether SGLang's KV pool was nearly full around the replay. Use the tool-wait GPU activity zoom to see whether scheduler/model/KV activity was already busy during the pause. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due.</p>
+    <p>This is a preview of a merged per-gap view. Each gap has a compact overview, a local zoom of the dense KV movement burst, a local zoom of replay execution, GPU/tool-wait pressure zooms, a deadline zoom for KV readiness, and a target-KV residency zoom.</p>
+    <p class="note">Use the overview to see the big timing story. Use the expanded KV zoom to inspect H2D, D2H, and eviction bars. Use the replay zoom to inspect prefetch KV H2D, replay KV H2D, prefill/recompute, remaining before-first-token time, first-token timing, and decode. Use the GPU pool zoom to see whether SGLang's KV pool was nearly full around the replay. Use the tool-wait GPU activity zoom to see whether scheduler/model/KV activity was already busy during the pause. Use the deadline zoom to see whether useful KV H2D finished before or after replay was due. Use target KV residency to see whether the request's own logical KV blocks were GPU-resident, host-resident, missing, or being reloaded.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">When prefetch-side H2D exists, the replay zoom becomes a two-window broken-axis view: the left window shows the earlier green prefetch KV H2D, the right window shows replay execution, and the break marker shows the long elapsed time compressed between them.</p>
     <p class="note">In the GPU pool zoom, green/yellow means lower KV-pool pressure, orange/red means high pressure, and dark red means the KV pool was effectively full. This is direct SGLang KV memory-pool telemetry, not a coarse NVIDIA-SMI whole-GPU memory estimate.</p>
     <p class="note">In the deadline zoom, the dashed line is the readiness gap. Green means KV became ready before replay was due; red means useful KV H2D completed late.</p>
+    <p class="note">In the target KV residency zoom, the bars are reconstructed from direct block lifecycle hooks. Exact transition timestamps come from SGLang events; the location between two transitions is the inferred state implied by those events.</p>
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows, kv_pool_residency_rows, tool_wait_activity_rows=tool_wait_activity_rows)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows, kv_pool_residency_rows, kv_block_lifecycle_rows=kv_block_lifecycle_rows, tool_wait_activity_rows=tool_wait_activity_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
 
@@ -10123,6 +10851,7 @@ def grouped_mode_comparison_timeline_html(
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
     projected_hardware_rows: list[dict[str, Any]] | None = None,
     tool_wait_activity_rows: list[dict[str, Any]] | None = None,
+    kv_block_lifecycle_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not rows:
         return """
@@ -10136,8 +10865,8 @@ def grouped_mode_comparison_timeline_html(
     }
     mode_order = [
         mode
-        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass")
-        if mode == "projected_hardware_bypass" or mode in present_modes
+        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints")
+        if mode in present_modes
     ]
     mode_key_items = []
     for mode in mode_order:
@@ -10156,10 +10885,10 @@ def grouped_mode_comparison_timeline_html(
     mode_names = ", ".join(display_mode(mode) for mode in mode_order)
     return f"""
     <p>This view groups the same controlled scenario across modes. For example, {mode_examples} are the same task/gap setup shown under {html.escape(mode_names)}.</p>
-    <p class="note">Current manager-facing default is: no prefetch, Dynamo priority hints only, then projected hardware bypass. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. The projected hardware row is <strong>not measured</strong>; it estimates where a low-overhead hardware KV movement path could have completed using the measured KV H2D duration plus a small fixed hardware-control overhead. Projected rows show only the compact projection overview, not detailed measured SGLang lanes.</p>
+    <p class="note">This chart shows measured modes only. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. Projected hardware bypass remains in the separate projection/global sections where it is explicitly labeled as projected, not measured.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
-    <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row. Measured rows also show the same tool-wait GPU activity zoom as the unified forensic timeline.</p>
+    <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row. Measured rows also show the same tool-wait GPU activity zoom and target-KV residency zoom as the unified forensic timeline.</p>
     {mode_key_html}
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
@@ -10167,7 +10896,7 @@ def grouped_mode_comparison_timeline_html(
       <div class="card"><div class="label">modes shown</div><div class="value">{html.escape(' / '.join(mode_short_label(mode) for mode in mode_order))}</div></div>
     </div>
     <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, projected_hardware_rows=projected_hardware_rows, tool_wait_activity_rows=tool_wait_activity_rows, compact_projected_rows=True)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, kv_block_lifecycle_rows=kv_block_lifecycle_rows, projected_hardware_rows=[], tool_wait_activity_rows=tool_wait_activity_rows, compact_projected_rows=True)}</div>
     """
 
 
@@ -10309,6 +11038,7 @@ def render_html(
     ]
     grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
+    grouped_block_lifecycle_rows = block_lifecycle_by_gap_rows(grouped_comparison_rows, kv_block_rows)
     grouped_hardware_projection_rows = projected_hardware_bypass_rows(grouped_comparison_rows)
     grouped_tool_wait_activity_rows = tool_wait_gpu_activity_rows(
         [
@@ -10322,6 +11052,8 @@ def render_html(
         gpu_util_rows,
     )
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(gaps)
+    dynamo_priority_queue_rows = dynamo_priority_queue_effectiveness_rows(gaps)
+    dynamo_lifecycle_audit_rows = dynamo_hint_kv_lifecycle_audit_rows(gaps)
     prefetch_truth_summary_table_rows = prefetch_truth_summary_rows(gaps)
     prefetch_truth_table = prefetch_truth_table_rows(gaps)
     global_mode_readiness_table_rows = global_kv_readiness_by_mode_rows(gaps)
@@ -10525,12 +11257,12 @@ def render_html(
 
   <details id="unified-forensic-stack" class="section-card theme-profiled">
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
-    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows, interesting_tool_wait_activity_rows)}
+    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows, interesting_tool_wait_activity_rows, interesting_block_lifecycle_rows)}
   </details>
 
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
     <summary><h2>Grouped Mode Comparison Timeline</h2></summary>
-    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows)}
+    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows, grouped_block_lifecycle_rows)}
   </details>
 
   {live_section}
@@ -10621,6 +11353,14 @@ def render_html(
     <h3>Dynamo Priority Hint Translation Rows</h3>
     <p class="note">These rows show the bridge used by <code>dynamo_priority_hints</code>: the emitted <code>custom_params.nvext.agent_hints</code> priority and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
     {table_html(dynamo_priority_rows, limit=1000)}
+    <h3>Dynamo Priority Queue Effectiveness Audit</h3>
+    <p class="note">This table checks whether the priority hint was only attached to the request or whether SGLang scheduler traces show queue/admission behavior consistent with honoring it.</p>
+    {table_html(dynamo_priority_queue_effectiveness_column_guide_rows(), ["column", "meaning"])}
+    {table_html(dynamo_priority_queue_rows, limit=1000)}
+    <h3>Dynamo Hint KV Lifecycle Audit</h3>
+    <p class="note">This table answers the key Dynamo-hints question: if no direct prefetch H2D happened, was the KV already on GPU, lost from host, loaded by replay, or recomputed? It uses the same SGLang lifecycle and prefix counters that drive the timelines.</p>
+    {table_html(dynamo_hint_kv_lifecycle_audit_column_guide_rows(), ["column", "meaning"])}
+    {table_html(dynamo_lifecycle_audit_rows, limit=1000)}
     <h3>Grouped Mode Comparison Rows</h3>
     <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DH</code>, and <code>C00-HW</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
     {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
@@ -10732,6 +11472,8 @@ def main() -> None:
     global_mode_readiness_summary = global_kv_readiness_by_mode_summary_rows(global_mode_readiness)
     global_replay_start_summary = global_replay_start_by_mode_summary_rows(global_mode_readiness)
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(all_gaps)
+    dynamo_priority_queue = dynamo_priority_queue_effectiveness_rows(all_gaps)
+    dynamo_lifecycle_audit = dynamo_hint_kv_lifecycle_audit_rows(all_gaps)
     prefetch_truth_table = prefetch_truth_table_rows(all_gaps)
     prefetch_truth_summary = prefetch_truth_summary_rows(all_gaps)
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
@@ -10788,6 +11530,8 @@ def main() -> None:
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", global_mode_readiness_summary)
     write_csv(args.out_dir / "global_replay_start_by_mode_summary.csv", global_replay_start_summary)
     write_csv(args.out_dir / "dynamo_priority_hint_translation.csv", dynamo_priority_rows)
+    write_csv(args.out_dir / "dynamo_priority_queue_effectiveness.csv", dynamo_priority_queue)
+    write_csv(args.out_dir / "dynamo_hint_kv_lifecycle_audit.csv", dynamo_lifecycle_audit)
     write_csv(args.out_dir / "prefetch_truth_table.csv", prefetch_truth_table)
     write_csv(args.out_dir / "prefetch_truth_summary.csv", prefetch_truth_summary)
     write_csv(args.out_dir / "hardware_counterfactual.csv", hardware_counterfactual_rows(ledger))
@@ -10839,6 +11583,8 @@ def main() -> None:
             "global_kv_readiness_by_mode_summary": global_mode_readiness_summary,
             "global_replay_start_by_mode_summary": global_replay_start_summary,
             "dynamo_priority_hint_translation": dynamo_priority_rows,
+            "dynamo_priority_queue_effectiveness": dynamo_priority_queue,
+            "dynamo_hint_kv_lifecycle_audit": dynamo_lifecycle_audit,
             "prefetch_truth_table": prefetch_truth_table,
             "prefetch_truth_summary": prefetch_truth_summary,
             "exact_kv_movement_attribution": exact_kv_rows,

@@ -444,10 +444,12 @@ async def main_async() -> None:
             return "none"
 
         def dynamo_agent_priority(phase: str, pair: ReplayPair) -> str:
-            if phase in {"hint_prefetch", "replay"}:
-                return "high"
             if phase == "pressure_filler" or pair.priority == "low":
                 return "low"
+            if dynamo_mode_enabled() and phase in {"initial_turn", "hint_prefetch", "replay"}:
+                return "high"
+            if phase in {"hint_prefetch", "replay"}:
+                return "high"
             return "normal"
 
         def sglang_priority_value(agent_priority: str) -> int:
@@ -469,10 +471,12 @@ async def main_async() -> None:
             agent_priority = dynamo_agent_priority(phase, pair)
             sglang_priority = sglang_priority_value(agent_priority)
             hint_action = {
+                "initial_turn": "mark_session_priority",
                 "hint_prefetch": "prefetch_kv",
                 "replay": "consume_kv",
                 "pressure_filler": "background_work",
             }.get(phase, "normal_request")
+            kv_relevant = phase in {"initial_turn", "hint_prefetch", "replay"}
             hints = {
                 "schema": "nvext.agent_hints",
                 "session_id": pair.session_id,
@@ -483,8 +487,8 @@ async def main_async() -> None:
                 "priority": agent_priority,
                 "deadline_offset_ms": round(deadline_ms, 3) if deadline_ms is not None else "",
                 "expected_action": hint_action,
-                "reuse_confidence": 0.95 if phase in {"hint_prefetch", "replay"} else 0.2,
-                "kv_cache_relevant": phase in {"hint_prefetch", "replay"},
+                "reuse_confidence": 0.95 if kv_relevant else 0.2,
+                "kv_cache_relevant": kv_relevant,
             }
             bridge = {
                 "hint_source": "custom_params.nvext.agent_hints",
@@ -525,6 +529,22 @@ async def main_async() -> None:
                     **bridge_metadata,
                 }
             )
+            if bridge_metadata:
+                write_trace_event(
+                    {
+                        "event": "m27.priority.client_submit",
+                        "session_id": pair.session_id,
+                        "phase": phase,
+                        "mode": args.mode,
+                        "label": label,
+                        "request_id": label,
+                        "prompt_hash": p_hash,
+                        "client_priority": bridge_metadata["dynamo_agent_priority"],
+                        "sglang_priority": bridge_metadata["sglang_priority"],
+                        "priority_translation": bridge_metadata["priority_translation"],
+                        "deadline_offset_ms": bridge_metadata["deadline_offset_ms"],
+                    }
+                )
             limiter = sem if use_concurrency_limit else NoopAsyncContext()
             async with limiter:
                 write_trace_event(
@@ -776,7 +796,7 @@ async def main_async() -> None:
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "priority_policy": priority_policy_name(),
                         "meaning": (
-                            "Dynamo-style priority metadata will be attached to replay/filler "
+                            "Dynamo-style priority metadata will be attached to initial/replay/filler "
                             "requests. No direct KV prefetch hook is issued in this mode."
                         ),
                     }

@@ -529,6 +529,13 @@ def _request_like_context(req: Any) -> dict[str, Any]:
         "agent_correlation_id",
         "agent_case_id",
         "agent_gap_id",
+        "dynamo_agent_priority",
+        "dynamo_hint_priority",
+        "dynamo_hint_request_id",
+        "dynamo_hint_phase",
+        "sglang_priority",
+        "priority_translation",
+        "deadline_offset_ms",
     ):
         if hasattr(req, attr) and attr not in context:
             try:
@@ -685,6 +692,131 @@ def _scheduler_state_summary(obj: Any) -> dict[str, Any]:
             out[attr] = _request_like_context(value)
 
     return {key: value for key, value in out.items() if value not in (None, "", [], {})}
+
+
+def _priority_value_from_request(request: dict[str, Any]) -> int | None:
+    for key in ("sglang_priority", "priority"):
+        value = request.get(key)
+        try:
+            if value not in (None, ""):
+                return int(value)
+        except (TypeError, ValueError):
+            pass
+    named = str(
+        request.get("dynamo_agent_priority")
+        or request.get("dynamo_hint_priority")
+        or request.get("agent_priority")
+        or ""
+    ).lower()
+    if named == "high":
+        return 100
+    if named == "low":
+        return -100
+    if named == "normal":
+        return 0
+    return None
+
+
+def _request_identity(request: dict[str, Any]) -> str:
+    for key in (
+        "request_id",
+        "agent_request_id",
+        "dynamo_hint_request_id",
+        "rid",
+        "req_pool_idx",
+    ):
+        value = request.get(key)
+        if value not in (None, "", [], {}):
+            return str(value)
+    session = request.get("agent_session_id") or request.get("session_id")
+    phase = request.get("agent_phase") or request.get("dynamo_hint_phase")
+    label = request.get("agent_label")
+    if session or phase or label:
+        return "|".join(str(part) for part in (session, phase, label) if part not in (None, ""))
+    return ""
+
+
+def _queue_items(obj: Any) -> tuple[str, list[Any]]:
+    for attr in (
+        "waiting_queue",
+        "req_queue",
+        "waiting_requests",
+        "waiting_req_list",
+        "waiting_reqs",
+        "queue",
+    ):
+        if not hasattr(obj, attr):
+            continue
+        try:
+            value = getattr(obj, attr)
+            items = list(value)
+        except Exception:
+            continue
+        return attr, items
+    return "", []
+
+
+def _priority_queue_audit_context(obj: Any, request: dict[str, Any]) -> dict[str, Any]:
+    queue_name, raw_items = _queue_items(obj)
+    if not raw_items:
+        return {}
+    entries = [_request_like_context(item) for item in raw_items]
+    target_id = _request_identity(request)
+    target_priority = _priority_value_from_request(request)
+    position: int | None = None
+    for idx, entry in enumerate(entries):
+        entry_id = _request_identity(entry)
+        if target_id and entry_id == target_id:
+            position = idx
+            break
+    ahead = entries[:position] if position is not None else entries
+    lower_priority_ahead = 0
+    higher_priority_ahead = 0
+    same_or_higher_priority_ahead = 0
+    for entry in ahead:
+        priority = _priority_value_from_request(entry)
+        if priority is None or target_priority is None:
+            continue
+        if priority < target_priority:
+            lower_priority_ahead += 1
+        elif priority > target_priority:
+            higher_priority_ahead += 1
+            same_or_higher_priority_ahead += 1
+        else:
+            same_or_higher_priority_ahead += 1
+    return {
+        "queue_name": queue_name,
+        "queue_len": len(entries),
+        "request_id": target_id,
+        "request_priority": target_priority if target_priority is not None else "",
+        "queue_position": position if position is not None else "",
+        "lower_priority_ahead": lower_priority_ahead if target_priority is not None else "",
+        "higher_priority_ahead": higher_priority_ahead if target_priority is not None else "",
+        "same_or_higher_priority_ahead": same_or_higher_priority_ahead if target_priority is not None else "",
+        "queue_head_sample": [
+            {
+                "request_id": _request_identity(entry),
+                "priority": _priority_value_from_request(entry),
+                "agent_session_id": entry.get("agent_session_id") or entry.get("session_id", ""),
+                "agent_phase": entry.get("agent_phase") or entry.get("dynamo_hint_phase", ""),
+            }
+            for entry in entries[:8]
+        ],
+    }
+
+
+def _priority_order_context(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for request in requests[:32]:
+        out.append(
+            {
+                "request_id": _request_identity(request),
+                "priority": _priority_value_from_request(request),
+                "agent_session_id": request.get("agent_session_id") or request.get("session_id", ""),
+                "agent_phase": request.get("agent_phase") or request.get("dynamo_hint_phase", ""),
+            }
+        )
+    return out
 
 
 def _call_or_value(value: Any) -> Any:
@@ -1013,6 +1145,23 @@ def _req_context(req: Any) -> dict[str, Any]:
                 )
                 context["agent_case_id"] = context.get("agent_case_id") or _safe_summary(request_context.get("case_id"))
                 context["agent_gap_id"] = context.get("agent_gap_id") or _safe_summary(request_context.get("gap_id"))
+            nvext = custom_params.get("nvext")
+            if isinstance(nvext, dict):
+                agent_hints = nvext.get("agent_hints")
+                if isinstance(agent_hints, dict):
+                    context["dynamo_hint_priority"] = _safe_summary(agent_hints.get("priority"))
+                    context["dynamo_hint_request_id"] = _safe_summary(agent_hints.get("request_id"))
+                    context["dynamo_hint_phase"] = _safe_summary(agent_hints.get("phase"))
+                    context["dynamo_hint_deadline_offset_ms"] = _safe_summary(agent_hints.get("deadline_offset_ms"))
+                    context["dynamo_hint_expected_action"] = _safe_summary(agent_hints.get("expected_action"))
+                    if context.get("dynamo_hint_request_id") and "request_id" not in context:
+                        context["request_id"] = context["dynamo_hint_request_id"]
+            bridge = custom_params.get("dynamo_priority_bridge")
+            if isinstance(bridge, dict):
+                context["dynamo_agent_priority"] = _safe_summary(bridge.get("dynamo_agent_priority"))
+                context["sglang_priority"] = _safe_summary(bridge.get("sglang_priority"))
+                context["priority_translation"] = _safe_summary(bridge.get("priority_translation"))
+                context["deadline_offset_ms"] = _safe_summary(bridge.get("deadline_offset_ms"))
     except Exception:
         pass
     try:
@@ -1136,6 +1285,9 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
     }:
         context["direction"] = "scheduler_request"
         context["request"] = _request_like_context(_arg_value(args, kwargs, 0, "req") or _arg_value(args, kwargs, 0, "recv_req"))
+        priority_audit = _priority_queue_audit_context(self_obj, context["request"])
+        if priority_audit:
+            context["priority_queue_audit"] = priority_audit
         scheduler_state = _scheduler_state_summary(self_obj)
         if scheduler_state:
             context["scheduler_state"] = scheduler_state
@@ -1144,6 +1296,8 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
     }:
         context["direction"] = "scheduler_input"
         context["requests"] = _requests_from_value(_arg_value(args, kwargs, 0, "recv_reqs"))
+        if context["requests"]:
+            context["priority_receive_order"] = _priority_order_context(context["requests"])
         scheduler_state = _scheduler_state_summary(self_obj)
         if scheduler_state:
             context["scheduler_state"] = scheduler_state
@@ -1162,6 +1316,7 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         requests = context["batch"].get("requests") if isinstance(context.get("batch"), dict) else None
         if isinstance(requests, list):
             context["requests"] = requests
+            context["priority_admission_order"] = _priority_order_context(requests)
         scheduler_state = _scheduler_state_summary(self_obj)
         if scheduler_state:
             context["scheduler_state"] = scheduler_state

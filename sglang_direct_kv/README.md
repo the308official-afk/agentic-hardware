@@ -311,7 +311,7 @@ It is likely dominated by scheduling, queueing, runtime bookkeeping, and content
 | F19 | Real DeepAgents/SWE-bench tool gaps can be much shorter than the software prefetch path. | Milestone 22 bigger live run captured `12` real tool gaps across `4` SWE-bench tasks, with average gap about `11.5 ms` and max gap about `14.1 ms`. Milestone 23 live prefetch smoke matched `2` live prefetch attempts, but they took about `438 ms` and `498 ms`, with average prefetch margin about `-471 ms` and `0 / 2` finishing before resume. | This is a strong early live-traffic finding: the runtime can see useful tool-call hints, but the normal software/controller/SGLang request path is far too slow for very short resume windows. | Need a deadline-aware, hint-aware hardware/runtime path that can act on agent context quickly and predictably, instead of routing prefetch through ordinary best-effort serving work. | Strong |
 | F20 | Low 7B tool-call counts were caused by harness/parser/tool-interface issues plus model weakness, not by lack of tool traffic in the workload. | Direct-SGLang debugging found three issues: Qwen2.5 needed `--tool-call-parser qwen25`, DeepAgents tools see the repo at `/` rather than the host checkout path, and the 7B model sometimes emits unsafe empty-string `edit_file` calls. After fixes, a 4-task run produced `93` real task model requests, `49` structured tool calls, `44` trajectory prompts, and `0` prose-only tool-intent misses. | The direct SGLang path is now useful for live tool-gap/KV experiments. The remaining gap versus prior 30B/40B runs is mostly model capability and batch size. | Keep the parser/root/safe-edit safeguards on for A10G 7B runs; use Qwen3-Coder 30B/40B-class models on compatible GPUs for manager-grade SWE-bench tool diversity. | Strong |
 | F21 | Full live paired AgentBench traffic shows software prefetch usually misses the real tool-gap deadline. | Milestone 24 ran `START_INDEX=0`, `END_INDEX=15`, `AGENTBENCH_EXECUTION_LOOP_MAX_STEPS=10` twice: no-prefetch captured `267` analyzed live requests and `127` tool gaps; live-prefetch captured `254` analyzed live requests and `114` tool gaps. The live-prefetch run submitted `117` hints, matched `114` prefetch attempts, but only `2 / 114` finished before resume. Average tool gap was about `19.9 ms`, while average prefetch request duration was about `629.5 ms`; `112 / 114` attempts were late. | This is the strongest live-system evidence so far: the runtime can observe the agent/tool context, but the ordinary software/controller/SGLang request path is much slower than the real resume window. The paired run was slower on average by about `130 ms`, with `105` slower pairs and only `9` faster pairs. | Need a hint-aware, deadline-aware prefetch/migration path that does not compete as an ordinary best-effort request, plus residency protection and telemetry to make useful prefetch enforceable. | Strong |
-| F22 | Dynamo priority hints and projected hardware test two different questions. | `dynamo_priority_hints` sends Dynamo-style priority metadata and an SGLang priority value, but does not issue our artificial direct KV prefetch hook. `projected_hardware_bypass` estimates a lower-overhead memory path from measured H2D durations. | This keeps the current manager-facing comparison clean: priority hints today vs. a projected memory-system enforcement path. | If priority hints still miss deadlines but projected hardware could meet them, the issue is not just lack of hints; it is lack of a low-overhead memory-system enforcement path. | Strong |
+| F22 | Dynamo priority hints and projected hardware test two different questions. | `dynamo_priority_hints` sends Dynamo-style priority metadata and an SGLang priority value, but does not issue our artificial direct KV prefetch hook. The new priority queue audit checks whether SGLang actually honors that priority in receive/queue/admission traces. `projected_hardware_bypass` estimates a lower-overhead memory path from measured H2D durations. | This keeps the current manager-facing comparison clean: priority hints today vs. a projected memory-system enforcement path. | If priority hints still miss deadlines but projected hardware could meet them, the issue is not just lack of hints; it is lack of a low-overhead memory-system enforcement path. | Strong |
 
 Current strongest claim:
 
@@ -6752,7 +6752,8 @@ Grouped Mode Comparison Timeline:
   compare the same task/gap scenario across:
     Cxx-NP = no prefetch
     Cxx-DH = Dynamo priority hints only, if MODES includes dynamo_priority_hints
-    Cxx-HW = projected hardware bypass
+  Projected hardware rows are intentionally hidden from this timeline for now,
+  because they are estimates, not measured SGLang executions.
 
 Unified Forensic Stack Timeline:
   detailed measured evidence for no-prefetch and Dynamo-priority-hints rows.
@@ -6846,6 +6847,59 @@ Global KV Readiness By Mode:
 
 Evidence Tables / Raw Proof:
   Dynamo Priority Hint Translation Rows show the exact hint-to-priority mapping.
+```
+
+Priority queue effectiveness audit:
+
+```text
+The hint translation table proves:
+  our driver attached Dynamo-style hints
+  our driver translated them into SGLang priority values
+
+That alone does not prove:
+  SGLang actually moved the request ahead inside its scheduler queue
+
+So this milestone also records a priority queue audit:
+  client submit request_id + priority
+  SGLang receive request_id + priority
+  scheduler queue context
+  queue position when visible
+  how many lower-priority requests were ahead
+  scheduler admission order
+  whether lower-priority requests were admitted before this request
+
+This lets us distinguish two cases:
+
+  hint attached but not honored:
+    the priority metadata reached the request, but scheduler behavior did not
+    clearly move the request earlier.
+
+  hint attached and honored:
+    scheduler traces show the high-priority request being received/admitted
+    ahead of lower-priority work.
+```
+
+New output files:
+
+```text
+artifacts/results/<run>/dynamo_priority_hint_translation.csv
+artifacts/results/<run>/dynamo_priority_queue_effectiveness.csv
+```
+
+Where to see it in the HTML report:
+
+```text
+Evidence Tables / Raw Proof
+  -> Dynamo Priority Hint Translation
+  -> Dynamo Priority Queue Effectiveness Audit
+```
+
+Important:
+
+```text
+Old reports cannot prove priority queue effectiveness because the scheduler
+queue/admission hooks were not present when those traces were captured.
+Rerun this milestone to populate the new queue-effectiveness evidence.
 ```
 
 ### Milestone 39: Projected Hardware Bypass Benefit
