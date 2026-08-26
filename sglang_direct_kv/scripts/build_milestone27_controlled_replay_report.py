@@ -5382,6 +5382,331 @@ def gpu_kv_residency_summary_html(rows: list[dict[str, Any]]) -> str:
     """
 
 
+def _trace_text(row: dict[str, Any]) -> str:
+    values = [
+        row.get("event", ""),
+        row.get("source_event", ""),
+        row.get("method", ""),
+        row.get("class", ""),
+        row.get("category", ""),
+        row.get("stage", ""),
+        row.get("phase", ""),
+    ]
+    return " ".join(str(value or "").lower() for value in values)
+
+
+def _trace_event_is_scheduler(row: dict[str, Any]) -> bool:
+    text = _trace_text(row)
+    return (
+        "scheduler" in text
+        or "request_stage" in text
+        or "queue" in text
+        or "admit" in text
+        or "run_batch" in text
+        or trace_scheduler_metric(
+            row,
+            "scheduler_waiting_queue_len",
+            "scheduler_running_queue_len",
+            "scheduler_running_batch_request_count",
+            "scheduler_cur_batch_request_count",
+        )
+        is not None
+    )
+
+
+def _trace_event_is_prefill(row: dict[str, Any]) -> bool:
+    return "prefill" in _trace_text(row)
+
+
+def _trace_event_is_decode(row: dict[str, Any]) -> bool:
+    return "decode" in _trace_text(row)
+
+
+def _tool_wait_activity_verdict(
+    max_pool: float | None,
+    scheduler_events: int,
+    prefill_events: int,
+    decode_events: int,
+    kv_movement_events: int,
+    max_running_requests: float | None,
+) -> str:
+    running = max_running_requests or 0.0
+    if (max_pool is not None and max_pool >= 95.0) or kv_movement_events >= 20 or running >= 8:
+        return "very busy"
+    if (max_pool is not None and max_pool >= 85.0) or kv_movement_events > 0 or scheduler_events > 0 or prefill_events > 0 or decode_events > 0:
+        return "busy"
+    return "quiet"
+
+
+def tool_wait_gpu_activity_rows(
+    gaps: list[dict[str, Any]],
+    trace_rows: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+    kv_pool_samples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Summarize SGLang-visible scheduler/model/KV activity during each tool wait."""
+
+    bases = trace_base_by_case(trace_rows)
+    trace_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        case_id = _trace_row_case_id(row)
+        if case_id:
+            trace_by_case[case_id].append(row)
+
+    movement_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in all_kv_events:
+        case_id = str(event.get("case_id") or "")
+        if case_id:
+            movement_by_case[case_id].append(event)
+
+    pool_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in kv_pool_samples:
+        case_id = str(sample.get("case_id") or "")
+        if case_id:
+            pool_by_case[case_id].append(sample)
+
+    rows: list[dict[str, Any]] = []
+    for gap in gaps:
+        case_id = str(gap.get("case_id") or "")
+        start = as_float(gap.get("tool_gap_start_ms"))
+        end = as_float(gap.get("tool_gap_end_ms"))
+        if not case_id or start is None or end is None or end < start:
+            continue
+
+        trace_window: list[dict[str, Any]] = []
+        for row in trace_by_case.get(case_id, []):
+            local_ms = trace_local_ms(row, bases)
+            if local_ms is not None and start <= local_ms <= end:
+                trace_window.append(row)
+
+        scheduler_events = sum(1 for row in trace_window if _trace_event_is_scheduler(row))
+        prefill_events = sum(1 for row in trace_window if _trace_event_is_prefill(row))
+        decode_events = sum(1 for row in trace_window if _trace_event_is_decode(row))
+        run_batch_events = sum(1 for row in trace_window if "run_batch" in _trace_text(row))
+
+        waiting_values: list[float] = []
+        running_queue_values: list[float] = []
+        running_request_values: list[float] = []
+        running_token_values: list[float] = []
+        for row in trace_window:
+            waiting = trace_scheduler_metric(row, "scheduler_waiting_queue_len", "waiting_queue_len")
+            running_queue = trace_scheduler_metric(row, "scheduler_running_queue_len", "running_queue_len")
+            running_requests = trace_scheduler_metric(
+                row,
+                "scheduler_running_batch_request_count",
+                "scheduler_cur_batch_request_count",
+                "running_request_count",
+            )
+            running_tokens = trace_scheduler_metric(
+                row,
+                "scheduler_running_batch_extend_num_tokens",
+                "scheduler_cur_batch_extend_num_tokens",
+                "running_token_count",
+            )
+            if waiting is not None:
+                waiting_values.append(waiting)
+            if running_queue is not None:
+                running_queue_values.append(running_queue)
+            if running_requests is not None:
+                running_request_values.append(running_requests)
+            if running_tokens is not None:
+                running_token_values.append(running_tokens)
+
+        movement_window = kv_events_overlap_window(movement_by_case.get(case_id, []), start, end)
+        movement_counts = Counter(str(event.get("movement_kind") or "") for event in movement_window)
+        pool_window = [
+            sample
+            for sample in pool_by_case.get(case_id, [])
+            if (as_float(sample.get("aligned_ms")) is not None and start <= (as_float(sample.get("aligned_ms")) or 0.0) <= end)
+        ]
+        pool_values = [
+            as_float(sample.get("kv_pool_usage_pct"))
+            for sample in pool_window
+            if as_float(sample.get("kv_pool_usage_pct")) is not None
+        ]
+        max_pool = max(pool_values) if pool_values else None
+        avg_pool = mean(pool_values) if pool_values else None
+        near_full_samples = sum(1 for value in pool_values if value >= 95.0)
+        max_running_requests = max(running_request_values) if running_request_values else None
+        kv_movement_events = len(movement_window)
+        verdict = _tool_wait_activity_verdict(
+            max_pool,
+            scheduler_events,
+            prefill_events,
+            decode_events,
+            kv_movement_events,
+            max_running_requests,
+        )
+        pool_phrase = f"max KV pool {max_pool:.1f}%" if max_pool is not None else "no KV-pool sample"
+        simple_meaning = (
+            f"During the tool wait, SGLang-visible activity showed {scheduler_events} scheduler events, "
+            f"{prefill_events} prefill events, {decode_events} decode events, and {kv_movement_events} KV movement events; "
+            f"{pool_phrase}."
+        )
+        rows.append(
+            {
+                "row": gap.get("timeline_label", ""),
+                "case_id": case_id,
+                "mode": gap.get("mode", ""),
+                "fillers": case_fillers(gap),
+                "task": gap.get("task_index", ""),
+                "gap": gap.get("gap_order_in_task", ""),
+                "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                "tool_wait_start_ms": round(start, 3),
+                "tool_wait_end_ms": round(end, 3),
+                "tool_wait_duration_ms": round(end - start, 3),
+                "trace_events": len(trace_window),
+                "scheduler_events": scheduler_events,
+                "prefill_events": prefill_events,
+                "decode_events": decode_events,
+                "run_batch_events": run_batch_events,
+                "kv_movement_events": kv_movement_events,
+                "h2d_events": movement_counts.get("H2D", 0),
+                "d2h_events": movement_counts.get("D2H", 0),
+                "gpu_evict_events": movement_counts.get("GPU evict", 0),
+                "host_evict_events": movement_counts.get("host evict", 0),
+                "max_waiting_queue_len": round(max(waiting_values), 3) if waiting_values else "",
+                "max_running_queue_len": round(max(running_queue_values), 3) if running_queue_values else "",
+                "max_running_requests": round(max_running_requests, 3) if max_running_requests is not None else "",
+                "max_running_tokens": round(max(running_token_values), 3) if running_token_values else "",
+                "pool_samples": len(pool_window),
+                "max_kv_pool_usage_pct": round(max_pool, 3) if max_pool is not None else "",
+                "avg_kv_pool_usage_pct": round(avg_pool, 3) if avg_pool is not None else "",
+                "near_full_pool_samples": near_full_samples,
+                "tool_wait_activity_verdict": verdict,
+                "simple_meaning": simple_meaning,
+                "evidence": (
+                    "direct_sglang_trace_and_kv_pool_samples"
+                    if trace_window or pool_window or movement_window
+                    else "no_sglang_visible_activity_in_tool_wait_window"
+                ),
+                "scope_note": "SGLang-visible activity only; not full hardware GPU utilization.",
+            }
+        )
+    return rows
+
+
+def build_tool_wait_gpu_activity_svg(rows: list[dict[str, Any]], max_rows: int = 48) -> str:
+    plotted = rows[:max_rows]
+    if not plotted:
+        return "<p>No tool-wait GPU activity rows were available.</p>"
+    width = 1500
+    row_h = 34
+    left = 205
+    right = 52
+    top = 58
+    bottom = 72
+    plot_w = width - left - right
+    height = top + len(plotted) * row_h + bottom
+    count_keys = [
+        ("scheduler_events", "scheduler", "#4f46e5"),
+        ("prefill_events", "prefill", "#c026d3"),
+        ("decode_events", "decode", "#ef4444"),
+        ("kv_movement_events", "KV movement", "#0ea5e9"),
+    ]
+    max_count = max(
+        [as_float(row.get(key)) or 0.0 for row in plotted for key, _, _ in count_keys] + [1.0]
+    )
+
+    def count_w(value: Any) -> float:
+        count = as_float(value) or 0.0
+        return max(0.0, count * (plot_w * 0.58) / max_count)
+
+    pool_x = left + plot_w * 0.66
+    pool_w = plot_w * 0.30
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="SGLang-visible GPU activity during tool wait">',
+        '<text x="12" y="24" font-size="18" font-weight="900" fill="#0f172a">SGLang-visible activity during tool wait</text>',
+        '<text x="12" y="44" font-size="11" fill="#475569">Left stacked bars count trace events during the tool pause. Right heat bars show max SGLang KV-pool occupancy during the same pause.</text>',
+        f'<text x="{left:.1f}" y="{top - 10}" font-size="10" font-weight="900" fill="#334155">event counts during tool wait</text>',
+        f'<text x="{pool_x:.1f}" y="{top - 10}" font-size="10" font-weight="900" fill="#334155">max KV-pool occupancy during tool wait</text>',
+    ]
+    for idx, row in enumerate(plotted):
+        y = top + idx * row_h
+        if idx % 2:
+            parts.append(f'<rect x="0" y="{y - 16:.1f}" width="{width}" height="{row_h}" fill="#f8fafc"/>')
+        label = str(row.get("row") or f"G{idx:02d}")
+        verdict = str(row.get("tool_wait_activity_verdict") or "")
+        parts.append(f'<text x="12" y="{y + 5:.1f}" font-size="11" font-weight="900" fill="#0f172a">{html.escape(label)}</text>')
+        parts.append(
+            f'<text x="58" y="{y + 5:.1f}" font-size="9" fill="#475569">'
+            f'{html.escape(str(row.get("mode") or ""))}; fillers {html.escape(str(row.get("fillers") or ""))}; {html.escape(str(row.get("tool_wait_ms") or ""))} ms</text>'
+        )
+        x = left
+        for key, name, color in count_keys:
+            value = as_float(row.get(key)) or 0.0
+            w = count_w(value)
+            if value > 0 and w < 8:
+                w = 8
+            if w > 0:
+                title = f"{label} | {name}: {int(value)} events during tool wait"
+                parts.append(
+                    f'<rect x="{x:.1f}" y="{y - 11:.1f}" width="{w:.1f}" height="18" rx="4" fill="{color}" opacity="0.82">'
+                    f'<title>{html.escape(title)}</title></rect>'
+                )
+                if w > 48:
+                    parts.append(
+                        f'<text x="{x + w / 2:.1f}" y="{y + 2:.1f}" text-anchor="middle" font-size="9" '
+                        f'font-weight="900" fill="#ffffff">{int(value)}</text>'
+                    )
+                x += w + 2
+        pool = as_float(row.get("max_kv_pool_usage_pct"))
+        if pool is not None:
+            pw = max(2.0, min(pool_w, pool_w * pool / 100.0))
+            color = kv_pool_heat_color(pool)
+            parts.append(
+                f'<rect x="{pool_x:.1f}" y="{y - 11:.1f}" width="{pool_w:.1f}" height="18" rx="4" '
+                f'fill="#e2e8f0" opacity="0.62"/>'
+            )
+            parts.append(
+                f'<rect x="{pool_x:.1f}" y="{y - 11:.1f}" width="{pw:.1f}" height="18" rx="4" '
+                f'fill="{color}" opacity="0.82"><title>{html.escape(label)} | max KV pool during tool wait: {pool:.1f}%</title></rect>'
+            )
+            parts.append(
+                f'<text x="{pool_x + min(pool_w - 18, max(18, pw - 20)):.1f}" y="{y + 2:.1f}" '
+                f'text-anchor="middle" font-size="9" font-weight="900" fill="#0f172a">{pool:.0f}%</text>'
+            )
+        else:
+            parts.append(f'<text x="{pool_x:.1f}" y="{y + 4:.1f}" font-size="9" fill="#64748b">no pool sample</text>')
+        verdict_color = "#b91c1c" if verdict.startswith("very") else "#c2410c" if verdict.startswith("busy") else "#15803d"
+        parts.append(
+            f'<text x="{pool_x + pool_w + 12:.1f}" y="{y + 4:.1f}" font-size="9" font-weight="900" '
+            f'fill="{verdict_color}">{html.escape(verdict)}</text>'
+        )
+    legend_y = height - 32
+    x = left
+    for _, name, color in count_keys:
+        parts.append(f'<rect x="{x:.1f}" y="{legend_y - 10:.1f}" width="13" height="13" rx="3" fill="{color}" opacity="0.82"/>')
+        parts.append(f'<text x="{x + 18:.1f}" y="{legend_y:.1f}" font-size="10" fill="#334155">{html.escape(name)}</text>')
+        x += 180
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def tool_wait_gpu_activity_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No SGLang-visible tool-wait activity rows were available.</p>"
+    observed = [row for row in rows if row.get("evidence") != "no_sglang_visible_activity_in_tool_wait_window"]
+    counts = Counter(str(row.get("tool_wait_activity_verdict") or "unknown") for row in rows)
+    cards = [
+        ("tool waits analyzed", len(rows)),
+        ("with direct activity evidence", f"{len(observed)} / {len(rows)}"),
+        ("very busy tool waits", counts.get("very busy", 0)),
+        ("busy tool waits", counts.get("busy", 0)),
+        ("quiet tool waits", counts.get("quiet", 0)),
+    ]
+    cards_html = "<div class=\"cards\">" + "\n".join(
+        f"<div class=\"card\"><div class=\"label\">{html.escape(str(label))}</div><div class=\"value\">{html.escape(str(value))}</div></div>"
+        for label, value in cards
+    ) + "</div>"
+    return f"""
+    <p>This section answers: while the agent was waiting on the tool, was SGLang visibly busy with scheduler/model work, KV movement, or a full KV pool?</p>
+    <p class="note">This is direct SGLang-visible activity, not total GPU utilization and not a full hardware DMA-lane profiler.</p>
+    {cards_html}
+    <div class="setup-diagram">{build_tool_wait_gpu_activity_svg(rows)}</div>
+    """
+
+
 def build_gpu_kv_residency_svg(rows: list[dict[str, Any]], max_rows: int = 48) -> str:
     plotted = rows[:max_rows]
     if not plotted:
@@ -7706,6 +8031,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     max_rows: int,
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
     projected_hardware_rows: list[dict[str, Any]] | None = None,
+    tool_wait_activity_rows: list[dict[str, Any]] | None = None,
     compact_projected_rows: bool = False,
 ) -> str:
     rows = gaps[:max_rows]
@@ -7757,6 +8083,9 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     min_visible_event_w = 5.0
     kv_pool_by_label = {
         str(row.get("row") or ""): row for row in (kv_pool_residency_rows or []) if str(row.get("row") or "")
+    }
+    tool_wait_activity_by_label = {
+        str(row.get("row") or ""): row for row in (tool_wait_activity_rows or []) if str(row.get("row") or "")
     }
     projected_by_label: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for projected in projected_hardware_rows or []:
@@ -8202,6 +8531,19 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         else:
             pool_text = "GPU KV pool: no sample"
         parts.append(f'<text x="16" y="{y + 180:.1f}" font-size="10" fill="#475569">{html.escape(pool_text[:58])}</text>')
+        tool_wait_activity = tool_wait_activity_by_label.get(label, {})
+        if tool_wait_activity:
+            activity_verdict = str(tool_wait_activity.get("tool_wait_activity_verdict") or "")
+            max_pool = tool_wait_activity.get("max_kv_pool_usage_pct")
+            pool_phrase = f"pool {max_pool}%" if max_pool not in ("", None) else "pool n/a"
+            activity_text = (
+                f"tool wait: {activity_verdict}; {pool_phrase}; "
+                f"KV moves {tool_wait_activity.get('kv_movement_events') or 0}"
+            )
+            parts.append(
+                f'<text x="16" y="{y + 192:.1f}" font-size="9" fill="#475569">'
+                f'{html.escape(activity_text[:62])}</text>'
+            )
         parts.append(
             f'<text x="16" y="{y + 204:.1f}" font-size="10" fill="#475569">'
             f'{html.escape(str(row.get("replay_path") or replay_path_from_evidence(row))[:54])}</text>'
@@ -9271,6 +9613,7 @@ def unified_per_gap_forensic_stack_html(
     all_kv_events: list[dict[str, Any]],
     max_rows: int,
     kv_pool_residency_rows: list[dict[str, Any]] | None = None,
+    tool_wait_activity_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not gaps:
         return "<p>No timeline rows were available for the unified forensic stack.</p>"
@@ -9284,7 +9627,7 @@ def unified_per_gap_forensic_stack_html(
     <p class="note">In the deadline zoom, the dashed line is the readiness gap. Green means KV became ready before replay was due; red means useful KV H2D completed late.</p>
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows, kv_pool_residency_rows)}</div>
+    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows, kv_pool_residency_rows, tool_wait_activity_rows=tool_wait_activity_rows)}</div>
     <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
     """
 
@@ -9448,8 +9791,17 @@ def render_html(
     replay_delay_running_rows = replay_delay_running_context_rows(all_timeline_rows, trace_rows, all_h2d_activity_events)
     kv_pool_sample_rows = kv_pool_samples_from_trace(all_timeline_rows, trace_rows)
     kv_pool_residency_rows = kv_pool_residency_by_gap_rows(all_timeline_rows, kv_pool_sample_rows)
+    tool_wait_activity_rows = tool_wait_gpu_activity_rows(
+        all_timeline_rows,
+        trace_rows,
+        all_kv_movement_events,
+        kv_pool_sample_rows,
+    )
     interesting_kv_pool_residency_rows = [
         row for row in kv_pool_residency_rows if str(row.get("row") or "") in interesting_labels
+    ]
+    interesting_tool_wait_activity_rows = [
+        row for row in tool_wait_activity_rows if str(row.get("row") or "") in interesting_labels
     ]
     grouped_comparison_rows = grouped_mode_comparison_rows(gaps, max_timeline_gaps)
     grouped_kv_pool_residency_rows = kv_pool_residency_by_gap_rows(grouped_comparison_rows, kv_pool_sample_rows)
@@ -9556,6 +9908,7 @@ def render_html(
         ("hardware-bypass", "Projected Hardware Bypass Benefit"),
         ("h2d-pressure", "KV H2D Bandwidth Pressure"),
         ("gpu-kv-residency", "GPU KV Pool Residency"),
+        ("tool-wait-gpu-activity", "GPU Activity During Tool Wait"),
         ("delay-breakdown", "Replay Delay Breakdown"),
         ("client-dispatch-kv", "Client Dispatch KV Movement"),
         ("timeline-guide", "How To Read Timelines"),
@@ -9626,6 +9979,11 @@ def render_html(
     {gpu_kv_residency_summary_html(kv_pool_residency_rows)}
   </details>
 
+  <details id="tool-wait-gpu-activity" class="section-card theme-directkv">
+    <summary><h2>GPU Activity During Tool Wait</h2></summary>
+    {tool_wait_gpu_activity_html(tool_wait_activity_rows)}
+  </details>
+
   <details id="delay-breakdown" class="section-card theme-profiled">
     <summary><h2>Replay Delay Breakdown</h2></summary>
     <p>This section answers the next question: if replay-side H2D started late, where did the time go before the copy began?</p>
@@ -9652,7 +10010,7 @@ def render_html(
 
   <details id="unified-forensic-stack" class="section-card theme-profiled">
     <summary><h2>Unified Forensic Stack Timeline</h2></summary>
-    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows)}
+    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows, interesting_tool_wait_activity_rows)}
   </details>
 
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
@@ -9720,6 +10078,9 @@ def render_html(
     <h3>GPU KV Pool Residency By Gap</h3>
     <p class="note">These rows come from direct SGLang KV memory pool samples. They are not derived from <code>nvidia-smi</code>.</p>
     {table_html(kv_pool_residency_rows, limit=1000)}
+    <h3>Tool-Wait GPU Activity Rows</h3>
+    <p class="note">These rows summarize SGLang-visible scheduler/model/KV activity during each tool wait window. They are not total GPU utilization and not hardware DMA-lane profiling.</p>
+    {table_html(tool_wait_activity_rows, limit=1000)}
     <h3>Raw GPU KV Pool Samples</h3>
     {table_html(kv_pool_sample_rows, limit=2000)}
     <h3>All Aligned KV Movement Rows</h3>
@@ -9864,6 +10225,12 @@ def main() -> None:
     replay_delay_gap_verdicts = delay_verdicts_by_gap_rows(replay_delay_breakdown)
     kv_pool_sample_rows = kv_pool_samples_from_trace(all_labeled_gaps, all_trace_rows)
     kv_pool_residency_rows = kv_pool_residency_by_gap_rows(all_labeled_gaps, kv_pool_sample_rows)
+    tool_wait_activity = tool_wait_gpu_activity_rows(
+        all_labeled_gaps,
+        all_trace_rows,
+        all_kv_movement_events,
+        kv_pool_sample_rows,
+    )
     evidence_audit = audit_report_data(
         {
             "gaps": all_gaps,
@@ -9887,6 +10254,7 @@ def main() -> None:
     write_csv(args.out_dir / "replay_delay_gap_verdicts.csv", replay_delay_gap_verdicts)
     write_csv(args.out_dir / "kv_pool_samples.csv", kv_pool_sample_rows)
     write_csv(args.out_dir / "kv_pool_residency_by_gap.csv", kv_pool_residency_rows)
+    write_csv(args.out_dir / "tool_wait_gpu_activity.csv", tool_wait_activity)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "all_aligned_kv_movement_events.csv", all_kv_movement_events)
     write_csv(args.out_dir / "client_dispatch_kv_movement_summary.csv", client_dispatch_kv_summary)
@@ -9935,6 +10303,7 @@ def main() -> None:
             "replay_delay_gap_verdicts": replay_delay_gap_verdicts,
             "kv_pool_samples": kv_pool_sample_rows,
             "kv_pool_residency_by_gap": kv_pool_residency_rows,
+            "tool_wait_gpu_activity": tool_wait_activity,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
             "all_aligned_kv_movement_events": all_kv_movement_events,
