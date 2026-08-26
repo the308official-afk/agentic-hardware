@@ -3813,11 +3813,11 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     if not usable:
         return "<p>No first-token or KV-ready timing rows were available for this run.</p>"
     width = 1500
-    height = 610
+    height = 720
     left = 118
     right = 68
     top = 92
-    bottom = 128
+    bottom = 210
     plot_w = width - left - right
     plot_h = height - top - bottom
     values: list[float] = []
@@ -3876,12 +3876,12 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
 
     zero_y = y_pos(0.0)
     parts = [
-        '<svg viewBox="0 0 1500 610" width="100%" role="img" aria-label="Replay first token versus KV readiness by mode">',
+        '<svg viewBox="0 0 1500 720" width="100%" role="img" aria-label="Replay first token versus KV readiness by mode">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" rx="10" fill="#ffffff" stroke="#e2e8f0"/>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
         f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
         '<text x="26" y="300" transform="rotate(-90 26 300)" text-anchor="middle" font-size="13" font-weight="700">deadline margin ms (symlog)</text>',
-        f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 46}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="34" font-size="13" fill="#111827" font-weight="700">above 0 ms = before deadline; below 0 ms = after deadline</text>',
         '<text x="104" y="56" font-size="12" fill="#475569">Circle = first replay token produced. Square = useful KV became ready. This chart intentionally omits request-submission and prefetch-issued timing.</text>',
     ]
@@ -3943,24 +3943,37 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
                 f'fill="{color}" opacity="0.55" stroke="{color}" stroke-width="2"><title>{html.escape(title)}</title></rect>'
             )
 
-    lx = left
-    ly = height - 100
-    parts.append(f'<circle cx="{lx:.1f}" cy="{ly - 34:.1f}" r="6.2" fill="#0f172a" opacity="0.85"/>')
-    parts.append(f'<text x="{lx + 18}" y="{ly - 30}" font-size="12" fill="#334155">circle = first replay token</text>')
-    parts.append(f'<rect x="{lx + 210:.1f}" y="{ly - 40:.1f}" width="12" height="12" rx="2" fill="#0f172a" opacity="0.45" stroke="#0f172a" stroke-width="2"/>')
-    parts.append(f'<text x="{lx + 230}" y="{ly - 30}" font-size="12" fill="#334155">square = KV ready</text>')
+    legend_y = top + plot_h + 62
+    legend_box_x = left
+    legend_box_y = top + plot_h + 38
+    legend_box_w = plot_w
+    legend_box_h = 104
+    parts.append(
+        f'<rect x="{legend_box_x}" y="{legend_box_y}" width="{legend_box_w}" height="{legend_box_h}" '
+        'rx="10" fill="#f8fafc" stroke="#e2e8f0"/>'
+    )
+    lx = left + 24
+    parts.append(f'<text x="{lx}" y="{legend_y}" font-size="12" fill="#475569" font-weight="700">Marker shape</text>')
+    parts.append(f'<circle cx="{lx + 118:.1f}" cy="{legend_y - 4:.1f}" r="6.2" fill="#0f172a" opacity="0.85"/>')
+    parts.append(f'<text x="{lx + 136}" y="{legend_y}" font-size="12" fill="#334155">first replay token</text>')
+    parts.append(f'<rect x="{lx + 300:.1f}" y="{legend_y - 10:.1f}" width="12" height="12" rx="2" fill="#0f172a" opacity="0.45" stroke="#0f172a" stroke-width="2"/>')
+    parts.append(f'<text x="{lx + 320}" y="{legend_y}" font-size="12" fill="#334155">KV ready</text>')
     legend_modes = [
         ("NP", "No prefetch", "no_prefetch"),
         ("DP", "Direct prefetch", "direct_prefetch"),
         ("DH", "Dynamo priority hints only", "dynamo_priority_hints"),
         ("HW", "Projected hardware bypass", "projected_hardware_bypass"),
     ]
+    lx = left + 24
+    ly = legend_y + 42
+    parts.append(f'<text x="{lx}" y="{ly + 4}" font-size="12" fill="#475569" font-weight="700">Mode color</text>')
+    lx += 118
     for short, label, mode_key in legend_modes:
         color = mode_colors[mode_key]
         parts.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="6.5" fill="{color}"/>')
         parts.append(f'<rect x="{lx + 20:.1f}" y="{ly - 6:.1f}" width="12" height="12" rx="2" fill="{color}" opacity="0.55" stroke="{color}" stroke-width="2"/>')
         parts.append(f'<text x="{lx + 42}" y="{ly + 4}" font-size="12">{html.escape(short)} = {html.escape(label)}</text>')
-        lx += 310
+        lx += 290
     parts.append("</svg>")
     return "\n".join(parts)
 
