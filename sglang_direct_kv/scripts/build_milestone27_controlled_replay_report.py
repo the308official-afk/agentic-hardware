@@ -3438,15 +3438,22 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
             margin, evidence_kind, source, meaning = mode_readiness_margin(row)
             due = as_float(row.get("tool_gap_end_ms"))
             replay_start = as_float(row.get("resume_start_ms"))
+            resume_ttft = as_float(row.get("resume_ttft_ms"))
+            first_token = replay_start + resume_ttft if replay_start is not None and resume_ttft is not None else None
             kv_ready, _, _, _ = mode_kv_ready_timing(row)
             replay_start_relative = (
                 round(replay_start - due, 3) if due is not None and replay_start is not None else ""
             )
-            if margin is None and replay_start_relative == "":
+            first_token_relative = round(first_token - due, 3) if due is not None and first_token is not None else ""
+            first_token_margin = round(due - first_token, 3) if due is not None and first_token is not None else ""
+            if margin is None and replay_start_relative == "" and first_token_relative == "":
                 continue
             kv_ready_relative = round(kv_ready - due, 3) if due is not None and kv_ready is not None else ""
             replay_start_to_kv_ready = (
                 round(kv_ready - replay_start, 3) if kv_ready is not None and replay_start is not None else ""
+            )
+            first_token_to_kv_ready = (
+                round(kv_ready - first_token, 3) if kv_ready is not None and first_token is not None else ""
             )
             output.append(
                 {
@@ -3460,10 +3467,16 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                     "kv_ready_margin_ms": margin if margin is not None else "",
                     "kv_ready_relative_ms": kv_ready_relative,
                     "replay_start_relative_ms": replay_start_relative,
+                    "first_token_relative_ms": first_token_relative,
+                    "first_token_margin_ms": first_token_margin,
                     "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
+                    "first_token_to_kv_ready_ms": first_token_to_kv_ready,
                     "ready_before_replay_due": "" if margin is None else 1 if margin >= 0 else 0,
                     "replay_started_before_or_at_due": (
                         1 if replay_start_relative not in ("", None) and float(replay_start_relative) <= 0 else 0
+                    ),
+                    "first_token_before_or_at_due": (
+                        1 if first_token_relative not in ("", None) and float(first_token_relative) <= 0 else 0
                     ),
                     "evidence_kind": evidence_kind,
                     "readiness_source": source,
@@ -3488,10 +3501,14 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
             if margin is not None:
                 due = as_float(projection_source.get("tool_gap_end_ms"))
                 replay_start = as_float(projection_source.get("resume_start_ms"))
+                resume_ttft = as_float(projection_source.get("resume_ttft_ms"))
+                first_token = replay_start + resume_ttft if replay_start is not None and resume_ttft is not None else None
                 projected_ready = as_float(realistic.get("projected_hardware_end_ms"))
                 replay_start_relative = (
                     round(replay_start - due, 3) if due is not None and replay_start is not None else ""
                 )
+                first_token_relative = round(first_token - due, 3) if due is not None and first_token is not None else ""
+                first_token_margin = round(due - first_token, 3) if due is not None and first_token is not None else ""
                 kv_ready_relative = (
                     round(projected_ready - due, 3)
                     if due is not None and projected_ready is not None
@@ -3500,6 +3517,11 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                 replay_start_to_kv_ready = (
                     round(projected_ready - replay_start, 3)
                     if projected_ready is not None and replay_start is not None
+                    else ""
+                )
+                first_token_to_kv_ready = (
+                    round(projected_ready - first_token, 3)
+                    if projected_ready is not None and first_token is not None
                     else ""
                 )
                 output.append(
@@ -3514,12 +3536,21 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                         "kv_ready_margin_ms": round(margin, 3),
                         "kv_ready_relative_ms": kv_ready_relative,
                         "replay_start_relative_ms": replay_start_relative,
+                        "first_token_relative_ms": first_token_relative,
+                        "first_token_margin_ms": first_token_margin,
                         "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
+                        "first_token_to_kv_ready_ms": first_token_to_kv_ready,
                         "ready_before_replay_due": 1 if margin >= 0 else 0,
                         "replay_started_before_or_at_due": (
                             1
                             if replay_start_relative not in ("", None)
                             and float(replay_start_relative) <= 0
+                            else 0
+                        ),
+                        "first_token_before_or_at_due": (
+                            1
+                            if first_token_relative not in ("", None)
+                            and float(first_token_relative) <= 0
                             else 0
                         ),
                         "evidence_kind": "projected",
@@ -3715,6 +3746,34 @@ def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list
     return output
 
 
+def global_first_token_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    output: list[dict[str, Any]] = []
+    for mode in mode_order:
+        items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
+        values = [
+            float(row["first_token_relative_ms"])
+            for row in items
+            if row.get("first_token_relative_ms") not in ("", None)
+        ]
+        if not values:
+            continue
+        late = [value for value in values if value > 0]
+        on_time = [value for value in values if value <= 0]
+        output.append(
+            {
+                "mode": display_mode(mode),
+                "circles": len(values),
+                "first_token_on_or_before_due": len(on_time),
+                "first_token_late": len(late),
+                "late_pct": round(len(late) * 100.0 / len(values), 2) if values else "",
+                "median_first_token_relative_ms": round(median(values), 3),
+                "worst_first_token_lateness_ms": round(max(late), 3) if late else "",
+            }
+        )
+    return output
+
+
 def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
     output: list[dict[str, Any]] = []
@@ -3722,10 +3781,10 @@ def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
         if not items:
             continue
-        replay_dots = sum(1 for row in items if row.get("replay_start_relative_ms") not in ("", None))
+        replay_dots = sum(1 for row in items if row.get("first_token_relative_ms") not in ("", None))
         kv_squares = sum(1 for row in items if row.get("kv_ready_margin_ms") not in ("", None))
         if mode == "dynamo_priority_hints":
-            meaning = "priority request timing only; KV square appears only when replay-side H2D was measured"
+            meaning = "first-token timing is measured; KV square appears only when replay-side H2D was measured"
         elif mode == "projected_hardware_bypass":
             meaning = "projected KV-ready square, not measured hardware"
         elif mode == "direct_prefetch":
@@ -3735,7 +3794,7 @@ def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str
         output.append(
             {
                 "mode": display_mode(mode),
-                "replay_start_circles": replay_dots,
+                "first_token_circles": replay_dots,
                 "kv_ready_squares": kv_squares,
                 "missing_kv_ready_squares": max(0, replay_dots - kv_squares),
                 "meaning": meaning,
@@ -3748,32 +3807,32 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     usable = [
         row
         for row in rows
-        if row.get("replay_start_relative_ms") not in ("", None)
+        if row.get("first_token_relative_ms") not in ("", None)
         or row.get("kv_ready_relative_ms") not in ("", None)
     ]
     if not usable:
-        return "<p>No replay-start or KV-ready timing rows were available for this run.</p>"
-    width = 1480
-    height = 620
-    left = 96
-    right = 52
-    top = 88
-    bottom = 138
+        return "<p>No first-token or KV-ready timing rows were available for this run.</p>"
+    width = 1500
+    height = 610
+    left = 118
+    right = 68
+    top = 92
+    bottom = 128
     plot_w = width - left - right
     plot_h = height - top - bottom
     values: list[float] = []
     for row in usable:
-        replay_relative = as_float(row.get("replay_start_relative_ms"))
+        first_token_relative = as_float(row.get("first_token_relative_ms"))
         kv_ready_margin = as_float(row.get("kv_ready_margin_ms"))
         kv_ready_relative = as_float(row.get("kv_ready_relative_ms"))
-        if replay_relative is not None:
-            values.append(-replay_relative)
+        if first_token_relative is not None:
+            values.append(-first_token_relative)
         if kv_ready_margin is not None:
             values.append(kv_ready_margin)
         elif kv_ready_relative is not None:
             values.append(-kv_ready_relative)
     if not values:
-        return "<p>No replay-start or KV-ready timing values were available for this run.</p>"
+        return "<p>No first-token or KV-ready timing values were available for this run.</p>"
     v_min = min(values)
     v_max = max(values)
     pad = max(50.0, (v_max - v_min) * 0.08)
@@ -3795,13 +3854,21 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         "dynamo_priority_hints": "#f59e0b",
         "projected_hardware_bypass": "#0f766e",
     }
+    max_offset = max(abs(value) for value in mode_offsets.values())
+    base_left = left + max_offset + 18
+    base_right = left + plot_w - max_offset - 18
 
     def x_pos(label: str, mode_key: str) -> float:
         if len(scenario_labels) <= 1:
             base = left + plot_w / 2
         else:
-            base = left + scenario_index[label] * plot_w / (len(scenario_labels) - 1)
+            base = base_left + scenario_index[label] * (base_right - base_left) / (len(scenario_labels) - 1)
         return base + mode_offsets.get(mode_key, 0.0)
+
+    def scenario_x(label: str) -> float:
+        if len(scenario_labels) <= 1:
+            return left + plot_w / 2
+        return base_left + scenario_index[label] * (base_right - base_left) / (len(scenario_labels) - 1)
 
     def y_pos(value: float) -> float:
         scaled = h2d_symlog_value(value)
@@ -3809,22 +3876,26 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
 
     zero_y = y_pos(0.0)
     parts = [
-        '<svg viewBox="0 0 1480 620" width="100%" role="img" aria-label="Replay start versus KV readiness by mode">',
-        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
+        '<svg viewBox="0 0 1500 610" width="100%" role="img" aria-label="Replay first token versus KV readiness by mode">',
+        f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" rx="10" fill="#ffffff" stroke="#e2e8f0"/>',
         f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
         f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
-        '<text x="22" y="305" transform="rotate(-90 22 305)" text-anchor="middle" font-size="13" font-weight="700">deadline margin ms (symlog)</text>',
+        '<text x="26" y="300" transform="rotate(-90 26 300)" text-anchor="middle" font-size="13" font-weight="700">deadline margin ms (symlog)</text>',
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 45}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="34" font-size="13" fill="#111827" font-weight="700">above 0 ms = before deadline; below 0 ms = after deadline</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">Circle = replay request started. Square = useful KV became ready. This chart intentionally omits prefetch-issued timing.</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">Circle = first replay token produced. Square = useful KV became ready. This chart intentionally omits request-submission and prefetch-issued timing.</text>',
     ]
     seen_ticks: set[int] = set()
+    seen_tick_y: list[float] = []
     for value in h2d_symlog_tick_values(y_min, y_max):
         rounded = int(round(value))
         if rounded in seen_ticks:
             continue
-        seen_ticks.add(rounded)
         y = y_pos(value)
+        if any(abs(y - prior_y) < 18 for prior_y in seen_tick_y):
+            continue
+        seen_ticks.add(rounded)
+        seen_tick_y.append(y)
         parts.append(f'<line x1="{left - 6}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
         parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="11">{rounded} ms</text>')
 
@@ -3832,7 +3903,7 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     for index, label in enumerate(scenario_labels):
         if index % x_tick_step != 0 and index != len(scenario_labels) - 1:
             continue
-        x = x_pos(label, "")
+        x = scenario_x(label)
         parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
         parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" font-size="10">{html.escape(label)}</text>')
 
@@ -3843,8 +3914,8 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
             continue
         color = mode_colors.get(mode_key, "#64748b")
         x = x_pos(scenario, mode_key)
-        replay_rel = as_float(row.get("replay_start_relative_ms"))
-        replay_margin = -replay_rel if replay_rel is not None else None
+        first_token_rel = as_float(row.get("first_token_relative_ms"))
+        first_token_margin = -first_token_rel if first_token_rel is not None else None
         kv_margin = as_float(row.get("kv_ready_margin_ms"))
         kv_rel = as_float(row.get("kv_ready_relative_ms"))
         if kv_margin is None and kv_rel is not None:
@@ -3853,20 +3924,13 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
             f"{scenario} {display_mode(mode_key)} | fillers={row.get('fillers')} | "
             f"tool_wait={row.get('tool_wait_ms')} ms"
         )
-        if replay_margin is not None and kv_margin is not None:
-            y1 = y_pos(replay_margin)
-            y2 = y_pos(kv_margin)
-            parts.append(
-                f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" '
-                f'stroke="{color}" stroke-width="2" opacity="0.35"><title>{html.escape(title_base)} | replay-to-KV={row.get("replay_start_to_kv_ready_ms")} ms</title></line>'
-            )
-        if replay_margin is not None:
-            y = y_pos(replay_margin)
+        if first_token_margin is not None:
+            y = y_pos(first_token_margin)
             title = (
-                f"{title_base} | replay start margin={replay_margin:.3f} ms "
-                f"(positive=started before due, negative=started late)"
+                f"{title_base} | first token margin={first_token_margin:.3f} ms "
+                f"(positive=first token before due, negative=first token late)"
             )
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{html.escape(title)}</title></circle>')
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.2" fill="{color}" opacity="0.92" stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></circle>')
         if kv_margin is not None:
             y = y_pos(kv_margin)
             title = (
@@ -3881,6 +3945,10 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
 
     lx = left
     ly = height - 100
+    parts.append(f'<circle cx="{lx:.1f}" cy="{ly - 34:.1f}" r="6.2" fill="#0f172a" opacity="0.85"/>')
+    parts.append(f'<text x="{lx + 18}" y="{ly - 30}" font-size="12" fill="#334155">circle = first replay token</text>')
+    parts.append(f'<rect x="{lx + 210:.1f}" y="{ly - 40:.1f}" width="12" height="12" rx="2" fill="#0f172a" opacity="0.45" stroke="#0f172a" stroke-width="2"/>')
+    parts.append(f'<text x="{lx + 230}" y="{ly - 30}" font-size="12" fill="#334155">square = KV ready</text>')
     legend_modes = [
         ("NP", "No prefetch", "no_prefetch"),
         ("DP", "Direct prefetch", "direct_prefetch"),
@@ -3901,18 +3969,18 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     rows = global_kv_readiness_by_mode_rows(gaps)
     if not rows:
         return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
-    replay_start_summary = global_replay_start_by_mode_summary_rows(rows)
+    first_token_summary = global_first_token_by_mode_summary_rows(rows)
     status_rows = global_replay_vs_kv_status_rows(rows)
     return f"""
-    <p>This section separates two questions: did the replay request itself start on time, and did useful KV become ready on time?</p>
-    <p class="note">For Dynamo priority hints only, no artificial direct-prefetch H2D is counted. Its KV-ready dot uses replay-side H2D finish only. If replay-side H2D is not observed, the replay-start dot can still appear while the KV-ready dot is omitted.</p>
-    <h3>Replay Start Lateness Summary</h3>
-    {table_html(replay_start_summary, ["mode", "dots", "replay_started_on_or_before_due", "replay_started_late", "late_pct", "median_replay_start_relative_ms", "worst_replay_start_lateness_ms"])}
-    <h3>Replay Start vs KV Ready</h3>
-    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means the event happened before the replay deadline. Below zero means it happened after the replay deadline. Circle = replay request started. Square = useful KV became ready, usually when host-to-device KV load finished. For Dynamo priority hints only, the square appears only when replay-side KV H2D was observed. For projected hardware, the square is projected, not measured.</p>
+    <p>This section separates two questions: when did the replay produce its first useful output token, and did useful KV become ready before that replay deadline?</p>
+    <p class="note">For Dynamo priority hints only, no artificial direct-prefetch H2D is counted. Its KV-ready square uses replay-side H2D finish only. If replay-side H2D is not observed, the first-token circle can still appear while the KV-ready square is omitted.</p>
+    <h3>First Token Lateness Summary</h3>
+    {table_html(first_token_summary, ["mode", "circles", "first_token_on_or_before_due", "first_token_late", "late_pct", "median_first_token_relative_ms", "worst_first_token_lateness_ms"])}
+    <h3>Replay First Token vs KV Ready</h3>
+    <p class="note">This chart uses <code>deadline_margin = replay_due - event_time</code>. Above zero means the event happened before the replay deadline. Below zero means it happened after the replay deadline. Circle = first replay token produced. Square = useful KV became ready, usually when host-to-device KV load finished. For Dynamo priority hints only, the square appears only when replay-side KV H2D was observed. For projected hardware, the square is projected, not measured.</p>
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
     <h3>Dot Availability</h3>
-    {table_html(status_rows, ["mode", "replay_start_circles", "kv_ready_squares", "missing_kv_ready_squares", "meaning"])}
+    {table_html(status_rows, ["mode", "first_token_circles", "kv_ready_squares", "missing_kv_ready_squares", "meaning"])}
     <p class="note">Exact per-dot values are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
     """
 
