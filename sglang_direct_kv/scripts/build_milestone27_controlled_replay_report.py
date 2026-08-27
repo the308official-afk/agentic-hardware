@@ -4113,23 +4113,24 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
 
 
 def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    measured_modes = ("no_prefetch", "dynamo_priority_hints")
     scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
-        if mode in {"no_prefetch", "direct_prefetch", "dynamo_priority_hints"}:
+        if mode in measured_modes:
             scenario_to_modes[scenario_compare_key(row)][mode] = row
 
     scenarios = [
         (key, rows_by_mode)
         for key, rows_by_mode in scenario_to_modes.items()
-        if any(mode in rows_by_mode for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints"))
+        if any(mode in rows_by_mode for mode in measured_modes)
     ]
     scenarios.sort(key=lambda item: scenario_compare_sort_key(item[0]))
 
     output: list[dict[str, Any]] = []
     for scenario_idx, (key, rows_by_mode) in enumerate(scenarios):
         scenario_label = f"C{scenario_idx:02d}"
-        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints"):
+        for mode in measured_modes:
             row = rows_by_mode.get(mode)
             if not row:
                 continue
@@ -4182,90 +4183,11 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
                     "simple_meaning": meaning,
                 }
             )
-
-        projection_source = None
-        realistic = None
-        for candidate_mode in ("dynamo_priority_hints", "no_prefetch", "direct_prefetch"):
-            candidate = rows_by_mode.get(candidate_mode)
-            if not candidate:
-                continue
-            projections = projected_hardware_bypass_rows([candidate])
-            realistic = next((row for row in projections if row.get("hardware_projection") == "realistic"), None)
-            if realistic:
-                projection_source = candidate
-                break
-        if projection_source and realistic:
-            margin = as_float(realistic.get("projected_hardware_margin_ms"))
-            if margin is not None:
-                due = as_float(projection_source.get("tool_gap_end_ms"))
-                replay_start = as_float(projection_source.get("resume_start_ms"))
-                resume_ttft = as_float(projection_source.get("resume_ttft_ms"))
-                first_token = replay_start + resume_ttft if replay_start is not None and resume_ttft is not None else None
-                projected_ready = as_float(realistic.get("projected_hardware_end_ms"))
-                replay_start_relative = (
-                    round(replay_start - due, 3) if due is not None and replay_start is not None else ""
-                )
-                first_token_relative = round(first_token - due, 3) if due is not None and first_token is not None else ""
-                first_token_margin = round(due - first_token, 3) if due is not None and first_token is not None else ""
-                kv_ready_relative = (
-                    round(projected_ready - due, 3)
-                    if due is not None and projected_ready is not None
-                    else round(-margin, 3)
-                )
-                replay_start_to_kv_ready = (
-                    round(projected_ready - replay_start, 3)
-                    if projected_ready is not None and replay_start is not None
-                    else ""
-                )
-                first_token_to_kv_ready = (
-                    round(projected_ready - first_token, 3)
-                    if projected_ready is not None and first_token is not None
-                    else ""
-                )
-                output.append(
-                    {
-                        "scenario": scenario_label,
-                        "mode": "Projected hardware bypass",
-                        "mode_key": "projected_hardware_bypass",
-                        "task": realistic.get("task", key[0]),
-                        "gap": realistic.get("gap", key[1]),
-                        "tool_wait_ms": realistic.get("tool_wait_ms", key[2]),
-                        "fillers": case_fillers(projection_source) or key[3],
-                        "kv_ready_margin_ms": round(margin, 3),
-                        "kv_ready_relative_ms": kv_ready_relative,
-                        "replay_start_relative_ms": replay_start_relative,
-                        "first_token_relative_ms": first_token_relative,
-                        "first_token_margin_ms": first_token_margin,
-                        "replay_start_to_kv_ready_ms": replay_start_to_kv_ready,
-                        "first_token_to_kv_ready_ms": first_token_to_kv_ready,
-                        "ready_before_replay_due": 1 if margin >= 0 else 0,
-                        "replay_started_before_or_at_due": (
-                            1
-                            if replay_start_relative not in ("", None)
-                            and float(replay_start_relative) <= 0
-                            else 0
-                        ),
-                        "first_token_before_or_at_due": (
-                            1
-                            if first_token_relative not in ("", None)
-                            and float(first_token_relative) <= 0
-                            else 0
-                        ),
-                        "evidence_kind": "projected",
-                        "readiness_source": "projected hardware H2D",
-                        "measured_or_projected": "projected, not measured",
-                        "simple_meaning": (
-                            "Projected hardware bypass: assumes the urgent KV copy starts at the tool-wait boundary "
-                            "and pays measured H2D time plus 50 ms overhead. The measured H2D duration is taken "
-                            "from the best available measured H2D source for the same scenario."
-                        ),
-                    }
-                )
     return output
 
 
 def global_kv_readiness_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4283,11 +4205,7 @@ def global_kv_readiness_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list
                 "ready_pct": round(ready * 100.0 / len(items), 2) if items else "",
                 "median_margin_ms": round(median(margins), 3) if margins else "",
                 "worst_lateness_ms": round(abs(min(late_margins)), 3) if late_margins else "",
-                "evidence": (
-                    "projected, not measured"
-                    if mode == "projected_hardware_bypass"
-                    else "measured SGLang KV movement/request timing"
-                ),
+                "evidence": "measured SGLang KV movement/request timing",
             }
         )
     return output
@@ -4317,16 +4235,12 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     scenario_labels = sorted({str(row.get("scenario") or "") for row in rows}, key=lambda value: (len(value), value))
     scenario_index = {label: idx for idx, label in enumerate(scenario_labels)}
     mode_offsets = {
-        "no_prefetch": -27.0,
-        "direct_prefetch": -9.0,
-        "dynamo_priority_hints": 9.0,
-        "projected_hardware_bypass": 27.0,
+        "no_prefetch": -12.0,
+        "dynamo_priority_hints": 12.0,
     }
     mode_styles = {
         "no_prefetch": ("#2563eb", "circle", "NP"),
-        "direct_prefetch": ("#7c3aed", "square", "DP"),
         "dynamo_priority_hints": ("#f59e0b", "diamond", "DH"),
-        "projected_hardware_bypass": ("#0f766e", "hollow", "HW"),
     }
 
     def x_pos(label: str, mode_key: str) -> float:
@@ -4361,7 +4275,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 40}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="36" font-size="13" fill="#166534" font-weight="700">above line = KV ready before replay due</text>',
         '<text x="470" y="36" font-size="13" fill="#b91c1c" font-weight="700">below line = KV became ready after replay was due</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">HW dots are projected from measured H2D duration plus 50 ms overhead; NP, DP, and DH dots are measured.</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">Measured modes only: no prefetch and Dynamo priority hints.</text>',
     ]
 
     seen_ticks: set[int] = set()
@@ -4403,9 +4317,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     ly = height - 82
     legend_items = [
         ("No prefetch", "no_prefetch"),
-        ("Direct prefetch", "direct_prefetch"),
         ("Dynamo priority hints only", "dynamo_priority_hints"),
-        ("Projected HW bypass", "projected_hardware_bypass"),
     ]
     for label, mode_key in legend_items:
         color, kind, short = mode_styles[mode_key]
@@ -4417,7 +4329,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
 
 
 def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4445,7 +4357,7 @@ def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list
 
 
 def global_first_token_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4473,7 +4385,7 @@ def global_first_token_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[
 
 
 def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "projected_hardware_bypass"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4483,10 +4395,6 @@ def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str
         kv_squares = sum(1 for row in items if row.get("kv_ready_margin_ms") not in ("", None))
         if mode == "dynamo_priority_hints":
             meaning = "first-token timing is measured; KV square appears only when replay-side H2D was measured"
-        elif mode == "projected_hardware_bypass":
-            meaning = "projected KV-ready square, not measured hardware"
-        elif mode == "direct_prefetch":
-            meaning = "measured direct-prefetch or replay-side KV readiness when observed"
         else:
             meaning = "measured replay start and replay-side KV readiness when observed"
         output.append(
@@ -8041,8 +7949,16 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
 
 
 def global_readiness_section_title(gaps: list[dict[str, Any]]) -> str:
-    if global_kv_readiness_by_mode_rows(gaps):
-        return "Global KV Readiness By Mode"
+    readiness_rows = global_kv_readiness_by_mode_rows(gaps)
+    if readiness_rows:
+        modes = []
+        for row in readiness_rows:
+            mode = canonical_mode(row.get("mode"))
+            if mode and mode not in modes:
+                modes.append(mode)
+        if len(modes) == 1:
+            return f"Measured Replay Readiness: {display_mode(modes[0])}"
+        return "Measured Replay Readiness: " + " vs ".join(display_mode(mode) for mode in modes)
     if any(
         canonical_mode(row.get("mode")) == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
         for row in gaps
@@ -11377,6 +11293,20 @@ def render_html(
         hardware_bypass_projection_rows
     )
     global_title = global_readiness_section_title(gaps)
+    grouped_comparison_evidence_html = ""
+    if grouped_comparison_rows:
+        grouped_comparison_evidence_html = f"""
+    <h3>Grouped Mode Comparison Rows</h3>
+    <p class="note">This table maps compact grouped timeline labels back to the exact measured mode, task, gap, wait time, prefetch margin, H2D counts, and verdict for this run.</p>
+    {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
+"""
+    grouped_hardware_projection_evidence_html = ""
+    if grouped_hardware_projection_rows:
+        grouped_hardware_projection_evidence_html = f"""
+    <h3>Grouped Projected Hardware Bypass Overlay Rows</h3>
+    <p class="note">These are projected rows used only for a projected hardware overlay. They are not measured events.</p>
+    {table_html(grouped_hardware_projection_rows, limit=1000)}
+"""
     gap_columns = [
         "session_id",
         "mode",
@@ -11466,7 +11396,7 @@ def render_html(
 
   <details id="summary" class="section-card theme-summary">
     <summary><h2>Summary</h2></summary>
-    <p>This section gives the headline numbers across no-prefetch and direct-prefetch modes. The replay-before-first-token window is split into evidence colors: cyan for replay-side host KV load, magenta for estimated recompute/rebuild, and gold for remaining prefill or TTFT work.</p>
+    <p>This section gives the headline numbers for the modes present in this experiment. The replay-before-first-token window is split into evidence colors: cyan for replay-side host KV load, magenta for prefill/recompute work, and gold for remaining before-token work.</p>
     {metric_cards_html(mode_rows)}
   </details>
 
@@ -11578,12 +11508,8 @@ def render_html(
     <p class="note">This table answers the key Dynamo-hints question: if no direct prefetch H2D happened, was the KV already on GPU, lost from host, loaded by replay, or recomputed? It uses the same SGLang lifecycle and prefix counters that drive the timelines.</p>
     {table_html(dynamo_hint_kv_lifecycle_audit_column_guide_rows(), ["column", "meaning"])}
     {table_html(dynamo_lifecycle_audit_rows, limit=1000)}
-    <h3>Grouped Mode Comparison Rows</h3>
-    <p class="note">This table maps compact grouped timeline labels such as <code>C00-NP</code>, <code>C00-DH</code>, and <code>C00-HW</code> back to their exact mode, task, gap, wait time, prefetch margin, H2D counts, and verdict.</p>
-    {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
-    <h3>Grouped Projected Hardware Bypass Overlay Rows</h3>
-    <p class="note">These are projected rows used only for the dashed teal overlay in the grouped comparison timeline. They are not measured events.</p>
-    {table_html(grouped_hardware_projection_rows, limit=1000)}
+    {grouped_comparison_evidence_html}
+    {grouped_hardware_projection_evidence_html}
     <h3>Replay Path Proof Rows</h3>
     {table_html(replay_path_proof_rows(ledger), limit=250)}
     <h3>Replay Attribution Rows</h3>
