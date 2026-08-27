@@ -60,6 +60,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 38: Dynamo Priority Hints And Projected Hardware | Ready | [Milestone 38](#milestone-38-dynamo-priority-hints-and-projected-hardware) |
 | Milestone 38B: Dynamo Priority Hint Bridge | Ready | [Milestone 38B](#milestone-38b-dynamo-priority-hint-bridge) |
 | Milestone 39: Projected Hardware Bypass Benefit | Ready | [Milestone 39](#milestone-39-projected-hardware-bypass-benefit) |
+| Milestone 40: Dynamo Priority KV Retention Sanity | Ready | [Milestone 40](#milestone-40-dynamo-priority-kv-retention-sanity) |
 
 ## Milestone Run Command Convention
 
@@ -7063,6 +7064,128 @@ Projected Hardware Bypass Benefit:
 If observed software remains far below 0 ms while projected hardware is above
 0 ms, the key blocker is not the raw copy duration alone. The blocker is the
 software/runtime path before useful movement becomes deadline-ready.
+```
+
+### Milestone 40: Dynamo Priority KV Retention Sanity
+
+Why this milestone is needed:
+
+```text
+Priority hints can help in two different ways:
+
+1. Scheduling:
+   move an urgent request ahead of lower-priority work.
+
+2. KV retention:
+   protect or preserve important KV under cache pressure.
+
+Our timeline experiments mostly study replay deadlines. This milestone isolates
+the second question: does Dynamo-style priority help important KV survive
+distractor pressure?
+```
+
+What it does:
+
+```text
+A_first
+-> many unrelated distractor requests
+-> A_replay
+
+Control arm:
+  A_first has no priority
+  distractors run
+  A_replay has no priority
+
+Protected arm:
+  A_first has high Dynamo-style priority
+  distractors have low priority
+  A_replay has high Dynamo-style priority
+```
+
+Why this is useful:
+
+```text
+If priority retention works, the protected replay should stay warmer for longer:
+
+  lower replay TTFT
+  higher cached-prefix reuse
+  fewer useful blocks lost before replay
+  more useful host-backed KV available under pressure
+
+If protected and control look the same, then priority hints may be attached, but
+they are not clearly improving KV retention in this SGLang setup.
+```
+
+Important events to observe:
+
+```text
+initial request:
+  target KV is created
+
+distractor pressure:
+  unrelated requests compete for KV cache space
+
+replay request:
+  SGLang either reuses GPU-resident KV, reloads host-backed KV, or recomputes
+
+retention summary:
+  compares control versus protected at each distractor count
+```
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone40_priority_retention_sanity \
+DISTRACTOR_COUNTS="32 64 128 256" \
+MAX_PAIRS=1 \
+TOOL_WAIT_LIST_MS=500 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone40_priority_retention_sanity.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Faster smoke command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_ROOT=artifacts/results/milestone40_priority_retention_smoke \
+DISTRACTOR_COUNTS="8 16" \
+MAX_PAIRS=1 \
+TOOL_WAIT_LIST_MS=500 \
+bash scripts/run_milestone40_priority_retention_sanity.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Outputs:
+
+```text
+artifacts/results/milestone40_priority_retention_sanity/
+  controlled_replay_report/controlled_replay_gaps.csv
+  priority_retention_report/priority_retention_report.html
+  priority_retention_report/priority_retention_summary.csv
+  priority_retention_report/priority_retention_detail.csv
+
+artifacts/results/latest_priority_retention_sanity_report.html
+```
+
+What to look for:
+
+```text
+Replay TTFT vs Distractors:
+  protected line should be lower/flatter than control if priority helps.
+
+Cached Prefix Tokens vs Distractors:
+  protected line should stay higher if priority protects useful KV.
+
+Retention Summary:
+  effect_status tells whether protected priority helped, was neutral, or was
+  worse for each distractor count.
 ```
 
 ## Directory Layout
