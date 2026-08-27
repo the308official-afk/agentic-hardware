@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentic_kv.nvtx import range_scope
+from agentic_kv.sglang_adapters import get_hook_targets, installed_sglang_version, select_adapter_name
 from agentic_kv.torch_cuda_profiler import maybe_start as maybe_start_torch_profiler
 from agentic_kv.torch_cuda_profiler import record_event as record_torch_profiler_event
 
@@ -2550,88 +2551,23 @@ def install_sglang_kv_trace() -> None:
 
     _write_event({"event": "trace.install.start"})
 
-    _try_patch(
-        lambda: __import__("sglang.srt.managers.cache_controller", fromlist=["HiCacheController"]),
-        "HiCacheController",
+    include_scheduler = os.environ.get("AGENTIC_KV_TRACE_SCHEDULER", "0") == "1"
+    sglang_version = installed_sglang_version()
+    adapter_name = select_adapter_name(sglang_version)
+    _write_event(
         {
-            "load": "hicache.load",
-            "write": "hicache.write",
-            "evict_device": "hicache.evict_device",
-            "evict_host": "hicache.evict_host",
-            "prefetch": "hicache.prefetch",
-            "start_loading": "hicache.start_loading",
-            "start_writing": "hicache.start_writing",
-        },
+            "event": "trace.adapter.selected",
+            "sglang_version": sglang_version,
+            "adapter": adapter_name,
+            "scheduler_hooks_enabled": include_scheduler,
+        }
     )
-    _try_patch(
-        lambda: __import__("sglang.srt.mem_cache.hiradix_cache", fromlist=["HiRadixCache"]),
-        "HiRadixCache",
-        {
-            "match_prefix": "hiradix.match_prefix",
-            "cache_finished_req": "hiradix.cache_finished_req",
-            "cache_unfinished_req": "hiradix.cache_unfinished_req",
-            "evict": "hiradix.evict",
-            "load_back": "hiradix.load_back",
-            "init_load_back": "hiradix.init_load_back",
-            "ready_to_load_host_cache": "hiradix.ready_to_load_host_cache",
-        },
-    )
-    _try_patch(
-        lambda: __import__("sglang.srt.mem_cache.radix_cache", fromlist=["RadixCache"]),
-        "RadixCache",
-        {
-            "match_prefix": "radix.match_prefix",
-            "cache_finished_req": "radix.cache_finished_req",
-            "cache_unfinished_req": "radix.cache_unfinished_req",
-            "evict": "radix.evict",
-        },
-    )
-    memory_pool_host = lambda: __import__("sglang.srt.mem_cache.memory_pool_host", fromlist=["HostPoolGroup"])
-    for class_name in (
-        "HostPoolGroup",
-        "MHATokenToKVPoolHost",
-        "MLATokenToKVPoolHost",
-        "NSATokenToKVPoolHost",
-        "MambaPoolHost",
-    ):
-        _try_patch(
-            memory_pool_host,
-            class_name,
-            {
-                "load_to_device_per_layer": "hostpool.load_to_device_per_layer",
-                "backup_from_device_all_layer": "hostpool.backup_from_device_all_layer",
-            },
-        )
 
-    if os.environ.get("AGENTIC_KV_TRACE_SCHEDULER", "0") == "1":
+    for target in get_hook_targets(include_scheduler=include_scheduler, version=sglang_version):
         _try_patch(
-            lambda: __import__("sglang.srt.managers.scheduler", fromlist=["Scheduler"]),
-            "Scheduler",
-            {
-                "handle_generate_request": "scheduler.handle_generate_request",
-                "_add_request_to_queue": "scheduler.add_request_to_queue",
-                "_prefetch_kvcache": "scheduler.prefetch_kvcache",
-                "_run_batch_prebuilt": "scheduler.run_batch_prebuilt",
-                "process_batch_result": "scheduler.process_batch_result",
-                "process_batch_result_prefill": "scheduler.process_batch_result_prefill",
-                "process_batch_result_decode": "scheduler.process_batch_result_decode",
-                "run_batch": "scheduler.run_batch",
-                "process_input_requests": "scheduler.process_input_requests",
-                "get_next_batch_to_run": "scheduler.get_next_batch_to_run",
-                "get_new_batch_prefill": "scheduler.get_new_batch_prefill",
-                "event_loop_overlap": "scheduler.event_loop_overlap",
-                "event_loop_normal": "scheduler.event_loop_normal",
-            },
-        )
-        _try_patch(
-            lambda: __import__("sglang.srt.managers.tp_worker", fromlist=["TpModelWorker"]),
-            "TpModelWorker",
-            {
-                "forward_batch_generation": "worker.forward_batch_generation",
-                "forward_batch_split_prefill": "worker.forward_batch_split_prefill",
-                "_forward_batch_generation_dllm": "worker.forward_batch_generation_dllm",
-                "forward_batch_embedding": "worker.forward_batch_embedding",
-            },
+            lambda module_name=target.module: __import__(module_name, fromlist=[target.class_name]),
+            target.class_name,
+            dict(target.methods),
         )
 
     _write_event({"event": "trace.install.end"})

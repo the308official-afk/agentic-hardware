@@ -170,6 +170,16 @@ Use this checklist before replacing the current runtime:
 
 1. Install or build `v0.5.11-cu129-runtime` in a separate environment.
 2. Run the SGLang capability probe and record:
+
+   ```bash
+   cd ~/agentic_hardware/sglang_direct_kv
+   source .venv/bin/activate
+
+   PYTHONPATH=src python scripts/probe_sglang_capabilities.py \
+     --out artifacts/sglang_capabilities.json \
+     --out-md artifacts/sglang_capabilities.md
+   ```
+
    - SGLang version
    - `--enable-priority-scheduling` support
    - `--radix-eviction-policy` choices

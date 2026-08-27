@@ -231,6 +231,15 @@ def collect_sglang_logs(root: Path | None) -> dict[str, Any]:
     }
 
 
+def sglang_capabilities() -> dict[str, Any]:
+    try:
+        from agentic_kv.sglang_adapters.capabilities import collect_sglang_capabilities
+
+        return collect_sglang_capabilities()
+    except Exception as exc:
+        return {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+
+
 def bytes_to_gib(value: Any) -> str:
     try:
         return f"{int(value) / (1024**3):.2f} GiB"
@@ -281,6 +290,7 @@ def main() -> None:
         "cpu": parse_lscpu(str(lscpu.get("stdout") or "")) if lscpu.get("ok") else {},
         "gpu": nvidia,
         "software": python_packages(),
+        "sglang_capabilities": sglang_capabilities(),
         "model": args.model,
         "run_config": run_config,
         "sglang": sglang_logs,

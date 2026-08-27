@@ -13,20 +13,14 @@ from agentic_kv.evidence_schema import (
     request_identity,
     request_or_context_value,
 )
+from agentic_kv.sglang_adapters import get_raw_event_map
 
 from .events import KVEventType, NormalizedKVEvent
 
 
 EVENT_MAP: dict[str, KVEventType] = {
-    "hicache.write.end": KVEventType.WRITE_HOST,
-    "hicache.evict_device.end": KVEventType.EVICT_GPU,
-    "hicache.evict_host.end": KVEventType.EVICT_HOST,
-    "hicache.load.end": KVEventType.LOAD_GPU,
-    "hostpool.load_to_device_per_layer.end": KVEventType.LOAD_GPU,
-    "hostpool.backup_from_device_all_layer.end": KVEventType.WRITE_HOST,
-    "hiradix.init_load_back.end": KVEventType.LOAD_GPU,
-    "hiradix.load_back.end": KVEventType.LOAD_GPU,
-    "hiradix.match_prefix.end": KVEventType.MATCH_PREFIX,
+    source_event: KVEventType(stable_event)
+    for source_event, stable_event in get_raw_event_map().items()
 }
 
 

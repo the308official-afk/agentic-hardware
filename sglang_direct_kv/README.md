@@ -6382,6 +6382,21 @@ That section lists which hooks are already modular, which ones are
 version-sensitive, and which ones need adapter wrapping before the migration.
 ```
 
+Runtime capability probe:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+PYTHONPATH=src python scripts/probe_sglang_capabilities.py \
+  --out artifacts/sglang_capabilities.json \
+  --out-md artifacts/sglang_capabilities.md
+```
+
+This checks the installed SGLang version, selected instrumentation adapter,
+priority scheduling support, radix eviction choices, and whether the hook
+classes/methods expected by the tracer exist in that runtime.
+
 ### Milestone 36: Multi-Session Agentic Replay Forensics
 
 Why this milestone is needed:
