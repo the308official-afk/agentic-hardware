@@ -2,8 +2,6 @@
 set -euo pipefail
 
 IMAGE="${IMAGE:-lmsysorg/sglang:v0.5.11-cu129-runtime}"
-OUT_JSON="${OUT_JSON:-artifacts/sglang_capabilities_v0511_docker.json}"
-OUT_MD="${OUT_MD:-artifacts/sglang_capabilities_v0511_docker.md}"
 DOCKER_GPU_ARGS="${DOCKER_GPU_ARGS:---gpus all}"
 DOCKER_PULL="${DOCKER_PULL:-1}"
 
@@ -11,6 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 mkdir -p "${PROJECT_DIR}/artifacts"
+
+IMAGE_SLUG="$(printf '%s' "${IMAGE}" | tr '/:@' '___' | tr -cd 'A-Za-z0-9_.-')"
+OUT_JSON="${OUT_JSON:-artifacts/sglang_capabilities_${IMAGE_SLUG}.json}"
+OUT_MD="${OUT_MD:-artifacts/sglang_capabilities_${IMAGE_SLUG}.md}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required for this probe but was not found on PATH." >&2

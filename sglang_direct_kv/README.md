@@ -6409,8 +6409,8 @@ bash scripts/probe_sglang_capabilities_docker.sh
 Expected output files:
 
 ```text
-artifacts/sglang_capabilities_v0511_docker.json
-artifacts/sglang_capabilities_v0511_docker.md
+artifacts/sglang_capabilities_lmsysorg_sglang_v0.5.11-cu129-runtime.json
+artifacts/sglang_capabilities_lmsysorg_sglang_v0.5.11-cu129-runtime.md
 ```
 
 This is the first migration gate. If v0.5.11 reports priority scheduling and
@@ -6432,6 +6432,77 @@ Interpretation:
   The priority-retention behavior seen in the other project likely depends on
   the Dynamo/SGLang worker image or wrapper, not the plain upstream SGLang
   runtime image by itself.
+```
+
+Probe the exact Dynamo/SGLang worker image from the working Dynamo setup:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+IMAGE=local/dynamo-sglang:runtime-json-logs-gh200 \
+DOCKER_PULL=0 \
+OUT_JSON=artifacts/sglang_capabilities_dynamo_worker_gh200.json \
+OUT_MD=artifacts/sglang_capabilities_dynamo_worker_gh200.md \
+bash scripts/probe_sglang_capabilities_docker.sh
+```
+
+Use `DOCKER_PULL=0` because `local/dynamo-sglang:runtime-json-logs-gh200`
+is a locally built worker image, not a public Docker Hub image.
+
+On an x86 EC2/G5-style machine, use the EC2 worker tag instead:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+IMAGE=local/dynamo-sglang:runtime-json-logs-ec2 \
+DOCKER_PULL=0 \
+OUT_JSON=artifacts/sglang_capabilities_dynamo_worker_ec2.json \
+OUT_MD=artifacts/sglang_capabilities_dynamo_worker_ec2.md \
+bash scripts/probe_sglang_capabilities_docker.sh
+```
+
+If the worker image is missing, build only the worker image from the
+`kv_cache_offloading` Dynamo source tree:
+
+```bash
+cd ~/kv_cache_offloading
+
+DYNAMO_MACHINE_PROFILE=ec2 \
+SKIP_FRONTEND=1 \
+SKIP_WORKER=0 \
+DYN_RUNTIME_JSON_LOGS=1 \
+bash runtime_instrumentation/build_instrumented_dynamo_images.sh
+```
+
+The GH200 tag is ARM-oriented; do not use the `gh200` profile on the x86 EC2
+machine unless you intentionally want an ARM build.
+
+What this checks:
+
+```text
+1. Whether the image contains plain `sglang.launch_server`.
+2. Whether the image contains the Dynamo worker entrypoint `dynamo.sglang`.
+3. Whether either entrypoint exposes:
+   --enable-priority-scheduling
+   --radix-eviction-policy
+   --radix-eviction-policy priority
+4. Whether our SGLang hook classes/methods still exist.
+```
+
+Current EC2 status:
+
+```text
+The EC2 machine currently has the public base image:
+  lmsysorg/sglang:v0.5.11-cu129-runtime
+
+It does not yet have either local worker image:
+  local/dynamo-sglang:runtime-json-logs-gh200
+  local/dynamo-sglang:runtime-json-logs-ec2
+
+The EC2 Docker root currently has about 52 GB free, while the Dynamo image
+builder asks for 80 GB. So the next migration step is to free/expand Docker
+storage or transfer a prebuilt worker image before treating the Dynamo
+priority-retention path as reproduced in this testbed.
 ```
 
 ### Milestone 36: Multi-Session Agentic Replay Forensics

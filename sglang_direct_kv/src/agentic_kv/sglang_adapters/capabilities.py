@@ -31,19 +31,30 @@ def _server_arg_choices(name: str) -> list[str]:
     return []
 
 
-def _launch_server_help() -> str:
+def _module_help(module_name: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "module": module_name,
+        "available": False,
+        "exit_code": None,
+        "help": "",
+    }
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "sglang.launch_server", "--help"],
+        proc = subprocess.run(
+            [sys.executable, "-m", module_name, "--help"],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             timeout=30,
         )
-    except Exception:
-        return ""
-    return result.stdout or ""
+    except Exception as exc:
+        result["error_type"] = type(exc).__name__
+        result["error"] = str(exc)
+        return result
+    result["exit_code"] = proc.returncode
+    result["help"] = proc.stdout or ""
+    result["available"] = proc.returncode == 0
+    return result
 
 
 def _help_flag_present(help_text: str, flag: str) -> bool:
@@ -56,6 +67,30 @@ def _help_choice_present(help_text: str, flag: str, choice: str) -> bool:
     flag_pos = help_text.find(flag)
     window = help_text[flag_pos : flag_pos + 800]
     return bool(re.search(rf"(?<![A-Za-z0-9_-]){re.escape(choice)}(?![A-Za-z0-9_-])", window))
+
+
+def _entrypoint_launch_capabilities(module_name: str) -> dict[str, Any]:
+    help_result = _module_help(module_name)
+    help_text = str(help_result.get("help") or "")
+    return {
+        "module": module_name,
+        "available": bool(help_result.get("available")),
+        "exit_code": help_result.get("exit_code"),
+        "error_type": help_result.get("error_type"),
+        "error": help_result.get("error"),
+        "enable_priority_scheduling_flag_supported": _help_flag_present(
+            help_text, "--enable-priority-scheduling"
+        ),
+        "radix_eviction_policy_flag_supported": _help_flag_present(
+            help_text, "--radix-eviction-policy"
+        ),
+        "radix_priority_eviction_supported": _help_choice_present(
+            help_text, "--radix-eviction-policy", "priority"
+        ),
+        "priority_schedule_policy_supported": _help_choice_present(
+            help_text, "--schedule-policy", "priority"
+        ),
+    }
 
 
 def _module_class_methods(module_name: str, class_name: str, methods: list[str]) -> dict[str, Any]:
@@ -87,11 +122,22 @@ def collect_sglang_capabilities() -> dict[str, Any]:
     sglang_version = _package_version("sglang")
     radix_choices = _server_arg_choices("RADIX_EVICTION_POLICY_CHOICES")
     schedule_choices = _server_arg_choices("SCHEDULE_POLICY_CHOICES")
-    help_text = _launch_server_help()
-    help_has_priority_flag = _help_flag_present(help_text, "--enable-priority-scheduling")
-    help_has_radix_policy_flag = _help_flag_present(help_text, "--radix-eviction-policy")
-    help_has_radix_priority = _help_choice_present(help_text, "--radix-eviction-policy", "priority")
-    help_has_schedule_priority = _help_choice_present(help_text, "--schedule-policy", "priority")
+    entrypoints = {
+        "sglang.launch_server": _entrypoint_launch_capabilities("sglang.launch_server"),
+        "dynamo.sglang": _entrypoint_launch_capabilities("dynamo.sglang"),
+    }
+    help_has_priority_flag = any(
+        row.get("enable_priority_scheduling_flag_supported") for row in entrypoints.values()
+    )
+    help_has_radix_policy_flag = any(
+        row.get("radix_eviction_policy_flag_supported") for row in entrypoints.values()
+    )
+    help_has_radix_priority = any(
+        row.get("radix_priority_eviction_supported") for row in entrypoints.values()
+    )
+    help_has_schedule_priority = any(
+        row.get("priority_schedule_policy_supported") for row in entrypoints.values()
+    )
     hook_targets = get_hook_targets(include_scheduler=True)
     hook_probe = [
         _module_class_methods(target.module, target.class_name, list(target.methods))
@@ -107,6 +153,7 @@ def collect_sglang_capabilities() -> dict[str, Any]:
             "sgl-kernel": _package_version("sgl-kernel"),
         },
         "launch_capabilities": {
+            "entrypoints": entrypoints,
             "radix_eviction_policy_choices": radix_choices,
             "radix_priority_eviction_supported": "priority" in radix_choices or help_has_radix_priority,
             "schedule_policy_choices": schedule_choices,
@@ -134,11 +181,30 @@ def _markdown(data: dict[str, Any]) -> str:
         f"- `--enable-priority-scheduling` flag supported: `{data['launch_capabilities'].get('enable_priority_scheduling_flag_supported')}`",
         f"- `--radix-eviction-policy` flag supported: `{data['launch_capabilities'].get('radix_eviction_policy_flag_supported')}`",
         "",
-        "## Hook Probe",
+        "## Launch Entrypoints",
         "",
-        "| module | class | class_found | missing_methods |",
-        "| --- | --- | --- | --- |",
+        "| entrypoint | help ok | priority flag | radix policy flag | radix priority choice | schedule priority choice |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
+    for name, row in (data.get("launch_capabilities", {}).get("entrypoints") or {}).items():
+        lines.append(
+            "| "
+            f"`{name}` | "
+            f"`{row.get('available')}` | "
+            f"`{row.get('enable_priority_scheduling_flag_supported')}` | "
+            f"`{row.get('radix_eviction_policy_flag_supported')}` | "
+            f"`{row.get('radix_priority_eviction_supported')}` | "
+            f"`{row.get('priority_schedule_policy_supported')}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Hook Probe",
+            "",
+            "| module | class | class_found | missing_methods |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     for row in data.get("hook_probe", []):
         missing = ", ".join(row.get("missing_methods") or [])
         lines.append(

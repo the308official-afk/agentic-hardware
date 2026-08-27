@@ -189,10 +189,45 @@ worker image or a patched wrapper such as local/dynamo-sglang:*.
 Next migration gate:
 
 ```text
-Probe the exact Dynamo/SGLang worker image used by the other project.
+Probe the exact Dynamo/SGLang worker image used by the other project:
+  local/dynamo-sglang:runtime-json-logs-gh200
+
 If that image exposes the priority flags and still contains the hook classes,
 then port the full report experiment runner to that image.
 ```
+
+Probe command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+IMAGE=local/dynamo-sglang:runtime-json-logs-gh200 \
+DOCKER_PULL=0 \
+OUT_JSON=artifacts/sglang_capabilities_dynamo_worker_gh200.json \
+OUT_MD=artifacts/sglang_capabilities_dynamo_worker_gh200.md \
+bash scripts/probe_sglang_capabilities_docker.sh
+```
+
+The probe now checks both `python -m sglang.launch_server --help` and
+`python -m dynamo.sglang --help`, because the priority behavior may be exposed
+by the Dynamo worker wrapper rather than plain upstream SGLang.
+
+On the x86 EC2/G5 test machine, the runnable worker image should use the EC2
+profile:
+
+```bash
+cd ~/kv_cache_offloading
+
+DYNAMO_MACHINE_PROFILE=ec2 \
+SKIP_FRONTEND=1 \
+SKIP_WORKER=0 \
+DYN_RUNTIME_JSON_LOGS=1 \
+bash runtime_instrumentation/build_instrumented_dynamo_images.sh
+```
+
+The current EC2 host does not yet have `local/dynamo-sglang:runtime-json-logs-ec2`
+or `local/dynamo-sglang:runtime-json-logs-gh200`. It also has about 52 GB free
+under Docker root, while the Dynamo build guard asks for 80 GB.
 
 Everything above the adapter should continue to consume stable normalized
 events. That keeps the report, ledger, timelines, and audit reusable across
