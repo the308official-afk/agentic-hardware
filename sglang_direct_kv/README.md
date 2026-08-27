@@ -6492,17 +6492,31 @@ What this checks:
 Current EC2 status:
 
 ```text
-The EC2 machine currently has the public base image:
+The EC2 machine has the public base image:
   lmsysorg/sglang:v0.5.11-cu129-runtime
 
-It does not yet have either local worker image:
-  local/dynamo-sglang:runtime-json-logs-gh200
+The x86 EC2 machine should use the local worker image:
   local/dynamo-sglang:runtime-json-logs-ec2
 
-The EC2 Docker root currently has about 52 GB free, while the Dynamo image
-builder asks for 80 GB. So the next migration step is to free/expand Docker
-storage or transfer a prebuilt worker image before treating the Dynamo
-priority-retention path as reproduced in this testbed.
+The GH200 worker tag is ARM/GH200-oriented. Do not use it on this x86 EC2
+machine unless you intentionally want an ARM build.
+
+After the EC2 worker image is built, the capability probe should report:
+  SGLang version: 0.5.11
+  selected adapter: v0511
+  --enable-priority-scheduling: supported
+  --schedule-policy fcfs: supported with priority scheduling
+  --radix-eviction-policy priority: supported
+
+Runtime note:
+  This v0.5.11 worker rejects `--schedule-policy priority`.
+  With `--enable-priority-scheduling`, it requires `--schedule-policy fcfs`
+  or `--schedule-policy lof`. The sanity wrapper defaults to `fcfs`.
+
+The next gate is not just "can we attach priority metadata?"
+The next gate is:
+  can we directly observe that priority-labelled requests move ahead in
+  SGLang's receive/queue/admission path?
 ```
 
 ### Milestone 36: Multi-Session Agentic Replay Forensics
@@ -7086,6 +7100,71 @@ Rerun this milestone to populate the new queue-effectiveness evidence.
 This audit is intentionally conservative. If it cannot see SGLang's exact queue
 internals for a given version, it will say "receive only" or "queue snapshot
 observed" instead of claiming that priority was fully honored.
+```
+
+Focused priority queue sanity command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_LABEL=priority_queue_sanity_v0511_1 \
+SGLANG_DOCKER_IMAGE=local/dynamo-sglang:runtime-json-logs-ec2 \
+SGLANG_DOCKER_PULL=0 \
+HICACHE_SIZE_GB=14 \
+FILLER_LIST=48 \
+REQUEST_CONCURRENCY=16 \
+bash scripts/run_priority_queue_sanity.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Why this focused run exists:
+
+```text
+This is the smallest manager-grade proof check for priority hints.
+It does not ask whether priority improves every latency number.
+It asks the narrower question:
+
+  Did the high-priority request reach SGLang with priority metadata?
+  Did it appear inside SGLang's scheduler queue/admission instrumentation?
+  Did lower-priority filler work remain ahead of it or get admitted first?
+```
+
+Main output files:
+
+```text
+artifacts/results/runs/controlled/<RESULT_LABEL>/controlled_replay_report/dynamo_priority_hint_translation.csv
+artifacts/results/runs/controlled/<RESULT_LABEL>/controlled_replay_report/dynamo_priority_queue_effectiveness.csv
+artifacts/results/runs/controlled/<RESULT_LABEL>/controlled_replay_report/controlled_replay_report.html
+```
+
+What success looks like:
+
+```text
+priority_receive_seen = 1
+  SGLang received the request priority.
+
+priority_queue_seen = 1
+  The request appeared in a captured SGLang queue snapshot.
+
+priority_admitted_seen = 1
+  The request appeared in the scheduler admission trace.
+
+priority_queue_effectiveness_verdict = priority_honored_in_admission_order
+  Strongest proof: the traced admission order did not show lower-priority
+  work admitted before the high-priority request.
+```
+
+What a negative or weak result means:
+
+```text
+receive-only:
+  The request carried priority, but this run did not prove scheduler movement.
+
+lower_priority_admitted_before_target:
+  Priority metadata was present, but SGLang still admitted lower-priority work
+  before the target request. That means the hint was not fully enforced by the
+  software scheduler in this run.
 ```
 
 ### Milestone 39: Projected Hardware Bypass Benefit
