@@ -11438,20 +11438,9 @@ def render_html(
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
         ("global-prefetch", global_title),
-        ("prefetch-truth", "Prefetch Truth Check"),
-        ("hardware-bypass", "Projected Hardware Bypass Benefit"),
-        ("h2d-pressure", "KV H2D Bandwidth Pressure"),
-        ("gpu-kv-residency", "GPU KV Pool Residency"),
-        ("tool-wait-gpu-activity", "GPU Activity During Tool Wait"),
-        ("delay-breakdown", "Replay Delay Breakdown"),
-        ("client-dispatch-kv", "Client Dispatch KV Movement"),
-        ("timeline-guide", "How To Read Timelines"),
-        ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
-        ("unified-forensic-stack", "Unified Forensic Stack Timeline"),
         ("grouped-mode-comparison", "Grouped Mode Comparison"),
         ("priority-queue-proof", "Priority Queue Proof"),
         ("observations", "Key Observations"),
-        ("evidence-audit", "Instrumentation Evidence Audit"),
         ("appendix", "Evidence Tables / Raw Proof"),
         ("reproduce", "Reproduce This Report"),
     ]
@@ -11492,62 +11481,6 @@ def render_html(
     {global_readiness_html(gaps)}
   </details>
 
-  <details id="prefetch-truth" class="section-card theme-observations">
-    <summary><h2>Prefetch Truth Check</h2></summary>
-    {prefetch_truth_check_html(gaps)}
-  </details>
-
-  <details id="hardware-bypass" class="section-card theme-directkv">
-    <summary><h2>Projected Hardware Bypass Benefit</h2></summary>
-    {projected_hardware_bypass_html(hardware_bypass_projection_rows)}
-  </details>
-
-  <details id="h2d-pressure" class="section-card theme-directkv">
-    <summary><h2>KV H2D Bandwidth Pressure</h2></summary>
-    <p>This section shows how much host-to-device KV movement was happening near replay deadlines. It helps explain whether a late replay was isolated or happened while the KV movement path was already busy.</p>
-    {h2d_bandwidth_pressure_html(gaps, exact_kv_movement_rows)}
-  </details>
-
-  <details id="gpu-kv-residency" class="section-card theme-directkv">
-    <summary><h2>GPU KV Pool Residency</h2></summary>
-    <p>This section uses direct SGLang KV-pool state, not total GPU memory, to show whether the KV cache pool was near full around replay and H2D events.</p>
-    {gpu_kv_residency_summary_html(kv_pool_residency_rows)}
-  </details>
-
-  <details id="tool-wait-gpu-activity" class="section-card theme-directkv">
-    <summary><h2>GPU Activity During Tool Wait</h2></summary>
-    {tool_wait_gpu_activity_html(tool_wait_activity_rows)}
-  </details>
-
-  <details id="delay-breakdown" class="section-card theme-profiled">
-    <summary><h2>Replay Delay Breakdown</h2></summary>
-    <p>This section answers the next question: if replay-side H2D started late, where did the time go before the copy began?</p>
-    {replay_delay_breakdown_html(all_timeline_rows, trace_rows, all_h2d_activity_events, max_rows=max_timeline_gaps)}
-  </details>
-
-  <details id="client-dispatch-kv" class="section-card theme-directkv">
-    <summary><h2>Client Dispatch KV Movement</h2></summary>
-    {client_dispatch_kv_movement_html(client_dispatch_kv_summary_rows, client_dispatch_kv_event_rows, max_rows=max_timeline_gaps)}
-  </details>
-
-  <details id="timeline-guide" class="section-card theme-guide">
-    <summary><h2>How To Read The Timelines</h2></summary>
-    {timeline_guide_html(profiled_available=True)}
-  </details>
-
-  <details id="readable-phase-timeline" class="section-card theme-clean">
-    <summary><h2>Readable KV Lifecycle Timeline</h2></summary>
-    <p class="note">This is the main timeline. Each row is one controlled replay gap such as <code>G00</code>. The columns are local views, so the bars are stretched for readability while the printed durations preserve the measured timing.</p>
-    <p class="note">Cyan and green bars now carry exact logical KV block attribution from the ledger. Hover over those bars to see block IDs, node IDs, token ranges, H2D start/end times, durations, and evidence confidence. Magenta/gold replay work remains explicitly marked as estimated.</p>
-    <p class="note">Detailed block lifecycle counts and nearby H2D pressure rows are kept in <strong>Evidence Tables / Raw Proof</strong> at the bottom so this timeline stays easy to scan.</p>
-    {build_local_timing_phase_timeline_svg(interesting, max_timeline_gaps, show_prefetch_legend=True, kv_block_lifecycle_rows=interesting_block_lifecycle_rows, h2d_pressure_rows=interesting_h2d_pressure_rows, show_block_lifecycle_strip=False, show_h2d_pressure_strip=False)}
-  </details>
-
-  <details id="unified-forensic-stack" class="section-card theme-profiled">
-    <summary><h2>Unified Forensic Stack Timeline</h2></summary>
-    {unified_per_gap_forensic_stack_html(interesting, all_kv_movement_events, max_timeline_gaps, interesting_kv_pool_residency_rows, interesting_tool_wait_activity_rows, interesting_block_lifecycle_rows)}
-  </details>
-
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
     <summary><h2>Grouped Mode Comparison Timeline</h2></summary>
     {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows, grouped_block_lifecycle_rows)}
@@ -11564,19 +11497,6 @@ def render_html(
     <summary><h2>Key Observations Per Gap/Session</h2></summary>
     <p>This section translates the timeline rows into plain English. It uses the same compact row names as the chart, so <code>G00</code> here means the same <code>G00</code> in the timeline.</p>
     {table_html(key_observation_rows(interesting), ["row", "mode", "status", "prefetch_truth", "what happened", "why it matters", "prefetch_truth_explanation", "tool_wait_ms", "resume_ttft_ms", "replay_path", "verdict"])}
-  </details>
-
-  <details id="evidence-audit" class="section-card theme-profiled">
-    <summary><h2>Instrumentation Evidence Audit</h2></summary>
-    <p>This section audits whether the report is backed by direct SGLang instrumentation, derived values, or inference. It is meant to keep the report honest: exact KV bars should trace to real hooks and IDs; inferred values should be labeled as inferred.</p>
-    <h3>Audit Summary</h3>
-    {table_html(evidence_audit["summary"])}
-    <h3>Audit Matrix</h3>
-    {table_html(evidence_audit["matrix"])}
-    <h3>Chart Evidence Inventory</h3>
-    {table_html(evidence_audit["chart_inventory"])}
-    <h3>Artifact Inventory</h3>
-    {table_html(evidence_audit["artifact_inventory"])}
   </details>
 
   <details id="appendix" class="section-card theme-appendix">
