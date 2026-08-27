@@ -2366,6 +2366,80 @@ def dynamo_priority_queue_effectiveness_rows(gaps: list[dict[str, Any]]) -> list
     return rows
 
 
+def dynamo_priority_queue_proof_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    priority_rows = len(rows)
+    received = sum(1 for row in rows if str(row.get("priority_receive_seen", "")).lower() in {"1", "true", "yes"})
+    queued = sum(1 for row in rows if str(row.get("priority_queue_seen", "")).lower() in {"1", "true", "yes"})
+    admitted = sum(1 for row in rows if str(row.get("priority_admitted_seen", "")).lower() in {"1", "true", "yes"})
+    strong = sum(1 for row in rows if "strong" in str(row.get("priority_scheduler_proof_strength", "")).lower())
+    lower_ahead = sum(1 for row in rows if (as_float(row.get("priority_lower_ahead")) or 0.0) > 0)
+    violations = sum(1 for row in rows if (as_float(row.get("priority_lower_admitted_before")) or 0.0) > 0)
+    no_proof = sum(
+        1
+        for row in rows
+        if str(row.get("priority_queue_effectiveness_verdict", ""))
+        == "priority_attached_but_no_scheduler_proof"
+    )
+    return [
+        {"metric": "priority rows checked", "value": priority_rows, "meaning": "Dynamo-priority rows included in this report."},
+        {"metric": "SGLang received priority", "value": received, "meaning": "SGLang-side hooks saw the priority request arrive."},
+        {"metric": "queue snapshots observed", "value": queued, "meaning": "SGLang-side hooks saw the request inside a scheduler queue-like structure."},
+        {"metric": "admission order observed", "value": admitted, "meaning": "SGLang-side hooks saw when the priority request was admitted for execution."},
+        {"metric": "strong scheduler proof", "value": strong, "meaning": "Admission order was observed, so the proof is stronger than just seeing the hint."},
+        {"metric": "jump-ahead pressure cases", "value": lower_ahead, "meaning": "Rows where lower-priority requests were observed ahead of the priority request."},
+        {"metric": "lower-priority admitted first", "value": violations, "meaning": "Rows where lower-priority work was admitted before the priority request."},
+        {"metric": "hint attached but no queue proof", "value": no_proof, "meaning": "Rows where the hint existed but scheduler queue/admission proof was missing."},
+    ]
+
+
+def dynamo_priority_queue_proof_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No Dynamo-priority rows were available in this run.</p>"
+    summary = {row["metric"]: row for row in dynamo_priority_queue_proof_summary_rows(rows)}
+
+    def value(metric: str) -> str:
+        return str(summary.get(metric, {}).get("value", ""))
+
+    examples = [
+        row
+        for row in rows
+        if (as_float(row.get("priority_lower_ahead")) or 0.0) > 0
+        or (as_float(row.get("priority_lower_admitted_before")) or 0.0) > 0
+    ]
+    if not examples:
+        examples = rows[: min(6, len(rows))]
+    example_rows = [
+        {
+            "row": row.get("row", ""),
+            "fillers": row.get("fillers", ""),
+            "queue_position": row.get("priority_queue_position", ""),
+            "lower_priority_ahead": row.get("priority_lower_ahead", ""),
+            "lower_priority_admitted_before": row.get("priority_lower_admitted_before", ""),
+            "proof_strength": row.get("priority_scheduler_proof_strength", ""),
+            "verdict": row.get("priority_queue_effectiveness_verdict", ""),
+            "meaning": row.get("simple_meaning", ""),
+        }
+        for row in examples[:8]
+    ]
+    cards = [
+        ("priority rows checked", value("priority rows checked"), "Dynamo-priority rows in this report"),
+        ("SGLang received priority", value("SGLang received priority"), "priority reached SGLang-side request hooks"),
+        ("admission order observed", value("admission order observed"), "scheduler admitted-order hook fired"),
+        ("jump-ahead pressure cases", value("jump-ahead pressure cases"), "lower-priority requests were seen ahead"),
+        ("lower-priority admitted first", value("lower-priority admitted first"), "should be 0 for honored priority"),
+        ("missing queue proof", value("hint attached but no queue proof"), "hint existed but scheduler proof was absent"),
+    ]
+    return f"""
+    <p>This section checks whether Dynamo-style priority hints were only attached to the request, or whether SGLang scheduler hooks also saw receive, queue, and admission-order behavior.</p>
+    <p class="note">The strongest proof is a row where lower-priority requests are seen ahead of the priority request, but no lower-priority request is admitted before it. That shows priority affected admission order.</p>
+    <div class="metric-grid">
+      {''.join(f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div><div class="metric-value">{html.escape(val)}</div><div class="metric-sub">{html.escape(subtitle)}</div></div>' for label, val, subtitle in cards)}
+    </div>
+    <h3>Queue Proof Examples</h3>
+    {table_html(example_rows)}
+    """
+
+
 def dynamo_hint_kv_lifecycle_audit_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Explain what happened to KV in Dynamo-priority-hints-only rows.
 
@@ -11262,9 +11336,11 @@ def render_html(
         kv_pool_sample_rows,
         gpu_util_rows,
     )
-    dynamo_priority_rows = dynamo_priority_hint_translation_rows(gaps)
-    dynamo_priority_queue_rows = dynamo_priority_queue_effectiveness_rows(gaps)
-    dynamo_lifecycle_audit_rows = dynamo_hint_kv_lifecycle_audit_rows(gaps)
+    priority_report_rows = grouped_comparison_rows or all_timeline_rows
+    dynamo_priority_rows = dynamo_priority_hint_translation_rows(priority_report_rows)
+    dynamo_priority_queue_rows = dynamo_priority_queue_effectiveness_rows(priority_report_rows)
+    dynamo_priority_queue_summary_rows = dynamo_priority_queue_proof_summary_rows(dynamo_priority_queue_rows)
+    dynamo_lifecycle_audit_rows = dynamo_hint_kv_lifecycle_audit_rows(priority_report_rows)
     prefetch_truth_summary_table_rows = prefetch_truth_summary_rows(gaps)
     prefetch_truth_table = prefetch_truth_table_rows(gaps)
     global_mode_readiness_table_rows = global_kv_readiness_by_mode_rows(gaps)
@@ -11373,6 +11449,7 @@ def render_html(
         ("readable-phase-timeline", "Readable KV Lifecycle Timeline"),
         ("unified-forensic-stack", "Unified Forensic Stack Timeline"),
         ("grouped-mode-comparison", "Grouped Mode Comparison"),
+        ("priority-queue-proof", "Priority Queue Proof"),
         ("observations", "Key Observations"),
         ("evidence-audit", "Instrumentation Evidence Audit"),
         ("appendix", "Evidence Tables / Raw Proof"),
@@ -11476,6 +11553,11 @@ def render_html(
     {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows, grouped_block_lifecycle_rows)}
   </details>
 
+  <details id="priority-queue-proof" class="section-card theme-profiled" open>
+    <summary><h2>Priority Queue Proof</h2></summary>
+    {dynamo_priority_queue_proof_html(dynamo_priority_queue_rows)}
+  </details>
+
   {live_section}
 
   <details id="observations" class="section-card theme-observations">
@@ -11566,7 +11648,11 @@ def render_html(
     {table_html(dynamo_priority_rows, limit=1000)}
     <h3>Dynamo Priority Queue Effectiveness Audit</h3>
     <p class="note">This table checks whether the priority hint was only attached to the request or whether SGLang scheduler traces show queue/admission behavior consistent with honoring it.</p>
+    <h4>Summary</h4>
+    {table_html(dynamo_priority_queue_summary_rows)}
+    <h4>Column Guide</h4>
     {table_html(dynamo_priority_queue_effectiveness_column_guide_rows(), ["column", "meaning"])}
+    <h4>Rows</h4>
     {table_html(dynamo_priority_queue_rows, limit=1000)}
     <h3>Dynamo Hint KV Lifecycle Audit</h3>
     <p class="note">This table answers the key Dynamo-hints question: if no direct prefetch H2D happened, was the KV already on GPU, lost from host, loaded by replay, or recomputed? It uses the same SGLang lifecycle and prefix counters that drive the timelines.</p>
@@ -11682,9 +11768,12 @@ def main() -> None:
     global_mode_readiness = global_kv_readiness_by_mode_rows(all_gaps)
     global_mode_readiness_summary = global_kv_readiness_by_mode_summary_rows(global_mode_readiness)
     global_replay_start_summary = global_replay_start_by_mode_summary_rows(global_mode_readiness)
-    dynamo_priority_rows = dynamo_priority_hint_translation_rows(all_gaps)
-    dynamo_priority_queue = dynamo_priority_queue_effectiveness_rows(all_gaps)
-    dynamo_lifecycle_audit = dynamo_hint_kv_lifecycle_audit_rows(all_gaps)
+    all_grouped_comparison_rows = grouped_mode_comparison_rows(all_gaps, len(all_gaps))
+    priority_output_rows = all_grouped_comparison_rows or all_labeled_gaps
+    dynamo_priority_rows = dynamo_priority_hint_translation_rows(priority_output_rows)
+    dynamo_priority_queue = dynamo_priority_queue_effectiveness_rows(priority_output_rows)
+    dynamo_priority_queue_summary = dynamo_priority_queue_proof_summary_rows(dynamo_priority_queue)
+    dynamo_lifecycle_audit = dynamo_hint_kv_lifecycle_audit_rows(priority_output_rows)
     prefetch_truth_table = prefetch_truth_table_rows(all_gaps)
     prefetch_truth_summary = prefetch_truth_summary_rows(all_gaps)
     replay_delay_breakdown = replay_delay_breakdown_rows(all_labeled_gaps, h2d_activity_events)
@@ -11742,6 +11831,7 @@ def main() -> None:
     write_csv(args.out_dir / "global_replay_start_by_mode_summary.csv", global_replay_start_summary)
     write_csv(args.out_dir / "dynamo_priority_hint_translation.csv", dynamo_priority_rows)
     write_csv(args.out_dir / "dynamo_priority_queue_effectiveness.csv", dynamo_priority_queue)
+    write_csv(args.out_dir / "dynamo_priority_queue_effectiveness_summary.csv", dynamo_priority_queue_summary)
     write_csv(args.out_dir / "dynamo_hint_kv_lifecycle_audit.csv", dynamo_lifecycle_audit)
     write_csv(args.out_dir / "prefetch_truth_table.csv", prefetch_truth_table)
     write_csv(args.out_dir / "prefetch_truth_summary.csv", prefetch_truth_summary)
