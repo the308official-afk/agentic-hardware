@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import re
+import subprocess
+import sys
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -26,6 +29,33 @@ def _server_arg_choices(name: str) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value]
     return []
+
+
+def _launch_server_help() -> str:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "sglang.launch_server", "--help"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return ""
+    return result.stdout or ""
+
+
+def _help_flag_present(help_text: str, flag: str) -> bool:
+    return flag in help_text
+
+
+def _help_choice_present(help_text: str, flag: str, choice: str) -> bool:
+    if flag not in help_text:
+        return False
+    flag_pos = help_text.find(flag)
+    window = help_text[flag_pos : flag_pos + 800]
+    return bool(re.search(rf"(?<![A-Za-z0-9_-]){re.escape(choice)}(?![A-Za-z0-9_-])", window))
 
 
 def _module_class_methods(module_name: str, class_name: str, methods: list[str]) -> dict[str, Any]:
@@ -57,6 +87,11 @@ def collect_sglang_capabilities() -> dict[str, Any]:
     sglang_version = _package_version("sglang")
     radix_choices = _server_arg_choices("RADIX_EVICTION_POLICY_CHOICES")
     schedule_choices = _server_arg_choices("SCHEDULE_POLICY_CHOICES")
+    help_text = _launch_server_help()
+    help_has_priority_flag = _help_flag_present(help_text, "--enable-priority-scheduling")
+    help_has_radix_policy_flag = _help_flag_present(help_text, "--radix-eviction-policy")
+    help_has_radix_priority = _help_choice_present(help_text, "--radix-eviction-policy", "priority")
+    help_has_schedule_priority = _help_choice_present(help_text, "--schedule-policy", "priority")
     hook_targets = get_hook_targets(include_scheduler=True)
     hook_probe = [
         _module_class_methods(target.module, target.class_name, list(target.methods))
@@ -73,10 +108,11 @@ def collect_sglang_capabilities() -> dict[str, Any]:
         },
         "launch_capabilities": {
             "radix_eviction_policy_choices": radix_choices,
-            "radix_priority_eviction_supported": "priority" in radix_choices,
+            "radix_priority_eviction_supported": "priority" in radix_choices or help_has_radix_priority,
             "schedule_policy_choices": schedule_choices,
-            "priority_schedule_policy_supported": "priority" in schedule_choices,
-            "enable_priority_scheduling_flag_expected": True,
+            "priority_schedule_policy_supported": "priority" in schedule_choices or help_has_schedule_priority,
+            "enable_priority_scheduling_flag_supported": help_has_priority_flag,
+            "radix_eviction_policy_flag_supported": help_has_radix_policy_flag,
         },
         "hook_probe": hook_probe,
         "hook_probe_summary": {
@@ -95,6 +131,8 @@ def _markdown(data: dict[str, Any]) -> str:
         f"- Selected adapter: `{data.get('selected_adapter')}`",
         f"- Radix priority eviction supported: `{data['launch_capabilities'].get('radix_priority_eviction_supported')}`",
         f"- Priority schedule policy supported: `{data['launch_capabilities'].get('priority_schedule_policy_supported')}`",
+        f"- `--enable-priority-scheduling` flag supported: `{data['launch_capabilities'].get('enable_priority_scheduling_flag_supported')}`",
+        f"- `--radix-eviction-policy` flag supported: `{data['launch_capabilities'].get('radix_eviction_policy_flag_supported')}`",
         "",
         "## Hook Probe",
         "",
@@ -132,4 +170,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

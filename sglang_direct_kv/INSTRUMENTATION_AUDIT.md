@@ -160,6 +160,40 @@ Does this build support priority scheduling?
 Does this build support radix eviction policy = priority?
 ```
 
+### v0.5.11 Runtime Probe Result
+
+We tested the plain public runtime image:
+
+```text
+lmsysorg/sglang:v0.5.11-cu129-runtime
+```
+
+Observed result:
+
+```text
+SGLang version: 0.5.11
+Selected adapter: v0511
+--enable-priority-scheduling: not exposed by plain sglang.launch_server
+--radix-eviction-policy priority: not exposed by plain sglang.launch_server
+python -m dynamo.sglang: unavailable in this image
+```
+
+Interpretation:
+
+```text
+The priority-retention behavior from the other project is likely not provided
+by the plain SGLang runtime image alone. It likely depends on the Dynamo/SGLang
+worker image or a patched wrapper such as local/dynamo-sglang:*.
+```
+
+Next migration gate:
+
+```text
+Probe the exact Dynamo/SGLang worker image used by the other project.
+If that image exposes the priority flags and still contains the hook classes,
+then port the full report experiment runner to that image.
+```
+
 Everything above the adapter should continue to consume stable normalized
 events. That keeps the report, ledger, timelines, and audit reusable across
 future SGLang versions.

@@ -6397,6 +6397,43 @@ This checks the installed SGLang version, selected instrumentation adapter,
 priority scheduling support, radix eviction choices, and whether the hook
 classes/methods expected by the tracer exist in that runtime.
 
+Probe the newer SGLang v0.5.11 runtime without changing the current venv:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+IMAGE=lmsysorg/sglang:v0.5.11-cu129-runtime \
+bash scripts/probe_sglang_capabilities_docker.sh
+```
+
+Expected output files:
+
+```text
+artifacts/sglang_capabilities_v0511_docker.json
+artifacts/sglang_capabilities_v0511_docker.md
+```
+
+This is the first migration gate. If v0.5.11 reports priority scheduling and
+priority radix eviction support, then we can port the full experiment launcher
+onto that runtime. If those flags are still missing, then the Dynamo behavior
+must be coming from a different image, wrapper, or patched SGLang entrypoint.
+
+Current probe result:
+
+```text
+lmsysorg/sglang:v0.5.11-cu129-runtime reports SGLang 0.5.11 and selects the
+v0511 adapter, but plain `sglang.launch_server` does not expose:
+  --enable-priority-scheduling
+  --radix-eviction-policy priority
+
+The same image also does not include `python -m dynamo.sglang`.
+
+Interpretation:
+  The priority-retention behavior seen in the other project likely depends on
+  the Dynamo/SGLang worker image or wrapper, not the plain upstream SGLang
+  runtime image by itself.
+```
+
 ### Milestone 36: Multi-Session Agentic Replay Forensics
 
 Why this milestone is needed:
