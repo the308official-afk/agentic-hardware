@@ -9176,6 +9176,28 @@ def build_unified_per_gap_stack_timeline_svg_v2(
     def local_zoom_x(value: float, z_min: float, z_max: float, x0: float, w: float) -> float:
         return x0 + (value - z_min) * w / max(1e-9, z_max - z_min)
 
+    def draw_shared_time_axis(
+        parts: list[str],
+        y1: float,
+        y2: float,
+        label_y: float,
+        font_size: int = 9,
+    ) -> None:
+        last_label_x = -10**9
+        for value in ticks:
+            if value < x_min or value > x_max:
+                continue
+            x = overview_x(value)
+            parts.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="#e5e7eb"/>')
+            if x - last_label_x < 72:
+                continue
+            label = f"{int(value)} ms" if abs(value) < 1000 else f"{value / 1000:.0f} s"
+            parts.append(
+                f'<text x="{x:.1f}" y="{label_y:.1f}" text-anchor="middle" font-size="{font_size}" '
+                f'fill="#64748b">{html.escape(label)}</text>'
+            )
+            last_label_x = x
+
     def draw_axis_break(
         parts: list[str],
         x: float,
@@ -9406,7 +9428,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Unified per-gap forensic stack timeline with per-gap KV zoom">',
         '<text x="12" y="30" font-size="20" font-weight="800" fill="#0f172a">Unified per-gap forensic stack timeline</text>',
         '<text x="12" y="54" font-size="12" fill="#475569">Each gap has a compact overview, an expanded KV activity zoom, an expanded replay zoom, GPU/tool-wait pressure zooms, and a KV readiness deadline zoom.</text>',
-        '<text x="12" y="76" font-size="12" fill="#475569">The overview shows the broad timing story; the expanded zoom lanes give dense KV, replay, pool pressure, tool-wait activity, and deadline activity room to breathe.</text>',
+        '<text x="12" y="76" font-size="12" fill="#475569">Overview, KV, GPU-pool, tool-wait, deadline, and residency lanes share one replay-relative scale; replay zoom stays local so replay execution remains readable.</text>',
         f'<line x1="{zero_x:.1f}" y1="{top - 32}" x2="{zero_x:.1f}" y2="{height - 70}" stroke="#111827" stroke-width="2.4"/>',
         f'<text x="{zero_x + 6:.1f}" y="{top - 42}" font-size="12" font-weight="800">0 ms replay due</text>',
     ]
@@ -9795,17 +9817,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
         if zoom is None:
             parts.append(f'<text x="{left + 8}" y="{zoom_title_y + 9:.1f}" font-size="10" fill="#64748b">No SGLang-visible KV movement in this gap window.</text>')
         else:
-            z_min, z_max = zoom
+            z_min, z_max = x_min, x_max
             z_span = max(1.0, z_max - z_min)
-            zoom_label = f"expanded KV burst: {display_ms(z_min)} -> {display_ms(z_max)} relative to replay due"
-            parts.append(f'<text x="{left + 8}" y="{zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">KV zoom: expanded memory movement region</text>')
+            zoom_label = f"shared replay-relative window: {display_ms(z_min)} -> {display_ms(z_max)}"
+            parts.append(f'<text x="{left + 8}" y="{zoom_title_y - 10:.1f}" font-size="10" font-weight="800" fill="#475569">KV zoom: shared replay-relative memory movement region</text>')
             parts.append(f'<text x="{left + 8}" y="{zoom_title_y + 6:.1f}" font-size="10" fill="#64748b">{html.escape(zoom_label)}</text>')
-            for tick_value in [z_min, z_min + z_span * 0.25, z_min + z_span * 0.5, z_min + z_span * 0.75, z_max]:
-                tx = zoom_x(tick_value, z_min, z_max)
-                parts.append(f'<line x1="{tx:.1f}" y1="{zoom_title_y + 30:.1f}" x2="{tx:.1f}" y2="{zoom_title_y + 142:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{zoom_title_y + 160:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            draw_shared_time_axis(parts, zoom_title_y + 30, zoom_title_y + 142, zoom_title_y + 160)
             if z_min <= 0 <= z_max:
-                zx = zoom_x(0.0, z_min, z_max)
+                zx = overview_x(0.0)
                 parts.append(f'<line x1="{zx:.1f}" y1="{zoom_title_y + 30:.1f}" x2="{zx:.1f}" y2="{zoom_title_y + 142:.1f}" stroke="#111827" stroke-width="1.6"/>')
                 parts.append(f'<text x="{zx + 4:.1f}" y="{zoom_title_y + 42:.1f}" font-size="9" font-weight="800">due</text>')
             zoom_lanes = {
@@ -9852,7 +9871,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     )
                 draw_span(
                     parts,
-                    lambda value, z_min=z_min, z_max=z_max: zoom_x(value, z_min, z_max),
+                    overview_x,
                     z_min,
                     z_max,
                     span[0],
@@ -9885,7 +9904,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 )
                 draw_span(
                     parts,
-                    lambda value, z_min=z_min, z_max=z_max: zoom_x(value, z_min, z_max),
+                    overview_x,
                     z_min,
                     z_max,
                     hint_h2d_relative_span[0],
@@ -10335,8 +10354,8 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             )
             parts.append(f'<line x1="{left}" y1="{pool_zoom_title_y + 72:.1f}" x2="{left + plot_w}" y2="{pool_zoom_title_y + 72:.1f}" stroke="#dbe4ee"/>')
         else:
-            pool_min = min(as_float(item.get("start_rel_ms")) or 0.0 for item in pool_bins)
-            pool_max = max(as_float(item.get("end_rel_ms")) or 0.0 for item in pool_bins)
+            pool_min = x_min
+            pool_max = x_max
             pool_span = max(1.0, pool_max - pool_min)
             pool_max_usage = max(as_float(item.get("max_usage_pct")) or 0.0 for item in pool_bins_with_samples)
             pool_avg_values = [as_float(item.get("avg_usage_pct")) for item in pool_bins_with_samples]
@@ -10344,7 +10363,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
             pool_verdict = str(kv_pool_row.get("kv_pool_verdict") or kv_pool_pressure_label(pool_max_usage))
 
             def pool_x(value: float, z_min: float = pool_min, z_max: float = pool_max) -> float:
-                return local_zoom_x(value, z_min, z_max, left, plot_w)
+                return overview_x(value)
 
             chart_top = pool_zoom_title_y + 42
             chart_h = 72.0
@@ -10372,10 +10391,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                     f'font-weight="800" fill="{color}">{threshold_label}</text>'
                 )
             parts.append(f'<line x1="{left}" y1="{chart_bottom:.1f}" x2="{left + plot_w}" y2="{chart_bottom:.1f}" stroke="#dbe4ee"/>')
-            for tick_value in [pool_min, pool_min + pool_span * 0.25, pool_min + pool_span * 0.5, pool_min + pool_span * 0.75, pool_max]:
-                tx = pool_x(tick_value)
-                parts.append(f'<line x1="{tx:.1f}" y1="{chart_top:.1f}" x2="{tx:.1f}" y2="{chart_bottom + 9:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{chart_bottom + 25:.1f}" text-anchor="middle" font-size="8" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            draw_shared_time_axis(parts, chart_top, chart_bottom + 9, chart_bottom + 25, font_size=8)
             if pool_min <= 0 <= pool_max:
                 zx = pool_x(0.0)
                 parts.append(f'<line x1="{zx:.1f}" y1="{chart_top:.1f}" x2="{zx:.1f}" y2="{chart_bottom + 9:.1f}" stroke="#111827" stroke-width="1.4"/>')
@@ -10499,33 +10515,14 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 ("decode_events", "decode", unified_stack_color("decode")),
                 ("kv_movement_events", "KV movement", unified_stack_color("h2d")),
             ]
-            rel_values: list[float] = []
-            for item in activity_bins:
-                start_rel = as_float(item.get("start_rel_ms"))
-                end_rel = as_float(item.get("end_rel_ms"))
-                if start_rel is not None:
-                    rel_values.append(start_rel)
-                if end_rel is not None:
-                    rel_values.append(end_rel)
-            rel_min = min(rel_values) if rel_values else -(as_float(tool_wait_activity.get("tool_wait_duration_ms")) or 1.0)
-            rel_max = max(rel_values) if rel_values else 0.0
-            if rel_max <= rel_min:
-                rel_max = rel_min + 1.0
+            rel_min = x_min
+            rel_max = x_max
 
             def tw_x(value: float) -> float:
-                return lane_left + lane_w * (value - rel_min) / (rel_max - rel_min)
+                return overview_x(value)
 
-            for tick_value in [rel_min, rel_min + (rel_max - rel_min) * 0.5, rel_max]:
-                tx = tw_x(tick_value)
-                tick_bottom = lane_top + len(lane_defs) * lane_gap + 4
-                parts.append(
-                    f'<line x1="{tx:.1f}" y1="{lane_top - 10:.1f}" x2="{tx:.1f}" y2="{tick_bottom:.1f}" '
-                    f'stroke="#e5e7eb" stroke-width="1"/>'
-                )
-                parts.append(
-                    f'<text x="{tx:.1f}" y="{tick_bottom + 14:.1f}" text-anchor="middle" font-size="8" fill="#64748b">'
-                    f'{html.escape(display_ms(tick_value))}</text>'
-                )
+            tick_bottom = lane_top + len(lane_defs) * lane_gap + 4
+            draw_shared_time_axis(parts, lane_top - 10, tick_bottom, tick_bottom + 14, font_size=8)
             if rel_min <= 0 <= rel_max:
                 zx = tw_x(0.0)
                 parts.append(
@@ -10693,20 +10690,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 verdict_color = "#dc2626"
                 gap_color = "#dc2626"
                 gap_start, gap_end = 0.0, ready_ms
-            dz_values = [0.0, start_ms, ready_ms]
-            if projected_span:
-                dz_values.extend(projected_span)
-            if first_token is not None:
-                dz_values.append(first_token - due)
-            dz_min = min(dz_values)
-            dz_max = max(dz_values)
+            dz_min = x_min
+            dz_max = x_max
             dz_span = max(1.0, dz_max - dz_min)
-            dz_pad = max(20.0, dz_span * 0.08)
-            dz_min -= dz_pad
-            dz_max += dz_pad
 
             def deadline_x(value: float, z_min: float = dz_min, z_max: float = dz_max) -> float:
-                return local_zoom_x(value, z_min, z_max, left, plot_w)
+                return overview_x(value)
 
             h2d_label_prefix = "prefetch KV H2D" if useful_kind == "prefetch" else "replay KV H2D"
             h2d_color = unified_stack_color("hint_h2d") if useful_kind == "prefetch" else unified_stack_color("h2d")
@@ -10735,10 +10724,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<text x="{left + 8}" y="{deadline_zoom_title_y + 8:.1f}" font-size="10" fill="#64748b">'
                 f'Shows the gap from replay due to useful KV readiness. {html.escape(verdict_text)}.</text>'
             )
-            for tick_value in [dz_min, dz_min + dz_span * 0.25, dz_min + dz_span * 0.5, dz_min + dz_span * 0.75, dz_max]:
-                tx = deadline_x(tick_value)
-                parts.append(f'<line x1="{tx:.1f}" y1="{deadline_zoom_title_y + 30:.1f}" x2="{tx:.1f}" y2="{deadline_zoom_title_y + 122:.1f}" stroke="#e5e7eb"/>')
-                parts.append(f'<text x="{tx:.1f}" y="{deadline_zoom_title_y + 140:.1f}" text-anchor="middle" font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>')
+            draw_shared_time_axis(parts, deadline_zoom_title_y + 30, deadline_zoom_title_y + 122, deadline_zoom_title_y + 140)
             if dz_min <= 0 <= dz_max:
                 zx = deadline_x(0.0)
                 parts.append(f'<line x1="{zx:.1f}" y1="{deadline_zoom_title_y + 30:.1f}" x2="{zx:.1f}" y2="{deadline_zoom_title_y + 122:.1f}" stroke="#111827" stroke-width="1.8"/>')
@@ -10872,27 +10858,12 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'y2="{target_residency_title_y + 48:.1f}" stroke="#dbe4ee"/>'
             )
         else:
-            rel_values = [0.0]
-            if zoom:
-                rel_values.extend([zoom[0], zoom[1]])
-            else:
-                wait_ms = as_float(row.get("tool_wait_ms")) or 500.0
-                rel_values.extend([-max(wait_ms, 500.0), 1000.0])
-            rel_values.extend(target_kv_relative_times(lifecycle_blocks))
-            finite_rel = [value for value in rel_values if math.isfinite(value)]
-            residency_min = min(finite_rel) if finite_rel else -500.0
-            residency_max = max(finite_rel) if finite_rel else 1000.0
-            if zoom and residency_max - residency_min > 120_000.0:
-                residency_min, residency_max = zoom
-            residency_min = min(residency_min, 0.0)
-            residency_max = max(residency_max, 0.0)
+            residency_min = x_min
+            residency_max = x_max
             residency_span = max(1.0, residency_max - residency_min)
-            residency_pad = max(20.0, residency_span * 0.04)
-            residency_min -= residency_pad
-            residency_max += residency_pad
 
             def residency_x(value: float) -> float:
-                return local_zoom_x(value, residency_min, residency_max, left, plot_w)
+                return overview_x(value)
 
             parts.append(
                 f'<text x="{left + 8}" y="{target_residency_title_y - 10:.1f}" font-size="10" '
@@ -10902,22 +10873,7 @@ def build_unified_per_gap_stack_timeline_svg_v2(
                 f'<text x="{left + 8}" y="{target_residency_title_y + 8:.1f}" font-size="10" fill="#64748b">'
                 f'Simplified from {len(lifecycle_blocks)} logical KV blocks. Solid bars are directly observed; dashed bars are inferred from later replay H2D.</text>'
             )
-            for tick_value in [
-                residency_min,
-                residency_min + residency_span * 0.25,
-                residency_min + residency_span * 0.5,
-                residency_min + residency_span * 0.75,
-                residency_max,
-            ]:
-                tx = residency_x(tick_value)
-                parts.append(
-                    f'<line x1="{tx:.1f}" y1="{target_residency_title_y + 32:.1f}" '
-                    f'x2="{tx:.1f}" y2="{target_residency_title_y + 160:.1f}" stroke="#e5e7eb"/>'
-                )
-                parts.append(
-                    f'<text x="{tx:.1f}" y="{target_residency_title_y + 176:.1f}" text-anchor="middle" '
-                    f'font-size="9" fill="#64748b">{html.escape(display_ms(tick_value))}</text>'
-                )
+            draw_shared_time_axis(parts, target_residency_title_y + 32, target_residency_title_y + 160, target_residency_title_y + 176)
             if residency_min <= 0 <= residency_max:
                 zx = residency_x(0.0)
                 parts.append(
@@ -11042,7 +10998,7 @@ def unified_per_gap_forensic_stack_html(
     <p class="note">The magenta <strong>prefill/recompute</strong> bar is model-forward work before the first output token. It may include recomputing missing KV or processing uncached replay prompt tokens. The gold <strong>remaining before-first-token time</strong> is leftover time after visible H2D and prefill/recompute are separated out.</p>
     <p class="note">Rendering rule: every instrumented event is drawn, even when it is very small. Tiny events use a minimum visual width so they remain visible; hover text keeps the exact measured duration.</p>
     <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(gaps, all_kv_events, max_rows, kv_pool_residency_rows, kv_block_lifecycle_rows=kv_block_lifecycle_rows, tool_wait_activity_rows=tool_wait_activity_rows)}</div>
-    <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. The zoom strip uses a local linear scale per gap, while the overview remains replay-relative symlog time.</p>
+    <p class="note">Target-row movement is drawn thicker and more opaque. Pressure/filler or other-session movement is thinner and faded. Overview, KV, GPU-pool, tool-wait, deadline, and residency lanes now share one replay-relative scale. The replay execution zoom remains local so short replay details stay readable.</p>
     """
 
 
