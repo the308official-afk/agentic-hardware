@@ -13,6 +13,8 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any, Callable
 
+PRIORITY_HINT_MODES = {"dynamo_priority_hints", "e2e_priority_hints"}
+
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
@@ -90,6 +92,8 @@ def canonical_mode(mode: Any) -> str:
         return "projected_hardware_bypass"
     if raw.startswith("deadline_priority_prefetch"):
         return "deadline_priority_prefetch"
+    if raw.startswith("e2e_priority_hints"):
+        return "e2e_priority_hints"
     if raw.startswith("dynamo_priority_hints"):
         return "dynamo_priority_hints"
     if raw.startswith("priority_direct_prefetch"):
@@ -110,6 +114,7 @@ def display_mode(mode: Any) -> str:
         "no_prefetch": "No prefetch",
         "direct_prefetch": "Direct prefetch",
         "dynamo_priority_hints": "Dynamo priority hints only",
+        "e2e_priority_hints": "End-to-end priority hints",
         "priority_direct_prefetch": "Priority direct prefetch",
         "deadline_priority_prefetch": "Deadline priority prefetch",
         "projected_hardware_bypass": "Projected hardware bypass",
@@ -124,6 +129,7 @@ def mode_badge_style(mode: Any) -> tuple[str, str]:
         "no_prefetch": ("#334155", "#f1f5f9"),
         "direct_prefetch": ("#7c3aed", "#f3e8ff"),
         "dynamo_priority_hints": ("#b45309", "#fffbeb"),
+        "e2e_priority_hints": ("#0f766e", "#ccfbf1"),
         "priority_direct_prefetch": ("#0891b2", "#ecfeff"),
         "deadline_priority_prefetch": ("#16a34a", "#dcfce7"),
         "projected_hardware_bypass": ("#0f766e", "#f0fdfa"),
@@ -139,6 +145,7 @@ def mode_row_background_style(mode: Any, row_index: int = 0) -> tuple[str, str, 
         "no_prefetch": ("#f8fafc", "#64748b", 0.92),
         "direct_prefetch": ("#f0f9ff", "#0284c7", 0.88),
         "dynamo_priority_hints": ("#fffbeb", "#f59e0b", 0.90),
+        "e2e_priority_hints": ("#ecfdf5", "#0f766e", 0.90),
         "priority_direct_prefetch": ("#ecfeff", "#0891b2", 0.88),
         "deadline_priority_prefetch": ("#f0fdf4", "#16a34a", 0.88),
         "projected_hardware_bypass": ("#ecfdf5", "#0f766e", 0.92),
@@ -2030,7 +2037,8 @@ def timeline_mode_rank(row: dict[str, Any]) -> tuple[int, str]:
         "no_prefetch": 0,
         "direct_prefetch": 1,
         "dynamo_priority_hints": 2,
-        "deadline_priority_prefetch": 3,
+        "e2e_priority_hints": 3,
+        "deadline_priority_prefetch": 4,
         "priority_direct_prefetch": 4,
         "oracle_prefetch": 4,
         "oracle_direct_load": 4,
@@ -2126,6 +2134,7 @@ def mode_short_label(mode: Any) -> str:
         "no_prefetch": "NP",
         "direct_prefetch": "DP",
         "dynamo_priority_hints": "DH",
+        "e2e_priority_hints": "E2E",
         "deadline_priority_prefetch": "DLP",
         "projected_hardware_bypass": "HW",
         "priority_direct_prefetch": "PDP",
@@ -2210,7 +2219,7 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
     scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
-        if mode not in {"no_prefetch", "direct_prefetch", "dynamo_priority_hints"}:
+        if mode not in {"no_prefetch", "direct_prefetch", "dynamo_priority_hints", "e2e_priority_hints"}:
             continue
         scenario_to_modes[scenario_compare_key(row)][mode] = row
 
@@ -2221,7 +2230,7 @@ def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int)
     ]
     complete_or_partial.sort(key=lambda item: scenario_compare_sort_key(item[0]))
 
-    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints"]
+    mode_order = ["no_prefetch", "direct_prefetch", "dynamo_priority_hints", "e2e_priority_hints"]
     output: list[dict[str, Any]] = []
     for scenario_idx, (_key, rows_by_mode) in enumerate(complete_or_partial[:max_scenarios]):
         scenario_label = f"C{scenario_idx:02d}"
@@ -2262,11 +2271,12 @@ def mode_comparison_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, A
 def dynamo_priority_hint_translation_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for row in gaps:
-        if canonical_mode(row.get("mode")) != "dynamo_priority_hints":
+        if canonical_mode(row.get("mode")) not in PRIORITY_HINT_MODES:
             continue
         rows.append(
             {
                 "row": row.get("timeline_label", ""),
+                "mode": display_mode(row.get("mode")),
                 "case_id": row.get("case_id", ""),
                 "session_id": row.get("session_id", ""),
                 "task": row.get("task_index", ""),
@@ -2319,6 +2329,10 @@ def dynamo_priority_queue_effectiveness_column_guide_rows() -> list[dict[str, st
         {"column": "priority_lower_admitted_before", "meaning": "How many lower-priority requests were admitted before this priority request in the captured admission order."},
         {"column": "priority_scheduler_proof_strength", "meaning": "How strong the proof is: receive only, queue snapshot observed, or admission order observed."},
         {"column": "priority_queue_effectiveness_verdict", "meaning": "Simple verdict: whether the priority was merely attached, partially observed, or actually reflected in admission order."},
+        {"column": "driver_priority_policy", "meaning": "Local experiment-driver policy used before the request reached SGLang."},
+        {"column": "driver_pending_lower_priority_count", "meaning": "Lower-priority filler requests held by the driver while the priority replay was dispatched."},
+        {"column": "driver_jump_observed", "meaning": "Whether the driver dispatched the high-priority replay ahead of held lower-priority filler work."},
+        {"column": "driver_replay_bypassed_concurrency_gate", "meaning": "Whether the priority replay skipped the driver's normal concurrency gate."},
         {"column": "simple_meaning", "meaning": "Plain-English explanation of the verdict."},
     ]
 
@@ -2326,11 +2340,12 @@ def dynamo_priority_queue_effectiveness_column_guide_rows() -> list[dict[str, st
 def dynamo_priority_queue_effectiveness_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for row in gaps:
-        if canonical_mode(row.get("mode")) != "dynamo_priority_hints":
+        if canonical_mode(row.get("mode")) not in PRIORITY_HINT_MODES:
             continue
         rows.append(
             {
                 "row": row.get("timeline_label", ""),
+                "mode": display_mode(row.get("mode")),
                 "case_id": row.get("case_id", ""),
                 "session_id": row.get("session_id", ""),
                 "task": row.get("task_index", ""),
@@ -2358,6 +2373,12 @@ def dynamo_priority_queue_effectiveness_rows(gaps: list[dict[str, Any]]) -> list
                 "priority_lower_admitted_before_sample": row.get("replay_priority_lower_admitted_before_sample", ""),
                 "priority_scheduler_proof_strength": row.get("replay_priority_scheduler_proof_strength", ""),
                 "priority_queue_effectiveness_verdict": row.get("replay_priority_queue_effectiveness_verdict", ""),
+                "driver_priority_policy": row.get("replay_driver_priority_policy", ""),
+                "driver_pending_lower_priority_count": row.get("replay_driver_pending_lower_priority_count", ""),
+                "driver_older_low_priority_waiting": row.get("replay_driver_older_low_priority_waiting", ""),
+                "driver_jump_observed": row.get("replay_driver_jump_observed", ""),
+                "driver_replay_bypassed_concurrency_gate": row.get("replay_driver_replay_bypassed_concurrency_gate", ""),
+                "driver_pending_lower_priority_sample": row.get("replay_driver_pending_lower_priority_sample", ""),
                 "simple_meaning": row.get("replay_priority_queue_effectiveness_meaning", ""),
                 "resume_ttft_ms": row.get("resume_ttft_ms", ""),
                 "per_gap_verdict": display_verdict(row.get("per_gap_verdict", "")),
@@ -2374,6 +2395,8 @@ def dynamo_priority_queue_proof_summary_rows(rows: list[dict[str, Any]]) -> list
     strong = sum(1 for row in rows if "strong" in str(row.get("priority_scheduler_proof_strength", "")).lower())
     lower_ahead = sum(1 for row in rows if (as_float(row.get("priority_lower_ahead")) or 0.0) > 0)
     violations = sum(1 for row in rows if (as_float(row.get("priority_lower_admitted_before")) or 0.0) > 0)
+    driver_jump = sum(1 for row in rows if str(row.get("driver_jump_observed", "")).lower() in {"1", "true", "yes"})
+    driver_held = sum(1 for row in rows if (as_float(row.get("driver_pending_lower_priority_count")) or 0.0) > 0)
     no_proof = sum(
         1
         for row in rows
@@ -2381,13 +2404,15 @@ def dynamo_priority_queue_proof_summary_rows(rows: list[dict[str, Any]]) -> list
         == "priority_attached_but_no_scheduler_proof"
     )
     return [
-        {"metric": "priority rows checked", "value": priority_rows, "meaning": "Dynamo-priority rows included in this report."},
+        {"metric": "priority rows checked", "value": priority_rows, "meaning": "Priority-hint rows included in this report."},
         {"metric": "SGLang received priority", "value": received, "meaning": "SGLang-side hooks saw the priority request arrive."},
         {"metric": "queue snapshots observed", "value": queued, "meaning": "SGLang-side hooks saw the request inside a scheduler queue-like structure."},
         {"metric": "admission order observed", "value": admitted, "meaning": "SGLang-side hooks saw when the priority request was admitted for execution."},
         {"metric": "strong scheduler proof", "value": strong, "meaning": "Admission order was observed, so the proof is stronger than just seeing the hint."},
         {"metric": "jump-ahead pressure cases", "value": lower_ahead, "meaning": "Rows where lower-priority requests were observed ahead of the priority request."},
         {"metric": "lower-priority admitted first", "value": violations, "meaning": "Rows where lower-priority work was admitted before the priority request."},
+        {"metric": "driver held lower-priority work", "value": driver_held, "meaning": "Rows where the local driver had lower-priority filler work waiting near replay time."},
+        {"metric": "driver queue jump observed", "value": driver_jump, "meaning": "Rows where the local driver dispatched priority replay ahead of held lower-priority filler work."},
         {"metric": "hint attached but no queue proof", "value": no_proof, "meaning": "Rows where the hint existed but scheduler queue/admission proof was missing."},
     ]
 
@@ -2422,15 +2447,16 @@ def dynamo_priority_queue_proof_html(rows: list[dict[str, Any]]) -> str:
         for row in examples[:8]
     ]
     cards = [
-        ("priority rows checked", value("priority rows checked"), "Dynamo-priority rows in this report"),
+        ("priority rows checked", value("priority rows checked"), "priority-hint rows in this report"),
         ("SGLang received priority", value("SGLang received priority"), "priority reached SGLang-side request hooks"),
         ("admission order observed", value("admission order observed"), "scheduler admitted-order hook fired"),
         ("jump-ahead pressure cases", value("jump-ahead pressure cases"), "lower-priority requests were seen ahead"),
         ("lower-priority admitted first", value("lower-priority admitted first"), "should be 0 for honored priority"),
+        ("driver queue jump observed", value("driver queue jump observed"), "driver dispatched urgent replay ahead of held fillers"),
         ("missing queue proof", value("hint attached but no queue proof"), "hint existed but scheduler proof was absent"),
     ]
     return f"""
-    <p>This section checks whether Dynamo-style priority hints were only attached to the request, or whether SGLang scheduler hooks also saw receive, queue, and admission-order behavior.</p>
+    <p>This section checks whether priority hints were only attached to the request, or whether the local driver and SGLang scheduler hooks also saw priority behavior.</p>
     <p class="note">The strongest proof is a row where lower-priority requests are seen ahead of the priority request, but no lower-priority request is admitted before it. That shows priority affected admission order.</p>
     <div class="metric-grid">
       {''.join(f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div><div class="metric-value">{html.escape(val)}</div><div class="metric-sub">{html.escape(subtitle)}</div></div>' for label, val, subtitle in cards)}
@@ -2441,16 +2467,16 @@ def dynamo_priority_queue_proof_html(rows: list[dict[str, Any]]) -> str:
 
 
 def dynamo_hint_kv_lifecycle_audit_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Explain what happened to KV in Dynamo-priority-hints-only rows.
+    """Explain what happened to KV in priority-hint rows.
 
-    This mode intentionally does not issue our direct SGLang KV prefetch hook. The
+    These modes intentionally do not issue our direct SGLang KV prefetch hook. The
     audit therefore checks the replay/cache lifecycle evidence instead of treating
     "no hint H2D" as a failure by itself.
     """
 
     rows: list[dict[str, Any]] = []
     for idx, row in enumerate(gaps):
-        if canonical_mode(row.get("mode")) != "dynamo_priority_hints":
+        if canonical_mode(row.get("mode")) not in PRIORITY_HINT_MODES:
             continue
 
         host_write_tokens = as_float(row.get("lifecycle_host_write_tokens")) or 0.0
@@ -2530,6 +2556,7 @@ def dynamo_hint_kv_lifecycle_audit_rows(gaps: list[dict[str, Any]]) -> list[dict
         rows.append(
             {
                 "row": row.get("timeline_label") or f"G{idx:02d}",
+                "mode": display_mode(row.get("mode")),
                 "case_id": row.get("case_id", ""),
                 "session_id": row.get("session_id", ""),
                 "task": row.get("task_index", ""),
@@ -2562,7 +2589,8 @@ def dynamo_hint_kv_lifecycle_audit_rows(gaps: list[dict[str, Any]]) -> list[dict
 def dynamo_hint_kv_lifecycle_audit_column_guide_rows() -> list[dict[str, str]]:
     return [
         {"column": "row", "meaning": "Timeline row, such as C03-DH or G03."},
-        {"column": "audit_verdict", "meaning": "Plain verdict for why Dynamo priority hints did or did not show useful KV H2D."},
+        {"column": "mode", "meaning": "Priority-hint mode being audited."},
+        {"column": "audit_verdict", "meaning": "Plain verdict for why priority hints did or did not show useful KV H2D."},
         {"column": "plain_explanation", "meaning": "Simple English explanation of the KV lifecycle for that row."},
         {"column": "evidence_confidence", "meaning": "How direct the evidence is. Direct lifecycle or H2D evidence is stronger than inference."},
         {"column": "lifecycle_verdict", "meaning": "The lower-level KV lifecycle verdict from our block/gap ledger."},
@@ -4113,7 +4141,7 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
 
 
 def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    measured_modes = ("no_prefetch", "dynamo_priority_hints")
+    measured_modes = ("no_prefetch", "dynamo_priority_hints", "e2e_priority_hints")
     scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
@@ -4187,7 +4215,7 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
 
 
 def global_kv_readiness_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "dynamo_priority_hints"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints", "e2e_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4235,12 +4263,14 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     scenario_labels = sorted({str(row.get("scenario") or "") for row in rows}, key=lambda value: (len(value), value))
     scenario_index = {label: idx for idx, label in enumerate(scenario_labels)}
     mode_offsets = {
-        "no_prefetch": -12.0,
-        "dynamo_priority_hints": 12.0,
+        "no_prefetch": -18.0,
+        "dynamo_priority_hints": 0.0,
+        "e2e_priority_hints": 18.0,
     }
     mode_styles = {
         "no_prefetch": ("#2563eb", "circle", "NP"),
         "dynamo_priority_hints": ("#f59e0b", "diamond", "DH"),
+        "e2e_priority_hints": ("#0f766e", "hollow", "E2E"),
     }
 
     def x_pos(label: str, mode_key: str) -> float:
@@ -4275,7 +4305,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 40}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="36" font-size="13" fill="#166534" font-weight="700">above line = KV ready before replay due</text>',
         '<text x="470" y="36" font-size="13" fill="#b91c1c" font-weight="700">below line = KV became ready after replay was due</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">Measured modes only: no prefetch and Dynamo priority hints.</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">Measured modes only: no prefetch, Dynamo priority hints, and end-to-end priority hints when present.</text>',
     ]
 
     seen_ticks: set[int] = set()
@@ -4318,6 +4348,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
     legend_items = [
         ("No prefetch", "no_prefetch"),
         ("Dynamo priority hints only", "dynamo_priority_hints"),
+        ("End-to-end priority hints", "e2e_priority_hints"),
     ]
     for label, mode_key in legend_items:
         color, kind, short = mode_styles[mode_key]
@@ -4329,7 +4360,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
 
 
 def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "dynamo_priority_hints"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints", "e2e_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4357,7 +4388,7 @@ def global_replay_start_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list
 
 
 def global_first_token_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "dynamo_priority_hints"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints", "e2e_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4385,7 +4416,7 @@ def global_first_token_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list[
 
 
 def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    mode_order = ["no_prefetch", "dynamo_priority_hints"]
+    mode_order = ["no_prefetch", "dynamo_priority_hints", "e2e_priority_hints"]
     output: list[dict[str, Any]] = []
     for mode in mode_order:
         items = [row for row in rows if canonical_mode(row.get("mode_key")) == mode]
@@ -4393,7 +4424,7 @@ def global_replay_vs_kv_status_rows(rows: list[dict[str, Any]]) -> list[dict[str
             continue
         replay_dots = sum(1 for row in items if row.get("first_token_relative_ms") not in ("", None))
         kv_squares = sum(1 for row in items if row.get("kv_ready_margin_ms") not in ("", None))
-        if mode == "dynamo_priority_hints":
+        if mode in PRIORITY_HINT_MODES:
             meaning = "first-token timing is measured; KV square appears only when replay-side H2D was measured"
         else:
             meaning = "measured replay start and replay-side KV readiness when observed"
@@ -4452,12 +4483,14 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         "no_prefetch": -30.0,
         "direct_prefetch": -10.0,
         "dynamo_priority_hints": 10.0,
-        "projected_hardware_bypass": 30.0,
+        "e2e_priority_hints": 30.0,
+        "projected_hardware_bypass": 50.0,
     }
     mode_colors = {
         "no_prefetch": "#2563eb",
         "direct_prefetch": "#7c3aed",
         "dynamo_priority_hints": "#f59e0b",
+        "e2e_priority_hints": "#0f766e",
         "projected_hardware_bypass": "#0f766e",
     }
     present_modes = {
@@ -4573,6 +4606,7 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
             ("NP", "No prefetch", "no_prefetch"),
             ("DP", "Direct prefetch", "direct_prefetch"),
             ("DH", "Dynamo priority hints only", "dynamo_priority_hints"),
+            ("E2E", "End-to-end priority hints", "e2e_priority_hints"),
             ("HW", "Projected hardware bypass", "projected_hardware_bypass"),
         ]
         if mode_key in present_modes
@@ -8093,7 +8127,7 @@ def reproduce_controlled_replay_html(result_root: Path) -> str:
             ("UPDATE_LATEST", run_config.get("UPDATE_LATEST") or "1"),
             ("MAX_TIMELINE_GAPS", run_config.get("MAX_TIMELINE_GAPS") or "24"),
             ("MAX_PAIRS", run_config.get("MAX_PAIRS") or "2"),
-            ("MODES", run_config.get("MODES") or "no_prefetch dynamo_priority_hints"),
+            ("MODES", run_config.get("MODES") or "no_prefetch dynamo_priority_hints e2e_priority_hints"),
             ("TOOL_WAIT_LIST_MS", run_config.get("TOOL_WAIT_LIST_MS") or "500"),
             ("FILLER_LIST", run_config.get("FILLER_LIST") or "8 12 16 24 32"),
             ("REQUEST_CONCURRENCY", run_config.get("REQUEST_CONCURRENCY") or "4"),
@@ -11022,7 +11056,7 @@ def grouped_mode_comparison_timeline_html(
     }
     mode_order = [
         mode
-        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints")
+        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints", "e2e_priority_hints")
         if mode in present_modes
     ]
     mode_key_items = []
@@ -11042,7 +11076,7 @@ def grouped_mode_comparison_timeline_html(
     mode_names = ", ".join(display_mode(mode) for mode in mode_order)
     return f"""
     <p>This view groups the same controlled scenario across modes. For example, {mode_examples} are the same task/gap setup shown under {html.escape(mode_names)}.</p>
-    <p class="note">This chart shows measured modes only. Dynamo priority hints only sends priority metadata and an SGLang priority value; it does not issue our direct KV prefetch hook. Projected hardware bypass remains in the separate projection/global sections where it is explicitly labeled as projected, not measured.</p>
+    <p class="note">This chart shows measured modes only. Dynamo priority hints only sends priority metadata and an SGLang priority value. End-to-end priority hints also makes the local driver queue priority-aware by holding low-priority filler dispatch near replay time and letting urgent replay bypass the driver concurrency gate. Neither priority-hint mode calls our direct KV prefetch hook.</p>
     <h3>Legend / How To Read This Timeline</h3>
     {unified_stack_legend_table_html()}
     <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row. Measured rows also show the same tool-wait GPU activity zoom and target-KV residency zoom as the unified forensic timeline.</p>
@@ -11450,7 +11484,7 @@ def render_html(
     <h3>Mode Summary</h3>
     {table_html(mode_rows)}
     <h3>Dynamo Priority Hint Translation Rows</h3>
-    <p class="note">These rows show the bridge used by <code>dynamo_priority_hints</code>: the emitted top-level <code>nvext.agent_hints.priority</code>, <code>osl</code>, and <code>expected_output_tokens</code>; the mirrored <code>custom_params.nvext.agent_hints</code> trace copy; and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
+    <p class="note">These rows show the bridge used by priority-hint modes: the emitted top-level <code>nvext.agent_hints.priority</code>, <code>osl</code>, and <code>expected_output_tokens</code>; the mirrored <code>custom_params.nvext.agent_hints</code> trace copy; and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
     {table_html(dynamo_priority_rows, limit=1000)}
     <h3>Dynamo Priority Queue Effectiveness Audit</h3>
     <p class="note">This table checks whether the priority hint was only attached to the request or whether SGLang scheduler traces show queue/admission behavior consistent with honoring it.</p>
@@ -11461,7 +11495,7 @@ def render_html(
     <h4>Rows</h4>
     {table_html(dynamo_priority_queue_rows, limit=1000)}
     <h3>Dynamo Hint KV Lifecycle Audit</h3>
-    <p class="note">This table answers the key Dynamo-hints question: if no direct prefetch H2D happened, was the KV already on GPU, lost from host, loaded by replay, or recomputed? It uses the same SGLang lifecycle and prefix counters that drive the timelines.</p>
+    <p class="note">This table answers the key priority-hints question: if no direct prefetch H2D happened, was the KV already on GPU, lost from host, loaded by replay, or recomputed? It uses the same SGLang lifecycle and prefix counters that drive the timelines.</p>
     {table_html(dynamo_hint_kv_lifecycle_audit_column_guide_rows(), ["column", "meaning"])}
     {table_html(dynamo_lifecycle_audit_rows, limit=1000)}
     {grouped_comparison_evidence_html}

@@ -16,6 +16,8 @@ import httpx
 
 DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 DYNAMO_PRIORITY_MODE = "dynamo_priority_hints"
+E2E_PRIORITY_MODE = "e2e_priority_hints"
+DYNAMO_PRIORITY_MODES = {DYNAMO_PRIORITY_MODE, E2E_PRIORITY_MODE}
 
 
 class NoopAsyncContext:
@@ -310,7 +312,7 @@ async def main_async() -> None:
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
     parser.add_argument(
         "--mode",
-        choices=("no_prefetch", "direct_prefetch", DYNAMO_PRIORITY_MODE, "oracle_prefetch"),
+        choices=("no_prefetch", "direct_prefetch", DYNAMO_PRIORITY_MODE, E2E_PRIORITY_MODE, "oracle_prefetch"),
         default="no_prefetch",
     )
     parser.add_argument("--workload-jsonl", type=Path)
@@ -394,6 +396,7 @@ async def main_async() -> None:
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     workload_start = time.perf_counter()
+    driver_pending_low: dict[str, set[str]] = {}
 
     write_trace_event(
         {
@@ -427,8 +430,14 @@ async def main_async() -> None:
             if delay > 0:
                 await asyncio.sleep(delay)
 
+        def now_offset_ms() -> float:
+            return (time.perf_counter() - workload_start) * 1000.0
+
         def dynamo_mode_enabled() -> bool:
-            return args.mode == DYNAMO_PRIORITY_MODE
+            return args.mode in DYNAMO_PRIORITY_MODES
+
+        def e2e_priority_mode_enabled() -> bool:
+            return args.mode == E2E_PRIORITY_MODE
 
         def direct_kv_prefetch_mode_enabled() -> bool:
             return args.mode in {"direct_prefetch", "oracle_prefetch"}
@@ -437,7 +446,9 @@ async def main_async() -> None:
             return args.mode == "direct_prefetch" and args.priority_direct_prefetch
 
         def priority_policy_name() -> str:
-            if dynamo_mode_enabled():
+            if e2e_priority_mode_enabled():
+                return "e2e_driver_queue_and_sglang_priority"
+            if args.mode == DYNAMO_PRIORITY_MODE:
                 return "dynamo_agent_hints_to_sglang_priority_only"
             if priority_direct_enabled():
                 return "legacy_driver_priority_direct_prefetch"
@@ -537,9 +548,31 @@ async def main_async() -> None:
             *,
             use_concurrency_limit: bool = True,
             deadline_ms: float | None = None,
+            driver_queue_metadata: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             p_hash = prompt_hash(prompt)
             request_extra, bridge_metadata = dynamo_hint_bridge(pair, phase, label, p_hash, deadline_ms, max_tokens)
+            driver_queue_metadata = driver_queue_metadata or {}
+            driver_priority = bridge_metadata.get("dynamo_agent_priority", pair.priority)
+            driver_priority_value = bridge_metadata.get("sglang_priority", "")
+            write_trace_event(
+                {
+                    "event": "m27.driver_queue.dispatch",
+                    "session_id": pair.session_id,
+                    "phase": phase,
+                    "mode": args.mode,
+                    "label": label,
+                    "request_id": label,
+                    "prompt_hash": p_hash,
+                    "agent_priority": driver_priority,
+                    "sglang_priority": driver_priority_value,
+                    "uses_driver_concurrency_gate": use_concurrency_limit,
+                    "priority_policy": priority_policy_name(),
+                    "deadline_offset_ms": round(deadline_ms, 3) if deadline_ms is not None else "",
+                    "dispatch_offset_ms": round(now_offset_ms(), 3),
+                    **driver_queue_metadata,
+                }
+            )
             write_trace_event(
                 {
                     "event": "m27.request.submitted",
@@ -551,6 +584,7 @@ async def main_async() -> None:
                     "prompt_chars": len(prompt),
                     "uses_driver_concurrency_gate": use_concurrency_limit,
                     **bridge_metadata,
+                    **driver_queue_metadata,
                 }
             )
             if bridge_metadata:
@@ -584,6 +618,7 @@ async def main_async() -> None:
                         "prompt_chars": len(prompt),
                         "uses_driver_concurrency_gate": use_concurrency_limit,
                         **bridge_metadata,
+                        **driver_queue_metadata,
                     }
                 )
                 params = agentic_params(pair, phase, args.mode, label, p_hash)
@@ -643,6 +678,7 @@ async def main_async() -> None:
                             for k, v in bridge_metadata.items()
                             if k not in {"nvext_agent_hints", "nvext_request_context", "nvext_payload"}
                         },
+                        **driver_queue_metadata,
                     }
                 )
                 rows.append(row)
@@ -657,6 +693,7 @@ async def main_async() -> None:
                         "ttft_ms": row["ttft_ms"],
                         "total_latency_ms": row["total_latency_ms"],
                         **bridge_metadata,
+                        **driver_queue_metadata,
                     }
                 )
                 print(json.dumps(row, sort_keys=True), flush=True)
@@ -697,6 +734,56 @@ async def main_async() -> None:
             )
             await sleep_until(earliest_offset_ms)
 
+        async def wait_for_e2e_priority_filler_slot(
+            pair: ReplayPair,
+            idx: int,
+            *,
+            replay_due_ms: float,
+        ) -> None:
+            if not e2e_priority_mode_enabled():
+                return
+            filler_request_id = f"{pair.session_id}_pressure_{idx:03d}_request"
+            pending = driver_pending_low.setdefault(pair.session_id, set())
+            pending.add(filler_request_id)
+            release_offset_ms = replay_due_ms + args.priority_replay_release_ms + idx * args.priority_filler_stagger_ms
+            write_trace_event(
+                {
+                    "event": "m27.driver_queue.low_queued",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "phase": "pressure_filler",
+                    "request_id": filler_request_id,
+                    "filler_index": idx,
+                    "queued_offset_ms": round(now_offset_ms(), 3),
+                    "release_offset_ms": round(release_offset_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "priority_label": "low",
+                    "sglang_priority": args.dynamo_low_priority,
+                    "priority_policy": priority_policy_name(),
+                    "meaning": (
+                        "The end-to-end priority driver is holding this low-priority filler "
+                        "until after the urgent replay has been dispatched."
+                    ),
+                }
+            )
+            await sleep_until(release_offset_ms)
+            pending.discard(filler_request_id)
+            write_trace_event(
+                {
+                    "event": "m27.driver_queue.low_released",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "phase": "pressure_filler",
+                    "request_id": filler_request_id,
+                    "filler_index": idx,
+                    "released_offset_ms": round(now_offset_ms(), 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "priority_label": "low",
+                    "sglang_priority": args.dynamo_low_priority,
+                    "priority_policy": priority_policy_name(),
+                }
+            )
+
         async def run_filler(
             pair: ReplayPair,
             idx: int,
@@ -712,6 +799,11 @@ async def main_async() -> None:
                     tool_start_offset_ms=tool_start_offset_ms,
                     replay_due_ms=replay_due_ms,
                     hint_offset_ms=hint_offset_ms,
+                )
+                await wait_for_e2e_priority_filler_slot(
+                    pair,
+                    idx,
+                    replay_due_ms=replay_due_ms,
                 )
             filler_session_id = f"{pair.session_id}_pressure_{idx}"
             if args.filler_diverge_early:
@@ -858,6 +950,7 @@ async def main_async() -> None:
                 for idx in range(args.filler_sessions)
             ]
             await sleep_until(replay_due_ms)
+            replay_driver_metadata: dict[str, Any] = {}
             if priority_direct_enabled():
                 write_trace_event(
                     {
@@ -868,6 +961,31 @@ async def main_async() -> None:
                         "guard_ms": args.priority_replay_guard_ms,
                         "release_ms": args.priority_replay_release_ms,
                         "priority_policy": priority_policy_name(),
+                    }
+                )
+            if e2e_priority_mode_enabled():
+                pending_lower = sorted(driver_pending_low.get(pair.session_id, set()))
+                replay_driver_metadata = {
+                    "driver_priority_policy": priority_policy_name(),
+                    "driver_pending_lower_priority_count": len(pending_lower),
+                    "driver_older_low_priority_waiting": len(pending_lower),
+                    "driver_jump_observed": bool(pending_lower),
+                    "driver_pending_lower_priority_sample": ",".join(pending_lower[:8]),
+                    "driver_replay_bypassed_concurrency_gate": True,
+                }
+                write_trace_event(
+                    {
+                        "event": "m27.driver_queue.high_dispatch",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "phase": "replay",
+                        "request_id": f"{pair.session_id}_replay",
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "dispatch_offset_ms": round(now_offset_ms(), 3),
+                        "priority_label": "high",
+                        "sglang_priority": args.dynamo_high_priority,
+                        "priority_policy": priority_policy_name(),
+                        **replay_driver_metadata,
                     }
                 )
             write_trace_event(
@@ -904,8 +1022,9 @@ async def main_async() -> None:
                 "replay",
                 f"{pair.session_id}_replay",
                 args.max_tokens,
-                use_concurrency_limit=not priority_direct_enabled(),
+                use_concurrency_limit=not (priority_direct_enabled() or e2e_priority_mode_enabled()),
                 deadline_ms=replay_due_ms,
+                driver_queue_metadata=replay_driver_metadata,
             )
             write_trace_event(
                 {

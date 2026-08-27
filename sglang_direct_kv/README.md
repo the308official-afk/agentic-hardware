@@ -5018,6 +5018,18 @@ dynamo_priority_hints:
   priority scheduling" without using the full Dynamo stack.
   it does not call our direct KV prefetch hook.
 
+e2e_priority_hints:
+  emits the same Dynamo-style top-level nvext.agent_hints payload.
+  also translates the hint into SGLang's native priority field.
+  additionally makes the local experiment driver queue priority-aware:
+    - low-priority filler requests can be held near replay time
+    - urgent replay bypasses the driver concurrency gate
+    - held low-priority fillers are released after urgent replay dispatch
+  this tests priority across both queues:
+    1. the local driver/client dispatch queue
+    2. the SGLang scheduler queue
+  it does not call our direct KV prefetch hook.
+
 oracle_prefetch:
   optional advanced mode for later sensitivity studies.
   excluded from the default run so the main report stays simple.
@@ -5046,6 +5058,49 @@ PRIORITY_REPLAY_GUARD_MS=120 \
 PRIORITY_REPLAY_RELEASE_MS=80 \
 bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Run the end-to-end priority queue comparison:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+AGENTIC_KV_TRACE_KV_POOL=1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL=e2e_priority_vs_sglang_priority_1 \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+MAX_TIMELINE_GAPS=32 \
+MAX_PAIRS=2 \
+MODES="no_prefetch dynamo_priority_hints e2e_priority_hints" \
+TOOL_WAIT_LIST_MS="500" \
+FILLER_LIST="12 24 32" \
+REQUEST_CONCURRENCY=4 \
+FILLER_PROMPT_TOKENS=1024 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=16 \
+MEM_FRACTION_STATIC=0.72 \
+TRACE_INDEX_CSV=~/kv_cache_offloading/experiments/reports/latest_prompt_evolution_trace_index.csv \
+bash scripts/run_master_report.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+What to look for:
+
+```text
+Dynamo priority hints:
+  proves whether priority metadata reached SGLang and whether SGLang scheduler
+  traces saw receive/queue/admission behavior.
+
+End-to-end priority hints:
+  proves whether the local driver held lower-priority filler work and dispatched
+  urgent replay ahead of that held work, while still sending SGLang priority.
+
+This lets us separate two possible failure points:
+  1. the client/driver queue did not prioritize the urgent replay
+  2. SGLang received priority, but priority still did not make KV ready in time
 ```
 
 Build the real prompt-pair workload from an AgentBench trace index:
