@@ -6370,6 +6370,18 @@ fresh experiments are needed to populate the newly added request/correlation
 fields in raw SGLang trace events.
 ```
 
+SGLang version portability audit:
+
+```text
+Before migrating this testbed to v0.5.11-cu129-runtime, read:
+
+  INSTRUMENTATION_AUDIT.md
+    -> SGLang Version Portability Audit
+
+That section lists which hooks are already modular, which ones are
+version-sensitive, and which ones need adapter wrapping before the migration.
+```
+
 ### Milestone 36: Multi-Session Agentic Replay Forensics
 
 Why this milestone is needed:

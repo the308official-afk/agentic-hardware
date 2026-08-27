@@ -106,6 +106,92 @@ The current report should not overclaim these:
 | Hardware page identity | `block_id` is a stable logical report ID, not a hardware page-table ID. |
 | All memory traffic | The report sees SGLang KV movement, not every possible CUDA allocation/copy from every library. |
 
+## SGLang Version Portability Audit
+
+This is the pre-migration audit for moving from the current direct-SGLang setup
+to `v0.5.11-cu129-runtime`.
+
+The key conclusion:
+
+```text
+Most reporting, normalization, and ledger code is already modular.
+The version-sensitive surface is concentrated in the SGLang hook installer and
+the server launch flags.
+```
+
+### Portability Matrix
+
+| Area | Main File(s) | Status | Why | Before Moving To `v0.5.11-cu129-runtime` |
+| --- | --- | --- | --- | --- |
+| Hook bootstrap | `src/sitecustomize.py` | Already modular | It is environment-gated by `AGENTIC_KV_TRACE_ENABLE=1` and imports our tracer without editing SGLang site-packages. | Keep this entry point. It should work across versions as long as `PYTHONPATH=src` is set. |
+| SGLang hook installer | `src/agentic_kv/sglang_trace_patch.py` | Version-sensitive | It imports and wraps concrete SGLang classes such as `HiCacheController`, `HiRadixCache`, host KV pools, scheduler, and TP worker internals. Method names and signatures can change between SGLang versions. | Wrap this behind a version adapter before migration. Treat this as the main compatibility boundary. |
+| Raw event vocabulary | `src/agentic_kv/block_ledger/normalizer.py` | Mostly modular, with a small version-sensitive map | The normalized schema is stable, but `EVENT_MAP` depends on raw event names like `hicache.load.end`, `hiradix.load_back.end`, and `hostpool.load_to_device_per_layer.end`. | Keep the normalized output stable. Move raw-event maps into versioned adapter tables if v0.5.11 renames hooks. |
+| Stable KV event schema | `src/agentic_kv/block_ledger/events.py` | Already modular | It defines stable event types such as `WRITE_HOST`, `EVICT_GPU`, `LOAD_GPU`, and `MATCH_PREFIX`; it has no SGLang imports. | No migration change expected. |
+| Stable block IDs | `src/agentic_kv/block_ledger/block_id.py` | Already modular | It creates logical IDs from stable fields such as session, token range, node id, and index signatures. | Keep unchanged. If v0.5.11 exposes better block/page IDs, add them as optional ID ingredients. |
+| KV ledger state machine | `src/agentic_kv/block_ledger/ledger.py` | Already modular | It consumes normalized events and does not care which SGLang version emitted the raw trace. | Keep unchanged unless new v0.5.11 states need additional stable event types. |
+| Evidence vocabulary | `src/agentic_kv/evidence_schema.py` | Already modular | It centralizes report-facing movement/evidence names like H2D, D2H, GPU evict, host evict, and recompute. | Keep unchanged. |
+| Master report builder | `scripts/build_milestone27_controlled_replay_report.py` | Mostly modular | It consumes structured artifacts and normalized rows, but mode names and projected-hardware assumptions are report-level logic. | Keep report code stable. Only update if new v0.5.11 artifacts expose stronger evidence columns. |
+| Environment capture | `scripts/collect_run_environment.py` | Mostly modular | It records run environment details, but should capture version/capability differences clearly. | Ensure the report records SGLang version, Docker image, priority scheduling support, and radix eviction policy choices. |
+| HiCache server launcher | `scripts/run_sglang_hicache_server.sh` | Version/config-sensitive | Launch flags differ across SGLang builds. Current direct setup supports priority scheduling, but current `0.5.10.post1` does not support `--radix-eviction-policy priority`; v0.5.11 is expected to. | Add/keep capability-gated flags. Do not blindly pass `--radix-eviction-policy priority` unless the target version accepts it. |
+| KV path probes | `scripts/probe_sglang_kv_paths.py`, `scripts/extract_sglang_kv_targets.py` | Migration helper | These scripts discover real SGLang KV/cache/offload symbols. | Rerun after installing v0.5.11 and compare target files/methods against the current map. |
+| Run orchestration | `scripts/run_master_report.sh`, milestone run scripts | Mostly modular | These scripts orchestrate server launch, workloads, and report generation; they depend on the launcher and trace hooks. | Keep as-is where possible. Pass version-specific launch knobs through environment variables. |
+
+### Recommended Adapter Boundary
+
+Before the migration, isolate the version-sensitive SGLang code behind this
+shape:
+
+```text
+src/agentic_kv/sglang_adapters/
+  __init__.py
+  base.py          stable adapter interface
+  capabilities.py  detect installed SGLang version and supported flags
+  v0510.py         current 0.5.10.post1 hook targets
+  v0511.py         v0.5.11-cu129-runtime hook targets
+```
+
+The stable interface should answer:
+
+```text
+Which classes should be wrapped?
+Which methods emit H2D, D2H, eviction, match-prefix, and request-stage events?
+Which launch flags are supported?
+Does this build support priority scheduling?
+Does this build support radix eviction policy = priority?
+```
+
+Everything above the adapter should continue to consume stable normalized
+events. That keeps the report, ledger, timelines, and audit reusable across
+future SGLang versions.
+
+### Migration Checklist
+
+Use this checklist before replacing the current runtime:
+
+1. Install or build `v0.5.11-cu129-runtime` in a separate environment.
+2. Run the SGLang capability probe and record:
+   - SGLang version
+   - `--enable-priority-scheduling` support
+   - `--radix-eviction-policy` choices
+   - HiCache-related launch flags
+3. Run `scripts/probe_sglang_kv_paths.py` against the new environment.
+4. Compare the discovered classes/methods with the current hook matrix.
+5. Add/update the v0.5.11 adapter only for changed hooks.
+6. Run the forced-eviction sanity probe to verify H2D/D2H/eviction traces.
+7. Run the Dynamo-priority retention sanity probe to check whether priority
+   retention behavior improves under `--radix-eviction-policy priority`.
+8. Rebuild the master report and run `scripts/audit_master_report_evidence.py`.
+
+### Current Migration Risk
+
+| Risk | Impact | Mitigation |
+| --- | --- | --- |
+| SGLang method names changed | Hooks silently miss events. | Capability/probe scripts must run before experiments. |
+| Method signatures changed | Hook wrapper may capture weak context or fail. | Keep wrappers defensive and versioned. |
+| Raw event names changed | Ledger/report may miss normalized events. | Version the raw-event mapping, not the stable event schema. |
+| Priority eviction flag unsupported in current env | Priority-retention experiments may not reproduce Dynamo setup. | Move to v0.5.11 for this specific experiment. |
+| Docker/runtime differences | CUDA, torch, and SGLang package paths may differ. | Capture environment in every report and keep launcher flags capability-gated. |
+
 ## Audit Outputs
 
 Each generated master report directory should contain:
