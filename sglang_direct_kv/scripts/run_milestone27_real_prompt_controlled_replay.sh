@@ -28,6 +28,7 @@ PRIORITY_FILLER_STAGGER_MS="${PRIORITY_FILLER_STAGGER_MS:-2}"
 DYNAMO_HIGH_PRIORITY="${DYNAMO_HIGH_PRIORITY:-100}"
 DYNAMO_NORMAL_PRIORITY="${DYNAMO_NORMAL_PRIORITY:-0}"
 DYNAMO_LOW_PRIORITY="${DYNAMO_LOW_PRIORITY:--100}"
+DYNAMO_RADIX_EVICTION_POLICY="${DYNAMO_RADIX_EVICTION_POLICY:-}"
 REQUEST_CONCURRENCY="${REQUEST_CONCURRENCY:-8}"
 MAX_TOKENS="${MAX_TOKENS:-8}"
 PREFETCH_MAX_TOKENS="${PREFETCH_MAX_TOKENS:-1}"
@@ -159,6 +160,7 @@ echo "PRIORITY_REPLAY_RELEASE_MS=${PRIORITY_REPLAY_RELEASE_MS}"
 echo "DYNAMO_HIGH_PRIORITY=${DYNAMO_HIGH_PRIORITY}"
 echo "DYNAMO_NORMAL_PRIORITY=${DYNAMO_NORMAL_PRIORITY}"
 echo "DYNAMO_LOW_PRIORITY=${DYNAMO_LOW_PRIORITY}"
+echo "DYNAMO_RADIX_EVICTION_POLICY=${DYNAMO_RADIX_EVICTION_POLICY:-<default>}"
 echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER}"
 echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL}"
 echo "Total cases: ${total_cases}"
@@ -193,7 +195,10 @@ run_case() {
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
   if [[ "${mode}" == "dynamo_priority_hints" ]]; then
-    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value ${DYNAMO_NORMAL_PRIORITY} --radix-eviction-policy priority"
+    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value ${DYNAMO_NORMAL_PRIORITY}"
+    if [[ -n "${DYNAMO_RADIX_EVICTION_POLICY}" ]]; then
+      export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --radix-eviction-policy ${DYNAMO_RADIX_EVICTION_POLICY}"
+    fi
   fi
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &

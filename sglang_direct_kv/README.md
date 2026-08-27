@@ -6796,7 +6796,10 @@ dynamo_priority_hints:
   maps high-priority prefetch/replay work to SGLang priority=100.
   maps background filler pressure to SGLang priority=-100.
   launches SGLang with --enable-cache-report, --enable-priority-scheduling,
-  --default-priority-value, and --radix-eviction-policy priority for this mode.
+  and --default-priority-value for this mode.
+  optional: set DYNAMO_RADIX_EVICTION_POLICY if a newer SGLang build supports
+  the eviction policy you want. This tested SGLang build accepts lru/lfu/slru,
+  not priority.
 ```
 
 Main run command:
