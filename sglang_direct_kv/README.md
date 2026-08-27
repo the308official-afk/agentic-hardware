@@ -6819,7 +6819,7 @@ UPDATE_LATEST=1 \
 WORKLOAD_SOURCE=synthetic \
 MAX_TIMELINE_GAPS=32 \
 MAX_PAIRS=2 \
-MODES="no_prefetch dynamo_priority_hints projected_hardware" \
+MODES="no_prefetch dynamo_priority_hints" \
 TOOL_WAIT_LIST_MS=500 \
 FILLER_LIST="12 16 24" \
 REQUEST_CONCURRENCY=4 \
@@ -6835,6 +6835,15 @@ DYNAMO_NORMAL_PRIORITY=0 \
 DYNAMO_LOW_PRIORITY=-100 \
 bash scripts/run_master_report.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Note:
+
+```text
+Only measured SGLang modes should be listed in MODES.
+The report automatically adds projected_hardware_bypass rows from measured
+results. If projected_hardware is accidentally included in MODES, the runner
+skips it because it is a report-only estimate, not a GPU workload.
 ```
 
 GPU activity note:
