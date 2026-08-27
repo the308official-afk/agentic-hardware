@@ -11296,7 +11296,7 @@ def render_html(
     grouped_comparison_evidence_html = ""
     if grouped_comparison_rows:
         grouped_comparison_evidence_html = f"""
-    <h3>Grouped Mode Comparison Rows</h3>
+    <h3>Comparison Rows</h3>
     <p class="note">This table maps compact grouped timeline labels back to the exact measured mode, task, gap, wait time, prefetch margin, H2D counts, and verdict for this run.</p>
     {table_html(mode_comparison_summary_rows(grouped_comparison_rows), limit=1000)}
 """
@@ -11368,7 +11368,7 @@ def render_html(
         ("summary", "Summary"),
         ("setup", "Experiment Setup"),
         ("global-prefetch", global_title),
-        ("grouped-mode-comparison", "Grouped Mode Comparison"),
+        ("grouped-mode-comparison", "Comparison Timeline"),
         ("priority-queue-proof", "Priority Queue Proof"),
         ("observations", "Key Observations"),
         ("appendix", "Evidence Tables / Raw Proof"),
@@ -11412,7 +11412,7 @@ def render_html(
   </details>
 
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
-    <summary><h2>Grouped Mode Comparison Timeline</h2></summary>
+    <summary><h2>Comparison Timeline</h2></summary>
     {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows, grouped_block_lifecycle_rows)}
   </details>
 
