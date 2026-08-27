@@ -7108,12 +7108,14 @@ Focused priority queue sanity command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-RESULT_LABEL=priority_queue_sanity_v0511_1 \
+RESULT_LABEL=priority_queue_jump_sanity_1 \
 SGLANG_DOCKER_IMAGE=local/dynamo-sglang:runtime-json-logs-ec2 \
 SGLANG_DOCKER_PULL=0 \
 HICACHE_SIZE_GB=14 \
-FILLER_LIST=48 \
-REQUEST_CONCURRENCY=16 \
+LOW_BEFORE_COUNT=24 \
+LOW_AFTER_COUNT=8 \
+REQUEST_CONCURRENCY=64 \
+HIGH_SUBMIT_DELAY_MS=100 \
 bash scripts/run_priority_queue_sanity.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
@@ -7126,33 +7128,57 @@ It does not ask whether priority improves every latency number.
 It asks the narrower question:
 
   Did the high-priority request reach SGLang with priority metadata?
-  Did it appear inside SGLang's scheduler queue/admission instrumentation?
-  Did lower-priority filler work remain ahead of it or get admitted first?
+  Was it submitted after older low-priority requests?
+  Did SGLang admit it before any of those older low-priority requests?
 ```
 
 Main output files:
 
 ```text
-artifacts/results/runs/controlled/<RESULT_LABEL>/controlled_replay_report/dynamo_priority_hint_translation.csv
-artifacts/results/runs/controlled/<RESULT_LABEL>/controlled_replay_report/dynamo_priority_queue_effectiveness.csv
-artifacts/results/runs/controlled/<RESULT_LABEL>/controlled_replay_report/controlled_replay_report.html
+artifacts/results/runs/priority_queue_sanity/<RESULT_LABEL>/priority_queue_sanity_trace.jsonl
+artifacts/results/runs/priority_queue_sanity/<RESULT_LABEL>/priority_queue_sanity_metrics.jsonl
+artifacts/results/reports/<RESULT_LABEL>/priority_queue_sanity/priority_queue_sanity_summary.csv
+artifacts/results/reports/<RESULT_LABEL>/priority_queue_sanity/priority_queue_sanity_report.md
 ```
 
 What success looks like:
 
 ```text
-priority_receive_seen = 1
-  SGLang received the request priority.
+verdict = priority_jump_observed
+  Strongest proof.
 
-priority_queue_seen = 1
-  The request appeared in a captured SGLang queue snapshot.
+low_requests_submitted_before_high > 0
+  Older low-priority requests were already submitted before the target.
 
-priority_admitted_seen = 1
-  The request appeared in the scheduler admission trace.
+older_low_admitted_after_high > 0
+  At least one older low-priority request was admitted after the high-priority
+  target. That means the high-priority request jumped ahead.
 
-priority_queue_effectiveness_verdict = priority_honored_in_admission_order
-  Strongest proof: the traced admission order did not show lower-priority
-  work admitted before the high-priority request.
+high_priority_seen = 1
+  SGLang-side tracing saw priority=100 for the target request.
+```
+
+Observed smoke result:
+
+```text
+RESULT_LABEL=priority_queue_jump_sanity_smoke_1
+verdict = priority_jump_observed
+
+High-priority request:
+  pq_high_0000, priority=100
+
+Older low-priority requests submitted before it:
+  12
+
+Older low-priority requests admitted before high priority:
+  0
+
+Older low-priority requests admitted after high priority:
+  12
+
+Meaning:
+  SGLang admitted the high-priority request before all 12 older low-priority
+  requests. This is direct evidence of priority queue reordering.
 ```
 
 What a negative or weak result means:
