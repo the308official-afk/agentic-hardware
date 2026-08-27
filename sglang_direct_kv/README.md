@@ -135,11 +135,14 @@ These are the current core claims we can safely make from the testbed so far:
 8. Simply forcing priority in software can be expensive. The Milestone 38 deadline-priority emulation gave urgent KV work special treatment, but it still had to pass through SGLang's normal software/runtime path. That path added enough overhead that replay TTFT became worse in the latest stress run. This strengthens the hardware argument: we need a faster, lower-overhead, deadline-aware KV movement path, not just a software queueing trick.
 
 9. The Dynamo priority-hint bridge lets us test a stronger software baseline:
-   agent hints are emitted as `custom_params.nvext.agent_hints` and translated
-   into SGLang's native `priority` field. If this still misses replay deadlines
-   under KV-pool pressure, the claim becomes sharper: existing priority hints
-   help express intent, but they still need a low-overhead KV movement and
-   residency enforcement path closer to the memory system.
+   agent hints are emitted as top-level `nvext.agent_hints` with numeric
+   `priority`, `osl`, and `expected_output_tokens`, then translated into
+   SGLang's native `priority` field. We also mirror the same hint under
+   `custom_params.nvext.agent_hints` only so our tracer can prove what was
+   sent. If this still misses replay deadlines under KV-pool pressure, the
+   claim becomes sharper: existing priority hints help express intent, but they
+   still need a low-overhead KV movement and residency enforcement path closer
+   to the memory system.
 
 Latest harsher controlled run:
 
@@ -5003,8 +5006,10 @@ direct_prefetch:
   this exercises SGLang's direct KV load-back path.
 
 dynamo_priority_hints:
-  emits a Dynamo-style hint payload under custom_params.nvext.agent_hints.
-  the proxy driver translates that hint into SGLang's native priority field:
+  emits a Dynamo-style top-level nvext.agent_hints payload.
+  includes numeric priority plus osl / expected_output_tokens.
+  mirrors the same hint under custom_params.nvext.agent_hints for tracing only.
+  the proxy driver also translates that hint into SGLang's native priority field:
     - urgent replay requests get high priority
     - background filler pressure gets low priority
     - SGLang is launched with priority scheduling enabled for this mode
@@ -5154,7 +5159,8 @@ Dynamo priority hint translation proof:
 ```text
 The report appendix includes "Dynamo Priority Hint Translation Rows".
 This table shows, per gap:
-  custom_params.nvext.agent_hints priority
+  top-level nvext.agent_hints.priority
+  mirrored custom_params.nvext.agent_hints priority for tracing
   translated SGLang priority integer
   whether the hint/replay used high priority
   whether background filler traffic used low priority
@@ -6771,20 +6777,26 @@ SGLang can accept request priority directly. Dynamo-style frontends can express
 agent/session intent as hints. This milestone connects those ideas without
 starting the full Dynamo stack:
 
-  custom_params.nvext.agent_hints
+  top-level nvext.agent_hints
     -> proxy-driver translation
     -> SGLang priority integer
     -> SGLang priority scheduler
+
+The same hint is mirrored under `custom_params.nvext.agent_hints` so our
+SGLang trace patch can audit the request without changing the external
+Dynamo-style request shape.
 ```
 
 What this mode means:
 
 ```text
 dynamo_priority_hints:
-  sends a Dynamo-style agent hint with phase, session, deadline, and priority.
+  sends a Dynamo-style top-level nvext.agent_hints object with phase, session,
+  deadline, numeric priority, osl, and expected_output_tokens.
   maps high-priority prefetch/replay work to SGLang priority=100.
   maps background filler pressure to SGLang priority=-100.
-  launches SGLang with --enable-priority-scheduling for this mode.
+  launches SGLang with --enable-cache-report, --enable-priority-scheduling,
+  --default-priority-value, and --radix-eviction-policy priority for this mode.
 ```
 
 Main run command:

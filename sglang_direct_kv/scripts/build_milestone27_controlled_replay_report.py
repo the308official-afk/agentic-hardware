@@ -1859,13 +1859,22 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "pre_replay_protected_tokens": checkpoint.get("protected_tokens", ""),
             "hint_source": p_start.get("hint_source") or hint.get("hint_source") or replay.get("hint_source", ""),
             "initial_hint_source": current.get("hint_source", ""),
+            "initial_dynamo_hint_priority": current.get("dynamo_hint_priority", ""),
+            "initial_dynamo_hint_osl": current.get("dynamo_hint_osl", ""),
+            "initial_dynamo_hint_expected_output_tokens": current.get("dynamo_hint_expected_output_tokens", ""),
             "initial_dynamo_agent_priority": current.get("dynamo_agent_priority", ""),
             "initial_sglang_priority": current.get("sglang_priority", ""),
             "initial_priority_translation": current.get("priority_translation", ""),
+            "hint_dynamo_hint_priority": p_start.get("dynamo_hint_priority") or hint.get("dynamo_hint_priority", ""),
+            "hint_dynamo_hint_osl": p_start.get("dynamo_hint_osl") or hint.get("dynamo_hint_osl", ""),
+            "hint_dynamo_hint_expected_output_tokens": p_start.get("dynamo_hint_expected_output_tokens") or hint.get("dynamo_hint_expected_output_tokens", ""),
             "hint_dynamo_agent_priority": p_start.get("dynamo_agent_priority") or hint.get("dynamo_agent_priority", ""),
             "hint_sglang_priority": p_start.get("sglang_priority") or hint.get("sglang_priority", ""),
             "hint_priority_translation": p_start.get("priority_translation") or hint.get("priority_translation", ""),
             "replay_hint_source": replay.get("hint_source", ""),
+            "replay_dynamo_hint_priority": replay.get("dynamo_hint_priority", ""),
+            "replay_dynamo_hint_osl": replay.get("dynamo_hint_osl", ""),
+            "replay_dynamo_hint_expected_output_tokens": replay.get("dynamo_hint_expected_output_tokens", ""),
             "replay_dynamo_agent_priority": replay.get("dynamo_agent_priority", ""),
             "replay_sglang_priority": replay.get("sglang_priority", ""),
             "replay_priority_translation": replay.get("priority_translation", ""),
@@ -2261,13 +2270,23 @@ def dynamo_priority_hint_translation_rows(gaps: list[dict[str, Any]]) -> list[di
                 "fillers": case_fillers(row),
                 "tool_wait_ms": row.get("tool_gap_ms", ""),
                 "initial_hint_source": row.get("initial_hint_source", ""),
+                "initial_dynamo_hint_priority": row.get("initial_dynamo_hint_priority", ""),
+                "initial_dynamo_hint_osl": row.get("initial_dynamo_hint_osl", ""),
+                "initial_dynamo_hint_expected_output_tokens": row.get("initial_dynamo_hint_expected_output_tokens", ""),
                 "initial_dynamo_agent_priority": row.get("initial_dynamo_agent_priority", ""),
                 "initial_sglang_priority": row.get("initial_sglang_priority", ""),
                 "initial_priority_translation": row.get("initial_priority_translation", ""),
                 "hint_source": row.get("hint_source", ""),
+                "hint_dynamo_hint_priority": row.get("hint_dynamo_hint_priority", ""),
+                "hint_dynamo_hint_osl": row.get("hint_dynamo_hint_osl", ""),
+                "hint_dynamo_hint_expected_output_tokens": row.get("hint_dynamo_hint_expected_output_tokens", ""),
                 "hint_dynamo_agent_priority": row.get("hint_dynamo_agent_priority", ""),
                 "hint_sglang_priority": row.get("hint_sglang_priority", ""),
                 "hint_priority_translation": row.get("hint_priority_translation", ""),
+                "replay_hint_source": row.get("replay_hint_source", ""),
+                "replay_dynamo_hint_priority": row.get("replay_dynamo_hint_priority", ""),
+                "replay_dynamo_hint_osl": row.get("replay_dynamo_hint_osl", ""),
+                "replay_dynamo_hint_expected_output_tokens": row.get("replay_dynamo_hint_expected_output_tokens", ""),
                 "replay_dynamo_agent_priority": row.get("replay_dynamo_agent_priority", ""),
                 "replay_sglang_priority": row.get("replay_sglang_priority", ""),
                 "replay_priority_translation": row.get("replay_priority_translation", ""),
@@ -11539,7 +11558,7 @@ def render_html(
     <h3>Mode Summary</h3>
     {table_html(mode_rows)}
     <h3>Dynamo Priority Hint Translation Rows</h3>
-    <p class="note">These rows show the bridge used by <code>dynamo_priority_hints</code>: the emitted <code>custom_params.nvext.agent_hints</code> priority and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
+    <p class="note">These rows show the bridge used by <code>dynamo_priority_hints</code>: the emitted top-level <code>nvext.agent_hints.priority</code>, <code>osl</code>, and <code>expected_output_tokens</code>; the mirrored <code>custom_params.nvext.agent_hints</code> trace copy; and the translated SGLang <code>priority</code> integer sent on the OpenAI-compatible request.</p>
     {table_html(dynamo_priority_rows, limit=1000)}
     <h3>Dynamo Priority Queue Effectiveness Audit</h3>
     <p class="note">This table checks whether the priority hint was only attached to the request or whether SGLang scheduler traces show queue/admission behavior consistent with honoring it.</p>

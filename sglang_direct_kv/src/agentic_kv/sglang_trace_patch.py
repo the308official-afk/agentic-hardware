@@ -699,7 +699,13 @@ def _scheduler_state_summary(obj: Any) -> dict[str, Any]:
 
 
 def _priority_value_from_request(request: dict[str, Any]) -> int | None:
-    for key in ("sglang_priority", "priority"):
+    for key in (
+        "sglang_priority",
+        "priority",
+        "dynamo_hint_priority",
+        "dynamo_agent_priority_value",
+        "agent_priority_value",
+    ):
         value = request.get(key)
         try:
             if value not in (None, ""):
@@ -707,8 +713,8 @@ def _priority_value_from_request(request: dict[str, Any]) -> int | None:
         except (TypeError, ValueError):
             pass
     named = str(
-        request.get("dynamo_agent_priority")
-        or request.get("dynamo_hint_priority")
+        request.get("dynamo_hint_priority_label")
+        or request.get("dynamo_agent_priority")
         or request.get("agent_priority")
         or ""
     ).lower()
@@ -1360,8 +1366,13 @@ def _req_context(req: Any) -> dict[str, Any]:
                 agent_hints = nvext.get("agent_hints")
                 if isinstance(agent_hints, dict):
                     context["dynamo_hint_priority"] = _safe_summary(agent_hints.get("priority"))
+                    context["dynamo_hint_priority_label"] = _safe_summary(agent_hints.get("priority_label"))
                     context["dynamo_hint_request_id"] = _safe_summary(agent_hints.get("request_id"))
                     context["dynamo_hint_phase"] = _safe_summary(agent_hints.get("phase"))
+                    context["dynamo_hint_osl"] = _safe_summary(agent_hints.get("osl"))
+                    context["dynamo_hint_expected_output_tokens"] = _safe_summary(
+                        agent_hints.get("expected_output_tokens")
+                    )
                     context["dynamo_hint_deadline_offset_ms"] = _safe_summary(agent_hints.get("deadline_offset_ms"))
                     context["dynamo_hint_expected_action"] = _safe_summary(agent_hints.get("expected_action"))
                     if context.get("dynamo_hint_request_id") and "request_id" not in context:
@@ -1370,6 +1381,18 @@ def _req_context(req: Any) -> dict[str, Any]:
             if isinstance(bridge, dict):
                 context["dynamo_agent_priority"] = _safe_summary(bridge.get("dynamo_agent_priority"))
                 context["sglang_priority"] = _safe_summary(bridge.get("sglang_priority"))
+                context["dynamo_hint_priority"] = context.get("dynamo_hint_priority") or _safe_summary(
+                    bridge.get("dynamo_hint_priority")
+                )
+                context["dynamo_hint_priority_label"] = context.get("dynamo_hint_priority_label") or _safe_summary(
+                    bridge.get("dynamo_hint_priority_label")
+                )
+                context["dynamo_hint_osl"] = context.get("dynamo_hint_osl") or _safe_summary(
+                    bridge.get("dynamo_hint_osl")
+                )
+                context["dynamo_hint_expected_output_tokens"] = context.get(
+                    "dynamo_hint_expected_output_tokens"
+                ) or _safe_summary(bridge.get("dynamo_hint_expected_output_tokens"))
                 context["priority_translation"] = _safe_summary(bridge.get("priority_translation"))
                 context["deadline_offset_ms"] = _safe_summary(bridge.get("deadline_offset_ms"))
     except Exception:

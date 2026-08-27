@@ -465,6 +465,7 @@ async def main_async() -> None:
             label: str,
             p_hash: str,
             deadline_ms: float | None,
+            max_tokens: int,
         ) -> tuple[dict[str, Any], dict[str, Any]]:
             if not dynamo_mode_enabled():
                 return {}, {}
@@ -484,24 +485,47 @@ async def main_async() -> None:
                 "phase": phase,
                 "task_index": pair.task_index,
                 "prompt_hash": p_hash,
-                "priority": agent_priority,
+                "priority": sglang_priority,
+                "priority_label": agent_priority,
+                "osl": max_tokens,
+                "expected_output_tokens": max_tokens,
                 "deadline_offset_ms": round(deadline_ms, 3) if deadline_ms is not None else "",
                 "expected_action": hint_action,
                 "reuse_confidence": 0.95 if kv_relevant else 0.2,
                 "kv_cache_relevant": kv_relevant,
             }
+            request_context = {
+                "experiment": "agentic_kv_priority_scheduling",
+                "request_role": agent_priority,
+                "request_id": label,
+                "parent_run_id": pair.session_id,
+                "phase": phase,
+                "case_id": pair.session_id,
+                "gap_id": str(pair.task_index),
+                "task_index": pair.task_index,
+                "correlation_id": f"{pair.session_id}:{phase}:{label}",
+            }
+            nvext = {"agent_hints": hints, "request_context": request_context}
             bridge = {
-                "hint_source": "custom_params.nvext.agent_hints",
+                "hint_source": "top_level.nvext.agent_hints",
+                "hint_mirror_source": "custom_params.nvext.agent_hints",
                 "dynamo_agent_priority": agent_priority,
                 "sglang_priority": sglang_priority,
+                "dynamo_hint_priority": sglang_priority,
+                "dynamo_hint_priority_label": agent_priority,
+                "dynamo_hint_osl": max_tokens,
+                "dynamo_hint_expected_output_tokens": max_tokens,
                 "deadline_offset_ms": round(deadline_ms, 3) if deadline_ms is not None else "",
                 "priority_translation": (
-                    f"nvext.agent_hints.priority={agent_priority} -> "
+                    f"nvext.agent_hints.priority={sglang_priority} "
+                    f"(label={agent_priority}) -> "
                     f"SGLang priority={sglang_priority}"
                 ),
                 "nvext_agent_hints": hints,
+                "nvext_request_context": request_context,
+                "nvext_payload": nvext,
             }
-            request_extra = {"priority": sglang_priority}
+            request_extra = {"priority": sglang_priority, "nvext": nvext}
             return request_extra, bridge
 
         async def run_request(
@@ -515,7 +539,7 @@ async def main_async() -> None:
             deadline_ms: float | None = None,
         ) -> dict[str, Any]:
             p_hash = prompt_hash(prompt)
-            request_extra, bridge_metadata = dynamo_hint_bridge(pair, phase, label, p_hash, deadline_ms)
+            request_extra, bridge_metadata = dynamo_hint_bridge(pair, phase, label, p_hash, deadline_ms, max_tokens)
             write_trace_event(
                 {
                     "event": "m27.request.submitted",
@@ -541,6 +565,8 @@ async def main_async() -> None:
                         "prompt_hash": p_hash,
                         "client_priority": bridge_metadata["dynamo_agent_priority"],
                         "sglang_priority": bridge_metadata["sglang_priority"],
+                        "dynamo_hint_priority": bridge_metadata["dynamo_hint_priority"],
+                        "dynamo_hint_osl": bridge_metadata["dynamo_hint_osl"],
                         "priority_translation": bridge_metadata["priority_translation"],
                         "deadline_offset_ms": bridge_metadata["deadline_offset_ms"],
                     }
@@ -562,19 +588,33 @@ async def main_async() -> None:
                 )
                 params = agentic_params(pair, phase, args.mode, label, p_hash)
                 if bridge_metadata:
-                    params["nvext"] = {"agent_hints": bridge_metadata["nvext_agent_hints"]}
+                    params["nvext"] = bridge_metadata["nvext_payload"]
                     params["dynamo_priority_bridge"] = {
                         "hint_source": bridge_metadata["hint_source"],
+                        "hint_mirror_source": bridge_metadata["hint_mirror_source"],
                         "dynamo_agent_priority": bridge_metadata["dynamo_agent_priority"],
                         "sglang_priority": bridge_metadata["sglang_priority"],
+                        "dynamo_hint_priority": bridge_metadata["dynamo_hint_priority"],
+                        "dynamo_hint_priority_label": bridge_metadata["dynamo_hint_priority_label"],
+                        "dynamo_hint_osl": bridge_metadata["dynamo_hint_osl"],
+                        "dynamo_hint_expected_output_tokens": bridge_metadata[
+                            "dynamo_hint_expected_output_tokens"
+                        ],
                         "deadline_offset_ms": bridge_metadata["deadline_offset_ms"],
                         "priority_translation": bridge_metadata["priority_translation"],
                     }
                     params["agentic_kv"].update(
                         {
                             "hint_source": bridge_metadata["hint_source"],
+                            "hint_mirror_source": bridge_metadata["hint_mirror_source"],
                             "dynamo_agent_priority": bridge_metadata["dynamo_agent_priority"],
                             "sglang_priority": bridge_metadata["sglang_priority"],
+                            "dynamo_hint_priority": bridge_metadata["dynamo_hint_priority"],
+                            "dynamo_hint_priority_label": bridge_metadata["dynamo_hint_priority_label"],
+                            "dynamo_hint_osl": bridge_metadata["dynamo_hint_osl"],
+                            "dynamo_hint_expected_output_tokens": bridge_metadata[
+                                "dynamo_hint_expected_output_tokens"
+                            ],
                             "deadline_offset_ms": bridge_metadata["deadline_offset_ms"],
                             "priority_translation": bridge_metadata["priority_translation"],
                         }
@@ -598,7 +638,11 @@ async def main_async() -> None:
                         "tool_names": pair.tool_names,
                         "priority": pair.priority,
                         "source": pair.source,
-                        **{k: v for k, v in bridge_metadata.items() if k != "nvext_agent_hints"},
+                        **{
+                            k: v
+                            for k, v in bridge_metadata.items()
+                            if k not in {"nvext_agent_hints", "nvext_request_context", "nvext_payload"}
+                        },
                     }
                 )
                 rows.append(row)

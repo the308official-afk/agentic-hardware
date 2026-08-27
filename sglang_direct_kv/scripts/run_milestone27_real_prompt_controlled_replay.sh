@@ -193,7 +193,7 @@ run_case() {
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
   if [[ "${mode}" == "dynamo_priority_hints" ]]; then
-    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-priority-scheduling --default-priority-value ${DYNAMO_NORMAL_PRIORITY}"
+    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value ${DYNAMO_NORMAL_PRIORITY} --radix-eviction-policy priority"
   fi
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
