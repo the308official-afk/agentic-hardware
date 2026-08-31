@@ -1,0 +1,398 @@
+#!/usr/bin/env python
+from __future__ import annotations
+
+import argparse
+import asyncio
+import base64
+import json
+import os
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
+
+MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
+
+
+@dataclass(frozen=True)
+class HarnessPair:
+    session_id: str
+    prompt: str
+    replay_prompt: str
+    task_index: str
+    prompt_tokens: int
+
+
+def write_trace(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row.setdefault("ts_ns", time.time_ns())
+    row.setdefault("pid", os.getpid())
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def marker(meta: dict[str, Any]) -> str:
+    raw = json.dumps(meta, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return MARKER + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def estimate_tokens(prompt: str) -> int:
+    return max(1, int(round(len(prompt.split()) * 1.35)))
+
+
+def build_pairs(harness: str, pressure_level: str, count: int, prompt_tokens: int) -> list[HarnessPair]:
+    pairs: list[HarnessPair] = []
+    for idx in range(count):
+        session_id = f"{harness}_{pressure_level}_session_{idx:03d}"
+        shared = make_shared_prefix(session_id, prompt_tokens)
+        prompt = (
+            f"{shared}\n\n"
+            "Initial turn: inspect this synthetic coding task context and answer briefly. "
+            "The tool result will arrive later."
+        )
+        replay_prompt = (
+            f"{shared}\n\n"
+            "Replay turn after tool wait: the tool returned one failing assertion and a traceback. "
+            "Continue from the same context and answer briefly."
+        )
+        pairs.append(
+            HarnessPair(
+                session_id=session_id,
+                prompt=prompt,
+                replay_prompt=replay_prompt,
+                task_index=str(idx),
+                prompt_tokens=estimate_tokens(prompt),
+            )
+        )
+    return pairs
+
+
+async def run_hatcher_request(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> None:
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"{prompt}\n\n{marker(meta)}"}],
+        "max_tokens": int(meta.get("max_tokens") or 8),
+        "temperature": 0,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=None) as client:
+        response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
+        response.raise_for_status()
+
+
+def codex_command(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    cmd = [
+        "npx",
+        "-y",
+        "@openai/codex@latest",
+        "exec",
+        "--ignore-user-config",
+        "--strict-config",
+        "-c",
+        'model_providers.harness.name="Harness Gateway"',
+        "-c",
+        f'model_providers.harness.base_url="{provider_base}"',
+        "-c",
+        'model_providers.harness.env_key="DUMMY_KEY"',
+        "-c",
+        'model_providers.harness.wire_api="responses"',
+        "-c",
+        'model_provider="harness"',
+        "-m",
+        model,
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--json",
+        f"{prompt}\n\n{marker(meta)}",
+    ]
+    return cmd, {"DUMMY_KEY": "dummy"}
+
+
+def claude_command(gateway_base: str, prompt: str, meta: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    cmd = [
+        "npx",
+        "-y",
+        "@anthropic-ai/claude-code@latest",
+        "--bare",
+        "-p",
+        "--model",
+        "claude-sonnet-4-5",
+        "--output-format",
+        "json",
+        "--max-budget-usd",
+        "0.05",
+        "--no-session-persistence",
+        "--prompt-suggestions",
+        "false",
+        f"{prompt}\n\n{marker(meta)}",
+    ]
+    return cmd, {
+        "ANTHROPIC_BASE_URL": gateway_base.rstrip("/"),
+        "ANTHROPIC_API_KEY": "dummy",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+
+
+async def run_cli_request(
+    harness: str,
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> None:
+    if harness == "codex":
+        cmd, extra_env = codex_command(gateway_base, model, prompt, meta)
+    elif harness == "claude_code":
+        cmd, extra_env = claude_command(gateway_base, prompt, meta)
+    else:
+        raise ValueError(f"unsupported CLI harness: {harness}")
+    env = os.environ.copy()
+    env.update(extra_env)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{meta['label']}.log"
+
+    def run() -> None:
+        with log_path.open("w", encoding="utf-8") as handle:
+            subprocess.run(
+                cmd,
+                env=env,
+                cwd="/tmp",
+                input="",
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
+
+    await asyncio.to_thread(run)
+
+
+async def run_harness_request(
+    harness: str,
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> None:
+    if harness == "hatcher":
+        await run_hatcher_request(gateway_base, model, prompt, meta)
+        return
+    await run_cli_request(harness, gateway_base, model, prompt, meta, log_dir)
+
+
+async def run_filler(
+    gateway_base: str,
+    model: str,
+    pair: HarnessPair,
+    idx: int,
+    meta_base: dict[str, Any],
+    tokens: int,
+) -> None:
+    filler_session = f"{pair.session_id}_pressure_{idx:03d}"
+    prompt = make_pressure_filler_prompt(filler_session, tokens)
+    meta = {
+        **meta_base,
+        "session_id": filler_session,
+        "phase": "pressure_filler",
+        "label": f"{filler_session}_request",
+        "task_index": pair.task_index,
+        "prompt_hash": prompt_hash(prompt),
+        "priority_label": "low",
+        "max_tokens": 2,
+    }
+    await run_hatcher_request(gateway_base, model, prompt, meta)
+
+
+async def main_async() -> None:
+    parser = argparse.ArgumentParser(description="Run target replay traffic through Hatcher, Codex, or Claude Code.")
+    parser.add_argument("--harness", choices=("hatcher", "codex", "claude_code"), required=True)
+    parser.add_argument("--mode", choices=("no_prefetch", "e2e_priority_hints"), required=True)
+    parser.add_argument("--pressure-level", required=True)
+    parser.add_argument("--gateway-base", default="http://127.0.0.1:31080")
+    parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
+    parser.add_argument("--trace", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--log-dir", type=Path, required=True)
+    parser.add_argument("--tool-wait-ms", type=int, default=50)
+    parser.add_argument("--target-prompt-tokens", type=int, default=4096)
+    parser.add_argument("--filler-sessions", type=int, default=0)
+    parser.add_argument("--filler-prompt-tokens", type=int, default=1536)
+    parser.add_argument("--session-count", type=int, default=1)
+    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--arrival-gap-ms", type=int, default=40)
+    args = parser.parse_args()
+
+    if args.harness in {"codex", "claude_code"} and shutil.which("npx") is None:
+        raise SystemExit("npx is required for Codex/Claude Code harness probes.")
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.log_dir.mkdir(parents=True, exist_ok=True)
+    pairs = build_pairs(args.harness, args.pressure_level, args.session_count, args.target_prompt_tokens)
+    rows: list[dict[str, Any]] = []
+    sem = asyncio.Semaphore(args.concurrency)
+    workload_start = time.perf_counter()
+
+    def offset_ms() -> float:
+        return (time.perf_counter() - workload_start) * 1000.0
+
+    async def sleep_until(target_ms: float) -> None:
+        delay = workload_start + target_ms / 1000.0 - time.perf_counter()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    write_trace(
+        args.trace,
+        {
+            "event": "m27.workload_start",
+            "harness": args.harness,
+            "mode": args.mode,
+            "pressure_level": args.pressure_level,
+            "model": args.model,
+            "pairs": len(pairs),
+            "tool_wait_list_ms": [args.tool_wait_ms],
+            "filler_sessions": args.filler_sessions,
+            "target_prompt_tokens": args.target_prompt_tokens,
+            "filler_prompt_tokens": args.filler_prompt_tokens,
+        },
+    )
+
+    async def bounded_request(prompt: str, meta: dict[str, Any]) -> None:
+        async with sem:
+            await run_harness_request(args.harness, args.gateway_base, args.model, prompt, meta, args.log_dir)
+
+    async def run_pair(pair: HarnessPair, index: int) -> None:
+        await sleep_until(index * args.arrival_gap_ms)
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.session.start",
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "task_index": pair.task_index,
+                "tool_names": "synthetic_tool",
+                "arrival_offset_ms": round(offset_ms(), 3),
+                "tool_wait_ms": args.tool_wait_ms,
+                "prompt_tokens": pair.prompt_tokens,
+            },
+        )
+        base_meta = {
+            "harness": args.harness,
+            "mode": args.mode,
+            "pressure_level": args.pressure_level,
+            "high_priority": 100,
+            "low_priority": -100,
+        }
+        initial_meta = {
+            **base_meta,
+            "session_id": pair.session_id,
+            "phase": "initial_turn",
+            "label": f"{pair.session_id}_initial",
+            "task_index": pair.task_index,
+            "prompt_hash": prompt_hash(pair.prompt),
+            "priority_label": "high",
+            "max_tokens": 8,
+        }
+        await bounded_request(pair.prompt, initial_meta)
+        tool_start_ms = offset_ms()
+        replay_due_ms = tool_start_ms + args.tool_wait_ms
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.tool_wait.start",
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "tool_start_offset_ms": round(tool_start_ms, 3),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "tool_wait_ms": args.tool_wait_ms,
+                "prompt_hash": prompt_hash(pair.prompt),
+            },
+        )
+        filler_tasks = [
+            asyncio.create_task(run_filler(args.gateway_base, args.model, pair, idx, base_meta, args.filler_prompt_tokens))
+            for idx in range(args.filler_sessions)
+        ]
+        await sleep_until(replay_due_ms)
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.pre_replay.checkpoint",
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "expected_reuse": "intercepted_priority" if args.mode == "e2e_priority_hints" else "baseline",
+                "gpu_resident_tokens": "unknown",
+                "host_resident_tokens": "unknown",
+                "missing_tokens": "unknown",
+                "protected_tokens": "unknown",
+            },
+        )
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.replay.due",
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+            },
+        )
+        replay_meta = {
+            **base_meta,
+            "session_id": pair.session_id,
+            "phase": "replay",
+            "label": f"{pair.session_id}_replay",
+            "task_index": pair.task_index,
+            "prompt_hash": prompt_hash(pair.replay_prompt),
+            "priority_label": "high",
+            "deadline_offset_ms": round(replay_due_ms, 3),
+            "max_tokens": 8,
+        }
+        await bounded_request(pair.replay_prompt, replay_meta)
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.tool_wait.end",
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+            },
+        )
+        await asyncio.gather(*filler_tasks, return_exceptions=True)
+        rows.append(
+            {
+                "harness": args.harness,
+                "mode": args.mode,
+                "session_id": pair.session_id,
+                "tool_wait_ms": args.tool_wait_ms,
+                "filler_sessions": args.filler_sessions,
+                "target_prompt_tokens": args.target_prompt_tokens,
+                "pressure_level": args.pressure_level,
+            }
+        )
+
+    await asyncio.gather(*(run_pair(pair, idx) for idx, pair in enumerate(pairs)))
+    write_trace(args.trace, {"event": "m27.workload_end", "harness": args.harness, "mode": args.mode, "row_count": len(rows)})
+    with args.out.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def main() -> None:
+    asyncio.run(main_async())
+
+
+if __name__ == "__main__":
+    main()

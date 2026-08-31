@@ -17,6 +17,7 @@ BURST_SIZE="${BURST_SIZE:-4}"
 BURST_GAP_MS="${BURST_GAP_MS:-800}"
 TOOL_WAIT_LIST_MS="${TOOL_WAIT_LIST_MS:-100 250 500 1000}"
 TOOL_WAIT_JITTER_MS="${TOOL_WAIT_JITTER_MS:-0}"
+SYNC_REPLAY_AFTER_INITIALS="${SYNC_REPLAY_AFTER_INITIALS:-0}"
 PREFETCH_TIMING="${PREFETCH_TIMING:-early}"
 HINT_DELAY_MS="${HINT_DELAY_MS:-20}"
 PREFETCH_LEAD_MS="${PREFETCH_LEAD_MS:-120}"
@@ -37,11 +38,19 @@ SERVER_READY_TIMEOUT_SECS="${SERVER_READY_TIMEOUT_SECS:-900}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-16384}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-16}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.72}"
+DYNAMO_HIGH_PRIORITY="${DYNAMO_HIGH_PRIORITY:-100}"
+DYNAMO_NORMAL_PRIORITY="${DYNAMO_NORMAL_PRIORITY:-0}"
+DYNAMO_LOW_PRIORITY="${DYNAMO_LOW_PRIORITY:--100}"
+DYNAMO_RADIX_EVICTION_POLICY="${DYNAMO_RADIX_EVICTION_POLICY:-}"
+DYNAMO_SCHEDULE_POLICY="${DYNAMO_SCHEDULE_POLICY:-fcfs}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-32}"
+PRESSURE_LEVEL="${PRESSURE_LEVEL:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 BASE_EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
 AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-1}"
 AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-1}"
+AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
+AGENTIC_RUNTIME_TELEMETRY_BACKEND="${AGENTIC_RUNTIME_TELEMETRY_BACKEND:-sglang}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -149,6 +158,8 @@ echo "SESSION_COUNT=${SESSION_COUNT}"
 echo "ARRIVAL_SHAPE=${ARRIVAL_SHAPE}"
 echo "ARRIVAL_GAP_MS=${ARRIVAL_GAP_MS}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
+echo "PRESSURE_LEVEL=${PRESSURE_LEVEL:-<none>}"
+echo "SYNC_REPLAY_AFTER_INITIALS=${SYNC_REPLAY_AFTER_INITIALS}"
 echo "PREFETCH_TIMING=${PREFETCH_TIMING}"
 echo "HINT_DELAY_MS=${HINT_DELAY_MS}"
 echo "PREFETCH_LEAD_MS=${PREFETCH_LEAD_MS}"
@@ -160,22 +171,29 @@ echo "REQUEST_CONCURRENCY=${REQUEST_CONCURRENCY}"
 echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
 echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC}"
 echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS}"
+echo "DYNAMO_HIGH_PRIORITY=${DYNAMO_HIGH_PRIORITY}"
+echo "DYNAMO_NORMAL_PRIORITY=${DYNAMO_NORMAL_PRIORITY}"
+echo "DYNAMO_LOW_PRIORITY=${DYNAMO_LOW_PRIORITY}"
+echo "DYNAMO_RADIX_EVICTION_POLICY=${DYNAMO_RADIX_EVICTION_POLICY:-<default>}"
 echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER}"
 echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL}"
+echo "AGENTIC_RUNTIME_TELEMETRY=${AGENTIC_RUNTIME_TELEMETRY}"
+echo "AGENTIC_RUNTIME_TELEMETRY_BACKEND=${AGENTIC_RUNTIME_TELEMETRY_BACKEND}"
 
 run_case() {
   local mode="$1"
   case_idx=$((case_idx + 1))
-  local case_id="${mode}_sessions${SESSION_COUNT}_${ARRIVAL_SHAPE}_tw${TOOL_WAIT_LIST_MS// /-}"
+  local case_id="${PRESSURE_LEVEL:+${PRESSURE_LEVEL}_}${mode}_sessions${SESSION_COUNT}_${ARRIVAL_SHAPE}_tw${TOOL_WAIT_LIST_MS// /-}"
   case_id="${case_id//[^A-Za-z0-9_.-]/_}"
   local case_root="${RESULT_ROOT}/${case_id}"
   local trace="${case_root}/m27_trace.jsonl"
   local telemetry="${case_root}/m27_copy_telemetry.jsonl"
+  local runtime_telemetry="${case_root}/runtime_telemetry.jsonl"
   local metrics="${case_root}/m35_metrics.jsonl"
   local server_log="${case_root}/sglang_server.log"
 
   mkdir -p "${case_root}"
-  rm -f "${trace}" "${telemetry}" "${metrics}" "${server_log}"
+  rm -f "${trace}" "${telemetry}" "${runtime_telemetry}" "${metrics}" "${server_log}"
 
   echo
   echo "==== Milestone 36 case [${case_idx}/${total_cases}]: ${case_id} ===="
@@ -186,9 +204,21 @@ run_case() {
   export AGENTIC_KV_TRACE_KV_POOL
   export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
   export AGENTIC_KV_COPY_TELEMETRY_PATH="${telemetry}"
+  export AGENTIC_RUNTIME_TELEMETRY
+  export AGENTIC_RUNTIME_TELEMETRY_BACKEND
+  export AGENTIC_RUNTIME_TELEMETRY_PATH="${runtime_telemetry}"
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
+  if [[ "${mode}" == "dynamo_priority_hints" || "${mode}" == "e2e_priority_hints" ]]; then
+    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value ${DYNAMO_NORMAL_PRIORITY}"
+    if [[ -n "${DYNAMO_SCHEDULE_POLICY}" ]]; then
+      export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --schedule-policy ${DYNAMO_SCHEDULE_POLICY}"
+    fi
+    if [[ -n "${DYNAMO_RADIX_EVICTION_POLICY}" ]]; then
+      export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --radix-eviction-policy ${DYNAMO_RADIX_EVICTION_POLICY}"
+    fi
+  fi
 
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
   server_pid="$!"
@@ -220,9 +250,15 @@ run_case() {
     --prefetch-max-tokens "${PREFETCH_MAX_TOKENS}"
     --filler-max-tokens "${FILLER_MAX_TOKENS}"
     --concurrency "${REQUEST_CONCURRENCY}"
+    --dynamo-high-priority "${DYNAMO_HIGH_PRIORITY}"
+    --dynamo-normal-priority "${DYNAMO_NORMAL_PRIORITY}"
+    --dynamo-low-priority "${DYNAMO_LOW_PRIORITY}"
     --seed "${SEED}"
     --out "${metrics}"
   )
+  if [[ "${SYNC_REPLAY_AFTER_INITIALS}" == "1" ]]; then
+    driver_args+=(--sync-replay-after-initials)
+  fi
   if [[ -n "${WORKLOAD_JSONL}" && -s "${WORKLOAD_JSONL}" ]]; then
     driver_args+=(--workload-jsonl "${WORKLOAD_JSONL}")
   fi
@@ -234,9 +270,9 @@ run_case() {
 
 for mode in ${MODES}; do
   case "${mode}" in
-    no_prefetch|direct_prefetch|priority_direct_prefetch|deadline_priority_prefetch) ;;
+    no_prefetch|direct_prefetch|priority_direct_prefetch|deadline_priority_prefetch|dynamo_priority_hints|e2e_priority_hints) ;;
     *)
-      echo "ERROR: Milestone 36 only supports no_prefetch, direct_prefetch, priority_direct_prefetch, and deadline_priority_prefetch. Got: ${mode}" >&2
+      echo "ERROR: Milestone 36 only supports no_prefetch, direct_prefetch, priority_direct_prefetch, deadline_priority_prefetch, dynamo_priority_hints, and e2e_priority_hints. Got: ${mode}" >&2
       exit 2
       ;;
   esac

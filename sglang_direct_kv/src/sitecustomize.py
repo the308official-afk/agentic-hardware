@@ -10,7 +10,11 @@ from __future__ import annotations
 import os
 
 
-if os.environ.get("AGENTIC_KV_TRACE_ENABLE", "0") == "1":
+if (
+    os.environ.get("AGENTIC_KV_TRACE_ENABLE", "0") == "1"
+    or os.environ.get("AGENTIC_RUNTIME_TELEMETRY", "0") == "1"
+    or os.environ.get("AGENTIC_RUNTIME_TELEMETRY_ENABLE", "0") == "1"
+):
     try:
         from agentic_kv.sglang_trace_patch import install_sglang_kv_trace
 

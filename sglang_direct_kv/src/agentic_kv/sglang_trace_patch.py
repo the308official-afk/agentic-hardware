@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentic_kv.nvtx import range_scope
+from agentic_kv.runtime_telemetry import emit_runtime_event
 from agentic_kv.sglang_adapters import get_hook_targets, installed_sglang_version, select_adapter_name
 from agentic_kv.torch_cuda_profiler import maybe_start as maybe_start_torch_profiler
 from agentic_kv.torch_cuda_profiler import record_event as record_torch_profiler_event
@@ -1734,6 +1735,229 @@ def _write_event(event: dict[str, Any]) -> None:
         f.write(json.dumps(event, sort_keys=True) + "\n")
 
 
+def _runtime_event_type_for_method(method_name: str) -> str:
+    event_type_by_method = {
+        "handle_generate_request": "request_received",
+        "process_input_requests": "request_input_received",
+        "_add_request_to_queue": "request_queued",
+        "_prefetch_kvcache": "request_prefetch_considered",
+        "get_new_batch_prefill": "request_admitted",
+        "get_next_batch_to_run": "request_admitted",
+        "run_batch": "scheduler_batch_run",
+        "_run_batch_prebuilt": "scheduler_batch_run",
+        "process_batch_result": "scheduler_batch_result",
+        "process_batch_result_prefill": "prefill_result",
+        "process_batch_result_decode": "decode_result",
+        "match_prefix": "kv_lookup_summary",
+        "ready_to_load_host_cache": "kv_host_ready_check",
+        "init_load_back": "kv_load_plan",
+        "load_back": "kv_h2d",
+        "load": "kv_h2d",
+        "load_to_device_per_layer": "kv_h2d",
+        "backup_from_device_all_layer": "kv_d2h",
+        "write": "kv_write_host",
+        "cache_finished_req": "kv_cache_write",
+        "cache_unfinished_req": "kv_cache_write",
+        "evict_device": "kv_evict_gpu",
+        "evict_host": "kv_evict_host",
+        "forward_batch_generation": "model_forward",
+        "forward_batch_split_prefill": "model_forward",
+        "_forward_batch_generation_dllm": "model_forward",
+        "forward_batch_embedding": "model_forward",
+    }
+    return event_type_by_method.get(method_name, "runtime_hook")
+
+
+def _runtime_payload_from_context(
+    *,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "stable_stage": (_request_stage_category(method_name) or ("", "", ""))[0],
+        "stage_group": (_request_stage_category(method_name) or ("", "", ""))[1],
+        "source_event": event_name,
+        "direction": context.get("direction", ""),
+        "request_count": _request_count(context),
+        "first_request_id": _first_request_id(context),
+    }
+    for key in ("host_indices", "device_indices", "prefix_indices"):
+        value = _compact_index_for_telemetry(context.get(key))
+        if value:
+            payload[key] = value
+            count = value.get("index_count") or value.get("numel")
+            if count not in (None, ""):
+                payload[f"{key}_count"] = count
+
+    request = context.get("request")
+    if isinstance(request, dict):
+        for key in (
+            "rid",
+            "request_id",
+            "agent_request_id",
+            "agent_phase",
+            "agent_case_id",
+            "agent_gap_id",
+            "prefill_full_input_tokens",
+            "prefill_active_input_tokens",
+            "prefill_cached_prefix_tokens",
+            "prefill_uncached_token_count",
+            "host_hit_length",
+            "ingest_input_tokens",
+            "scheduler_trimmed_tokens",
+        ):
+            if request.get(key) not in (None, "", [], {}):
+                payload[key] = request[key]
+
+    pool_state = context.get("kv_pool_state")
+    if isinstance(pool_state, dict):
+        payload["kv_pool"] = pool_state
+
+    scheduler_state = context.get("scheduler_state")
+    if isinstance(scheduler_state, dict):
+        scheduler_payload: dict[str, Any] = {}
+        for key in (
+            "waiting_queue_len",
+            "running_queue_len",
+            "grammar_queue_len",
+            "new_token_ratio",
+            "max_running_requests",
+            "max_total_num_tokens",
+            "max_prefill_tokens",
+            "chunked_prefill_size",
+        ):
+            if scheduler_state.get(key) not in (None, "", [], {}):
+                scheduler_payload[key] = scheduler_state[key]
+        for key in ("running_batch", "cur_batch", "last_batch"):
+            batch = scheduler_state.get(key)
+            if not isinstance(batch, dict):
+                continue
+            scheduler_payload[key] = {
+                batch_key: batch.get(batch_key)
+                for batch_key in (
+                    "request_count",
+                    "forward_mode",
+                    "extend_num_tokens",
+                    "seq_lens_sum",
+                    "request_uncached_token_sum",
+                    "request_full_token_sum",
+                    "request_cached_prefix_token_sum",
+                )
+                if batch.get(batch_key) not in (None, "", [], {})
+            }
+        if scheduler_payload:
+            payload["scheduler"] = scheduler_payload
+
+    batch = context.get("batch")
+    if isinstance(batch, dict):
+        payload["batch"] = {
+            key: batch.get(key)
+            for key in (
+                "object_id",
+                "forward_mode",
+                "extend_num_tokens",
+                "seq_lens_sum",
+                "request_count",
+                "request_uncached_token_sum",
+                "request_full_token_sum",
+                "request_cached_prefix_token_sum",
+                "requests_with_uncached_tokens",
+            )
+            if batch.get(key) not in (None, "", [], {})
+        }
+
+    for key in (
+        "priority_queue_audit",
+        "priority_queue_snapshots",
+        "priority_receive_order",
+        "priority_admission_order",
+        "priority_admission_sequence",
+    ):
+        if context.get(key) not in (None, "", [], {}):
+            payload[key] = context[key]
+
+    return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
+
+
+def _runtime_emission_contexts(context: dict[str, Any]) -> list[dict[str, Any]]:
+    direct = _copy_agent_context(context)
+    if direct:
+        return [context]
+
+    contexts: list[dict[str, Any]] = []
+    batch = context.get("batch")
+    requests = batch.get("requests") if isinstance(batch, dict) else context.get("requests")
+    if isinstance(requests, list):
+        for request in requests[:32]:
+            if not isinstance(request, dict):
+                continue
+            merged = dict(context)
+            merged.update({key: value for key, value in request.items() if value not in (None, "", [], {})})
+            merged["request"] = request
+            contexts.append(merged)
+    sessions = context.get("agent_sessions")
+    if not contexts and isinstance(sessions, list):
+        for session in sessions[:32]:
+            if not isinstance(session, dict):
+                continue
+            merged = dict(context)
+            merged.update({key: value for key, value in session.items() if value not in (None, "", [], {})})
+            contexts.append(merged)
+    return contexts or [context]
+
+
+def _write_runtime_telemetry(
+    *,
+    phase: str,
+    call_id: str,
+    event_name: str,
+    method_name: str,
+    class_name: str,
+    context: dict[str, Any],
+    duration_ms: float | None = None,
+    error: str = "",
+) -> None:
+    event_type = _runtime_event_type_for_method(method_name)
+    source_hook = f"{event_name}.{phase}"
+    for item_context in _runtime_emission_contexts(context):
+        payload = _runtime_payload_from_context(
+            event_name=event_name,
+            method_name=method_name,
+            class_name=class_name,
+            context=item_context,
+        )
+        emit_runtime_event(
+            event_type,
+            phase=phase,
+            backend="sglang",
+            source_backend="sglang_adapter",
+            source_hook=source_hook,
+            source_class=class_name,
+            source_method=method_name,
+            call_id=call_id,
+            context=item_context,
+            payload=payload,
+            duration_ms=duration_ms,
+            error=error,
+        )
+        if isinstance(payload.get("kv_pool"), dict):
+            emit_runtime_event(
+                "kv_pool_sample",
+                phase="point",
+                backend="sglang",
+                source_backend="sglang_adapter",
+                source_hook=source_hook,
+                source_class=class_name,
+                source_method=method_name,
+                call_id=call_id,
+                context=item_context,
+                payload={"kv_pool": payload["kv_pool"], "source_event_type": event_type},
+                confidence="direct_runtime_sample",
+            )
+
+
 def _compact_index_for_telemetry(index: Any) -> dict[str, Any]:
     if not isinstance(index, dict):
         return {}
@@ -2352,6 +2576,14 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
             "kv_context": start_kv_context,
         }
         _write_event(start_event)
+        _write_runtime_telemetry(
+            phase="start",
+            call_id=call_id,
+            event_name=event_name,
+            method_name=method_name,
+            class_name=cls.__name__,
+            context=start_kv_context,
+        )
         _write_copy_telemetry(
             _copy_telemetry_event(
                 phase="start",
@@ -2399,16 +2631,27 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                 result = original(self, *args, **kwargs)
         except Exception as exc:
             error_context = _kv_context(event_name, method_name, self, args, kwargs)
+            error_duration_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
             _write_event(
                 {
                     "event": f"{event_name}.error",
                     "call_id": call_id,
                     "class": cls.__name__,
                     "method": method_name,
-                    "duration_ms": (time.perf_counter_ns() - start_ns) / 1_000_000,
+                    "duration_ms": error_duration_ms,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 }
+            )
+            _write_runtime_telemetry(
+                phase="error",
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=error_context,
+                duration_ms=error_duration_ms,
+                error=str(exc),
             )
             _write_copy_telemetry(
                 _copy_telemetry_event(
@@ -2418,7 +2661,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                     method_name=method_name,
                     class_name=cls.__name__,
                     context=error_context,
-                    duration_ms=(time.perf_counter_ns() - start_ns) / 1_000_000,
+                    duration_ms=error_duration_ms,
                     error=str(exc),
                 )
             )
@@ -2455,6 +2698,15 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
                     "result": _safe_summary(result),
                     "kv_context": end_context,
                 }
+            )
+            _write_runtime_telemetry(
+                phase="end",
+                call_id=call_id,
+                event_name=event_name,
+                method_name=method_name,
+                class_name=cls.__name__,
+                context=end_context,
+                duration_ms=duration_ms,
             )
             _write_copy_telemetry(
                 _copy_telemetry_event(

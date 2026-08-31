@@ -86,6 +86,287 @@ def read_csv_rows(path: Path | None) -> list[dict[str, Any]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
+def runtime_payload(row: dict[str, Any]) -> dict[str, Any]:
+    payload = row.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def runtime_kv_pool_state(row: dict[str, Any]) -> dict[str, Any]:
+    payload = runtime_payload(row)
+    state = payload.get("kv_pool")
+    return state if isinstance(state, dict) else {}
+
+
+def runtime_scheduler_state(row: dict[str, Any]) -> dict[str, Any]:
+    payload = runtime_payload(row)
+    state = payload.get("scheduler")
+    return state if isinstance(state, dict) else {}
+
+
+def runtime_request_context(row: dict[str, Any]) -> dict[str, Any]:
+    payload = runtime_payload(row)
+    context = {
+        "agent_case_id": row.get("case_id", ""),
+        "agent_gap_id": row.get("gap_id", ""),
+        "agent_session_id": row.get("session_id", ""),
+        "agent_phase": row.get("request_phase", ""),
+        "agent_label": row.get("request_label", ""),
+        "agent_request_id": row.get("request_id", ""),
+        "agent_prompt_hash": row.get("prompt_hash", ""),
+        "agent_priority": row.get("priority", ""),
+        "agent_correlation_id": row.get("correlation_id", ""),
+        "agent_parent_run_id": row.get("parent_run_id", ""),
+        "direction": payload.get("direction", ""),
+    }
+    request = dict(context)
+    for key in (
+        "rid",
+        "request_id",
+        "agent_request_id",
+        "agent_phase",
+        "agent_case_id",
+        "agent_gap_id",
+        "prefill_full_input_tokens",
+        "prefill_active_input_tokens",
+        "prefill_cached_prefix_tokens",
+        "prefill_uncached_token_count",
+        "host_hit_length",
+        "ingest_input_tokens",
+        "scheduler_trimmed_tokens",
+    ):
+        if payload.get(key) not in (None, "", [], {}):
+            request[key] = payload[key]
+    context["request"] = {key: value for key, value in request.items() if value not in (None, "", [], {})}
+    pool_state = runtime_kv_pool_state(row)
+    if pool_state:
+        context["kv_pool_state"] = pool_state
+    scheduler_state = runtime_scheduler_state(row)
+    if scheduler_state:
+        context["scheduler_state"] = scheduler_state
+    for key in ("host_indices", "device_indices", "prefix_indices"):
+        if isinstance(payload.get(key), dict):
+            context[key] = payload[key]
+    return {key: value for key, value in context.items() if value not in (None, "", [], {})}
+
+
+def runtime_legacy_stage(row: dict[str, Any]) -> str:
+    payload = runtime_payload(row)
+    event_type = str(row.get("event_type") or "")
+    return str(
+        payload.get("stable_stage")
+        or {
+            "request_received": "backend_receive",
+            "request_input_received": "scheduler_input_batch",
+            "request_queued": "scheduler_queue_enter",
+            "request_admitted": "scheduler_select_run",
+            "scheduler_batch_run": "scheduler_run_batch",
+            "scheduler_batch_result": "scheduler_process_batch_result",
+            "prefill_result": "scheduler_process_prefill_result",
+            "decode_result": "scheduler_process_decode_result",
+            "request_prefetch_considered": "scheduler_prefetch_kvcache",
+        }.get(event_type, event_type)
+    )
+
+
+def runtime_legacy_category(row: dict[str, Any]) -> str:
+    event_type = str(row.get("event_type") or "")
+    return {
+        "request_received": "request_received",
+        "request_input_received": "input_batch_received",
+        "request_queued": "entered_scheduler_queue",
+        "request_admitted": "selected_to_run",
+        "scheduler_batch_run": "run_batch",
+        "scheduler_batch_result": "batch_result_processed",
+        "prefill_result": "prefill_result_processed",
+        "decode_result": "decode_result_processed",
+        "request_prefetch_considered": "scheduler_prefetch_kvcache",
+        "kv_lookup_summary": "match_prefix",
+        "kv_host_ready_check": "ready_to_load_host_cache",
+        "kv_load_plan": "init_load_back",
+        "kv_h2d": "runtime_h2d",
+        "kv_d2h": "runtime_d2h",
+        "kv_write_host": "cache_finished_req",
+        "kv_evict_gpu": "evict_device",
+        "kv_evict_host": "evict_host",
+        "model_forward": "model_forward",
+    }.get(event_type, event_type)
+
+
+def runtime_legacy_rows(runtime_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    trace_rows: list[dict[str, Any]] = []
+    copy_rows: list[dict[str, Any]] = []
+    for row in runtime_rows:
+        if row.get("schema") != "agentic.runtime_telemetry" and row.get("event") != "runtime_telemetry":
+            continue
+        event_type = str(row.get("event_type") or "")
+        phase = str(row.get("event_phase") or "point")
+        payload = runtime_payload(row)
+        context = runtime_request_context(row)
+        pool = runtime_kv_pool_state(row)
+        common = {
+            "call_id": row.get("call_id", ""),
+            "class": row.get("source_class", ""),
+            "method": row.get("source_method", ""),
+            "source_event": row.get("source_hook", ""),
+            "phase": phase,
+            "duration_ms": row.get("duration_ms", ""),
+            "ts_ns": row.get("ts_ns", ""),
+            "pid": row.get("pid", ""),
+            "ledger_case_id": row.get("ledger_case_id", ""),
+            "kv_context": context,
+            "runtime_telemetry_source": 1,
+            "runtime_event_type": event_type,
+            "backend": row.get("backend", ""),
+            "confidence": row.get("confidence", ""),
+            "timing_source": "portable_runtime_telemetry",
+        }
+        if pool:
+            for src, dst in (
+                ("source", "kv_pool_source"),
+                ("object_type", "kv_pool_object_type"),
+                ("total_slots", "kv_pool_total_slots"),
+                ("free_slots", "kv_pool_free_slots"),
+                ("used_slots", "kv_pool_used_slots"),
+                ("usage_pct", "kv_pool_usage_pct"),
+                ("page_size", "kv_pool_page_size"),
+            ):
+                if pool.get(src) not in (None, "", [], {}):
+                    common[dst] = pool[src]
+
+        if event_type in {
+            "request_received",
+            "request_input_received",
+            "request_queued",
+            "request_admitted",
+            "scheduler_batch_run",
+            "scheduler_batch_result",
+            "prefill_result",
+            "decode_result",
+            "request_prefetch_considered",
+        }:
+            scheduler = runtime_scheduler_state(row)
+            legacy = {
+                **common,
+                "event": "kv_telemetry.request_stage",
+                "category": runtime_legacy_category(row),
+                "stage": runtime_legacy_stage(row),
+                "stage_group": payload.get("stage_group", "scheduler"),
+                "stage_order": "",
+                "direction": payload.get("direction", ""),
+                "request_count": payload.get("request_count", ""),
+                "request_id": row.get("request_id", payload.get("first_request_id", "")),
+                "exact_runtime_hook": 1,
+            }
+            for key in (
+                "waiting_queue_len",
+                "running_queue_len",
+                "grammar_queue_len",
+                "new_token_ratio",
+                "max_running_requests",
+                "max_total_num_tokens",
+                "max_prefill_tokens",
+                "chunked_prefill_size",
+            ):
+                if scheduler.get(key) not in (None, "", [], {}):
+                    legacy[f"scheduler_{key}"] = scheduler[key]
+            for batch_key in ("running_batch", "cur_batch", "last_batch"):
+                batch = scheduler.get(batch_key)
+                if not isinstance(batch, dict):
+                    continue
+                prefix = f"scheduler_{batch_key}"
+                for key in (
+                    "request_count",
+                    "forward_mode",
+                    "extend_num_tokens",
+                    "seq_lens_sum",
+                    "request_uncached_token_sum",
+                    "request_full_token_sum",
+                    "request_cached_prefix_token_sum",
+                ):
+                    if batch.get(key) not in (None, "", [], {}):
+                        legacy[f"{prefix}_{key}"] = batch[key]
+            for key in (
+                "priority_queue_audit",
+                "priority_queue_snapshots",
+                "priority_receive_order",
+                "priority_admission_order",
+                "priority_admission_sequence",
+            ):
+                if payload.get(key) not in (None, "", [], {}):
+                    legacy[key] = payload[key]
+            trace_rows.append({key: value for key, value in legacy.items() if value not in (None, "", [], {})})
+
+        if event_type in {
+            "kv_lookup_summary",
+            "kv_host_ready_check",
+            "kv_load_plan",
+            "kv_h2d",
+            "kv_write_host",
+        } and phase in {"end", "point"}:
+            trace_rows.append(
+                {
+                    **common,
+                    "event": "kv_telemetry.cache.end",
+                    "category": runtime_legacy_category(row),
+                    "direction": payload.get("direction", ""),
+                    "input_tokens": payload.get("ingest_input_tokens")
+                    or payload.get("prefill_full_input_tokens", ""),
+                    "active_input_tokens": payload.get("prefill_active_input_tokens", ""),
+                    "ingest_input_tokens": payload.get("ingest_input_tokens", ""),
+                    "scheduler_trimmed_tokens": payload.get("scheduler_trimmed_tokens", ""),
+                    "cached_prefix_tokens": payload.get("prefill_cached_prefix_tokens", ""),
+                    "new_prefill_tokens_est": payload.get("prefill_uncached_token_count", ""),
+                    "host_hit_tokens": payload.get("host_hit_length", ""),
+                    "host_load_tokens": payload.get("host_indices_count", ""),
+                    "device_load_tokens": payload.get("device_indices_count", ""),
+                    "request_id": row.get("request_id", ""),
+                }
+            )
+
+        if event_type in {"kv_h2d", "kv_d2h"} and phase in {"start", "end"}:
+            direction = "host_to_device" if event_type == "kv_h2d" else "device_to_host"
+            copy_rows.append(
+                {
+                    "event": f"kv_telemetry.copy.{phase}",
+                    "call_id": row.get("call_id", ""),
+                    "source_event": row.get("source_hook", ""),
+                    "class": row.get("source_class", ""),
+                    "method": row.get("source_method", ""),
+                    "direction": direction,
+                    "agent_session_id": row.get("session_id", ""),
+                    "agent_phase": row.get("request_phase", ""),
+                    "agent_case_id": row.get("case_id", ""),
+                    "agent_gap_id": row.get("gap_id", ""),
+                    "request_id": row.get("request_id", ""),
+                    "duration_ms": row.get("duration_ms", ""),
+                    "ts_ns": row.get("ts_ns", ""),
+                    "pid": row.get("pid", ""),
+                    "runtime_telemetry_source": 1,
+                }
+            )
+
+        if event_type == "model_forward" and phase in {"start", "end"}:
+            batch = payload.get("batch") if isinstance(payload.get("batch"), dict) else {}
+            trace_rows.append(
+                {
+                    **common,
+                    "event": f"kv_telemetry.prefill.{phase}",
+                    "category": "model_forward",
+                    "request_count": payload.get("request_count", ""),
+                    "request_id": row.get("request_id", payload.get("first_request_id", "")),
+                    "forward_mode": batch.get("forward_mode", ""),
+                    "extend_num_tokens": batch.get("extend_num_tokens", ""),
+                    "seq_lens_sum": batch.get("seq_lens_sum", ""),
+                    "batch_object_id": batch.get("object_id", ""),
+                    "batch_uncached_token_sum": batch.get("request_uncached_token_sum", ""),
+                    "batch_full_token_sum": batch.get("request_full_token_sum", ""),
+                    "batch_cached_prefix_token_sum": batch.get("request_cached_prefix_token_sum", ""),
+                    "batch_requests_with_uncached_tokens": batch.get("requests_with_uncached_tokens", ""),
+                }
+            )
+    return trace_rows, copy_rows
+
+
 def canonical_mode(mode: Any) -> str:
     raw = str(mode or "")
     if raw.startswith("projected_hardware"):
@@ -1553,6 +1834,7 @@ def trace_request_windows(trace_rows: list[dict[str, Any]], base_ts: float) -> d
         "deadline_offset_ms",
         "priority_translation",
         "priority_policy",
+        "harness",
     ]
     windows: dict[tuple[str, str], dict[str, Any]] = {}
     for row in trace_rows:
@@ -1633,8 +1915,19 @@ def events_in_window(
 
 
 def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+    raw_trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+    runtime_rows = read_jsonl(case_dir / "runtime_telemetry.jsonl")
+    runtime_trace_rows, runtime_copy_rows = runtime_legacy_rows(runtime_rows)
+    trace_rows = raw_trace_rows
+    if runtime_trace_rows:
+        trace_rows = [
+            row
+            for row in raw_trace_rows
+            if not str(row.get("event") or "").startswith("kv_telemetry.")
+        ] + runtime_trace_rows
     telemetry_rows = read_jsonl(case_dir / "m27_copy_telemetry.jsonl")
+    if runtime_copy_rows:
+        telemetry_rows = runtime_copy_rows
     if not trace_rows:
         return [], []
     base_ts = min((float(row["ts_ns"]) / 1_000_000_000.0 for row in trace_rows if row.get("ts_ns")), default=0.0)
@@ -1713,6 +2006,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
         gap = {
             "session_id": session,
             "mode": mode,
+            "harness": meta.get("harness") or current.get("harness") or replay.get("harness", ""),
             "task_index": meta.get("task_index", ""),
             "gap_order_in_task": idx,
             "tool_names": meta.get("tool_names", ""),
@@ -1808,6 +2102,7 @@ def build_gaps_for_case(case_dir: Path, mode: str) -> tuple[list[dict[str, Any]]
             "replay_scheduler_admit_end_ms": replay_queue_summary["admit_end_ms"],
             "replay_scheduler_admit_category": replay_queue_summary["admit_category"],
             "replay_scheduler_admit_timing_source": replay_queue_summary["admit_timing_source"],
+            "replay_runtime_telemetry_source": 1 if runtime_trace_rows else 0,
             "replay_scheduler_queue_waiting_len": replay_queue_summary["queue_waiting_len"],
             "replay_scheduler_queue_running_len": replay_queue_summary["queue_running_len"],
             "replay_scheduler_admit_running_batch_requests": replay_queue_summary["admit_running_batch_requests"],
@@ -2105,8 +2400,61 @@ def timeline_rows_with_labels(rows: list[dict[str, Any]], prefix: str = "G") -> 
     return labeled
 
 
-def scenario_compare_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+PRESSURE_LEVEL_KEY_ORDER = (
+    "p0_control",
+    "p1_mild",
+    "p2_medium",
+    "p3_high",
+    "p4_cliff",
+    "p5_burst_cliff",
+    "p5_boss_queue",
+)
+
+
+def pressure_level_key_from_text(value: Any) -> str:
+    text = str(value or "")
+    for key in PRESSURE_LEVEL_KEY_ORDER:
+        if text == key or text.startswith(f"{key}_") or f"/{key}_" in text or f"_{key}_" in text:
+            return key
+    return ""
+
+
+HARNESS_LABELS = {
+    "hatcher": "Hatcher",
+    "codex": "Codex",
+    "claude_code": "Claude Code",
+}
+
+
+def harness_key_from_text(value: Any) -> str:
+    text = str(value or "")
+    for key in HARNESS_LABELS:
+        if text == key or text.startswith(f"{key}_") or f"/{key}_" in text or f"_{key}_" in text:
+            return key
+    return ""
+
+
+def harness_key(row: dict[str, Any]) -> str:
     return (
+        harness_key_from_text(row.get("harness"))
+        or harness_key_from_text(row.get("case_id"))
+        or harness_key_from_text(Path(str(row.get("case_dir") or "")).name)
+    )
+
+
+def harness_label(row: dict[str, Any]) -> str:
+    key = harness_key(row)
+    return HARNESS_LABELS.get(key, "")
+
+
+def readiness_chart_label(row: dict[str, Any]) -> str:
+    return str(row.get("harness_pressure_label") or row.get("pressure_level_label") or row.get("scenario") or "")
+
+
+def scenario_compare_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    return (
+        harness_key(row),
+        pressure_level_key_from_text(row.get("case_id")) or pressure_level_key_from_text(row.get("case_dir")),
         str(row.get("task_index") or ""),
         str(row.get("gap_order_in_task") or ""),
         str(row.get("tool_gap_ms") or ""),
@@ -2114,13 +2462,19 @@ def scenario_compare_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def scenario_compare_sort_key(key: tuple[str, str, str, str]) -> tuple[int, int, float, float, str]:
-    task, gap, wait, fillers = key
+def scenario_compare_sort_key(key: tuple[str, ...]) -> tuple[int, str, int, int, float, float, str]:
+    if len(key) >= 6:
+        harness, pressure, task, gap, wait, fillers = key[:6]
+    else:
+        harness, pressure, task, gap, wait, fillers = ("", "", *key[:4])
     task_rank = int(task) if str(task).isdigit() else 10**9
     gap_rank = int(gap) if str(gap).isdigit() else 10**9
     wait_rank = as_float(wait)
     filler_rank = as_float(fillers)
+    pressure_rank = PRESSURE_LEVEL_KEY_ORDER.index(pressure) if pressure in PRESSURE_LEVEL_KEY_ORDER else 10**6
     return (
+        pressure_rank,
+        str(harness),
         task_rank,
         gap_rank,
         wait_rank if wait_rank is not None else 10**12,
@@ -2216,7 +2570,7 @@ def projected_hardware_timeline_row(
 
 
 def grouped_mode_comparison_rows(gaps: list[dict[str, Any]], max_scenarios: int) -> list[dict[str, Any]]:
-    scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    scenario_to_modes: defaultdict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
         if mode not in {"no_prefetch", "direct_prefetch", "dynamo_priority_hints", "e2e_priority_hints"}:
@@ -2906,6 +3260,62 @@ def case_fillers(row: dict[str, Any]) -> str:
     if "_f" not in name:
         return ""
     return name.rsplit("_f", 1)[-1]
+
+
+PRESSURE_LEVEL_LABELS = {
+    "p0_control": "P0 Control",
+    "p1_mild": "P1 Short Wait",
+    "p2_medium": "P2 Large KV",
+    "p3_high": "P3 Queue Pressure",
+    "p4_cliff": "P4 KV Pool Pressure",
+    "p5_burst_cliff": "P5 Burst Cliff",
+    "p5_boss_queue": "P5 Boss Queue",
+}
+
+
+PRESSURE_LEVEL_KNOB_SUMMARIES = {
+    "P0 Control": "500 ms wait, 1024-token target, no fillers, 1 urgent agent",
+    "P1 Short Wait": "50 ms wait, 1024-token target, no fillers, 1 urgent agent",
+    "P2 Large KV": "500 ms wait, 4096-token target, no fillers, 1 urgent agent",
+    "P3 Queue Pressure": "50 ms wait, 4096-token target, 32 fillers, 1 urgent agent",
+    "P4 KV Pool Pressure": "50 ms wait, 4096-token target, 48 larger fillers, 1 urgent agent",
+    "P5 Burst Cliff": "50 ms wait, 4096-token target, no fillers, 4 urgent agents",
+    "P5 Boss Queue": "50 ms wait, 4096-token target, 4 fillers/session, 8 urgent agents",
+}
+
+
+PRESSURE_LEVEL_FILLER_SUMMARIES = {
+    "P5 Burst Cliff": "0/session",
+    "P5 Boss Queue": "4/session",
+}
+
+
+def pressure_level_key_from_case_id(case_id: Any) -> str:
+    return pressure_level_key_from_text(case_id)
+
+
+def pressure_level_key(row: dict[str, Any]) -> str:
+    return pressure_level_key_from_case_id(row.get("case_id")) or pressure_level_key_from_case_id(
+        Path(str(row.get("case_dir") or "")).name
+    )
+
+
+def pressure_level_label(row: dict[str, Any]) -> str:
+    key = pressure_level_key(row)
+    return PRESSURE_LEVEL_LABELS.get(key, "")
+
+
+def pressure_level_sort_rank(label_or_key: Any) -> int:
+    raw = str(label_or_key or "")
+    if " / " in raw:
+        raw = raw.rsplit(" / ", 1)[-1]
+    if raw in PRESSURE_LEVEL_LABELS:
+        key = raw
+    else:
+        key = next((candidate for candidate, label in PRESSURE_LEVEL_LABELS.items() if label == raw), "")
+    if not key:
+        return 10**6
+    return list(PRESSURE_LEVEL_LABELS).index(key)
 
 
 def timeline_mapping_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4142,7 +4552,7 @@ def mode_readiness_margin(row: dict[str, Any]) -> tuple[float | None, str, str, 
 
 def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     measured_modes = ("no_prefetch", "dynamo_priority_hints", "e2e_priority_hints")
-    scenario_to_modes: defaultdict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    scenario_to_modes: defaultdict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in gaps:
         mode = canonical_mode(row.get("mode"))
         if mode in measured_modes:
@@ -4158,6 +4568,17 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
     output: list[dict[str, Any]] = []
     for scenario_idx, (key, rows_by_mode) in enumerate(scenarios):
         scenario_label = f"C{scenario_idx:02d}"
+        level_labels = [pressure_level_label(row) for row in rows_by_mode.values()]
+        level_keys = [pressure_level_key(row) for row in rows_by_mode.values()]
+        harness_labels = [harness_label(row) for row in rows_by_mode.values()]
+        harness_keys = [harness_key(row) for row in rows_by_mode.values()]
+        pressure_label = next((label for label in level_labels if label), "")
+        pressure_key = next((key_value for key_value in level_keys if key_value), "")
+        harness_name = next((label for label in harness_labels if label), "")
+        harness_value = next((key_value for key_value in harness_keys if key_value), "")
+        harness_pressure_label = (
+            f"{harness_name} / {pressure_label}" if harness_name and pressure_label else pressure_label or scenario_label
+        )
         for mode in measured_modes:
             row = rows_by_mode.get(mode)
             if not row:
@@ -4184,13 +4605,19 @@ def global_kv_readiness_by_mode_rows(gaps: list[dict[str, Any]]) -> list[dict[st
             )
             output.append(
                 {
-                    "scenario": scenario_label,
+                    "scenario": pressure_label or scenario_label,
+                    "comparison_scenario": scenario_label,
+                    "pressure_level": pressure_key,
+                    "pressure_level_label": pressure_label,
+                    "harness": harness_value,
+                    "harness_label": harness_name,
+                    "harness_pressure_label": harness_pressure_label,
                     "mode": display_mode(mode),
                     "mode_key": mode,
-                    "task": row.get("task_index", key[0]),
-                    "gap": row.get("gap_order_in_task", key[1]),
-                    "tool_wait_ms": row.get("tool_gap_ms", key[2]),
-                    "fillers": case_fillers(row) or key[3],
+                    "task": row.get("task_index", key[2] if len(key) >= 6 else key[1]),
+                    "gap": row.get("gap_order_in_task", key[3] if len(key) >= 6 else key[2]),
+                    "tool_wait_ms": row.get("tool_gap_ms", key[4] if len(key) >= 6 else key[3]),
+                    "fillers": case_fillers(row) or (key[5] if len(key) >= 6 else key[4]),
                     "kv_ready_margin_ms": margin if margin is not None else "",
                     "kv_ready_relative_ms": kv_ready_relative,
                     "replay_start_relative_ms": replay_start_relative,
@@ -4234,6 +4661,56 @@ def global_kv_readiness_by_mode_summary_rows(rows: list[dict[str, Any]]) -> list
                 "median_margin_ms": round(median(margins), 3) if margins else "",
                 "worst_lateness_ms": round(abs(min(late_margins)), 3) if late_margins else "",
                 "evidence": "measured SGLang KV movement/request timing",
+            }
+        )
+    return output
+
+
+def pressure_ladder_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_level: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        label = readiness_chart_label(row)
+        if label:
+            by_level[label].append(row)
+    output: list[dict[str, Any]] = []
+    for label in sorted(by_level, key=lambda value: (pressure_level_sort_rank(value), len(value), value)):
+        items = by_level[label]
+        pressure_labels = [str(row.get("pressure_level_label") or "") for row in items]
+        pressure_label = next((value for value in pressure_labels if value), label)
+        mode_names = sorted({str(row.get("mode") or "") for row in items})
+        waits = sorted(
+            {str(row.get("tool_wait_ms") or "") for row in items if row.get("tool_wait_ms") not in ("", None)},
+            key=lambda value: as_float(value) if as_float(value) is not None else 10**12,
+        )
+        fillers = sorted(
+            {str(row.get("fillers") or "") for row in items if row.get("fillers") not in ("", None)},
+            key=lambda value: as_float(value) if as_float(value) is not None else 10**12,
+        )
+        filler_summary = " / ".join(fillers) if fillers else PRESSURE_LEVEL_FILLER_SUMMARIES.get(label, "")
+        no_prefetch_lateness = [
+            float(row["first_token_relative_ms"])
+            for row in items
+            if canonical_mode(row.get("mode_key")) == "no_prefetch"
+            and row.get("first_token_relative_ms") not in ("", None)
+        ]
+        e2e_lateness = [
+            float(row["first_token_relative_ms"])
+            for row in items
+            if canonical_mode(row.get("mode_key")) == "e2e_priority_hints"
+            and row.get("first_token_relative_ms") not in ("", None)
+        ]
+        output.append(
+            {
+                "pressure_level": label,
+                "pressure_knobs": PRESSURE_LEVEL_KNOB_SUMMARIES.get(pressure_label, ""),
+                "modes": " / ".join(mode_names),
+                "samples": len(items),
+                "tool_wait_ms": " / ".join(waits),
+                "fillers": filler_summary,
+                "median_no_prefetch_first_token_lateness_ms": (
+                    round(median(no_prefetch_lateness), 3) if no_prefetch_lateness else ""
+                ),
+                "median_e2e_first_token_lateness_ms": round(median(e2e_lateness), 3) if e2e_lateness else "",
             }
         )
     return output
@@ -4296,6 +4773,11 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
         return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.5" fill="{color}" opacity="0.9"><title>{escaped_title}</title></circle>'
 
     zero_y = y_pos(0.0)
+    mode_note = "Measured modes only: " + ", ".join(
+        display_mode(mode)
+        for mode in ("no_prefetch", "dynamo_priority_hints", "e2e_priority_hints")
+        if any(canonical_mode(row.get("mode_key")) == mode for row in rows)
+    ) + "."
     parts = [
         '<svg viewBox="0 0 1480 560" width="100%" role="img" aria-label="Global KV readiness by mode dot plot">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" fill="#ffffff" stroke="#e5e7eb"/>',
@@ -4305,7 +4787,7 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 40}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
         '<text x="104" y="36" font-size="13" fill="#166534" font-weight="700">above line = KV ready before replay due</text>',
         '<text x="470" y="36" font-size="13" fill="#b91c1c" font-weight="700">below line = KV became ready after replay was due</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">Measured modes only: no prefetch, Dynamo priority hints, and end-to-end priority hints when present.</text>',
+        f'<text x="104" y="56" font-size="12" fill="#475569">{html.escape(mode_note)}</text>',
     ]
 
     seen_ticks: set[int] = set()
@@ -4345,12 +4827,15 @@ def build_global_kv_readiness_by_mode_dot_plot(rows: list[dict[str, Any]]) -> st
 
     lx = left
     ly = height - 82
+    present_modes = {canonical_mode(row.get("mode_key")) for row in rows}
     legend_items = [
         ("No prefetch", "no_prefetch"),
         ("Dynamo priority hints only", "dynamo_priority_hints"),
         ("End-to-end priority hints", "e2e_priority_hints"),
     ]
     for label, mode_key in legend_items:
+        if mode_key not in present_modes:
+            continue
         color, kind, short = mode_styles[mode_key]
         parts.append(dot_svg(lx, ly, color, kind, label))
         parts.append(f'<text x="{lx + 14}" y="{ly + 4}" font-size="12">{html.escape(short)} = {html.escape(label)}</text>')
@@ -4445,10 +4930,9 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         row
         for row in rows
         if row.get("first_token_relative_ms") not in ("", None)
-        or row.get("kv_ready_relative_ms") not in ("", None)
     ]
     if not usable:
-        return "<p>No first-token or KV-ready timing rows were available for this run.</p>"
+        return "<p>No first-token timing rows were available for this run.</p>"
     width = 1500
     height = 720
     left = 118
@@ -4457,19 +4941,13 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     bottom = 210
     plot_w = width - left - right
     plot_h = height - top - bottom
-    values: list[float] = []
-    for row in usable:
-        first_token_relative = as_float(row.get("first_token_relative_ms"))
-        kv_ready_margin = as_float(row.get("kv_ready_margin_ms"))
-        kv_ready_relative = as_float(row.get("kv_ready_relative_ms"))
-        if first_token_relative is not None:
-            values.append(first_token_relative)
-        if kv_ready_relative is not None:
-            values.append(kv_ready_relative)
-        elif kv_ready_margin is not None:
-            values.append(-kv_ready_margin)
+    values = [
+        float(row["first_token_relative_ms"])
+        for row in usable
+        if row.get("first_token_relative_ms") not in ("", None)
+    ]
     if not values:
-        return "<p>No first-token or KV-ready timing values were available for this run.</p>"
+        return "<p>No first-token timing values were available for this run.</p>"
     v_min = min(values)
     v_max = max(values)
     pad = max(50.0, (v_max - v_min) * 0.08)
@@ -4477,7 +4955,10 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     y_max = max(v_max + pad, 50.0)
     scaled_min = h2d_symlog_value(y_min)
     scaled_max = h2d_symlog_value(y_max)
-    scenario_labels = sorted({str(row.get("scenario") or "") for row in usable}, key=lambda value: (len(value), value))
+    scenario_labels = sorted(
+        {readiness_chart_label(row) for row in usable},
+        key=lambda value: (pressure_level_sort_rank(value), len(value), value),
+    )
     scenario_index = {label: idx for idx, label in enumerate(scenario_labels)}
     mode_offsets = {
         "no_prefetch": -30.0,
@@ -4498,6 +4979,25 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         for row in usable
         if canonical_mode(row.get("mode_key")) in mode_colors
     }
+    duplicate_positions: dict[tuple[str, str, int], float] = {}
+    duplicate_counts: Counter[tuple[str, str]] = Counter()
+    for row in usable:
+        scenario = readiness_chart_label(row)
+        mode_key = canonical_mode(row.get("mode_key"))
+        if scenario and mode_key in mode_colors:
+            duplicate_counts[(scenario, mode_key)] += 1
+    duplicate_seen: Counter[tuple[str, str]] = Counter()
+    for idx, row in enumerate(usable):
+        scenario = readiness_chart_label(row)
+        mode_key = canonical_mode(row.get("mode_key"))
+        duplicate_key = (scenario, mode_key)
+        count = duplicate_counts.get(duplicate_key, 0)
+        seen = duplicate_seen[duplicate_key]
+        duplicate_seen[duplicate_key] += 1
+        if count > 1:
+            duplicate_positions[(scenario, mode_key, idx)] = (seen - (count - 1) / 2.0) * 7.5
+        else:
+            duplicate_positions[(scenario, mode_key, idx)] = 0.0
     max_offset = max(abs(value) for value in mode_offsets.values())
     base_left = left + max_offset + 18
     base_right = left + plot_w - max_offset - 18
@@ -4520,15 +5020,38 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
 
     zero_y = y_pos(0.0)
     parts = [
-        '<svg viewBox="0 0 1500 720" width="100%" role="img" aria-label="Replay first token versus KV readiness by mode">',
+        '<svg viewBox="0 0 1500 720" width="100%" role="img" aria-label="Replay Deadline Pressure Chart">',
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" rx="10" fill="#ffffff" stroke="#e2e8f0"/>',
-        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>',
-        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>',
         '<text x="26" y="300" transform="rotate(-90 26 300)" text-anchor="middle" font-size="13" font-weight="700">lateness vs deadline ms (symlog)</text>',
-        f'<text x="{left + plot_w / 2:.1f}" y="{height - 46}" text-anchor="middle" font-size="13" font-weight="700">controlled scenario order</text>',
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 46}" text-anchor="middle" font-size="13" font-weight="700">harness / pressure level</text>',
         '<text x="104" y="34" font-size="13" fill="#111827" font-weight="700">above 0 ms = late; below 0 ms = early</text>',
-        '<text x="104" y="56" font-size="12" fill="#475569">Circle = first replay token. Square = KV ready. Higher means later.</text>',
+        '<text x="104" y="56" font-size="12" fill="#475569">Each dot is one replay request. Lower is better. Multiple dots in one band mean multiple urgent agents.</text>',
     ]
+    if scenario_labels:
+        centers = [scenario_x(label) for label in scenario_labels]
+        boundaries: list[float] = [left]
+        for left_center, right_center in zip(centers, centers[1:]):
+            boundaries.append((left_center + right_center) / 2.0)
+        boundaries.append(left + plot_w)
+        for index, label in enumerate(scenario_labels):
+            band_left = boundaries[index]
+            band_right = boundaries[index + 1]
+            fill = "#f8fafc" if index % 2 == 0 else "#ffffff"
+            parts.append(
+                f'<rect x="{band_left:.1f}" y="{top}" width="{band_right - band_left:.1f}" height="{plot_h}" '
+                f'fill="{fill}" opacity="0.72"/>'
+            )
+            if index > 0:
+                parts.append(
+                    f'<line x1="{band_left:.1f}" y1="{top}" x2="{band_left:.1f}" y2="{top + plot_h}" '
+                    'stroke="#cbd5e1" stroke-width="1.4" stroke-dasharray="5 5"/>'
+                )
+    parts.append(
+        f'<line x1="{left}" y1="{zero_y:.1f}" x2="{left + plot_w}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="2"/>'
+    )
+    parts.append(
+        f'<text x="{left + plot_w - 8}" y="{zero_y - 8:.1f}" text-anchor="end" font-size="12" font-weight="700">0 ms deadline</text>'
+    )
     seen_ticks: set[int] = set()
     seen_tick_y: list[float] = []
     for value in h2d_symlog_tick_values(y_min, y_max):
@@ -4551,19 +5074,16 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         parts.append(f'<line x1="{x:.1f}" y1="{top + plot_h}" x2="{x:.1f}" y2="{top + plot_h + 6}" stroke="#94a3b8"/>')
         parts.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" font-size="10">{html.escape(label)}</text>')
 
-    for row in usable:
-        scenario = str(row.get("scenario") or "")
+    for row_idx, row in enumerate(usable):
+        scenario = readiness_chart_label(row)
         mode_key = canonical_mode(row.get("mode_key"))
         if scenario not in scenario_index:
             continue
         color = mode_colors.get(mode_key, "#64748b")
-        x = x_pos(scenario, mode_key)
+        x = x_pos(scenario, mode_key) + duplicate_positions.get((scenario, mode_key, row_idx), 0.0)
         first_token_rel = as_float(row.get("first_token_relative_ms"))
-        kv_margin = as_float(row.get("kv_ready_margin_ms"))
-        kv_rel = as_float(row.get("kv_ready_relative_ms"))
-        kv_lateness = kv_rel if kv_rel is not None else -kv_margin if kv_margin is not None else None
         title_base = (
-            f"{scenario} {display_mode(mode_key)} | fillers={row.get('fillers')} | "
+            f"{scenario} {display_mode(mode_key)} | comparison={row.get('comparison_scenario') or row.get('scenario')} | fillers={row.get('fillers')} | "
             f"tool_wait={row.get('tool_wait_ms')} ms"
         )
         if first_token_rel is not None:
@@ -4573,16 +5093,25 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
                 f"(positive=late, negative=early)"
             )
             parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.2" fill="{color}" opacity="0.92" stroke="#ffffff" stroke-width="1.5"><title>{html.escape(title)}</title></circle>')
-        if kv_lateness is not None:
-            y = y_pos(kv_lateness)
-            title = (
-                f"{title_base} | KV ready lateness={kv_lateness:.3f} ms "
-                f"(positive=late, negative=early) | "
-                f"source={row.get('readiness_source')} | {row.get('measured_or_projected')}"
-            )
+
+    for scenario in scenario_labels:
+        for mode_key in sorted(present_modes):
+            mode_values = [
+                float(row["first_token_relative_ms"])
+                for row in usable
+                if readiness_chart_label(row) == scenario
+                and canonical_mode(row.get("mode_key")) == mode_key
+                and row.get("first_token_relative_ms") not in ("", None)
+            ]
+            if len(mode_values) < 2:
+                continue
+            x = x_pos(scenario, mode_key)
+            y = y_pos(median(mode_values))
+            color = mode_colors.get(mode_key, "#64748b")
             parts.append(
-                f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" rx="2" '
-                f'fill="{color}" opacity="0.55" stroke="{color}" stroke-width="2"><title>{html.escape(title)}</title></rect>'
+                f'<line x1="{x - 24:.1f}" y1="{y:.1f}" x2="{x + 24:.1f}" y2="{y:.1f}" '
+                f'stroke="{color}" stroke-width="4" stroke-linecap="round"><title>{html.escape(scenario)} '
+                f'{html.escape(display_mode(mode_key))} median first-token lateness={median(mode_values):.3f} ms</title></line>'
             )
 
     legend_y = top + plot_h + 62
@@ -4595,11 +5124,11 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
         'rx="10" fill="#f8fafc" stroke="#e2e8f0"/>'
     )
     lx = left + 24
-    parts.append(f'<text x="{lx}" y="{legend_y}" font-size="12" fill="#475569" font-weight="700">Marker shape</text>')
+    parts.append(f'<text x="{lx}" y="{legend_y}" font-size="12" fill="#475569" font-weight="700">Dot meaning</text>')
     parts.append(f'<circle cx="{lx + 118:.1f}" cy="{legend_y - 4:.1f}" r="6.2" fill="#0f172a" opacity="0.85"/>')
-    parts.append(f'<text x="{lx + 136}" y="{legend_y}" font-size="12" fill="#334155">first replay token</text>')
-    parts.append(f'<rect x="{lx + 300:.1f}" y="{legend_y - 10:.1f}" width="12" height="12" rx="2" fill="#0f172a" opacity="0.45" stroke="#0f172a" stroke-width="2"/>')
-    parts.append(f'<text x="{lx + 320}" y="{legend_y}" font-size="12" fill="#334155">KV ready</text>')
+    parts.append(f'<text x="{lx + 136}" y="{legend_y}" font-size="12" fill="#334155">first replay token appeared</text>')
+    parts.append(f'<line x1="{lx + 340:.1f}" y1="{legend_y - 4:.1f}" x2="{lx + 388:.1f}" y2="{legend_y - 4:.1f}" stroke="#0f172a" stroke-width="4" stroke-linecap="round"/>')
+    parts.append(f'<text x="{lx + 404}" y="{legend_y}" font-size="12" fill="#334155">median when there are multiple urgent agents</text>')
     legend_modes = [
         (short, label, mode_key)
         for short, label, mode_key in [
@@ -4618,8 +5147,7 @@ def build_global_replay_vs_kv_readiness_plot(rows: list[dict[str, Any]]) -> str:
     for short, label, mode_key in legend_modes:
         color = mode_colors[mode_key]
         parts.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="6.5" fill="{color}"/>')
-        parts.append(f'<rect x="{lx + 20:.1f}" y="{ly - 6:.1f}" width="12" height="12" rx="2" fill="{color}" opacity="0.55" stroke="{color}" stroke-width="2"/>')
-        parts.append(f'<text x="{lx + 42}" y="{ly + 4}" font-size="12">{html.escape(short)} = {html.escape(label)}</text>')
+        parts.append(f'<text x="{lx + 20}" y="{ly + 4}" font-size="12">{html.escape(short)} = {html.escape(label)}</text>')
         lx += 290
     parts.append("</svg>")
     return "\n".join(parts)
@@ -4629,9 +5157,18 @@ def global_kv_readiness_by_mode_html(gaps: list[dict[str, Any]]) -> str:
     rows = global_kv_readiness_by_mode_rows(gaps)
     if not rows:
         return "<p>No mode-comparison KV readiness rows were available for this run.</p>"
+    ladder_rows = pressure_ladder_summary_rows(rows)
+    ladder_html = ""
+    if ladder_rows:
+        ladder_html = f"""
+    <h3>Pressure Levels In This Run</h3>
+    <p>This table is the compact knob map for the readiness chart. Each row is a bundled pressure level, not a full Cartesian sweep.</p>
+    {table_html(ladder_rows)}
+        """
     return f"""
-    <h3>Replay First Token vs KV Ready</h3>
-    <p class="note">Circle = first replay token. Square = KV ready. Above zero is late; below zero is early.</p>
+    <h3>Replay Deadline Pressure Chart</h3>
+    <p class="note">Every dot is a first replay token. Above zero is late; below zero is early. KV readiness remains in Evidence Tables / Raw Proof, but is intentionally not drawn here.</p>
+    {ladder_html}
     <div class="setup-diagram">{build_global_replay_vs_kv_readiness_plot(rows)}</div>
     """
 
@@ -6439,6 +6976,1387 @@ def tool_wait_gpu_activity_rows(
     return rows
 
 
+SNAPSHOT_RELATIVE_OFFSETS_MS = [
+    0.0,
+    20.0,
+    50.0,
+    100.0,
+    250.0,
+    500.0,
+    1000.0,
+    2000.0,
+    5000.0,
+    10000.0,
+    20000.0,
+]
+
+
+def snapshot_label_for_offset(offset_ms: float, event_label: str | None = None) -> str:
+    if event_label:
+        return event_label
+    if offset_ms == 0:
+        return "replay due"
+    return f"+{display_ms(offset_ms)}"
+
+
+def _event_offset(row: dict[str, Any], due_ms: float, key: str) -> float | None:
+    value = as_float(row.get(key))
+    if value is None:
+        return None
+    return value - due_ms
+
+
+def first_float_field(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = as_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def replay_backend_receive_start_ms(row: dict[str, Any]) -> float | None:
+    return first_float_field(
+        row,
+        (
+            "replay_backend_receive_start_ms",
+            "replay_receive_start_ms",
+            "replay_sglang_receive_start_ms",
+        ),
+    )
+
+
+def request_snapshot_points(row: dict[str, Any]) -> list[tuple[str, float]]:
+    due = as_float(row.get("tool_gap_end_ms"))
+    if due is None:
+        return []
+    first_token = first_token_ms(row)
+    first_token_rel = (first_token - due) if first_token is not None else None
+    resume_end = as_float(row.get("resume_end_ms"))
+    fallback_end_rel = (resume_end - due) if resume_end is not None else 20000.0
+    max_rel = max(0.0, first_token_rel if first_token_rel is not None else fallback_end_rel)
+
+    points: dict[float, str] = {}
+    for offset in SNAPSHOT_RELATIVE_OFFSETS_MS:
+        if offset <= max_rel + 1e-6:
+            points[round(offset, 3)] = snapshot_label_for_offset(offset)
+
+    event_points = [
+        ("client submit", "resume_submitted_ms"),
+        ("request start", "resume_start_ms"),
+        ("backend receive", None),
+        ("queue enter", "replay_scheduler_queue_enter_start_ms"),
+        ("scheduler admit", "replay_scheduler_admit_start_ms"),
+        ("cache lookup", None),
+        ("replay H2D start", "replay_kv_h2d_start_ms"),
+        ("replay H2D end", "replay_kv_h2d_end_ms"),
+        ("first token", None),
+    ]
+    for label, key in event_points:
+        if label == "cache lookup":
+            offset = _event_offset({"value": replay_first_cache_event_ms(row)}, due, "value")
+        elif label == "backend receive":
+            receive = replay_backend_receive_start_ms(row)
+            offset = (receive - due) if receive is not None else None
+        elif label == "first token":
+            offset = first_token_rel
+        elif key:
+            offset = _event_offset(row, due, key)
+        else:
+            offset = None
+        if offset is None or offset < -1e-6 or offset > max_rel + 1e-6:
+            continue
+        points[round(offset, 3)] = label
+
+    return [(label, offset) for offset, label in sorted(points.items(), key=lambda item: item[0])]
+
+
+def window_active_at(row: dict[str, Any], timestamp_ms: float, start_key: str, end_key: str) -> bool:
+    start = as_float(row.get(start_key))
+    end = as_float(row.get(end_key))
+    if start is None or end is None:
+        return False
+    return start <= timestamp_ms <= end
+
+
+def target_scheduler_state_at(row: dict[str, Any], timestamp_ms: float) -> tuple[str, str]:
+    eps = 0.01
+    exact_stage_source = (
+        "portable_runtime_stage_hook"
+        if boolish(row.get("replay_runtime_telemetry_source"))
+        else "exact_scheduler_stage_hook"
+    )
+    submitted = as_float(row.get("resume_submitted_ms"))
+    request_start = as_float(row.get("resume_start_ms"))
+    receive = replay_backend_receive_start_ms(row)
+    queue = as_float(row.get("replay_scheduler_queue_enter_start_ms"))
+    admit = as_float(row.get("replay_scheduler_admit_start_ms"))
+    token = first_token_ms(row)
+    end = as_float(row.get("resume_end_ms"))
+
+    if submitted is not None and timestamp_ms < submitted - eps:
+        return "ready_not_submitted", "measured_client_timing"
+    if request_start is not None and timestamp_ms < request_start - eps:
+        return "submitted_waiting_client_request_start", "measured_client_timing"
+    if receive is not None and timestamp_ms < receive - eps:
+        return "request_started_waiting_backend_receive", "measured_client_plus_backend_timing"
+    if queue is not None and timestamp_ms < queue - eps:
+        return (
+            "backend_received_before_queue",
+            "portable_runtime_stage_hook" if boolish(row.get("replay_runtime_telemetry_source")) else "exact_backend_stage_hook",
+        )
+    if admit is not None and timestamp_ms < admit - eps:
+        return "queued_waiting_for_admission", exact_stage_source
+    if token is not None and timestamp_ms < token - eps:
+        return "admitted_running_before_first_token", exact_stage_source
+    if token is not None and timestamp_ms >= token - eps and (end is None or timestamp_ms < end - eps):
+        return "first_token_seen_decoding", "measured_ttft"
+    if end is not None and timestamp_ms >= end - eps:
+        return "replay_complete", "measured_client_timing"
+    return "unknown", "missing_stage_timing"
+
+
+def normalize_gpu_util_samples(
+    trace_rows: list[dict[str, Any]],
+    gpu_util_rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    bases = trace_base_by_case(trace_rows)
+    by_case: dict[str, list[dict[str, Any]]] = {case_id: [] for case_id in bases}
+    for case_id, base_seconds in bases.items():
+        rows: list[dict[str, Any]] = []
+        for sample in gpu_util_rows:
+            ts_ns = as_float(sample.get("ts_ns"))
+            if ts_ns is None:
+                continue
+            aligned_ms = (ts_ns / 1_000_000_000.0 - base_seconds) * 1000.0
+            item = dict(sample)
+            item["aligned_ms"] = round(aligned_ms, 3)
+            rows.append(item)
+        rows.sort(key=lambda row: as_float(row.get("aligned_ms")) or 0.0)
+        by_case[case_id] = rows
+    return by_case
+
+
+def nearest_sample_by_aligned_ms(
+    samples: list[dict[str, Any]],
+    timestamp_ms: float,
+    max_distance_ms: float,
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    best_distance = float("inf")
+    for sample in samples:
+        aligned = as_float(sample.get("aligned_ms"))
+        if aligned is None:
+            continue
+        distance = abs(aligned - timestamp_ms)
+        if distance < best_distance:
+            best = sample
+            best_distance = distance
+    if best is None or best_distance > max_distance_ms:
+        return None
+    copied = dict(best)
+    copied["distance_from_target_ms"] = round(best_distance, 3)
+    return copied
+
+
+def nearest_trace_scheduler_state(
+    trace_rows: list[dict[str, Any]],
+    bases: dict[str, float],
+    case_id: str,
+    timestamp_ms: float,
+    max_distance_ms: float = 500.0,
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    best_distance = float("inf")
+    for row in trace_rows:
+        if str(row.get("ledger_case_id") or "") != case_id:
+            continue
+        local = trace_local_ms(row, bases)
+        if local is None:
+            continue
+        if not _trace_event_is_scheduler(row):
+            continue
+        distance = abs(local - timestamp_ms)
+        if distance < best_distance:
+            best = row
+            best_distance = distance
+    if best is None or best_distance > max_distance_ms:
+        return None
+    copied = dict(best)
+    copied["aligned_ms"] = round(trace_local_ms(best, bases) or 0.0, 3)
+    copied["distance_from_target_ms"] = round(best_distance, 3)
+    return copied
+
+
+def target_kv_snapshot_from_lifecycle(
+    lifecycle_rows: list[dict[str, Any]],
+    relative_ms: float,
+) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    tokens: Counter[str] = Counter()
+    confidence: Counter[str] = Counter()
+    for block in lifecycle_rows:
+        state = target_kv_state_at_relative(block, relative_ms)
+        token_count = int(round(target_kv_block_token_count(block)))
+        counts[state] += 1
+        tokens[state] += token_count
+        confidence[str(block.get("confidence") or block.get("evidence_level") or "derived")] += 1
+
+    gpu_tokens = tokens.get("known_gpu", 0)
+    host_tokens = tokens.get("known_host", 0) + tokens.get("inferred_host", 0)
+    missing_tokens = tokens.get("missing", 0)
+    h2d_tokens = tokens.get("hint_reload", 0) + tokens.get("replay_reload", 0)
+    if not lifecycle_rows:
+        return {
+            "target_kv_gpu_tokens": "",
+            "target_kv_host_tokens": "",
+            "target_kv_missing_tokens": "",
+            "target_kv_h2d_loading_tokens": "",
+            "target_kv_state_label": "unknown",
+            "target_kv_state_counts": "",
+            "target_kv_source": "missing_lifecycle_rows",
+            "target_kv_confidence": "unknown",
+        }
+    state_counts = ", ".join(
+        f"{state}:{counts[state]}/{compact_token_count(tokens[state])}"
+        for state, _name, _kind in TARGET_KV_RESIDENCY_STATES
+        if counts.get(state, 0)
+    )
+    dominant_state = max(tokens, key=tokens.get) if tokens else "unknown"
+    confidence_label = "direct_or_derived_lifecycle"
+    if confidence and all(str(key).lower().startswith("high") for key in confidence):
+        confidence_label = "high_lifecycle_evidence"
+    return {
+        "target_kv_gpu_tokens": gpu_tokens,
+        "target_kv_host_tokens": host_tokens,
+        "target_kv_missing_tokens": missing_tokens,
+        "target_kv_h2d_loading_tokens": h2d_tokens,
+        "target_kv_state_label": dominant_state,
+        "target_kv_state_counts": state_counts,
+        "target_kv_source": "block_lifecycle_events",
+        "target_kv_confidence": confidence_label,
+    }
+
+
+def target_kv_snapshot_from_gap_counters(row: dict[str, Any], timestamp_ms: float) -> dict[str, Any]:
+    h2d_start = as_float(row.get("replay_kv_h2d_start_ms"))
+    h2d_end = as_float(row.get("replay_kv_h2d_end_ms"))
+    input_tokens = as_float(row.get("replay_input_tokens")) or as_float(row.get("replay_active_input_tokens"))
+    cached = as_float(row.get("replay_initial_cached_prefix_tokens"))
+    final_cached = as_float(row.get("replay_final_cached_prefix_tokens"))
+    host_load = as_float(row.get("replay_host_load_tokens"))
+    if h2d_end is not None and timestamp_ms >= h2d_end and final_cached is not None:
+        gpu_tokens = int(round(final_cached))
+        host_tokens = 0
+        loading_tokens = 0
+    else:
+        gpu_tokens = int(round(cached or 0.0))
+        host_tokens = int(round(host_load or 0.0))
+        loading_tokens = (
+            int(round(host_load or 0.0))
+            if h2d_start is not None and h2d_end is not None and h2d_start <= timestamp_ms <= h2d_end
+            else 0
+        )
+    missing_tokens = ""
+    if input_tokens is not None:
+        missing_tokens = int(round(max(0.0, input_tokens - gpu_tokens - host_tokens)))
+    return {
+        "target_kv_input_tokens": int(round(input_tokens)) if input_tokens is not None else "",
+        "target_kv_gpu_tokens": gpu_tokens,
+        "target_kv_host_tokens": host_tokens,
+        "target_kv_missing_tokens": missing_tokens,
+        "target_kv_h2d_loading_tokens": loading_tokens,
+        "target_kv_state_label": "counter_estimate",
+        "target_kv_state_counts": "",
+        "target_kv_source": "request_cache_counters",
+        "target_kv_confidence": "derived",
+    }
+
+
+def request_state_snapshot_rows(
+    gaps: list[dict[str, Any]],
+    trace_rows: list[dict[str, Any]],
+    kv_pool_samples: list[dict[str, Any]],
+    gpu_util_rows: list[dict[str, Any]],
+    kv_block_lifecycle_rows: list[dict[str, Any]],
+    all_kv_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build request-centered point-in-time snapshots for timeline reporting.
+
+    This derived layer is intentionally backend-portable: it consumes normalized
+    request timings, normalized memory-movement events, pool samples, and block
+    lifecycle rows. Backend-specific hook names stay in the normalizers.
+    """
+
+    bases = trace_base_by_case(trace_rows)
+    trace_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trace_rows:
+        case_id = str(row.get("ledger_case_id") or "")
+        if case_id:
+            trace_by_case[case_id].append(row)
+
+    pool_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in kv_pool_samples:
+        case_id = str(sample.get("case_id") or "")
+        if case_id:
+            pool_by_case[case_id].append(sample)
+
+    gpu_by_case = normalize_gpu_util_samples(trace_rows, gpu_util_rows)
+
+    lifecycle_by_row: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for block in kv_block_lifecycle_rows:
+        label = str(block.get("row") or "")
+        if label:
+            lifecycle_by_row[label].append(block)
+
+    kv_events_by_case: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in all_kv_events:
+        case_id = str(event.get("case_id") or "")
+        if case_id:
+            kv_events_by_case[case_id].append(event)
+
+    rows: list[dict[str, Any]] = []
+    for idx, gap in enumerate(gaps):
+        due = as_float(gap.get("tool_gap_end_ms"))
+        if due is None:
+            continue
+        label = str(gap.get("timeline_label") or f"G{idx:02d}")
+        case_id = str(gap.get("case_id") or "")
+        session = str(gap.get("session_id") or "")
+        ledger_session = str(gap.get("ledger_session_id") or session)
+        request_id = str(gap.get("replay_priority_request_id") or f"{session}_replay")
+        lifecycle_rows = lifecycle_by_row.get(label, [])
+
+        for snap_index, (snap_label, rel) in enumerate(request_snapshot_points(gap)):
+            timestamp = due + rel
+            scheduler_state, scheduler_source = target_scheduler_state_at(gap, timestamp)
+            trace_state = nearest_trace_scheduler_state(
+                trace_by_case.get(case_id, []),
+                bases,
+                case_id,
+                timestamp,
+            )
+            pool_sample = nearest_sample_by_aligned_ms(pool_by_case.get(case_id, []), timestamp, 500.0)
+            gpu_sample = nearest_sample_by_aligned_ms(gpu_by_case.get(case_id, []), timestamp, 500.0)
+            lifecycle_snapshot = target_kv_snapshot_from_lifecycle(lifecycle_rows, rel)
+            counter_snapshot = target_kv_snapshot_from_gap_counters(gap, timestamp)
+            if lifecycle_snapshot["target_kv_source"] != "missing_lifecycle_rows":
+                counter_snapshot["target_kv_state_counts"] = lifecycle_snapshot.get("target_kv_state_counts", "")
+                counter_snapshot["target_kv_state_label"] = lifecycle_snapshot.get("target_kv_state_label", "")
+                counter_snapshot["target_kv_source"] = "request_cache_counters_plus_block_lifecycle_events"
+                counter_snapshot["target_kv_confidence"] = (
+                    f"{counter_snapshot.get('target_kv_confidence')}; "
+                    f"{lifecycle_snapshot.get('target_kv_confidence')}"
+                )
+            lifecycle_snapshot = counter_snapshot
+
+            target_prefetch_request_active = window_active_at(gap, timestamp, "prefetch_start_ms", "prefetch_end_ms")
+            target_prefetch_h2d_active = window_active_at(
+                gap,
+                timestamp,
+                "direct_kv_h2d_start_ms",
+                "direct_kv_h2d_end_ms",
+            )
+            target_replay_request_active = window_active_at(gap, timestamp, "resume_start_ms", "resume_end_ms")
+            target_replay_h2d_active = window_active_at(
+                gap,
+                timestamp,
+                "replay_kv_h2d_start_ms",
+                "replay_kv_h2d_end_ms",
+            )
+            target_prefill_active = window_active_at(
+                gap,
+                timestamp,
+                "replay_runtime_prefill_attribution_start_ms",
+                "replay_runtime_prefill_attribution_end_ms",
+            )
+            target_model_forward_active = window_active_at(
+                gap,
+                timestamp,
+                "replay_model_forward_start_ms",
+                "replay_model_forward_end_ms",
+            )
+
+            active_kv_events = kv_events_overlap_window(
+                kv_events_by_case.get(case_id, []),
+                timestamp,
+                timestamp,
+                case_id=case_id,
+            )
+            target_kv_events = [
+                event for event in active_kv_events if str(event.get("ledger_session_id") or "") == ledger_session
+            ]
+            other_kv_events = [
+                event for event in active_kv_events if str(event.get("ledger_session_id") or "") != ledger_session
+            ]
+            target_h2d_events = [
+                event
+                for event in target_kv_events
+                if str(event.get("movement_kind") or "") == "H2D"
+            ]
+            other_h2d_events = [
+                event
+                for event in other_kv_events
+                if str(event.get("movement_kind") or "") == "H2D"
+            ]
+
+            waiting_len = ""
+            running_requests = ""
+            running_tokens = ""
+            trace_distance = ""
+            if trace_state:
+                waiting = trace_scheduler_metric(trace_state, "scheduler_waiting_queue_len", "waiting_queue_len")
+                running = trace_scheduler_metric(
+                    trace_state,
+                    "scheduler_running_batch_request_count",
+                    "scheduler_cur_batch_request_count",
+                    "running_request_count",
+                )
+                tokens = trace_scheduler_metric(
+                    trace_state,
+                    "scheduler_running_batch_extend_num_tokens",
+                    "scheduler_cur_batch_extend_num_tokens",
+                    "running_token_count",
+                )
+                waiting_len = int(waiting) if waiting is not None else ""
+                running_requests = int(running) if running is not None else ""
+                running_tokens = int(tokens) if tokens is not None else ""
+                trace_distance = trace_state.get("distance_from_target_ms", "")
+
+            pool_usage = as_float(pool_sample.get("kv_pool_usage_pct")) if pool_sample else None
+            gpu_util = as_float(gpu_sample.get("utilization_gpu_pct")) if gpu_sample else None
+            gpu_mem_util = as_float(gpu_sample.get("utilization_memory_pct")) if gpu_sample else None
+            gpu_memory_used = as_float(gpu_sample.get("memory_used_mib")) if gpu_sample else None
+            gpu_memory_total = as_float(gpu_sample.get("memory_total_mib")) if gpu_sample else None
+
+            source_parts = [
+                f"scheduler={scheduler_source}",
+                f"target_kv={lifecycle_snapshot.get('target_kv_source')}",
+                "kv_pool=nearest_pool_sample" if pool_sample else "kv_pool=missing",
+                "gpu_util=nearest_sampler_sample" if gpu_sample else "gpu_util=missing",
+                "memory_events=normalized_event_overlap",
+            ]
+            confidence_parts = [
+                scheduler_source,
+                str(lifecycle_snapshot.get("target_kv_confidence") or "unknown"),
+                "nearest_sample" if pool_sample else "missing",
+                "nearest_sample" if gpu_sample else "missing",
+            ]
+            simple_bits = [
+                f"{label} at {snapshot_label_for_offset(rel, snap_label)}",
+                f"scheduler={scheduler_state}",
+                f"target H2D={'yes' if target_replay_h2d_active or bool(target_h2d_events) else 'no'}",
+            ]
+            if pool_usage is not None:
+                simple_bits.append(f"KV pool {pool_usage:.1f}%")
+            if gpu_util is not None:
+                simple_bits.append(f"GPU util {gpu_util:.0f}%")
+
+            rows.append(
+                {
+                    "row": label,
+                    "case_id": case_id,
+                    "comparison_scenario": gap.get("comparison_scenario", ""),
+                    "mode": gap.get("mode", ""),
+                    "mode_display": display_mode(gap.get("mode")),
+                    "session_id": session,
+                    "ledger_session_id": ledger_session,
+                    "request_id": request_id,
+                    "tool_wait_ms": gap.get("tool_gap_ms", ""),
+                    "snapshot_index": snap_index,
+                    "snapshot_label": snap_label,
+                    "relative_to_replay_due_ms": round(rel, 3),
+                    "absolute_case_ms": round(timestamp, 3),
+                    "target_scheduler_state": scheduler_state,
+                    "target_request_seen_by_backend": 1 if replay_backend_receive_start_ms(gap) is not None and timestamp >= (replay_backend_receive_start_ms(gap) or timestamp + 1) else 0,
+                    "target_in_scheduler_queue": 1 if scheduler_state == "queued_waiting_for_admission" else 0,
+                    "target_admitted": 1 if scheduler_state in {"admitted_running_before_first_token", "first_token_seen_decoding", "replay_complete"} else 0,
+                    "target_replay_request_active": 1 if target_replay_request_active else 0,
+                    "target_prefetch_request_active": 1 if target_prefetch_request_active else 0,
+                    "target_prefetch_h2d_active": 1 if target_prefetch_h2d_active else 0,
+                    "target_replay_h2d_active": 1 if target_replay_h2d_active or target_h2d_events else 0,
+                    "target_prefill_or_recompute_active": 1 if target_prefill_active or target_model_forward_active else 0,
+                    "target_model_forward_active": 1 if target_model_forward_active else 0,
+                    "target_active_kv_events": len(target_kv_events),
+                    "target_active_h2d_events": len(target_h2d_events),
+                    "background_active_kv_events": len(other_kv_events),
+                    "background_active_h2d_events": len(other_h2d_events),
+                    **lifecycle_snapshot,
+                    "scheduler_waiting_queue_len_near_t": waiting_len,
+                    "scheduler_running_requests_near_t": running_requests,
+                    "scheduler_running_tokens_near_t": running_tokens,
+                    "scheduler_sample_distance_ms": trace_distance,
+                    "global_kv_pool_usage_pct": round(pool_usage, 3) if pool_usage is not None else "",
+                    "global_kv_pool_used_slots": pool_sample.get("kv_pool_used_slots", "") if pool_sample else "",
+                    "global_kv_pool_free_slots": pool_sample.get("kv_pool_free_slots", "") if pool_sample else "",
+                    "global_pool_pressure": kv_pool_pressure_label(pool_usage),
+                    "kv_pool_sample_distance_ms": pool_sample.get("distance_from_target_ms", "") if pool_sample else "",
+                    "global_gpu_util_pct": round(gpu_util, 3) if gpu_util is not None else "",
+                    "global_gpu_memory_util_pct": round(gpu_mem_util, 3) if gpu_mem_util is not None else "",
+                    "global_gpu_memory_used_mib": round(gpu_memory_used, 3) if gpu_memory_used is not None else "",
+                    "global_gpu_memory_total_mib": round(gpu_memory_total, 3) if gpu_memory_total is not None else "",
+                    "gpu_util_sample_distance_ms": gpu_sample.get("distance_from_target_ms", "") if gpu_sample else "",
+                    "source_origin": "; ".join(source_parts),
+                    "confidence": "; ".join(confidence_parts),
+                    "scope_note": "Target fields describe the monitored replay request. Background fields are aggregate context only.",
+                    "simple_meaning": "; ".join(simple_bits) + ".",
+                }
+            )
+    return rows
+
+
+def request_state_snapshot_display_rows(rows: list[dict[str, Any]], limit: int = 180) -> list[dict[str, Any]]:
+    display_rows: list[dict[str, Any]] = []
+    for row in rows[:limit]:
+        kv_parts = []
+        for label, key in [
+            ("GPU", "target_kv_gpu_tokens"),
+            ("host", "target_kv_host_tokens"),
+            ("missing", "target_kv_missing_tokens"),
+            ("loading", "target_kv_h2d_loading_tokens"),
+        ]:
+            value = row.get(key)
+            if value not in ("", None):
+                kv_parts.append(f"{label} {compact_token_count(value)}")
+        global_parts = []
+        if row.get("global_gpu_util_pct") not in ("", None):
+            global_parts.append(f"GPU {row.get('global_gpu_util_pct')}%")
+        if row.get("global_kv_pool_usage_pct") not in ("", None):
+            global_parts.append(f"KV pool {row.get('global_kv_pool_usage_pct')}%")
+        display_rows.append(
+            {
+                "row": row.get("row", ""),
+                "t": row.get("snapshot_label", ""),
+                "ms_after_due": row.get("relative_to_replay_due_ms", ""),
+                "scheduler": row.get("target_scheduler_state", ""),
+                "replay": "yes" if boolish(row.get("target_replay_request_active")) else "no",
+                "prefetch": "yes" if boolish(row.get("target_prefetch_request_active")) else "no",
+                "target_h2d": "yes" if boolish(row.get("target_replay_h2d_active")) else "no",
+                "prefill": "yes" if boolish(row.get("target_prefill_or_recompute_active")) else "no",
+                "target_kv": ", ".join(kv_parts) if kv_parts else row.get("target_kv_state_label", ""),
+                "global_state": ", ".join(global_parts) if global_parts else "no nearby sample",
+                "queue_near_t": row.get("scheduler_waiting_queue_len_near_t", ""),
+                "source": row.get("source_origin", ""),
+                "confidence": row.get("confidence", ""),
+            }
+        )
+    return display_rows
+
+
+def request_state_snapshot_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>No request-centered snapshot rows were available.</p>"
+    columns = [
+        "row",
+        "t",
+        "ms_after_due",
+        "scheduler",
+        "replay",
+        "prefetch",
+        "target_h2d",
+        "prefill",
+        "target_kv",
+        "global_state",
+        "queue_near_t",
+        "source",
+        "confidence",
+    ]
+    return f"""
+    <h3>Request-Centered Snapshot Timeline</h3>
+    <p class="note">Each row is a point-in-time snapshot for the monitored replay request only. Background work is compressed into aggregate context such as queue length, global GPU utilization, and KV-pool pressure.</p>
+    {table_html(request_state_snapshot_display_rows(rows), columns, limit=240)}
+    <p class="note">Snapshot fields are normalized so this layer can survive backend changes: exact request timings, normalized memory movement, target KV lifecycle state, nearest KV-pool sample, and nearest GPU-utilization sample.</p>
+    """
+
+
+TIMESTAMP_HISTOGRAM_POINTS = [
+    "replay due",
+    "+20 ms",
+    "+100 ms",
+    "+500 ms",
+    "+1.0 s",
+    "+5.0 s",
+    "+10.0 s",
+    "backend receive",
+    "scheduler admit",
+    "first token",
+]
+
+
+TIMESTAMP_HISTOGRAM_COLORS = {
+    "waiting_state": "#cbd5e1",
+    "backend": "#0f766e",
+    "admitted": "#14b8a6",
+    "target_gpu_kv": "#16a34a",
+    "target_host_kv": "#f97316",
+    "target_missing_kv": "#c026d3",
+    "host_h2d": "#2563eb",
+    "missing_recompute": "#c026d3",
+    "model_token": "#16a34a",
+    "scheduler_pressure": "#dc2626",
+    "running_pressure": "#f59e0b",
+    "gpu_pressure": "#0ea5e9",
+    "kv_pool_pressure": "#7c3aed",
+    "background_h2d_pressure": "#0891b2",
+    "priority_conflict": "#991b1b",
+}
+
+
+TARGET_BAR_METRICS = [
+    ("target_gpu_kv", "GPU KV", "How much of this request's KV is already in GPU memory."),
+    ("target_host_kv", "Host KV", "How much of this request's KV is sitting in host memory."),
+    ("target_missing_kv", "Missing KV", "How much of this request's KV is absent and may need recompute."),
+    ("host_h2d", "Target H2D", "Whether this request is actively loading KV from host to GPU."),
+    ("model_token", "Target compute", "Whether this request is doing useful model work or has produced a token."),
+]
+
+
+PRESSURE_BAR_METRICS = [
+    ("gpu_pressure", "GPU compute", "Whole-GPU compute utilization near this timestamp."),
+    ("kv_pool_pressure", "KV pool", "How full the shared GPU KV cache pool is."),
+    ("scheduler_pressure", "Queue", "How much scheduler waiting pressure exists."),
+    ("running_pressure", "Running batch", "How much running-request/token pressure exists."),
+    ("background_h2d_pressure", "Other H2D/KV", "Background KV movement or H2D work from other requests."),
+    ("priority_conflict", "Priority clash", "Same-priority or higher-priority work competing with the replay."),
+]
+
+
+def _clamped(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _bar_segment(height: float, color: str, label: str) -> dict[str, Any]:
+    if height <= 0:
+        return {}
+    return {"height": height, "color": color, "label": label}
+
+
+def _snapshot_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
+    lookup: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("comparison_scenario") or ""),
+            canonical_mode(row.get("mode")),
+            str(row.get("snapshot_label") or ""),
+        )
+        lookup[key] = row
+    return lookup
+
+
+def _gap_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    return {
+        (str(row.get("comparison_scenario") or ""), canonical_mode(row.get("mode"))): row
+        for row in rows
+        if canonical_mode(row.get("mode")) != "projected_hardware_bypass"
+    }
+
+
+def _snapshot_label_available(
+    lookup: dict[tuple[str, str, str], dict[str, Any]],
+    scenario: str,
+    modes: list[str],
+    label: str,
+) -> bool:
+    return any((scenario, mode, label) in lookup for mode in modes)
+
+
+def _timestamp_columns_for_scenario(
+    lookup: dict[tuple[str, str, str], dict[str, Any]],
+    scenario: str,
+    modes: list[str],
+) -> list[str]:
+    labels = [
+        label
+        for label in TIMESTAMP_HISTOGRAM_POINTS
+        if _snapshot_label_available(lookup, scenario, modes, label)
+    ]
+    if "replay due" not in labels:
+        labels.insert(0, "replay due")
+    # Keep the main chart readable. The raw proof table still contains every
+    # collected timestamp row, including denser points such as +50 ms, +250 ms,
+    # cache lookup, and replay-H2D start/end when present.
+    return labels[:10]
+
+
+def _kv_fraction(snapshot: dict[str, Any], key: str) -> float:
+    total = as_float(snapshot.get("target_kv_input_tokens"))
+    value = as_float(snapshot.get(key))
+    if total is None or total <= 0 or value is None:
+        return 0.0
+    return _clamped(value / total, 0.0, 1.0)
+
+
+def _metric_bar(value: float, color: str, label: str, title: str) -> dict[str, Any]:
+    return {
+        "value": _clamped(value, 0.0, 100.0),
+        "color": color,
+        "label": label,
+        "title": title,
+    }
+
+
+def _target_grouped_bars(snapshot: dict[str, Any] | None) -> tuple[list[dict[str, Any]], str, str]:
+    if not snapshot:
+        return (
+            [_metric_bar(0.0, TIMESTAMP_HISTOGRAM_COLORS[key], label, "No point-in-time sample") for key, label, _ in TARGET_BAR_METRICS],
+            "No point-in-time sample",
+            "KV: no sample",
+        )
+    state = str(snapshot.get("target_scheduler_state") or "unknown")
+    h2d_active = boolish(snapshot.get("target_replay_h2d_active")) or boolish(snapshot.get("target_prefetch_h2d_active"))
+    prefill_active = boolish(snapshot.get("target_prefill_or_recompute_active"))
+    model_active = boolish(snapshot.get("target_model_forward_active"))
+    first_token = state == "first_token_seen_decoding"
+    host_fraction = _kv_fraction(snapshot, "target_kv_host_tokens")
+    missing_fraction = _kv_fraction(snapshot, "target_kv_missing_tokens")
+    gpu_fraction = _kv_fraction(snapshot, "target_kv_gpu_tokens")
+    loading_fraction = _kv_fraction(snapshot, "target_kv_h2d_loading_tokens")
+
+    h2d_score = max(loading_fraction * 100.0, 100.0 if h2d_active else 0.0)
+    compute_score = 0.0
+    if first_token:
+        compute_score = 100.0
+    elif model_active:
+        compute_score = 85.0
+    elif prefill_active:
+        compute_score = 70.0
+    bars = [
+        _metric_bar(
+            gpu_fraction * 100.0,
+            TIMESTAMP_HISTOGRAM_COLORS["target_gpu_kv"],
+            "GPU KV",
+            f"Target KV on GPU: {gpu_fraction * 100.0:.0f}%",
+        ),
+        _metric_bar(
+            host_fraction * 100.0,
+            TIMESTAMP_HISTOGRAM_COLORS["target_host_kv"],
+            "Host KV",
+            f"Target KV in host memory: {host_fraction * 100.0:.0f}%",
+        ),
+        _metric_bar(
+            missing_fraction * 100.0,
+            TIMESTAMP_HISTOGRAM_COLORS["target_missing_kv"],
+            "Missing KV",
+            f"Target KV missing/recompute exposure: {missing_fraction * 100.0:.0f}%",
+        ),
+        _metric_bar(
+            h2d_score,
+            TIMESTAMP_HISTOGRAM_COLORS["host_h2d"],
+            "Target H2D",
+            f"Target H2D activity score: {h2d_score:.0f}%",
+        ),
+        _metric_bar(
+            compute_score,
+            TIMESTAMP_HISTOGRAM_COLORS["model_token"],
+            "Target compute",
+            f"Target compute/token activity score: {compute_score:.0f}%",
+        ),
+    ]
+
+    kv_label = "KV unknown"
+    kv_parts = []
+    for name, key in [("GPU", "target_kv_gpu_tokens"), ("host", "target_kv_host_tokens"), ("missing", "target_kv_missing_tokens")]:
+        value = snapshot.get(key)
+        if value not in ("", None):
+            kv_parts.append(f"{name} {compact_token_count(value)}")
+    if kv_parts:
+        kv_label = "KV: " + ", ".join(kv_parts)
+    return bars, target_state_short_label(state), kv_label
+
+
+def _pressure_grouped_bars(snapshot: dict[str, Any] | None, gap: dict[str, Any] | None) -> tuple[list[dict[str, Any]], str]:
+    if not snapshot:
+        return (
+            [_metric_bar(0.0, TIMESTAMP_HISTOGRAM_COLORS[key], label, "No nearby pressure sample") for key, label, _ in PRESSURE_BAR_METRICS],
+            "No nearby pressure sample",
+        )
+    queue_len = as_float(snapshot.get("scheduler_waiting_queue_len_near_t")) or 0.0
+    running_requests = as_float(snapshot.get("scheduler_running_requests_near_t")) or 0.0
+    running_tokens = as_float(snapshot.get("scheduler_running_tokens_near_t")) or 0.0
+    gpu_util = as_float(snapshot.get("global_gpu_util_pct")) or 0.0
+    kv_pool = as_float(snapshot.get("global_kv_pool_usage_pct")) or 0.0
+    background_h2d = as_float(snapshot.get("background_active_h2d_events")) or 0.0
+    background_kv = as_float(snapshot.get("background_active_kv_events")) or 0.0
+    same_or_higher = as_float((gap or {}).get("replay_priority_same_or_higher_ahead")) or 0.0
+
+    queue_score = _clamped(queue_len * 20.0, 0.0, 100.0)
+    running_score = _clamped(running_requests * 18.0 + running_tokens / 60.0, 0.0, 100.0)
+    background_h2d_score = _clamped(background_h2d * 24.0 + background_kv * 4.0, 0.0, 100.0)
+    priority_score = _clamped(same_or_higher * 25.0, 0.0, 100.0)
+    bars = [
+        _metric_bar(
+            gpu_util,
+            TIMESTAMP_HISTOGRAM_COLORS["gpu_pressure"],
+            "GPU compute",
+            f"Whole-GPU compute utilization: {gpu_util:.0f}%",
+        ),
+        _metric_bar(
+            kv_pool,
+            TIMESTAMP_HISTOGRAM_COLORS["kv_pool_pressure"],
+            "KV pool",
+            f"Shared GPU KV pool usage: {kv_pool:.0f}%",
+        ),
+        _metric_bar(
+            queue_score,
+            TIMESTAMP_HISTOGRAM_COLORS["scheduler_pressure"],
+            "Queue",
+            f"Scheduler waiting queue length: {int(queue_len)}",
+        ),
+        _metric_bar(
+            running_score,
+            TIMESTAMP_HISTOGRAM_COLORS["running_pressure"],
+            "Running batch",
+            f"Running requests={int(running_requests)}, running tokens={int(running_tokens)}",
+        ),
+        _metric_bar(
+            background_h2d_score,
+            TIMESTAMP_HISTOGRAM_COLORS["background_h2d_pressure"],
+            "Other H2D/KV",
+            f"Background H2D events={int(background_h2d)}, background KV events={int(background_kv)}",
+        ),
+        _metric_bar(
+            priority_score,
+            TIMESTAMP_HISTOGRAM_COLORS["priority_conflict"],
+            "Priority clash",
+            f"Same/higher-priority requests ahead: {int(same_or_higher)}",
+        ),
+    ]
+    meaning = []
+    if queue_len:
+        meaning.append(f"queue {int(queue_len)}")
+    if gpu_util:
+        meaning.append(f"GPU {gpu_util:.0f}%")
+    if kv_pool:
+        meaning.append(f"KV pool {kv_pool:.0f}%")
+    if same_or_higher:
+        meaning.append(f"same/higher priority ahead {int(same_or_higher)}")
+    return bars, ", ".join(meaning) if meaning else "low visible pressure"
+
+
+def target_state_short_label(state: Any) -> str:
+    labels = {
+        "ready_not_submitted": "Ready, not submitted",
+        "submitted_waiting_client_request_start": "Submitted, waiting for request start",
+        "request_started_waiting_backend_receive": "Request started, waiting for backend receive",
+        "backend_received_before_queue": "Backend received, not queued yet",
+        "queued_waiting_for_admission": "Queued, waiting for admission",
+        "admitted_running_before_first_token": "Admitted, running before first token",
+        "first_token_seen_decoding": "First token seen, decoding",
+        "replay_complete": "Replay complete",
+        "unknown": "Unknown state",
+    }
+    return labels.get(str(state or ""), str(state or "Unknown state").replace("_", " "))
+
+
+def _kv_story_label(snapshot: dict[str, Any] | None) -> str:
+    if not snapshot:
+        return "KV: no point-in-time sample"
+    parts = []
+    for label, key in [
+        ("GPU", "target_kv_gpu_tokens"),
+        ("host", "target_kv_host_tokens"),
+        ("missing", "target_kv_missing_tokens"),
+        ("loading", "target_kv_h2d_loading_tokens"),
+    ]:
+        value = snapshot.get(key)
+        if value not in ("", None):
+            parts.append(f"{label} {compact_token_count(value)}")
+    return "KV: " + (", ".join(parts) if parts else str(snapshot.get("target_kv_state_label") or "unknown"))
+
+
+def _pressure_story_label(snapshot: dict[str, Any] | None, gap: dict[str, Any] | None) -> str:
+    if not snapshot:
+        return "Pressure: no nearby sample"
+    parts = []
+    queue_len = as_float(snapshot.get("scheduler_waiting_queue_len_near_t"))
+    gpu_util = as_float(snapshot.get("global_gpu_util_pct"))
+    kv_pool = as_float(snapshot.get("global_kv_pool_usage_pct"))
+    same_or_higher = as_float((gap or {}).get("replay_priority_same_or_higher_ahead"))
+    if queue_len is not None:
+        parts.append(f"queue {int(queue_len)}")
+    if gpu_util is not None:
+        parts.append(f"GPU {gpu_util:.0f}%")
+    if kv_pool is not None:
+        parts.append(f"KV pool {kv_pool:.0f}%")
+    if same_or_higher:
+        parts.append(f"same-priority {int(same_or_higher)}")
+    return "Pressure: " + (", ".join(parts) if parts else "low visible pressure")
+
+
+def _wrap_text(text: str, max_chars: int) -> list[str]:
+    words = str(text or "").split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _draw_wrapped_text(
+    x: float,
+    y: float,
+    text: str,
+    max_chars: int,
+    max_lines: int,
+    *,
+    font_size: float = 8.0,
+    fill: str = "#475569",
+    weight: str = "500",
+    anchor: str = "middle",
+) -> list[str]:
+    lines = _wrap_text(text, max_chars)
+    if max_lines > 0:
+        lines = lines[:max_lines]
+    out: list[str] = []
+    for idx, line in enumerate(lines):
+        out.append(
+            f'<text x="{x:.1f}" y="{y + idx * (font_size + 2):.1f}" text-anchor="{anchor}" '
+            f'font-size="{font_size:.1f}" font-weight="{weight}" fill="{fill}">{html.escape(line)}</text>'
+        )
+    return out
+
+
+def _mode_takeaway(row: dict[str, Any], mode: str) -> str:
+    clock_a = as_float(row.get("replay_request_start_lateness_ms"))
+    ttft = as_float(row.get("resume_ttft_ms"))
+    queue_wait = as_float(row.get("replay_scheduler_queue_to_admit_ms"))
+    if canonical_mode(mode) == "e2e_priority_hints" and clock_a is not None and clock_a < 5:
+        if queue_wait is not None and queue_wait > 1000:
+            return "E2E released replay on time, but scheduler admission dominated the delay."
+        return "E2E released replay on time."
+    if canonical_mode(mode) == "dynamo_priority_hints" and clock_a is not None and clock_a > 1000:
+        return "Dynamo hints helped scheduler priority after a very late replay submission."
+    if canonical_mode(mode) == "no_prefetch":
+        return "Baseline replay had no early KV preparation."
+    if ttft is not None:
+        return f"Replay first token arrived after {display_ms(ttft)}."
+    return "No compact takeaway was available for this row."
+
+
+def _draw_stacked_vertical_bar(
+    x: float,
+    bottom_y: float,
+    width: float,
+    segments: list[dict[str, Any]],
+    max_height: float,
+    title: str,
+) -> list[str]:
+    total = sum(as_float(segment.get("height")) or 0.0 for segment in segments)
+    scale = min(1.0, max_height / total) if total > 0 else 1.0
+    y = bottom_y
+    out: list[str] = []
+    for segment in segments:
+        height = max(2.0, (as_float(segment.get("height")) or 0.0) * scale)
+        y -= height
+        out.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{width:.1f}" height="{height:.1f}" '
+            f'rx="2.5" fill="{segment.get("color")}" opacity="0.9">'
+            f'<title>{html.escape(title + " | " + str(segment.get("label") or ""))}</title></rect>'
+        )
+    out.append(
+        f'<rect x="{x:.1f}" y="{bottom_y - max(3.0, min(total * scale, max_height)):.1f}" '
+        f'width="{width:.1f}" height="{max(3.0, min(total * scale, max_height)):.1f}" '
+        'rx="2.5" fill="none" stroke="#0f172a" stroke-opacity="0.16"/>'
+    )
+    return out
+
+
+def _draw_grouped_metric_bars(
+    cx: float,
+    bottom_y: float,
+    bars: list[dict[str, Any]],
+    max_height: float,
+    title_prefix: str,
+    *,
+    bar_width: float = 7.0,
+    gap: float = 3.0,
+) -> list[str]:
+    group_w = len(bars) * bar_width + max(0, len(bars) - 1) * gap
+    x = cx - group_w / 2.0
+    out: list[str] = []
+    for idx, bar in enumerate(bars):
+        value = as_float(bar.get("value")) or 0.0
+        bx = x + idx * (bar_width + gap)
+        out.append(
+            f'<rect x="{bx:.1f}" y="{bottom_y - max_height:.1f}" width="{bar_width:.1f}" '
+            f'height="{max_height:.1f}" rx="2" fill="#e2e8f0" opacity="0.42"/>'
+        )
+        if value > 0:
+            height = max(2.0, value / 100.0 * max_height)
+            out.append(
+                f'<rect x="{bx:.1f}" y="{bottom_y - height:.1f}" width="{bar_width:.1f}" '
+                f'height="{height:.1f}" rx="2" fill="{bar.get("color")}" opacity="0.9">'
+                f'<title>{html.escape(title_prefix + " | " + str(bar.get("label") or "") + ": " + str(bar.get("title") or ""))}</title></rect>'
+            )
+        out.append(
+            f'<line x1="{bx:.1f}" y1="{bottom_y:.1f}" x2="{bx + bar_width:.1f}" y2="{bottom_y:.1f}" '
+            f'stroke="{bar.get("color")}" stroke-width="1.4" opacity="0.72">'
+            f'<title>{html.escape(title_prefix + " | " + str(bar.get("label") or "") + ": " + str(bar.get("title") or ""))}</title></line>'
+        )
+    return out
+
+
+def _draw_lane_grid(
+    left: float,
+    right: float,
+    bottom_y: float,
+    max_height: float,
+    label: str,
+) -> list[str]:
+    top_y = bottom_y - max_height
+    mid_y = bottom_y - max_height / 2.0
+    return [
+        f'<line x1="{left:.1f}" y1="{bottom_y:.1f}" x2="{right:.1f}" y2="{bottom_y:.1f}" stroke="#cbd5e1"/>',
+        f'<line x1="{left:.1f}" y1="{mid_y:.1f}" x2="{right:.1f}" y2="{mid_y:.1f}" stroke="#e2e8f0" stroke-dasharray="3 5"/>',
+        f'<line x1="{left:.1f}" y1="{top_y:.1f}" x2="{right:.1f}" y2="{top_y:.1f}" stroke="#e2e8f0" stroke-dasharray="3 5"/>',
+        f'<text x="{left - 14:.1f}" y="{top_y + 4:.1f}" text-anchor="end" font-size="8" font-weight="800" fill="#64748b">100</text>',
+        f'<text x="{left - 14:.1f}" y="{mid_y + 4:.1f}" text-anchor="end" font-size="8" font-weight="800" fill="#94a3b8">50</text>',
+        f'<text x="{left - 90:.1f}" y="{bottom_y - max_height / 2.0:.1f}" font-size="10" font-weight="900" fill="#334155">{html.escape(label)}</text>',
+    ]
+
+
+def _waterfall_segments_for_gap(row: dict[str, Any]) -> list[tuple[str, float, str]]:
+    stages = [
+        ("due_to_client_submit", "due -> submit", "#94a3b8"),
+        ("client_submit_to_request_start", "client dispatch", "#2563eb"),
+        ("request_start_to_sglang_receive", "backend receive", "#0f766e"),
+        ("sglang_receive_to_scheduler_queue", "queue enter", "#ca8a04"),
+        ("scheduler_queue_wait", "queue -> admit", "#dc2626"),
+        ("scheduler_admit_to_cache_lookup", "cache lookup", "#8b5cf6"),
+        ("cache_lookup_to_h2d_start", "load path", "#7c3aed"),
+        ("h2d_copy", "H2D", "#f97316"),
+        ("h2d_end_to_first_token", "to first token", "#16a34a"),
+        ("request_start_to_first_token", "submit -> token", "#16a34a"),
+    ]
+    values = replay_delay_segment_values(row)
+    if values.get("h2d_end_to_first_token"):
+        values.pop("request_start_to_first_token", None)
+    return [
+        (label, float(values[key]), color)
+        for key, label, color in stages
+        if (as_float(values.get(key)) or 0.0) > 0
+    ]
+
+
+def _draw_waterfall_row(row: dict[str, Any], x: float, y: float, width: float, label: str) -> list[str]:
+    segments = _waterfall_segments_for_gap(row)
+    total = sum(value for _label, value, _color in segments)
+    if total <= 0:
+        return [
+            f'<text x="{x:.1f}" y="{y + 13:.1f}" font-size="10" fill="#64748b">no stage timing available</text>'
+        ]
+    out: list[str] = []
+    cursor = x
+    dominant = max(segments, key=lambda item: item[1])
+    for segment_label, value, color in segments:
+        w = max(3.0, value / total * width)
+        title = f"{label}: {segment_label} consumed {display_ms(value)}"
+        out.append(
+            f'<rect x="{cursor:.1f}" y="{y:.1f}" width="{w:.1f}" height="16" rx="3" '
+            f'fill="{color}" opacity="0.88"><title>{html.escape(title)}</title></rect>'
+        )
+        cursor += w
+    out.append(
+        f'<text x="{x:.1f}" y="{y + 31:.1f}" font-size="9" font-weight="800" fill="#475569">'
+        f'dominant delay: {html.escape(dominant[0])} ({html.escape(display_ms(dominant[1]))})</text>'
+    )
+    return out
+
+
+def timestamp_histogram_legend_html() -> str:
+    def swatch(color: str, label: str) -> str:
+        return (
+            f'<span style="display:inline-block;width:72px;height:18px;border-radius:3px;'
+            f'background:{color};border:1px solid rgba(15,23,42,0.18);" title="{html.escape(label)}"></span>'
+        )
+
+    rows = [
+        {
+            "visual": "Target request bar group",
+            "color": "five colored bars",
+            "simple meaning": "These bars describe only the replay request we are investigating. Taller means more of that target-specific condition is present.",
+        },
+        {
+            "visual": "System pressure bar group",
+            "color": "six colored bars",
+            "simple meaning": "These bars describe aggregate backend/GPU pressure near the target request. They do not list filler request IDs.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["target_gpu_kv"], "target GPU KV"),
+            "color": "green",
+            "simple meaning": "More of the target request's KV is already on GPU. Taller is better for replay readiness.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["target_host_kv"], "target host KV"),
+            "color": "orange",
+            "simple meaning": "More of the target request's KV is in host memory. It may still need host-to-GPU loading before replay can run.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["target_missing_kv"], "target missing KV"),
+            "color": "purple",
+            "simple meaning": "More of the target request's KV is missing. Taller means more recompute risk.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["host_h2d"], "target H2D active"),
+            "color": "blue",
+            "simple meaning": "The target request is actively loading KV from host to GPU at this timestamp.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["model_token"], "target compute/token"),
+            "color": "green",
+            "simple meaning": "The target request is doing useful model work or has produced its first token.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["waiting_state"], "state label / waiting rail"),
+            "color": "light gray",
+            "simple meaning": "The written state label tells whether the target is ready, submitted, queued, admitted, or decoding. Waiting is not drawn as a tall activity bar.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["scheduler_pressure"], "scheduler pressure"),
+            "color": "red",
+            "simple meaning": "The scheduler queue is crowded. Taller means more admission pressure.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["running_pressure"], "running requests/tokens"),
+            "color": "amber",
+            "simple meaning": "Other requests/tokens are already occupying running batch capacity. Taller means less room for the replay.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["gpu_pressure"], "GPU compute pressure"),
+            "color": "cyan",
+            "simple meaning": "The GPU compute sampler says the GPU is busy near this timestamp. Taller means busier GPU.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["kv_pool_pressure"], "KV pool pressure"),
+            "color": "violet",
+            "simple meaning": "The GPU KV cache pool is full or close to full. Taller means less available GPU KV space.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["background_h2d_pressure"], "background KV/H2D"),
+            "color": "blue-green",
+            "simple meaning": "There is background KV movement or H2D activity from other requests. Taller means more transfer contention.",
+        },
+        {
+            "visual": swatch(TIMESTAMP_HISTOGRAM_COLORS["priority_conflict"], "same/higher priority"),
+            "color": "dark red",
+            "simple meaning": "The target is urgent, but same-priority or higher-priority work is also competing.",
+        },
+        {
+            "visual": "Delay waterfall strip",
+            "color": "stage colors",
+            "simple meaning": "This breaks the total delay into pieces such as due-to-submit, queue-to-admit, H2D/load path, and first-token work.",
+        },
+    ]
+    out = [
+        '<div class="table-wrap"><table>',
+        "<thead><tr><th>Visual</th><th>Color</th><th>Simple Meaning</th></tr></thead><tbody>",
+    ]
+    for row in rows:
+        visual = str(row.get("visual", ""))
+        visual_html = visual if visual.startswith("<span") else html.escape(visual)
+        out.append(
+            "<tr>"
+            f"<td>{visual_html}</td>"
+            f"<td>{html.escape(str(row.get('color', '')))}</td>"
+            f"<td>{html.escape(str(row.get('simple meaning', '')))}</td>"
+            "</tr>"
+        )
+    out.append("</tbody></table></div>")
+    return "\n".join(out)
+
+
+def build_timestamp_histogram_svg(
+    scenario: str,
+    rows: list[dict[str, Any]],
+    snapshot_rows: list[dict[str, Any]],
+) -> str:
+    modes = [
+        mode
+        for mode in ("no_prefetch", "direct_prefetch", "dynamo_priority_hints", "e2e_priority_hints")
+        if any(canonical_mode(row.get("mode")) == mode for row in rows)
+    ]
+    if not modes:
+        return "<p>No measured mode rows were available for the timestamp grouped bar chart.</p>"
+    snapshot_by_key = _snapshot_lookup(snapshot_rows)
+    gap_by_key = _gap_lookup(rows)
+    columns = _timestamp_columns_for_scenario(snapshot_by_key, scenario, modes)
+    width = 3000
+    left = 360
+    right = 70
+    top = 104
+    header_h = 86
+    mode_h = 590
+    bottom = 70
+    col_w = (width - left - right) / max(1, len(columns))
+    height = top + header_h + len(modes) * mode_h + bottom
+    max_bar_h = 112
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" role="img" aria-label="Timestamp grouped bar chart for {html.escape(scenario)}">',
+        f'<rect x="0" y="0" width="{width}" height="{height}" rx="12" fill="#ffffff" stroke="#e2e8f0"/>',
+        f'<text x="18" y="30" font-size="18" font-weight="850" fill="#0f172a">{html.escape(scenario)} timestamp grouped bar chart</text>',
+        '<text x="18" y="50" font-size="12" fill="#475569">Each timestamp has two bar groups: target request facts/work first, then aggregate system pressure. Bar height is normalized to 0-100.</text>',
+        '<text x="18" y="68" font-size="11" fill="#64748b">Waiting is shown as a written state label, not a tall bar. This keeps idle/waiting time visually separate from useful target work.</text>',
+    ]
+    for idx, column in enumerate(columns):
+        x = left + idx * col_w + col_w / 2
+        color = "#b91c1c" if column == "replay due" else "#334155"
+        parts.append(
+            f'<text x="{x:.1f}" y="{top:.1f}" text-anchor="middle" font-size="13" '
+            f'font-weight="800" fill="{color}">{html.escape(column)}</text>'
+        )
+        parts.append(f'<line x1="{x:.1f}" y1="{top + 14:.1f}" x2="{x:.1f}" y2="{height - bottom + 10:.1f}" stroke="#e2e8f0"/>')
+
+    target_key_y = top + 28
+    pressure_key_y = top + 52
+    key_x = left
+    for key, label, _meaning in TARGET_BAR_METRICS:
+        parts.append(f'<rect x="{key_x:.1f}" y="{target_key_y - 11:.1f}" width="13" height="13" rx="2" fill="{TIMESTAMP_HISTOGRAM_COLORS[key]}" opacity="0.9"/>')
+        parts.append(f'<text x="{key_x + 18:.1f}" y="{target_key_y:.1f}" font-size="11" font-weight="800" fill="#475569">{html.escape(label)}</text>')
+        key_x += 156
+    key_x = left
+    for key, label, _meaning in PRESSURE_BAR_METRICS:
+        parts.append(f'<rect x="{key_x:.1f}" y="{pressure_key_y - 11:.1f}" width="13" height="13" rx="2" fill="{TIMESTAMP_HISTOGRAM_COLORS[key]}" opacity="0.9"/>')
+        parts.append(f'<text x="{key_x + 18:.1f}" y="{pressure_key_y:.1f}" font-size="11" font-weight="800" fill="#64748b">{html.escape(label)}</text>')
+        key_x += 156
+
+    for mode_idx, mode in enumerate(modes):
+        row = gap_by_key.get((scenario, mode), {})
+        y0 = top + header_h + mode_idx * mode_h
+        _, accent, _opacity = mode_row_background_style(mode, mode_idx)
+        parts.append(f'<rect x="0" y="{y0 - 20:.1f}" width="{width}" height="{mode_h}" fill="#f8fafc" opacity="{0.5 if mode_idx % 2 else 0.25}"/>')
+        parts.append(f'<rect x="0" y="{y0 - 20:.1f}" width="8" height="{mode_h}" fill="{accent}"/>')
+        parts.append(f'<text x="18" y="{y0 + 8:.1f}" font-size="14" font-weight="850" fill="#0f172a">{html.escape(mode_short_label(mode))}</text>')
+        parts.append(f'<text x="18" y="{y0 + 25:.1f}" font-size="10" fill="#475569">{html.escape(display_mode(mode))}</text>')
+        clock_a = as_float(row.get("replay_request_start_lateness_ms"))
+        ttft = as_float(row.get("resume_ttft_ms"))
+        queue_wait = as_float(row.get("replay_scheduler_queue_to_admit_ms"))
+        clock_text = []
+        if clock_a is not None:
+            clock_text.append(f"due->submit {display_ms(clock_a)}")
+        if ttft is not None:
+            clock_text.append(f"TTFT {display_ms(ttft)}")
+        if queue_wait is not None:
+            clock_text.append(f"queue->admit {display_ms(queue_wait)}")
+        parts.append(f'<text x="18" y="{y0 + 43:.1f}" font-size="9" fill="#64748b">{html.escape(" | ".join(clock_text)[:88])}</text>')
+        parts.extend(
+            _draw_wrapped_text(
+                18,
+                y0 + 63,
+                _mode_takeaway(row, mode),
+                32,
+                3,
+                font_size=9.0,
+                fill="#334155",
+                weight="700",
+                anchor="start",
+            )
+        )
+
+        target_bottom = y0 + 172
+        pressure_bottom = y0 + 410
+        parts.extend(_draw_lane_grid(left, width - right, target_bottom, max_bar_h, "target bars"))
+        parts.extend(_draw_lane_grid(left, width - right, pressure_bottom, max_bar_h, "pressure bars"))
+        for col_idx, column in enumerate(columns):
+            cx = left + col_idx * col_w + col_w / 2
+            snapshot = snapshot_by_key.get((scenario, mode, column))
+            target_bars, target_state, kv_label = _target_grouped_bars(snapshot)
+            pressure_bars, pressure_label = _pressure_grouped_bars(snapshot, row)
+            title_prefix = f"{scenario} {display_mode(mode)} at {column}"
+            parts.extend(_draw_grouped_metric_bars(cx, target_bottom, target_bars, max_bar_h, f"{title_prefix}: target={target_state}; {kv_label}", bar_width=12.0, gap=6.0))
+            parts.extend(_draw_grouped_metric_bars(cx, pressure_bottom, pressure_bars, max_bar_h, f"{title_prefix}: pressure={pressure_label}", bar_width=12.0, gap=6.0))
+            if column in {"scheduler admit", "first token"}:
+                marker_color = TIMESTAMP_HISTOGRAM_COLORS["model_token"] if column == "first token" else TIMESTAMP_HISTOGRAM_COLORS["admitted"]
+                parts.append(f'<circle cx="{cx:.1f}" cy="{target_bottom + 12:.1f}" r="4" fill="{marker_color}"/>')
+            parts.extend(
+                _draw_wrapped_text(
+                    cx,
+                    target_bottom + 36,
+                    target_state,
+                    24,
+                    4,
+                    font_size=10.0,
+                    fill="#0f172a",
+                    weight="800",
+                )
+            )
+            parts.extend(
+                _draw_wrapped_text(
+                    cx,
+                    target_bottom + 92,
+                    kv_label,
+                    24,
+                    3,
+                    font_size=9.0,
+                    fill="#475569",
+                    weight="600",
+                )
+            )
+            parts.extend(
+                _draw_wrapped_text(
+                    cx,
+                    pressure_bottom + 34,
+                    _pressure_story_label(snapshot, row),
+                    24,
+                    3,
+                    font_size=9.0,
+                    fill="#64748b",
+                    weight="600",
+                )
+            )
+
+        wf_y = y0 + mode_h - 44
+        parts.append(f'<line x1="{left:.1f}" y1="{wf_y - 14:.1f}" x2="{width - right:.1f}" y2="{wf_y - 14:.1f}" stroke="#cbd5e1"/>')
+        parts.append(f'<text x="18" y="{wf_y + 12:.1f}" font-size="10" font-weight="800" fill="#475569">delay waterfall</text>')
+        parts.extend(_draw_waterfall_row(row, left, wf_y, width - left - right, mode_short_label(mode)))
+
+    legend_y = height - 44
+    legend_items = [
+        ("upper group: target request", "#0f172a"),
+        ("lower group: system pressure", "#64748b"),
+        ("bottom strip: where elapsed delay was spent", "#dc2626"),
+    ]
+    lx = left
+    for label, color in legend_items:
+        parts.append(f'<rect x="{lx:.1f}" y="{legend_y - 10:.1f}" width="14" height="14" rx="3" fill="{color}" opacity="0.82"/>')
+        parts.append(f'<text x="{lx + 20:.1f}" y="{legend_y + 2:.1f}" font-size="11" fill="#475569">{html.escape(label)}</text>')
+        lx += 320
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def timestamp_histogram_timeline_html(
+    rows: list[dict[str, Any]],
+    snapshot_rows: list[dict[str, Any]],
+    max_scenarios: int = 6,
+) -> str:
+    if not rows:
+        return "<p>No grouped comparison rows were available for timestamp grouped bar charts.</p>"
+    scenarios = sorted(
+        {str(row.get("comparison_scenario") or "") for row in rows if row.get("comparison_scenario")},
+        key=lambda value: (len(value), value),
+    )[:max_scenarios]
+    if not scenarios:
+        return "<p>No comparison scenarios were available for timestamp grouped bar charts.</p>"
+    charts = []
+    for scenario in scenarios:
+        scenario_rows = [row for row in rows if str(row.get("comparison_scenario") or "") == scenario]
+        charts.append(
+            '<div class="setup-diagram" style="margin-top:14px; overflow-x:auto; padding-bottom:12px; border:1px solid #e2e8f0; border-radius:8px;">'
+            + build_timestamp_histogram_svg(scenario, scenario_rows, snapshot_rows)
+            + "</div>"
+        )
+    return "\n".join(charts)
+
+
 def build_tool_wait_gpu_activity_svg(rows: list[dict[str, Any]], max_rows: int = 48) -> str:
     plotted = rows[:max_rows]
     if not plotted:
@@ -7985,14 +9903,7 @@ def global_replay_h2d_readiness_html(gaps: list[dict[str, Any]]) -> str:
 def global_readiness_section_title(gaps: list[dict[str, Any]]) -> str:
     readiness_rows = global_kv_readiness_by_mode_rows(gaps)
     if readiness_rows:
-        modes = []
-        for row in readiness_rows:
-            mode = canonical_mode(row.get("mode"))
-            if mode and mode not in modes:
-                modes.append(mode)
-        if len(modes) == 1:
-            return f"Measured Replay Readiness: {display_mode(modes[0])}"
-        return "Measured Replay Readiness: " + " vs ".join(display_mode(mode) for mode in modes)
+        return "Replay Deadline Pressure Chart"
     if any(
         canonical_mode(row.get("mode")) == "no_prefetch" and has_events(row.get("replay_kv_h2d_events"))
         for row in gaps
@@ -11043,6 +12954,7 @@ def grouped_mode_comparison_timeline_html(
     projected_hardware_rows: list[dict[str, Any]] | None = None,
     tool_wait_activity_rows: list[dict[str, Any]] | None = None,
     kv_block_lifecycle_rows: list[dict[str, Any]] | None = None,
+    request_snapshot_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     if not rows:
         return """
@@ -11074,20 +12986,30 @@ def grouped_mode_comparison_timeline_html(
         for mode in mode_order
     )
     mode_names = ", ".join(display_mode(mode) for mode in mode_order)
+    priority_notes: list[str] = ["This chart shows measured modes only."]
+    if "dynamo_priority_hints" in present_modes:
+        priority_notes.append("Dynamo priority hints only sends priority metadata and an SGLang priority value.")
+    if "e2e_priority_hints" in present_modes:
+        priority_notes.append(
+            "End-to-end priority hints sends priority metadata to SGLang and also makes the local driver queue priority-aware by holding low-priority filler dispatch near replay time and letting urgent replay bypass the driver concurrency gate."
+        )
+    if {"dynamo_priority_hints", "e2e_priority_hints"} & present_modes:
+        priority_notes.append("Priority-hint modes do not call our direct KV prefetch hook.")
     return f"""
     <p>This view groups the same controlled scenario across modes. For example, {mode_examples} are the same task/gap setup shown under {html.escape(mode_names)}.</p>
-    <p class="note">This chart shows measured modes only. Dynamo priority hints only sends priority metadata and an SGLang priority value. End-to-end priority hints also makes the local driver queue priority-aware by holding low-priority filler dispatch near replay time and letting urgent replay bypass the driver concurrency gate. Neither priority-hint mode calls our direct KV prefetch hook.</p>
-    <h3>Legend / How To Read This Timeline</h3>
-    {unified_stack_legend_table_html()}
-    <p class="note">Rows are lightly tinted by mode, with a stronger color strip on the far left of each row. Measured rows also show the same tool-wait GPU activity zoom and target-KV residency zoom as the unified forensic timeline.</p>
+    <p class="note">{html.escape(" ".join(priority_notes))}</p>
+    <h3>Timestamp Grouped Bar Timeline</h3>
+    <p>Each scenario is aligned at <strong>T due</strong>, the moment replay should be ready. Every timestamp column has an upper target-request bar group and a lower system-pressure bar group. Taller bars mean more of that specific metric on a normalized 0-100 scale.</p>
+    <p class="note">Read each timestamp from top to bottom: target KV location and target work, the written target state, aggregate scheduler/GPU/KV-pool pressure, and then the delay waterfall. Waiting states are written out in full instead of being drawn as tall activity bars.</p>
+    {timestamp_histogram_legend_html()}
     {mode_key_html}
     <div class="cards">
       <div class="card"><div class="label">scenarios compared</div><div class="value">{scenario_count}</div></div>
       <div class="card"><div class="label">timeline rows</div><div class="value">{len(rows)}</div></div>
       <div class="card"><div class="label">modes shown</div><div class="value">{html.escape(' / '.join(mode_short_label(mode) for mode in mode_order))}</div></div>
     </div>
-    <p class="note">The scenario row map and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
-    <div class="setup-diagram">{build_unified_per_gap_stack_timeline_svg_v2(rows, all_kv_events, len(rows), kv_pool_residency_rows, kv_block_lifecycle_rows=kv_block_lifecycle_rows, projected_hardware_rows=[], tool_wait_activity_rows=tool_wait_activity_rows, compact_projected_rows=True)}</div>
+    <p class="note">The full timestamp rows, source origins, confidence fields, event counts, and exact per-row numbers are in <strong>Evidence Tables / Raw Proof</strong> at the bottom of the report.</p>
+    {timestamp_histogram_timeline_html(rows, request_snapshot_rows or [], max_scenarios=max(1, min(scenario_count, 6)))}
     """
 
 
@@ -11181,6 +13103,7 @@ def render_html(
     exact_kv_movement_rows: list[dict[str, Any]] | None = None,
     trace_rows: list[dict[str, Any]] | None = None,
     gpu_util_rows: list[dict[str, Any]] | None = None,
+    runtime_telemetry_rows: list[dict[str, Any]] | None = None,
     run_environment: dict[str, Any] | None = None,
 ) -> str:
     mode_rows = mode_summary_rows(gaps)
@@ -11190,6 +13113,7 @@ def render_html(
     exact_kv_movement_rows = exact_kv_movement_rows or []
     trace_rows = trace_rows or []
     gpu_util_rows = gpu_util_rows or []
+    runtime_telemetry_rows = runtime_telemetry_rows or []
     run_environment = run_environment or {}
     all_timeline_rows = timeline_rows_with_labels(selected_timeline_gaps(gaps, len(gaps)))
     interesting = timeline_rows_with_labels(selected_timeline_gaps(gaps, max_timeline_gaps))
@@ -11242,6 +13166,18 @@ def render_html(
         kv_pool_sample_rows,
         gpu_util_rows,
     )
+    grouped_request_snapshot_rows = request_state_snapshot_rows(
+        [
+            row
+            for row in grouped_comparison_rows
+            if canonical_mode(row.get("mode")) != "projected_hardware_bypass"
+        ],
+        trace_rows,
+        kv_pool_sample_rows,
+        gpu_util_rows,
+        grouped_block_lifecycle_rows,
+        all_kv_movement_events,
+    )
     priority_report_rows = grouped_comparison_rows or all_timeline_rows
     dynamo_priority_rows = dynamo_priority_hint_translation_rows(priority_report_rows)
     dynamo_priority_queue_rows = dynamo_priority_queue_effectiveness_rows(priority_report_rows)
@@ -11266,6 +13202,7 @@ def render_html(
             "kv_block_ledger": kv_block_rows,
             "replay_delay_stage_trace": replay_delay_stage_rows,
             "replay_queue_timing": replay_queue_table_rows,
+            "request_state_snapshots": grouped_request_snapshot_rows,
             "client_dispatch_kv_movement_summary": client_dispatch_kv_summary_rows,
             "client_dispatch_kv_movement_events": client_dispatch_kv_event_rows,
         }
@@ -11403,7 +13340,7 @@ def render_html(
 
   <details id="grouped-mode-comparison" class="section-card theme-profiled" open>
     <summary><h2>Comparison Timeline</h2></summary>
-    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows, grouped_block_lifecycle_rows)}
+    {grouped_mode_comparison_timeline_html(grouped_comparison_rows, all_kv_movement_events, grouped_kv_pool_residency_rows, grouped_hardware_projection_rows, grouped_tool_wait_activity_rows, grouped_block_lifecycle_rows, grouped_request_snapshot_rows)}
   </details>
 
   <details id="priority-queue-proof" class="section-card theme-profiled" open>
@@ -11449,6 +13386,12 @@ def render_html(
     <h3>Replay Delay Stage Trace</h3>
     <p class="note">These rows come from direct SGLang method hooks emitted as <code>kv_telemetry.request_stage</code>. They are not parsed from server logs.</p>
     {table_html(replay_delay_stage_rows, limit=2000)}
+    <h3>Request-Centered State Snapshots</h3>
+    <p class="note">These point-in-time rows are the source table for the polished comparison timeline. They focus on the monitored replay request and use background rows only as aggregate pressure context.</p>
+    {table_html(grouped_request_snapshot_rows, limit=2000)}
+    <h3>Portable Runtime Telemetry Events</h3>
+    <p class="note">These rows are emitted at runtime through the backend-neutral telemetry schema. When present, the report uses them before falling back to legacy SGLang-shaped telemetry rows.</p>
+    {table_html(runtime_telemetry_rows, limit=2000)}
     <h3>Replay Delay Stage Duration Rows</h3>
     {table_html(replay_delay_rows)}
     <h3>H2D Activity During The Delay Window</h3>
@@ -11536,12 +13479,27 @@ def write_json(path: Path, data: Any) -> None:
 
 def discover_cases(root: Path) -> list[tuple[str, Path]]:
     cases: list[tuple[str, Path]] = []
+    known_modes = [
+        "deadline_priority_prefetch",
+        "priority_direct_prefetch",
+        "dynamo_priority_hints",
+        "e2e_priority_hints",
+        "projected_hardware_bypass",
+        "oracle_direct_load",
+        "oracle_prefetch",
+        "direct_prefetch",
+        "no_prefetch",
+    ]
     for child in sorted(root.iterdir() if root.exists() else []):
         if not child.is_dir():
             continue
         trace = child / "m27_trace.jsonl"
         if trace.exists():
             mode = child.name.split("_tw", 1)[0]
+            for known_mode in known_modes:
+                if child.name == known_mode or child.name.startswith(f"{known_mode}_") or f"_{known_mode}_" in child.name:
+                    mode = known_mode
+                    break
             cases.append((mode, child))
     return cases
 
@@ -11559,9 +13517,11 @@ def main() -> None:
 
     all_gaps: list[dict[str, Any]] = []
     all_trace_rows: list[dict[str, Any]] = []
+    all_runtime_telemetry_rows: list[dict[str, Any]] = []
     for mode, case_dir in discover_cases(args.root):
         gaps, trace_rows = build_gaps_for_case(case_dir, mode)
         case_id = case_dir.name
+        runtime_rows = read_jsonl(case_dir / "runtime_telemetry.jsonl")
         for gap in gaps:
             gap["case_id"] = case_id
             gap["case_dir"] = str(case_dir)
@@ -11571,8 +13531,13 @@ def main() -> None:
             context = row.get("kv_context")
             if isinstance(context, dict):
                 context["ledger_case_id"] = case_id
+        for row in runtime_rows:
+            row["ledger_case_id"] = case_id
+            if row.get("case_id") in ("", None):
+                row["case_id"] = case_id
         all_gaps.extend(gaps)
         all_trace_rows.extend(trace_rows)
+        all_runtime_telemetry_rows.extend(runtime_rows)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     ledger = build_replay_path_ledger(all_gaps)
@@ -11627,6 +13592,16 @@ def main() -> None:
         kv_pool_sample_rows,
         gpu_util_rows,
     )
+    snapshot_source_rows = all_grouped_comparison_rows or all_labeled_gaps
+    snapshot_lifecycle_rows = block_lifecycle_by_gap_rows(snapshot_source_rows, kv_block_rows)
+    request_state_snapshots = request_state_snapshot_rows(
+        snapshot_source_rows,
+        all_trace_rows,
+        kv_pool_sample_rows,
+        gpu_util_rows,
+        snapshot_lifecycle_rows,
+        all_kv_movement_events,
+    )
     evidence_audit = audit_report_data(
         {
             "gaps": all_gaps,
@@ -11634,6 +13609,7 @@ def main() -> None:
             "kv_block_ledger": kv_block_rows,
             "replay_delay_stage_trace": replay_delay_stage_trace,
             "replay_queue_timing": queue_timing,
+            "request_state_snapshots": request_state_snapshots,
             "client_dispatch_kv_movement_summary": client_dispatch_kv_summary,
             "client_dispatch_kv_movement_events": client_dispatch_kv_events,
         }
@@ -11652,6 +13628,8 @@ def main() -> None:
     write_csv(args.out_dir / "kv_pool_residency_by_gap.csv", kv_pool_residency_rows)
     write_csv(args.out_dir / "gpu_utilization_samples.csv", gpu_util_rows)
     write_csv(args.out_dir / "tool_wait_gpu_activity.csv", tool_wait_activity)
+    write_csv(args.out_dir / "request_state_snapshots.csv", request_state_snapshots)
+    write_csv(args.out_dir / "runtime_telemetry_events.csv", all_runtime_telemetry_rows)
     write_csv(args.out_dir / "h2d_activity_events.csv", h2d_activity_events)
     write_csv(args.out_dir / "all_aligned_kv_movement_events.csv", all_kv_movement_events)
     write_csv(args.out_dir / "client_dispatch_kv_movement_summary.csv", client_dispatch_kv_summary)
@@ -11705,6 +13683,8 @@ def main() -> None:
             "kv_pool_residency_by_gap": kv_pool_residency_rows,
             "gpu_utilization_samples": gpu_util_rows,
             "tool_wait_gpu_activity": tool_wait_activity,
+            "request_state_snapshots": request_state_snapshots,
+            "runtime_telemetry_events": all_runtime_telemetry_rows,
             "replay_h2d_readiness_summary": replay_h2d_readiness_summary(h2d_readiness),
             "h2d_activity_events": h2d_activity_events,
             "all_aligned_kv_movement_events": all_kv_movement_events,
@@ -11756,6 +13736,7 @@ def main() -> None:
         exact_kv_movement_rows=exact_kv_rows,
         trace_rows=all_trace_rows,
         gpu_util_rows=gpu_util_rows,
+        runtime_telemetry_rows=all_runtime_telemetry_rows,
         run_environment=load_json(args.run_environment_json),
     )
     report_path = args.out_dir / "controlled_replay_report.html"

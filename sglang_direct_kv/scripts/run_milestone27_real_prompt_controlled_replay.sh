@@ -38,10 +38,13 @@ MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-32768}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-8}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.45}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-32}"
+PRESSURE_LEVEL="${PRESSURE_LEVEL:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 BASE_EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
 AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-1}"
 AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-1}"
+AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
+AGENTIC_RUNTIME_TELEMETRY_BACKEND="${AGENTIC_RUNTIME_TELEMETRY_BACKEND:-sglang}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -187,6 +190,7 @@ echo "SYNTHETIC_PROMPT_TOKENS=${SYNTHETIC_PROMPT_TOKENS}"
 echo "SYNTHETIC_REPLAY_SUFFIX_TOKENS=${SYNTHETIC_REPLAY_SUFFIX_TOKENS}"
 echo "FILLER_DIVERGE_EARLY=${FILLER_DIVERGE_EARLY}"
 echo "TOOL_WAIT_LIST_MS=${TOOL_WAIT_LIST_MS}"
+echo "PRESSURE_LEVEL=${PRESSURE_LEVEL:-<none>}"
 echo "MAX_PAIRS=${MAX_PAIRS}"
 echo "PRIORITY_DIRECT_PREFETCH=${PRIORITY_DIRECT_PREFETCH}"
 echo "PRIORITY_PREFETCH_HEAD_START_MS=${PRIORITY_PREFETCH_HEAD_START_MS}"
@@ -198,22 +202,25 @@ echo "DYNAMO_LOW_PRIORITY=${DYNAMO_LOW_PRIORITY}"
 echo "DYNAMO_RADIX_EVICTION_POLICY=${DYNAMO_RADIX_EVICTION_POLICY:-<default>}"
 echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER}"
 echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL}"
+echo "AGENTIC_RUNTIME_TELEMETRY=${AGENTIC_RUNTIME_TELEMETRY}"
+echo "AGENTIC_RUNTIME_TELEMETRY_BACKEND=${AGENTIC_RUNTIME_TELEMETRY_BACKEND}"
 echo "Total cases: ${total_cases}"
 
 run_case() {
   local mode="$1"
   local fillers="$2"
   case_idx=$((case_idx + 1))
-  local case_id="${mode}_tw${TOOL_WAIT_LIST_MS// /-}_f${fillers}"
+  local case_id="${PRESSURE_LEVEL:+${PRESSURE_LEVEL}_}${mode}_tw${TOOL_WAIT_LIST_MS// /-}_f${fillers}"
   case_id="${case_id//[^A-Za-z0-9_.-]/_}"
   local case_root="${RESULT_ROOT}/${case_id}"
   local trace="${case_root}/m27_trace.jsonl"
   local telemetry="${case_root}/m27_copy_telemetry.jsonl"
+  local runtime_telemetry="${case_root}/runtime_telemetry.jsonl"
   local metrics="${case_root}/m27_metrics.jsonl"
   local server_log="${case_root}/sglang_server.log"
 
   mkdir -p "${case_root}"
-  rm -f "${trace}" "${telemetry}" "${metrics}" "${server_log}"
+  rm -f "${trace}" "${telemetry}" "${runtime_telemetry}" "${metrics}" "${server_log}"
 
   echo
   echo "==== Milestone 27 case [${case_idx}/${total_cases}]: ${case_id} ===="
@@ -226,6 +233,9 @@ run_case() {
   export AGENTIC_KV_TRACE_KV_POOL
   export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
   export AGENTIC_KV_COPY_TELEMETRY_PATH="${telemetry}"
+  export AGENTIC_RUNTIME_TELEMETRY
+  export AGENTIC_RUNTIME_TELEMETRY_BACKEND
+  export AGENTIC_RUNTIME_TELEMETRY_PATH="${runtime_telemetry}"
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"

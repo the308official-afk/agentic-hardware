@@ -19,6 +19,245 @@ Replay path instrumentation roadmap: [Replay Path Instrumentation Proposal](REPL
 Realistic AgentBench/DeepAgents path: see Milestones 16-19 in
 [sglang_direct_kv](sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct).
 
+## Current Experiment Entry Points
+
+The detailed milestone log lives in
+[sglang_direct_kv/README.md](sglang_direct_kv/README.md). That file is the
+long-form lab notebook. This top-level README is the quick GitHub landing page
+for reproducing the newest results.
+
+Latest generated report, after a run:
+
+```text
+sglang_direct_kv/artifacts/results/latest_master_report.html
+```
+
+Latest generated manifest:
+
+```text
+sglang_direct_kv/artifacts/results/latest_manifest.json
+```
+
+### Environment
+
+On the EC2 machine used for the current experiments:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+```
+
+The helper scripts for syncing and connecting to EC2 are documented in
+[aws/README.md](aws/README.md). From a local checkout, the common commands are:
+
+```bash
+./aws/upload.sh 0
+./aws/ssh_to_ec2.sh 0
+./aws/download.sh 0
+```
+
+### Most Recent Experiment: Harness Deadline Pressure
+
+This is the newest manager-facing experiment. It compares the same SGLang
+priority boundary across multiple agent harnesses:
+
+```text
+Hatcher / Deep Agents-style control
+Codex CLI
+Claude Code CLI
+```
+
+It runs each harness in two modes:
+
+```text
+no_prefetch
+e2e_priority_hints
+```
+
+And it uses three sentinel pressure levels:
+
+| Pressure Level | Meaning | Knobs |
+| --- | --- | --- |
+| `p0_control` | Easy baseline | `500 ms` tool wait, `1024` target prompt tokens, `0` fillers, `1` urgent agent |
+| `p3_high` | Single urgent replay under queue pressure | `50 ms` tool wait, `4096` target prompt tokens, `32` fillers, `1` urgent agent |
+| `p5_boss_queue` | Many urgent replays under pressure | `50 ms` tool wait, `4096` target prompt tokens, `4` fillers per session, `4` urgent agents |
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESSES="hatcher codex claude_code" \
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Primary scripts:
+
+| Script | Purpose |
+| --- | --- |
+| [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness P0/P3/P5 experiment and writes the latest report. |
+| [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates the target replay/filler traffic for Hatcher, Codex, and Claude Code. |
+| [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
+| [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
+| [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |
+
+Current run label:
+
+```text
+multi_harness_deadline_pressure_20260831_214134
+```
+
+Headline result from that run: end-to-end priority hints helped substantially
+under pressure, especially for Codex and Claude Code, but P3/P5 still missed
+deadlines by seconds. That suggests priority metadata helps queue admission, but
+does not fully solve backend GPU/KV pressure.
+
+### Hatcher Pressure Ladder
+
+This is the compact single-harness pressure ladder used before the
+multi-harness comparison. It focuses on the current Hatcher / Deep Agents-style
+control harness and answers: "as pressure increases, when do replay deadlines
+start failing?"
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+PRESSURE_LEVELS="p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_LABEL="hatcher_pressure_ladder_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_hatcher_pressure_ladder.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Faster sentinel version:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_LABEL="hatcher_pressure_ladder_quick_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_hatcher_pressure_ladder_quick.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Primary scripts:
+
+| Script | Purpose |
+| --- | --- |
+| [sglang_direct_kv/scripts/run_hatcher_pressure_ladder.sh](sglang_direct_kv/scripts/run_hatcher_pressure_ladder.sh) | Full P0-P5 Hatcher pressure ladder. |
+| [sglang_direct_kv/scripts/run_hatcher_pressure_ladder_quick.sh](sglang_direct_kv/scripts/run_hatcher_pressure_ladder_quick.sh) | Reduced P0/P3/P5 Hatcher ladder. |
+| [sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py](sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py) | Core controlled replay workload generator. |
+| [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Shared report builder. |
+
+### Priority Queue Proof
+
+This is the small pre-flight proof that SGLang can admit a high-priority request
+ahead of older low-priority work when priority scheduling is enabled.
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+RESULT_LABEL="priority_queue_jump_sanity_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_priority_queue_sanity.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Primary scripts:
+
+| Script | Purpose |
+| --- | --- |
+| [sglang_direct_kv/scripts/run_priority_queue_sanity.sh](sglang_direct_kv/scripts/run_priority_queue_sanity.sh) | Launches the priority proof experiment. |
+| [sglang_direct_kv/scripts/run_priority_queue_jump_workload.py](sglang_direct_kv/scripts/run_priority_queue_jump_workload.py) | Creates older low-priority work followed by one high-priority replay request. |
+| [sglang_direct_kv/scripts/summarize_priority_queue_sanity.py](sglang_direct_kv/scripts/summarize_priority_queue_sanity.py) | Summarizes whether the high-priority request jumped ahead. |
+
+### Controlled Replay With Priority Modes
+
+This is the older controlled experiment family used to compare:
+
+```text
+no_prefetch
+dynamo_priority_hints
+e2e_priority_hints
+projected_hardware_bypass
+```
+
+The current manager-facing path usually excludes `dynamo_priority_hints` and
+`projected_hardware_bypass` unless the question specifically needs them.
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+AGENTIC_KV_TRACE_SCHEDULER=1 \
+EXPERIMENT_KIND=controlled \
+REPORT_LABEL="controlled_replay_priority_$(date +%Y%m%d_%H%M%S)" \
+PRESSURE_PROFILE=custom \
+UPDATE_LATEST=1 \
+MAX_TIMELINE_GAPS=96 \
+MAX_PAIRS=2 \
+MODES="no_prefetch e2e_priority_hints" \
+TOOL_WAIT_LIST_MS="50" \
+FILLER_LIST="32" \
+REQUEST_CONCURRENCY=8 \
+FILLER_PROMPT_TOKENS=1536 \
+MAX_TOTAL_TOKENS=12288 \
+HICACHE_SIZE_GB=8 \
+MEM_FRACTION_STATIC=0.72 \
+bash scripts/run_milestone27_real_prompt_controlled_replay.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Primary scripts:
+
+| Script | Purpose |
+| --- | --- |
+| [sglang_direct_kv/scripts/run_milestone27_real_prompt_controlled_replay.sh](sglang_direct_kv/scripts/run_milestone27_real_prompt_controlled_replay.sh) | Runs real-prompt controlled replay experiments. |
+| [sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py](sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py) | Workload driver. |
+| [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Report builder. |
+
+### Milestone Map
+
+| Milestone | What It Proves | Primary Entry Point |
+| --- | --- | --- |
+| M16-M19 | AgentBench/DeepAgents prompts can drive SGLang directly and produce manager-facing reports. | [sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct](sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct) |
+| M27 | Controlled replay over real/synthetic coding-agent prompts. | [run_milestone27_real_prompt_controlled_replay.sh](sglang_direct_kv/scripts/run_milestone27_real_prompt_controlled_replay.sh) |
+| M29-M35 | Replay-path ledger, exact KV movement attribution, H2D pressure, delay breakdown, and evidence audit. | [build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) |
+| M36-M37 | Multi-session replay forensics and GPU KV pool residency telemetry. | [run_milestone36_multi_session_agentic_replay.sh](sglang_direct_kv/scripts/run_milestone36_multi_session_agentic_replay.sh) |
+| M38-M40 | Dynamo-style priority hints, priority queue proof, and priority retention sanity checks. | [run_priority_queue_sanity.sh](sglang_direct_kv/scripts/run_priority_queue_sanity.sh) |
+| Current | Multi-harness Replay Deadline Pressure Chart for Hatcher, Codex, and Claude Code. | [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) |
+
+### Next Harness Batch
+
+The next planned harness batch is:
+
+```text
+OpenCode
+Qwen Code
+```
+
+The recommended path is to first add wireability support in
+[harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py)
+and [run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py),
+then run the same P0/P3/P5 sentinel ladder through
+[run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
+NeMo Agent Toolkit should get a P0 wireability probe after that because it is a
+heavier workflow framework rather than a simple coding-agent CLI.
+
 ## Workload Scenario
 
 Use coding-agent-style workflows inspired by SWE-bench:
