@@ -18,6 +18,7 @@ import httpx
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
+SUPPORTED_HARNESSES = ("hatcher", "codex", "claude_code", "opencode", "qwen_code")
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,13 @@ async def run_hatcher_request(gateway_base: str, model: str, prompt: str, meta: 
         response.raise_for_status()
 
 
+def cli_or_npx(binary: str, package: str) -> list[str]:
+    installed = shutil.which(binary)
+    if installed:
+        return [installed]
+    return ["npx", "-y", package]
+
+
 def codex_command(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     provider_base = f"{gateway_base.rstrip('/')}/v1"
     cmd = [
@@ -140,6 +148,112 @@ def claude_command(gateway_base: str, prompt: str, meta: dict[str, Any]) -> tupl
     }
 
 
+def opencode_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    config_dir = log_dir / "opencode_config" / str(meta["label"])
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            "harness": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Harness Gateway",
+                "options": {
+                    "baseURL": provider_base,
+                    "apiKey": "dummy",
+                },
+                "models": {
+                    model: {
+                        "name": model,
+                    }
+                },
+            }
+        },
+    }
+    (config_dir / "opencode.json").write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+    cmd = [
+        *cli_or_npx("opencode", "opencode-ai@latest"),
+        "run",
+        "--model",
+        f"harness/{model}",
+        "--format",
+        "json",
+        "--dir",
+        "/tmp",
+        f"{prompt}\n\n{marker(meta)}",
+    ]
+    return cmd, {
+        "OPENCODE_CONFIG_DIR": str(config_dir),
+        "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
+        "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
+        "OPENCODE_PERMISSION": json.dumps({"edit": "deny", "bash": "deny", "webfetch": "deny"}),
+        "OPENAI_API_KEY": "dummy",
+    }
+
+
+def qwen_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    workspace = log_dir / "qwen_workspace" / str(meta["label"])
+    settings_dir = workspace / ".qwen"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    settings = {
+        "$version": 3,
+        "model": {
+            "name": model,
+            "maxSessionTurns": -1,
+        },
+        "modelProviders": {
+            "openai": [
+                {
+                    "id": model,
+                    "name": model,
+                    "baseUrl": provider_base,
+                    "envKey": "OPENAI_API_KEY",
+                }
+            ]
+        },
+        "security": {
+            "auth": {
+                "selectedType": "openai",
+                "apiKey": "dummy",
+                "baseUrl": provider_base,
+            }
+        },
+        "tools": {
+            "approvalMode": "yolo",
+            "exclude": ["shell", "write_file", "edit"],
+        },
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
+    cmd = [
+        *cli_or_npx("qwen", "@qwen-code/qwen-code@latest"),
+        "--model",
+        model,
+        "--output-format",
+        "json",
+        "--prompt",
+        f"{prompt}\n\n{marker(meta)}",
+    ]
+    return cmd, {
+        "OPENAI_API_KEY": "dummy",
+        "OPENAI_BASE_URL": provider_base,
+        "OPENAI_MODEL": model,
+        "QWEN_MODEL": model,
+    }
+
+
 async def run_cli_request(
     harness: str,
     gateway_base: str,
@@ -152,6 +266,10 @@ async def run_cli_request(
         cmd, extra_env = codex_command(gateway_base, model, prompt, meta)
     elif harness == "claude_code":
         cmd, extra_env = claude_command(gateway_base, prompt, meta)
+    elif harness == "opencode":
+        cmd, extra_env = opencode_command(gateway_base, model, prompt, meta, log_dir)
+    elif harness == "qwen_code":
+        cmd, extra_env = qwen_command(gateway_base, model, prompt, meta, log_dir)
     else:
         raise ValueError(f"unsupported CLI harness: {harness}")
     env = os.environ.copy()
@@ -164,7 +282,7 @@ async def run_cli_request(
             subprocess.run(
                 cmd,
                 env=env,
-                cwd="/tmp",
+                cwd=str(log_dir / "qwen_workspace" / str(meta["label"])) if harness == "qwen_code" else "/tmp",
                 input="",
                 stdout=handle,
                 stderr=subprocess.STDOUT,
@@ -213,8 +331,8 @@ async def run_filler(
 
 
 async def main_async() -> None:
-    parser = argparse.ArgumentParser(description="Run target replay traffic through Hatcher, Codex, or Claude Code.")
-    parser.add_argument("--harness", choices=("hatcher", "codex", "claude_code"), required=True)
+    parser = argparse.ArgumentParser(description="Run target replay traffic through Hatcher, Codex, Claude Code, OpenCode, or Qwen Code.")
+    parser.add_argument("--harness", choices=SUPPORTED_HARNESSES, required=True)
     parser.add_argument("--mode", choices=("no_prefetch", "e2e_priority_hints"), required=True)
     parser.add_argument("--pressure-level", required=True)
     parser.add_argument("--gateway-base", default="http://127.0.0.1:31080")
@@ -231,8 +349,15 @@ async def main_async() -> None:
     parser.add_argument("--arrival-gap-ms", type=int, default=40)
     args = parser.parse_args()
 
-    if args.harness in {"codex", "claude_code"} and shutil.which("npx") is None:
-        raise SystemExit("npx is required for Codex/Claude Code harness probes.")
+    if args.harness in {"codex", "claude_code", "opencode", "qwen_code"} and shutil.which("npx") is None:
+        missing_bins = {
+            "codex": "codex",
+            "claude_code": "claude",
+            "opencode": "opencode",
+            "qwen_code": "qwen",
+        }
+        if shutil.which(missing_bins[args.harness]) is None:
+            raise SystemExit(f"npx or {missing_bins[args.harness]} is required for {args.harness} harness probes.")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.log_dir.mkdir(parents=True, exist_ok=True)

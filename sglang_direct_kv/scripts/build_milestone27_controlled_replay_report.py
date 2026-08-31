@@ -2423,6 +2423,8 @@ HARNESS_LABELS = {
     "hatcher": "Hatcher",
     "codex": "Codex",
     "claude_code": "Claude Code",
+    "opencode": "OpenCode",
+    "qwen_code": "Qwen Code",
 }
 
 

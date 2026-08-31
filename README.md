@@ -101,6 +101,8 @@ agent harness shapes:
 | `hatcher` | Current in-repo Hatcher / Deep Agents-style control harness. |
 | `codex` | Codex-style coding-agent traffic shape. |
 | `claude_code` | Claude Code-style coding-agent traffic shape. |
+| `opencode` | OpenCode-style coding-agent traffic shape. |
+| `qwen_code` | Qwen Code-style coding-agent traffic shape. |
 
 It runs each harness in:
 
@@ -121,7 +123,7 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESSES="hatcher codex claude_code" \
+HARNESSES="hatcher codex claude_code opencode qwen_code" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
@@ -136,8 +138,20 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness pressure experiment and writes the latest report. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
+| [sglang_direct_kv/scripts/smoke_multi_harness_wireability.py](sglang_direct_kv/scripts/smoke_multi_harness_wireability.py) | Fast local smoke test for CLI harness wireability through the gateway. |
 | [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
+
+Smoke-test only the newest harness adapters without starting the real GPU
+server:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/smoke_multi_harness_wireability.py \
+  --harnesses opencode qwen_code
+```
 
 Current archived run:
 
@@ -289,21 +303,19 @@ the detailed lab notebook, older commands, or historical context.
 | M38-M40 | Priority queue proof, priority retention, and E2E priority sanity checks. |
 | Current | Pressure ladder and multi-harness Replay Deadline Pressure Chart. |
 
-## Next Harness Batch
+## Harness Backlog
 
-The next recommended harnesses are:
+Recently added:
 
 ```text
 OpenCode
 Qwen Code
 ```
 
-The recommended path is:
+The next recommended path is:
 
-1. Add wireability support in [harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py).
-2. Add harness traffic profiles in [run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py).
-3. Run the same P0/P3/P5 sentinel ladder through [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
-4. Add NeMo Agent Toolkit after the CLI-style harnesses, starting with a P0 wireability probe.
+1. Run the same P0/P3/P5 sentinel ladder across all five harnesses through [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
+2. Add NeMo Agent Toolkit after the CLI-style harnesses, starting with a P0 wireability probe.
 
 ## Current Research Claim
 
