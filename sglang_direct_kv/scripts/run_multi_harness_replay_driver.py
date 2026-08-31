@@ -27,6 +27,9 @@ SUPPORTED_HARNESSES = (
     "qwen_code",
     "nemo_agent_toolkit",
     "deepseek_harness",
+    "pi_agent_harness",
+    "openclaw",
+    "hermes_agent",
 )
 
 
@@ -45,6 +48,23 @@ def write_trace(path: Path, row: dict[str, Any]) -> None:
     row.setdefault("pid", os.getpid())
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def trace_has_event(path: Path, label: str, event: str) -> bool:
+    if not path.exists():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("event") == event and row.get("label") == label:
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def marker(meta: dict[str, Any]) -> str:
@@ -332,6 +352,36 @@ def deepseek_harness_command(
     return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "deepseek_harness")
 
 
+def pi_agent_harness_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "pi_agent_harness")
+
+
+def openclaw_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "openclaw")
+
+
+def hermes_agent_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "hermes_agent")
+
+
 async def run_cli_request(
     harness: str,
     gateway_base: str,
@@ -352,25 +402,51 @@ async def run_cli_request(
         cmd, extra_env = nemo_agent_toolkit_command(gateway_base, model, prompt, meta, log_dir)
     elif harness == "deepseek_harness":
         cmd, extra_env = deepseek_harness_command(gateway_base, model, prompt, meta, log_dir)
+    elif harness == "pi_agent_harness":
+        cmd, extra_env = pi_agent_harness_command(gateway_base, model, prompt, meta, log_dir)
+    elif harness == "openclaw":
+        cmd, extra_env = openclaw_command(gateway_base, model, prompt, meta, log_dir)
+    elif harness == "hermes_agent":
+        cmd, extra_env = hermes_agent_command(gateway_base, model, prompt, meta, log_dir)
     else:
         raise ValueError(f"unsupported CLI harness: {harness}")
     env = os.environ.copy()
     env.update(extra_env)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{meta['label']}.log"
+    trace_path = Path(str(meta.get("_trace_path") or ""))
+    request_timeout_secs = float(os.environ.get("HARNESS_REQUEST_TIMEOUT_SECS", "900"))
+    stop_when_gateway_done = str(os.environ.get("HARNESS_STOP_WHEN_GATEWAY_DONE", "1")) == "1"
 
     def run() -> None:
         with log_path.open("w", encoding="utf-8") as handle:
-            subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 env=env,
                 cwd=str(log_dir / "qwen_workspace" / str(meta["label"])) if harness == "qwen_code" else "/tmp",
-                input="",
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 text=True,
-                check=True,
             )
+            deadline = time.monotonic() + request_timeout_secs
+            while proc.poll() is None:
+                if stop_when_gateway_done and trace_path and trace_has_event(trace_path, str(meta["label"]), "m27.request.end"):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5)
+                    return
+                if time.monotonic() >= deadline:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    if trace_path and trace_has_event(trace_path, str(meta["label"]), "m27.request.end"):
+                        return
+                    raise TimeoutError(f"{harness} request timed out before gateway completion: {meta['label']}")
+                time.sleep(0.25)
+            if proc.returncode and not (trace_path and trace_has_event(trace_path, str(meta["label"]), "m27.request.end")):
+                raise subprocess.CalledProcessError(proc.returncode, cmd)
 
     await asyncio.to_thread(run)
 
@@ -498,6 +574,7 @@ async def main_async() -> None:
             "pressure_level": args.pressure_level,
             "high_priority": 100,
             "low_priority": -100,
+            "_trace_path": str(args.trace),
         }
         initial_meta = {
             **base_meta,

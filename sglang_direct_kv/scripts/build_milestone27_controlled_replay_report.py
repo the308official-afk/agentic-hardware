@@ -2427,6 +2427,9 @@ HARNESS_LABELS = {
     "qwen_code": "Qwen Code",
     "nemo_agent_toolkit": "NeMo Agent Toolkit / NAT",
     "deepseek_harness": "DeepSeek Harness",
+    "pi_agent_harness": "Pi Agent Harness",
+    "openclaw": "OpenClaw",
+    "hermes_agent": "Hermes Agent",
 }
 
 

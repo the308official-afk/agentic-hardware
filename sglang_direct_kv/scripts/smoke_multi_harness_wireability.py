@@ -18,8 +18,11 @@ from run_multi_harness_replay_driver import (
     claude_command,
     codex_command,
     deepseek_harness_command,
+    hermes_agent_command,
     nemo_agent_toolkit_command,
+    openclaw_command,
     opencode_command,
+    pi_agent_harness_command,
     qwen_command,
 )
 
@@ -150,6 +153,15 @@ def command_for_harness(
     if harness == "deepseek_harness":
         cmd, env = deepseek_harness_command(gateway_base, model, prompt, meta, log_dir)
         return cmd, env, "/tmp"
+    if harness == "pi_agent_harness":
+        cmd, env = pi_agent_harness_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, "/tmp"
+    if harness == "openclaw":
+        cmd, env = openclaw_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, "/tmp"
+    if harness == "hermes_agent":
+        cmd, env = hermes_agent_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, "/tmp"
     raise ValueError(f"unsupported CLI smoke harness: {harness}")
 
 
@@ -210,7 +222,7 @@ def run_single_replay_probe(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Smoke-test multi-harness CLI wiring through the SGLang gateway.")
-    parser.add_argument("--harnesses", nargs="+", default=["nemo_agent_toolkit", "deepseek_harness"])
+    parser.add_argument("--harnesses", nargs="+", default=["pi_agent_harness", "openclaw", "hermes_agent"])
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--python-bin", default=sys.executable)
