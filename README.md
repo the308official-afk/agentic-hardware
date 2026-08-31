@@ -1,44 +1,50 @@
-# Hint-Guided KV Cache Prefetching for Agentic AI Workloads
+# Agentic Hardware: Replay Deadline Pressure For Agentic LLMs
 
-## Goal
+This repository is a research testbed for measuring whether agentic LLM
+systems can resume quickly after tool calls.
 
-Build a realistic proof of concept showing that agent/runtime hints can reduce KV cache resume stalls in agentic LLM workloads............
+The current question is:
 
-The key question:
+> When many agents return from tools and need their next LLM token, can priority
+> signals help the replay request meet its deadline under GPU, KV-cache, queue,
+> and burst pressure?
 
-> When an agent is paused on a tool call, can the runtime use that pause to prefetch the agent's KV cache back into GPU memory before the next model turn arrives?
+The project has moved beyond the older generic "software prefetch" framing. The
+current experiments focus on replay-deadline readiness with real SGLang serving,
+HiCache, live timestamped telemetry, SGLang priority scheduling, controlled
+pressure levels, and multiple coding-agent harness shapes.
 
-This prototype does not require new GPU hardware. Instead, it emulates hardware-assisted behavior in software using real LLM serving, real KV tensors, real tool gaps, and real GPU memory pressure.
+## Repository Map
 
-See also: [Hardware Emulation Environment](HARDWARE_EMULATION_ENVIRONMENT.md)
+| Path | Purpose |
+| --- | --- |
+| [sglang_direct_kv/](sglang_direct_kv/) | Main SGLang replay-deadline testbed. |
+| [sglang_direct_kv/README.md](sglang_direct_kv/README.md) | Long-form milestone notebook with historical detail. |
+| [sglang_direct_kv/scripts/](sglang_direct_kv/scripts/) | Experiment runners, workload drivers, report builders, and SGLang launch helpers. |
+| [aws/README.md](aws/README.md) | EC2 sync and connection workflow. |
+| [HARDWARE_EMULATION_ENVIRONMENT.md](HARDWARE_EMULATION_ENVIRONMENT.md) | Original hardware-emulation environment notes. |
+| [REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md](REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md) | Replay-path instrumentation design notes. |
 
-Direct SGLang testbed: [sglang_direct_kv](sglang_direct_kv/README.md)
+## Latest Report Outputs
 
-Replay path instrumentation roadmap: [Replay Path Instrumentation Proposal](REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md)
-
-Realistic AgentBench/DeepAgents path: see Milestones 16-19 in
-[sglang_direct_kv](sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct).
-
-## Current Experiment Entry Points
-
-The detailed milestone log lives in
-[sglang_direct_kv/README.md](sglang_direct_kv/README.md). That file is the
-long-form lab notebook. This top-level README is the quick GitHub landing page
-for reproducing the newest results.
-
-Latest generated report, after a run:
+Each run updates the latest report files:
 
 ```text
 sglang_direct_kv/artifacts/results/latest_master_report.html
-```
-
-Latest generated manifest:
-
-```text
 sglang_direct_kv/artifacts/results/latest_manifest.json
 ```
 
-### Environment
+Archived reports are kept under:
+
+```text
+sglang_direct_kv/artifacts/results/reports/<REPORT_LABEL>/master_report.html
+```
+
+The latest master report is intentionally treated as a single-experiment report.
+It should represent the most recent run, not a mixture of old and new
+experiments.
+
+## Environment
 
 On the EC2 machine used for the current experiments:
 
@@ -47,8 +53,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 ```
 
-The helper scripts for syncing and connecting to EC2 are documented in
-[aws/README.md](aws/README.md). From a local checkout, the common commands are:
+From a local checkout, the common EC2 helper commands are:
 
 ```bash
 ./aws/upload.sh 0
@@ -56,31 +61,59 @@ The helper scripts for syncing and connecting to EC2 are documented in
 ./aws/download.sh 0
 ```
 
-### Most Recent Experiment: Harness Deadline Pressure
+## Core Modes
 
-This is the newest manager-facing experiment. It compares the same SGLang
-priority boundary across multiple agent harnesses:
+The current manager-facing comparisons use two modes:
 
-```text
-Hatcher / Deep Agents-style control
-Codex CLI
-Claude Code CLI
-```
+| Mode | Meaning |
+| --- | --- |
+| `no_prefetch` | Baseline. The replay request receives no end-to-end priority treatment. |
+| `e2e_priority_hints` | Current priority path. The driver marks replay urgency and the SGLang boundary carries that priority into scheduling. |
 
-It runs each harness in two modes:
+Older modes such as `dynamo_priority_hints`, `direct_prefetch`, and
+`projected_hardware_bypass` are still useful for historical analysis, but they
+are not the default comparison for the current pressure chart.
+
+## Pressure Levels
+
+Pressure levels bundle multiple knobs so experiments do not explode into a full
+Cartesian sweep.
+
+| Level | Name | Main Stressor | Typical Knobs |
+| --- | --- | --- | --- |
+| `p0_control` | Control | Easy baseline | `500 ms` tool wait, `1024` target prompt tokens, `0` fillers, `1` urgent agent |
+| `p1_mild` | Mild pressure | Shorter tool wait, modest context | Small filler count, moderate prompt, one urgent replay |
+| `p2_medium` | Medium pressure | More queue and KV pressure | Medium filler count, larger prompt, one urgent replay |
+| `p3_high` | Queue pressure | One urgent replay behind older work | `50 ms` tool wait, `4096` target prompt tokens, `32` fillers, `1` urgent agent |
+| `p4_cliff` | Deadline cliff | Short wait plus large KV and heavier backend pressure | Tight tool wait, large prompt, high filler pressure |
+| `p5_boss_queue` | Boss queue | Many urgent replays compete at once | `50 ms` tool wait, `4096` target prompt tokens, fillers per session, multiple urgent agents |
+
+Quick sentinel experiments often run only P0, P3, and P5 first. Full ladder
+runs use P0 through P5.
+
+## Most Recent Experiment: Multi-Harness Deadline Pressure
+
+The newest experiment compares the same SGLang priority boundary across three
+agent harness shapes:
+
+| Harness | Meaning |
+| --- | --- |
+| `hatcher` | Current in-repo Hatcher / Deep Agents-style control harness. |
+| `codex` | Codex-style coding-agent traffic shape. |
+| `claude_code` | Claude Code-style coding-agent traffic shape. |
+
+It runs each harness in:
 
 ```text
 no_prefetch
 e2e_priority_hints
 ```
 
-And it uses three sentinel pressure levels:
+And uses the sentinel pressure levels:
 
-| Pressure Level | Meaning | Knobs |
-| --- | --- | --- |
-| `p0_control` | Easy baseline | `500 ms` tool wait, `1024` target prompt tokens, `0` fillers, `1` urgent agent |
-| `p3_high` | Single urgent replay under queue pressure | `50 ms` tool wait, `4096` target prompt tokens, `32` fillers, `1` urgent agent |
-| `p5_boss_queue` | Many urgent replays under pressure | `50 ms` tool wait, `4096` target prompt tokens, `4` fillers per session, `4` urgent agents |
+```text
+p0_control p3_high p5_boss_queue
+```
 
 Main run command:
 
@@ -100,31 +133,37 @@ Primary scripts:
 
 | Script | Purpose |
 | --- | --- |
-| [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness P0/P3/P5 experiment and writes the latest report. |
-| [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates the target replay/filler traffic for Hatcher, Codex, and Claude Code. |
+| [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness pressure experiment and writes the latest report. |
+| [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
-| [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
 | [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |
+| [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
 
-Current run label:
+Current archived run:
 
 ```text
-multi_harness_deadline_pressure_20260831_214134
+sglang_direct_kv/artifacts/results/reports/multi_harness_deadline_pressure_20260831_214134/master_report.html
 ```
 
-Headline result from that run: end-to-end priority hints helped substantially
-under pressure, especially for Codex and Claude Code, but P3/P5 still missed
-deadlines by seconds. That suggests priority metadata helps queue admission, but
-does not fully solve backend GPU/KV pressure.
+Headline result from that run:
 
-### Hatcher Pressure Ladder
+| Harness | P0 no-prefetch | P0 E2E | P3 no-prefetch | P3 E2E | P5 no-prefetch | P5 E2E |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Hatcher / Deep Agents-style control | `215 ms` | `237 ms` | `16.1 s` | `10.8 s` | `50.5 s` | `26.5 s` |
+| Codex | `1.18 s` | `1.15 s` | `41.8 s` | `10.1 s` | `41.7 s` | `6.6 s` |
+| Claude Code | `1.29 s` | `1.32 s` | `72.0 s` | `12.2 s` | `50.2 s` | `27.0 s` |
 
-This is the compact single-harness pressure ladder used before the
-multi-harness comparison. It focuses on the current Hatcher / Deep Agents-style
-control harness and answers: "as pressure increases, when do replay deadlines
-start failing?"
+Interpretation: end-to-end priority hints help, especially under P3/P5
+pressure, but they do not guarantee deadline readiness. Priority metadata can
+move replay requests earlier in queues; it cannot by itself create more GPU
+compute, KV capacity, or transfer bandwidth.
 
-Main run command:
+## Hatcher Pressure Ladder
+
+This single-harness ladder focuses on the current Hatcher / Deep Agents-style
+control harness and asks when replay deadlines start failing as pressure rises.
+
+Full P0-P5 run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -137,7 +176,7 @@ bash scripts/run_hatcher_pressure_ladder.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-Faster sentinel version:
+Fast sentinel run:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -159,12 +198,10 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py](sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py) | Core controlled replay workload generator. |
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Shared report builder. |
 
-### Priority Queue Proof
+## Priority Queue Proof
 
-This is the small pre-flight proof that SGLang can admit a high-priority request
-ahead of older low-priority work when priority scheduling is enabled.
-
-Main run command:
+This pre-flight test proves that SGLang can admit a high-priority request ahead
+of older low-priority work when priority scheduling is enabled.
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -183,21 +220,10 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_priority_queue_jump_workload.py](sglang_direct_kv/scripts/run_priority_queue_jump_workload.py) | Creates older low-priority work followed by one high-priority replay request. |
 | [sglang_direct_kv/scripts/summarize_priority_queue_sanity.py](sglang_direct_kv/scripts/summarize_priority_queue_sanity.py) | Summarizes whether the high-priority request jumped ahead. |
 
-### Controlled Replay With Priority Modes
+## Controlled Replay With Priority Modes
 
-This is the older controlled experiment family used to compare:
-
-```text
-no_prefetch
-dynamo_priority_hints
-e2e_priority_hints
-projected_hardware_bypass
-```
-
-The current manager-facing path usually excludes `dynamo_priority_hints` and
-`projected_hardware_bypass` unless the question specifically needs them.
-
-Main run command:
+This controlled experiment family is useful when comparing individual scheduler
+or replay modes without changing the harness.
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -230,239 +256,61 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py](sglang_direct_kv/scripts/run_real_prompt_controlled_replay.py) | Workload driver. |
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Report builder. |
 
-### Milestone Map
+## Evidence And Reporting
 
-| Milestone | What It Proves | Primary Entry Point |
-| --- | --- | --- |
-| M16-M19 | AgentBench/DeepAgents prompts can drive SGLang directly and produce manager-facing reports. | [sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct](sglang_direct_kv/README.md#milestone-16-agentbench--sglang-direct) |
-| M27 | Controlled replay over real/synthetic coding-agent prompts. | [run_milestone27_real_prompt_controlled_replay.sh](sglang_direct_kv/scripts/run_milestone27_real_prompt_controlled_replay.sh) |
-| M29-M35 | Replay-path ledger, exact KV movement attribution, H2D pressure, delay breakdown, and evidence audit. | [build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) |
-| M36-M37 | Multi-session replay forensics and GPU KV pool residency telemetry. | [run_milestone36_multi_session_agentic_replay.sh](sglang_direct_kv/scripts/run_milestone36_multi_session_agentic_replay.sh) |
-| M38-M40 | Dynamo-style priority hints, priority queue proof, and priority retention sanity checks. | [run_priority_queue_sanity.sh](sglang_direct_kv/scripts/run_priority_queue_sanity.sh) |
-| Current | Multi-harness Replay Deadline Pressure Chart for Hatcher, Codex, and Claude Code. | [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) |
+The report contains presentation charts near the top and raw proof tables near
+the bottom. Important evidence files include:
 
-### Next Harness Batch
+| Artifact | What It Shows |
+| --- | --- |
+| `global_kv_readiness_by_mode.csv` | Replay first-token lateness by mode, harness, and pressure level. |
+| `replay_queue_timing.csv` | Driver release, backend receive, scheduler admission, and first-token timing. |
+| `dynamo_priority_queue_effectiveness.csv` | Priority queue behavior and older lower-priority work bypass evidence. |
+| `request_state_snapshots.csv` | Timestamp-centered state for the target request and surrounding system pressure. |
+| `runtime_telemetry_events.csv` | Live instrumentation events emitted while SGLang is running. |
+| `kv_block_ledger.csv` | KV residency and movement evidence where available. |
 
-The next planned harness batch is:
+The most important manager-facing chart is the **Replay Deadline Pressure
+Chart**. Each dot is one replay request. Lower is better. Values above `0 ms`
+missed the replay deadline; values below `0 ms` were early.
+
+## Milestone Notebook
+
+The full milestone history lives in
+[sglang_direct_kv/README.md](sglang_direct_kv/README.md). Use it when you need
+the detailed lab notebook, older commands, or historical context.
+
+| Milestone Range | Focus |
+| --- | --- |
+| M0-M8 | Early SGLang setup, KV stress, and basic workload control. |
+| M9-M15 | HiCache, real prompts, and first report automation. |
+| M16-M27 | AgentBench/DeepAgents-style prompts and controlled replay experiments. |
+| M28-M37 | Replay-path ledger, exact timing attribution, H2D evidence, live telemetry, and timestamp-centered reports. |
+| M38-M40 | Priority queue proof, priority retention, and E2E priority sanity checks. |
+| Current | Pressure ladder and multi-harness Replay Deadline Pressure Chart. |
+
+## Next Harness Batch
+
+The next recommended harnesses are:
 
 ```text
 OpenCode
 Qwen Code
 ```
 
-The recommended path is to first add wireability support in
-[harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py)
-and [run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py),
-then run the same P0/P3/P5 sentinel ladder through
-[run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
-NeMo Agent Toolkit should get a P0 wireability probe after that because it is a
-heavier workflow framework rather than a simple coding-agent CLI.
+The recommended path is:
 
-## Workload Scenario
+1. Add wireability support in [harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py).
+2. Add harness traffic profiles in [run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py).
+3. Run the same P0/P3/P5 sentinel ladder through [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
+4. Add NeMo Agent Toolkit after the CLI-style harnesses, starting with a P0 wireability probe.
 
-Use coding-agent-style workflows inspired by SWE-bench:
+## Current Research Claim
 
-```text
-LLM turn
--> tool call: search files / run tests / inspect error / edit code
--> tool wait
--> tool returns
--> next LLM turn
-```
+Priority hints are useful: they express urgency and can improve scheduler
+admission. But software priority alone does not guarantee replay-deadline
+readiness under heavy GPU compute pressure, KV-cache pressure, short tool waits,
+or many urgent agents arriving together.
 
-During the tool wait, the session's KV cache may be offloaded or evicted from fast GPU memory. When the tool returns, the next LLM turn needs that KV cache again.
-
-If the KV cache is not resident in GPU memory, the agent stalls before first token.
-
-## Three Evaluation Modes
-
-### Mode 1: No Special Prefetch
-
-The runtime does nothing during the tool gap.
-
-Example:
-
-```text
-0 ms: Agent 42 starts run_tests()
-20 ms: Agent 42 KV is offloaded from GPU memory
-500 ms: run_tests() returns
-500 ms: Agent 42 needs the model again
-500-620 ms: KV is reloaded
-620 ms: first token starts
-```
-
-This measures the baseline cost of cold KV cache resume.
-
-### Mode 2: Generic Software Prefetch
-
-The runtime uses ordinary software logic to prefetch KV during tool waits.
-
-Example policy:
-
-```python
-if session.state == "tool_wait":
-    prefetch(session.kv_blocks)
-```
-
-This mode is intentionally simple. It can copy KV blocks back to GPU memory, but it does not use rich session priority, deadlines, protection, or bandwidth-aware scheduling.
-
-Example:
-
-```text
-0 ms: Agent 42 starts run_tests()
-20 ms: Agent 42 KV is offloaded
-200 ms: software sees Agent 42 is waiting
-210 ms: software starts generic prefetch
-350 ms: KV arrives in GPU memory
-420 ms: KV is evicted again under HBM pressure
-500 ms: run_tests() returns
-500-620 ms: KV must be reloaded again
-620 ms: first token starts
-```
-
-This answers:
-
-> How much can ordinary software prefetch help?
-
-### Mode 3: Hint-Guided KV Prefetch
-
-The runtime emits structured hints, and a software prefetch manager emulates the proposed hardware behavior.
-
-Example hint:
-
-```python
-hint = {
-    "session_id": 42,
-    "state": "tool_wait",
-    "priority": "high",
-    "expected_resume_ms": 500,
-    "reuse_confidence": 0.85,
-    "protect_after_prefetch_ms": 400,
-    "throttle_if_decode_busy": True,
-}
-```
-
-The hint-guided manager emulates hardware features:
-
-- KV page/session tags
-- priority-aware prefetch queue
-- deadline-aware scheduling
-- decode-aware bandwidth throttling
-- temporary KV protection after prefetch
-- telemetry for hits, misses, late prefetches, and wasted prefetches
-
-Example:
-
-```text
-0 ms: Agent 42 starts run_tests()
-10 ms: runtime submits hint: high priority, expected resume around 500 ms
-50 ms: manager starts prefetch using spare bandwidth
-180 ms: active decode gets busy, manager slows prefetch
-260 ms: decode quiets down, manager resumes prefetch
-330 ms: KV is back in GPU memory
-330-500 ms: KV is protected from eviction
-500 ms: run_tests() returns
-505 ms: first token starts
-```
-
-This answers:
-
-> Would semantic, hardware-style support make KV prefetch more reliable and efficient than generic software prefetch?
-
-## Concrete Difference Between Mode 2 and Mode 3
-
-Mode 2 says:
-
-```text
-Copy these KV blocks back to GPU.
-```
-
-Mode 3 says:
-
-```text
-This agent is likely to resume soon.
-Its KV is high priority.
-Prefetch it before the deadline.
-Throttle around active decode.
-Protect it after prefetch.
-Track whether the hint helped.
-```
-
-Mode 2 is address/block based.
-
-Mode 3 is intent based.
-
-## Example Scheduling Case
-
-Suppose three agents are waiting:
-
-```text
-Agent A:
-  tool = run_tests
-  expected return = 300 ms
-  priority = high
-  KV size = 2 GB
-
-Agent B:
-  tool = repo_search
-  expected return = 2 seconds
-  priority = medium
-  KV size = 1 GB
-
-Agent C:
-  tool = long_build
-  expected return = 20 seconds
-  priority = low
-  KV size = 4 GB
-```
-
-Generic software prefetch may prefetch in arrival order or after a fixed timeout.
-
-Hint-guided prefetch should:
-
-```text
-1. Prefetch Agent A first.
-2. Prefetch Agent B later if bandwidth and HBM allow.
-3. Avoid prefetching Agent C too early.
-```
-
-## Metrics
-
-Primary metrics:
-
-- tool-return-to-first-token latency
-- KV reload stall time
-- P95 and P99 resume latency
-- end-to-end agent task latency
-
-Efficiency metrics:
-
-- prefetch hit rate
-- late prefetch rate
-- wasted prefetch bandwidth
-- prefetched-then-evicted rate
-- active decode slowdown
-- GPU memory pressure
-
-## Expected Result
-
-The expected result is not that hint-guided prefetch makes model decode faster.
-
-The expected result is:
-
-> Hint-guided KV prefetch makes agent resumption faster and more predictable under memory pressure.
-
-The strongest gains should appear with:
-
-- many concurrent agent sessions
-- long contexts and large KV caches
-- frequent tool calls
-- bursty tool returns
-- limited HBM capacity
-- CPU/CXL/peer-GPU KV offload
-
-## Research Claim
-
-Software can decide prefetch policy, but hardware can make enforcement cheaper, faster, and more predictable.
-
-This prototype emulates that future hardware behavior in software first. If the emulation shows meaningful improvements, it motivates hardware/runtime co-design for agent-aware KV cache prefetching.
+That gap is the hardware/runtime opportunity: make replay-critical KV residency,
+movement, and admission cheaper, deadline-aware, and enforceable.
