@@ -14,7 +14,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from run_multi_harness_replay_driver import claude_command, codex_command, opencode_command, qwen_command
+from run_multi_harness_replay_driver import (
+    claude_command,
+    codex_command,
+    deepseek_harness_command,
+    nemo_agent_toolkit_command,
+    opencode_command,
+    qwen_command,
+)
 
 
 class FakeSGLangHandler(BaseHTTPRequestHandler):
@@ -137,6 +144,12 @@ def command_for_harness(
     if harness == "qwen_code":
         cmd, env = qwen_command(gateway_base, model, prompt, meta, log_dir)
         return cmd, env, str(log_dir / "qwen_workspace" / str(meta["label"]))
+    if harness == "nemo_agent_toolkit":
+        cmd, env = nemo_agent_toolkit_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, "/tmp"
+    if harness == "deepseek_harness":
+        cmd, env = deepseek_harness_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, "/tmp"
     raise ValueError(f"unsupported CLI smoke harness: {harness}")
 
 
@@ -197,7 +210,7 @@ def run_single_replay_probe(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Smoke-test multi-harness CLI wiring through the SGLang gateway.")
-    parser.add_argument("--harnesses", nargs="+", default=["opencode", "qwen_code"])
+    parser.add_argument("--harnesses", nargs="+", default=["nemo_agent_toolkit", "deepseek_harness"])
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--python-bin", default=sys.executable)

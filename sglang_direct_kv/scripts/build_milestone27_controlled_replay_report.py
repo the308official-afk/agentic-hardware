@@ -2425,6 +2425,8 @@ HARNESS_LABELS = {
     "claude_code": "Claude Code",
     "opencode": "OpenCode",
     "qwen_code": "Qwen Code",
+    "nemo_agent_toolkit": "NeMo Agent Toolkit / NAT",
+    "deepseek_harness": "DeepSeek Harness",
 }
 
 

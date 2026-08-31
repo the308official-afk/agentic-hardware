@@ -103,6 +103,8 @@ agent harness shapes:
 | `claude_code` | Claude Code-style coding-agent traffic shape. |
 | `opencode` | OpenCode-style coding-agent traffic shape. |
 | `qwen_code` | Qwen Code-style coding-agent traffic shape. |
+| `nemo_agent_toolkit` | NeMo Agent Toolkit / NAT-style workflow adapter. |
+| `deepseek_harness` | DeepSeek Harness-style provider adapter. |
 
 It runs each harness in:
 
@@ -123,7 +125,7 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESSES="hatcher codex claude_code opencode qwen_code" \
+HARNESSES="hatcher codex claude_code opencode qwen_code nemo_agent_toolkit deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
@@ -150,7 +152,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 python scripts/smoke_multi_harness_wireability.py \
-  --harnesses opencode qwen_code
+  --harnesses nemo_agent_toolkit deepseek_harness
 ```
 
 Current archived run:
@@ -310,12 +312,19 @@ Recently added:
 ```text
 OpenCode
 Qwen Code
+NeMo Agent Toolkit / NAT
+DeepSeek Harness
 ```
+
+The NAT and DeepSeek Harness entries are currently smoke-level wireability
+adapters. They prove the SGLang boundary can receive their harness-shaped replay
+traffic and priority metadata. Full native framework runs can be added once we
+want them in the pressure chart.
 
 The next recommended path is:
 
-1. Run the same P0/P3/P5 sentinel ladder across all five harnesses through [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
-2. Add NeMo Agent Toolkit after the CLI-style harnesses, starting with a P0 wireability probe.
+1. Run the same P0/P3/P5 sentinel ladder across all seven harness adapters through [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
+2. Replace the NAT and DeepSeek Harness smoke adapters with full native profile invocations if those frameworks become part of the manager-facing pressure comparison.
 
 ## Current Research Claim
 

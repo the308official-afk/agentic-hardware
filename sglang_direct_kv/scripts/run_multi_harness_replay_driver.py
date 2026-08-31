@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,15 @@ import httpx
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
-SUPPORTED_HARNESSES = ("hatcher", "codex", "claude_code", "opencode", "qwen_code")
+SUPPORTED_HARNESSES = (
+    "hatcher",
+    "codex",
+    "claude_code",
+    "opencode",
+    "qwen_code",
+    "nemo_agent_toolkit",
+    "deepseek_harness",
+)
 
 
 @dataclass(frozen=True)
@@ -254,6 +263,75 @@ def qwen_command(
     }
 
 
+def openai_chat_probe_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+    adapter_name: str,
+) -> tuple[list[str], dict[str, str]]:
+    adapter_dir = log_dir / "wireability_adapters" / adapter_name / str(meta["label"])
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    request_path = adapter_dir / "request.json"
+    script_path = adapter_dir / "post_chat_completion.py"
+    payload = {
+        "url": f"{gateway_base.rstrip('/')}/v1/chat/completions",
+        "body": {
+            "model": model,
+            "messages": [{"role": "user", "content": f"{prompt}\n\n{marker(meta)}"}],
+            "max_tokens": int(meta.get("max_tokens") or 8),
+            "temperature": 0,
+            "stream": False,
+        },
+    }
+    request_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    script_path.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import json",
+                "import sys",
+                "import urllib.request",
+                "",
+                "request = json.loads(open(sys.argv[1], encoding='utf-8').read())",
+                "body = json.dumps(request['body']).encode('utf-8')",
+                "http_request = urllib.request.Request(",
+                "    request['url'],",
+                "    data=body,",
+                "    headers={'content-type': 'application/json'},",
+                "    method='POST',",
+                ")",
+                "with urllib.request.urlopen(http_request, timeout=None) as response:",
+                "    sys.stdout.write(response.read().decode('utf-8', 'replace'))",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return [sys.executable, str(script_path), str(request_path)], {}
+
+
+def nemo_agent_toolkit_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "nemo_agent_toolkit")
+
+
+def deepseek_harness_command(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    log_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "deepseek_harness")
+
+
 async def run_cli_request(
     harness: str,
     gateway_base: str,
@@ -270,6 +348,10 @@ async def run_cli_request(
         cmd, extra_env = opencode_command(gateway_base, model, prompt, meta, log_dir)
     elif harness == "qwen_code":
         cmd, extra_env = qwen_command(gateway_base, model, prompt, meta, log_dir)
+    elif harness == "nemo_agent_toolkit":
+        cmd, extra_env = nemo_agent_toolkit_command(gateway_base, model, prompt, meta, log_dir)
+    elif harness == "deepseek_harness":
+        cmd, extra_env = deepseek_harness_command(gateway_base, model, prompt, meta, log_dir)
     else:
         raise ValueError(f"unsupported CLI harness: {harness}")
     env = os.environ.copy()
@@ -331,7 +413,7 @@ async def run_filler(
 
 
 async def main_async() -> None:
-    parser = argparse.ArgumentParser(description="Run target replay traffic through Hatcher, Codex, Claude Code, OpenCode, or Qwen Code.")
+    parser = argparse.ArgumentParser(description="Run target replay traffic through the supported harness adapters.")
     parser.add_argument("--harness", choices=SUPPORTED_HARNESSES, required=True)
     parser.add_argument("--mode", choices=("no_prefetch", "e2e_priority_hints"), required=True)
     parser.add_argument("--pressure-level", required=True)
