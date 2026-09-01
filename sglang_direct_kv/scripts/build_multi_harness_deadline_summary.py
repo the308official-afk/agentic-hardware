@@ -53,11 +53,38 @@ HARNESS_SYMBOLS = {
 
 PRESSURE_LABELS = {
     "p0_control": "P0 Control",
-    "p1_mild": "P1 Mild",
-    "p2_medium": "P2 Medium",
+    "p1_mild": "P1 Short Wait",
+    "p2_medium": "P2 Large KV",
     "p3_high": "P3 Queue Pressure",
-    "p4_cliff": "P4 Cliff",
+    "p4_cliff": "P4 KV Pool Pressure",
     "p5_boss_queue": "P5 Boss Queue",
+}
+
+PRESSURE_DEFINITIONS = {
+    "p0_control": {
+        "goal": "Easy baseline. Confirms the replay path works when the system is not under pressure.",
+        "knobs": "500 ms tool wait, 1024-token target prompt, no fillers, 1 urgent agent.",
+    },
+    "p1_mild": {
+        "goal": "Short-wait pressure. Tests whether replay can resume after a small tool pause.",
+        "knobs": "50 ms tool wait, 1024-token target prompt, no fillers, 1 urgent agent.",
+    },
+    "p2_medium": {
+        "goal": "Large-KV pressure. Tests whether a larger target context makes replay readiness harder.",
+        "knobs": "500 ms tool wait, 4096-token target prompt, no fillers, 1 urgent agent.",
+    },
+    "p3_high": {
+        "goal": "Queue pressure. One urgent replay returns while older backend work is already queued.",
+        "knobs": "50 ms tool wait, 4096-token target prompt, 32 filler sessions, 1 urgent agent.",
+    },
+    "p4_cliff": {
+        "goal": "KV-pool pressure. More filler work pushes harder on cache capacity and backend pressure.",
+        "knobs": "50 ms tool wait, 4096-token target prompt, 48 filler sessions, 1 urgent agent.",
+    },
+    "p5_boss_queue": {
+        "goal": "Urgent burst pressure. Many urgent agents become ready together, so priority cannot make all of them first.",
+        "knobs": "50 ms tool wait, 4096-token target prompt, 4 filler sessions per group, 8 urgent agents.",
+    },
 }
 
 PRESSURE_ORDER = (
@@ -425,9 +452,26 @@ def render_table(rows: list[dict[str, Any]], columns: list[str]) -> str:
     return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_lines)}</tbody></table>"
 
 
+def render_pressure_definition_table(rows: list[dict[str, Any]]) -> str:
+    present = {str(row["pressure_level"]) for row in rows}
+    definition_rows: list[dict[str, Any]] = []
+    for pressure in PRESSURE_ORDER:
+        definition = PRESSURE_DEFINITIONS[pressure]
+        definition_rows.append(
+            {
+                "level": PRESSURE_LABELS[pressure],
+                "in_this_run": "Yes" if pressure in present else "No",
+                "what_it_means": definition["goal"],
+                "knobs": definition["knobs"],
+            }
+        )
+    return render_table(definition_rows, ["level", "in_this_run", "what_it_means", "knobs"])
+
+
 def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], report_label: str) -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     chart = render_pressure_chart(rows)
+    pressure_definition_table = render_pressure_definition_table(rows)
     summary_table = render_table(
         summary,
         [
@@ -478,6 +522,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; mode is encoded by color. Higher means later. Values above <code>0 ms</code> missed the replay deadline.</p>
+<h2>Pressure Level Definitions</h2>
+<p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
+<div class="card">{pressure_definition_table}</div>
 <div class="card">{chart}</div>
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>
