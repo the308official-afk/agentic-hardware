@@ -22,6 +22,7 @@ HARNESS_LABELS = {
     "opencode": "OpenCode",
     "qwen_code": "Qwen Code",
     "nemo_agent_toolkit": "NeMo Agent Toolkit / NAT",
+    "nemo_agent_toolkit_service": "NeMo Agent Toolkit / NAT Service",
     "deepseek_harness": "DeepSeek Harness",
     "pi_agent_harness": "Pi Agent Harness",
     "openclaw": "OpenClaw",
@@ -479,6 +480,135 @@ def priority_value_is_urgent(value: Any) -> bool:
         return False
 
 
+def priority_class_from_intent(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("class") or "")
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return ""
+    return str(parsed.get("class") or "") if isinstance(parsed, dict) else ""
+
+
+def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
+    proof_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        submits = [row for row in trace_rows if row.get("event") == "m27.nat_service_probe.client_submit"]
+        if not submits:
+            continue
+        gateway_starts = [
+            row
+            for row in trace_rows
+            if row.get("event") == "m27.request.start"
+            and str(row.get("harness") or "") == "nemo_agent_toolkit_service"
+        ]
+        gateway_ends = [
+            row
+            for row in trace_rows
+            if row.get("event") == "m27.request.end"
+            and str(row.get("harness") or "") == "nemo_agent_toolkit_service"
+        ]
+        client_done = [row for row in trace_rows if row.get("event") == "m27.nat_service_probe.client_done"]
+        fake_receives = [row for row in trace_rows if row.get("event") == "m27.nat_service_probe.fake_sglang_receive"]
+        starts_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in gateway_starts}
+        ends_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in gateway_ends}
+        done_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in client_done}
+        fake_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in fake_receives}
+        submit_order = {
+            str(row.get("label") or row.get("request_id") or ""): index + 1
+            for index, row in enumerate(sorted(submits, key=lambda item: int(float_value(item.get("ts_ns")))))
+        }
+        emit_order = {
+            str(row.get("label") or row.get("request_id") or ""): index + 1
+            for index, row in enumerate(sorted(gateway_starts, key=lambda item: int(float_value(item.get("ts_ns")))))
+        }
+        background_submits = [
+            row
+            for row in submits
+            if priority_class_from_intent(row.get("priority_intent")) == "background"
+        ]
+        for submit in sorted(submits, key=lambda item: int(float_value(item.get("ts_ns")))):
+            label = str(submit.get("label") or submit.get("request_id") or "")
+            start = starts_by_label.get(label, {})
+            end = ends_by_label.get(label, {})
+            done = done_by_label.get(label, {})
+            fake = fake_by_label.get(label, {})
+            submit_ns = int(float_value(submit.get("ts_ns")))
+            start_ns = int(float_value(start.get("ts_ns")))
+            emit_rank = emit_order.get(label, "")
+            priority_class = priority_class_from_intent(submit.get("priority_intent"))
+            older_background_submitted = [
+                row
+                for row in background_submits
+                if int(float_value(row.get("ts_ns"))) < submit_ns
+            ]
+            older_background_emitted_before = [
+                row
+                for row in older_background_submitted
+                if emit_order.get(str(row.get("label") or row.get("request_id") or ""), 10**9)
+                < (emit_rank if isinstance(emit_rank, int) else 10**9)
+            ]
+            native_signal = start.get("harness_emit_priority_signal", "")
+            if not start:
+                verdict = "NAT did not emit request to gateway"
+            elif (
+                priority_class == "urgent"
+                and older_background_submitted
+                and len(older_background_emitted_before) < len(older_background_submitted)
+                and native_signal
+            ):
+                verdict = "priority-bearing urgent request overtook older background work before gateway"
+            elif priority_class == "urgent" and older_background_submitted and len(older_background_emitted_before) < len(older_background_submitted):
+                verdict = "urgent request overtook older background work; priority cause not proven"
+            elif priority_class == "urgent" and older_background_submitted:
+                verdict = "no NAT-side priority overtaking observed"
+            elif priority_class == "urgent":
+                verdict = "urgent request emitted; no older background work to overtake"
+            else:
+                verdict = "background request"
+            proof_rows.append(
+                {
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                    "request_id": label,
+                    "priority_class": priority_class,
+                    "submit_rank_into_nat": submit_order.get(label, ""),
+                    "emit_rank_from_nat_to_gateway": emit_rank,
+                    "older_background_submitted_before": len(older_background_submitted),
+                    "older_background_emitted_before": len(older_background_emitted_before),
+                    "submit_to_gateway_emit_ms": (
+                        round(ns_to_ms_delta(submit_ns, start_ns), 3)
+                        if ns_to_ms_delta(submit_ns, start_ns) is not None
+                        else ""
+                    ),
+                    "gateway_to_fake_sglang_ms": (
+                        round(ns_to_ms_delta(start_ns, int(float_value(fake.get("ts_ns")))), 3)
+                        if ns_to_ms_delta(start_ns, int(float_value(fake.get("ts_ns")))) is not None
+                        else ""
+                    ),
+                    "gateway_backend_ms": end.get("total_latency_ms", ""),
+                    "client_latency_ms": done.get("client_latency_ms", ""),
+                    "harness_input_signal": submit.get("harness_input_priority_signal", ""),
+                    "harness_input_signal_source": submit.get("harness_input_priority_signal_source", ""),
+                    "gateway_saw_marker_intent": "yes" if start.get("experiment_priority_intent") else "no",
+                    "harness_output_signal": native_signal,
+                    "harness_output_signal_source": start.get("harness_emit_priority_signal_source", ""),
+                    "gateway_translated_priority": start.get("gateway_priority_translation", ""),
+                    "gateway_translation_source": start.get("gateway_priority_translation_source", ""),
+                    "sglang_priority_seen": start.get("sglang_priority", fake.get("sglang_priority", "")),
+                    "client_status": done.get("status", ""),
+                    "client_error": done.get("error", ""),
+                    "verdict": verdict,
+                }
+            )
+    return proof_rows
+
+
 def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     replay_by_label = {
         (str(row.get("case_dir") or ""), str(row.get("request_id") or "")): row
@@ -697,6 +827,32 @@ HARNESS_PRIORITY_COLUMNS = [
     "harness_emit_delay_ms",
     "backend_ms",
     "first_token_lateness_ms",
+    "verdict",
+    "case_id",
+    "case_dir",
+]
+
+NAT_SERVICE_PRIORITY_COLUMNS = [
+    "request_id",
+    "priority_class",
+    "submit_rank_into_nat",
+    "emit_rank_from_nat_to_gateway",
+    "older_background_submitted_before",
+    "older_background_emitted_before",
+    "submit_to_gateway_emit_ms",
+    "gateway_to_fake_sglang_ms",
+    "gateway_backend_ms",
+    "client_latency_ms",
+    "harness_input_signal",
+    "harness_input_signal_source",
+    "gateway_saw_marker_intent",
+    "harness_output_signal",
+    "harness_output_signal_source",
+    "gateway_translated_priority",
+    "gateway_translation_source",
+    "sglang_priority_seen",
+    "client_status",
+    "client_error",
     "verdict",
     "case_id",
     "case_dir",
@@ -1030,6 +1186,7 @@ def render_html(
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
+    nat_service_priority_rows: list[dict[str, Any]],
     report_label: str,
     run_config: dict[str, str],
 ) -> str:
@@ -1068,6 +1225,7 @@ def render_html(
     )
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
+    nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     raw_table = render_table(
         rows,
         [
@@ -1131,6 +1289,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Harness Priority Preservation Proof</h2>
 <p>This table appears when the run includes <code>pre_harness_priority_hints</code>. It proves whether the driver supplied an urgent intent before the harness, whether the gateway saw that intent or a native emitted signal, and whether it translated to SGLang priority.</p>
 <div class="card">{harness_priority_table if harness_priority_rows else "<p>No pre-harness priority proof rows found in this run.</p>"}</div>
+<h2>NAT Shared-Service Priority Probe</h2>
+<p>This table appears when NAT is run as a shared <code>nat serve</code> service. It compares the order requests entered NAT with the order NAT emitted model calls to the gateway. If urgent work jumps ahead of older background work here, that is NAT-side priority evidence.</p>
+<div class="card">{nat_service_priority_table if nat_service_priority_rows else "<p>No NAT shared-service priority probe rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -1154,11 +1315,12 @@ def write_manifest(
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
+    nat_service_priority_rows: list[dict[str, Any]],
     run_config: dict[str, str],
 ) -> None:
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "experiment_kind": "multi_harness_deadline_pressure",
+        "experiment_kind": run_config.get("EXPERIMENT_KIND") or "multi_harness_deadline_pressure",
         "report_label": args.report_label,
         "script": "scripts/build_multi_harness_deadline_summary.py",
         "root": str(args.root),
@@ -1167,6 +1329,7 @@ def write_manifest(
         "summary_row_count": len(summary),
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "harness_priority_row_count": len(harness_priority_rows),
+        "nat_service_priority_row_count": len(nat_service_priority_rows),
         "hardware_profile": os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE", ""),
         "hardware_profile_path": os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH", ""),
         "harnesses": sorted({row["harness"] for row in rows}),
@@ -1192,18 +1355,20 @@ def main() -> None:
     summary = summarize(rows)
     speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
     harness_priority_rows = collect_harness_priority_proof(args.root, rows)
+    nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
-    html_text = render_html(rows, summary, speculative_prefill_rows, harness_priority_rows, args.report_label, run_config)
+    write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
+    html_text = render_html(rows, summary, speculative_prefill_rows, harness_priority_rows, nat_service_priority_rows, args.report_label, run_config)
     report_path = args.out_dir / "master_report.html"
     report_path.write_text(html_text, encoding="utf-8")
-    write_manifest(args.out_dir / "manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, run_config)
+    write_manifest(args.out_dir / "manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, nat_service_priority_rows, run_config)
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
-        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, run_config)
+        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, nat_service_priority_rows, run_config)
     print(f"wrote {report_path}")
     print(f"rows={len(rows)} summary_rows={len(summary)}")
 
