@@ -91,6 +91,33 @@ Cartesian sweep.
 Quick sentinel experiments often run only P0, P3, and P5 first. Full ladder
 runs use P0 through P5.
 
+## Hardware Profiles
+
+Hardware profiles keep the experiment design the same while changing the amount
+of pressure applied to the machine. The runner loads
+`HARDWARE_PROFILE=ec2_a10g` by default.
+
+| Profile | File | Use Case |
+| --- | --- | --- |
+| `ec2_a10g` | [sglang_direct_kv/configs/hardware/ec2_a10g.env](sglang_direct_kv/configs/hardware/ec2_a10g.env) | Current EC2/A10G-scale runs and apples-to-apples GH200 comparison. |
+| `gh200` | [sglang_direct_kv/configs/hardware/gh200.env](sglang_direct_kv/configs/hardware/gh200.env) | GH200-scaled pressure run with larger token budget, larger HiCache, more fillers, and more urgent agents. |
+
+Profile defaults can still be overridden inline:
+
+```bash
+HARDWARE_PROFILE=gh200 MAX_TOTAL_TOKENS=131072 \
+bash scripts/run_native_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Recommended migration sequence for a new GH200 machine:
+
+1. Run `HARDWARE_PROFILE=ec2_a10g` first. This gives an apples-to-apples
+   comparison against the EC2 results.
+2. Run `HARDWARE_PROFILE=gh200` next. This increases pressure so GH200 can find
+   its own replay-deadline cliff.
+3. Keep `REPORT_BUILDER_MODE=lightweight` for full multi-harness runs.
+
 ## Most Recent Experiment: Real-Client Deadline Pressure
 
 The newest experiment sends real coding-agent CLIs through the inspection
@@ -124,10 +151,10 @@ source .venv/bin/activate
 
 HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_BUILDER_MODE=lightweight \
-MAX_TOTAL_TOKENS=24576 \
 REPORT_LABEL="native_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_native_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
@@ -141,11 +168,11 @@ source .venv/bin/activate
 
 HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_BUILDER_MODE=lightweight \
-MAX_TOTAL_TOKENS=24576 \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
@@ -158,11 +185,11 @@ report label without rerunning completed cases:
 SKIP_EXISTING_CASES=1 \
 HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_BUILDER_MODE=lightweight \
-MAX_TOTAL_TOKENS=24576 \
 REPORT_LABEL="<existing_report_label>" \
 bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
@@ -235,11 +262,49 @@ source .venv/bin/activate
 
 HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+GH200 apples-to-apples run. Use this first after migrating the checkout to
+GH200:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="gh200_apples_to_apples_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_native_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+GH200-scaled pressure run. Use this after the apples-to-apples run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=gh200 \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
+PRESSURE_LEVELS="p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="gh200_scaled_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_native_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
@@ -259,6 +324,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh) | Runs only the native CLI harnesses plus the Hatcher control. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
+| [sglang_direct_kv/configs/hardware/](sglang_direct_kv/configs/hardware/) | EC2 and GH200 pressure profiles. |
 | [sglang_direct_kv/scripts/run_real_client_wireability_probe.py](sglang_direct_kv/scripts/run_real_client_wireability_probe.py) | Launches real client CLIs against the inspection gateway and reports the live request shape observed at the boundary. |
 | [sglang_direct_kv/scripts/smoke_multi_harness_wireability.py](sglang_direct_kv/scripts/smoke_multi_harness_wireability.py) | Fast local smoke test for CLI harness wireability through the gateway. |
 | [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |

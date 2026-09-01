@@ -2,6 +2,36 @@
 set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen2.5-Coder-7B-Instruct}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${DIRECT_ROOT}"
+
+HARDWARE_PROFILE="${HARDWARE_PROFILE:-ec2_a10g}"
+HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH:-}"
+
+load_hardware_profile() {
+  if [[ -z "${HARDWARE_PROFILE}" || "${HARDWARE_PROFILE}" == "none" ]]; then
+    return
+  fi
+  local profile_path="${HARDWARE_PROFILE_PATH}"
+  if [[ -z "${profile_path}" ]]; then
+    profile_path="configs/hardware/${HARDWARE_PROFILE}.env"
+  fi
+  if [[ ! -f "${profile_path}" ]]; then
+    echo "Hardware profile not found: ${profile_path}" >&2
+    echo "Set HARDWARE_PROFILE=none or HARDWARE_PROFILE_PATH=<file> to override." >&2
+    exit 2
+  fi
+  # shellcheck disable=SC1090
+  source "${profile_path}"
+  HARDWARE_PROFILE_PATH="${profile_path}"
+}
+
+load_hardware_profile
+
+export HARDWARE_PROFILE
+export HARDWARE_PROFILE_PATH
+
 HOST_URL="${HOST_URL:-http://127.0.0.1:30000}"
 GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:31080}"
 REPORT_LABEL="${REPORT_LABEL:-harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)}"
@@ -27,10 +57,6 @@ AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
 AGENTIC_RUNTIME_TELEMETRY_BACKEND="${AGENTIC_RUNTIME_TELEMETRY_BACKEND:-sglang}"
 AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
 GPU_UTIL_SAMPLE_INTERVAL_MS="${GPU_UTIL_SAMPLE_INTERVAL_MS:-100}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${DIRECT_ROOT}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -120,14 +146,36 @@ wait_for_gateway() {
 }
 
 level_knobs() {
+  local profile_value=""
   case "$1" in
     p0_control)
+      profile_value="${P0_CONTROL_KNOBS:-}"
+      if [[ -n "${profile_value}" ]]; then echo "${profile_value}"; return; fi
       echo "tool_wait_ms=500 target_prompt_tokens=1024 filler_sessions=0 filler_prompt_tokens=768 session_count=1 concurrency=1"
       ;;
+    p1_mild)
+      profile_value="${P1_MILD_KNOBS:-}"
+      if [[ -n "${profile_value}" ]]; then echo "${profile_value}"; return; fi
+      echo "tool_wait_ms=250 target_prompt_tokens=2048 filler_sessions=8 filler_prompt_tokens=1024 session_count=1 concurrency=4"
+      ;;
+    p2_medium)
+      profile_value="${P2_MEDIUM_KNOBS:-}"
+      if [[ -n "${profile_value}" ]]; then echo "${profile_value}"; return; fi
+      echo "tool_wait_ms=100 target_prompt_tokens=3072 filler_sessions=16 filler_prompt_tokens=1536 session_count=1 concurrency=6"
+      ;;
     p3_high)
+      profile_value="${P3_HIGH_KNOBS:-}"
+      if [[ -n "${profile_value}" ]]; then echo "${profile_value}"; return; fi
       echo "tool_wait_ms=50 target_prompt_tokens=4096 filler_sessions=32 filler_prompt_tokens=1536 session_count=1 concurrency=8"
       ;;
+    p4_cliff)
+      profile_value="${P4_CLIFF_KNOBS:-}"
+      if [[ -n "${profile_value}" ]]; then echo "${profile_value}"; return; fi
+      echo "tool_wait_ms=25 target_prompt_tokens=4096 filler_sessions=48 filler_prompt_tokens=2048 session_count=1 concurrency=10"
+      ;;
     p5_boss_queue)
+      profile_value="${P5_BOSS_QUEUE_KNOBS:-}"
+      if [[ -n "${profile_value}" ]]; then echo "${profile_value}"; return; fi
       echo "tool_wait_ms=50 target_prompt_tokens=4096 filler_sessions=4 filler_prompt_tokens=2048 session_count=4 concurrency=12"
       ;;
     *)
@@ -145,13 +193,21 @@ write_run_config() {
     echo "RESULTS_ROOT=${RESULTS_ROOT}"
     echo "RUN_ROOT=${RUN_ROOT}"
     echo "REPORT_DIR=${REPORT_DIR}"
+    echo "HARDWARE_PROFILE=${HARDWARE_PROFILE}"
+    echo "HARDWARE_PROFILE_PATH=${HARDWARE_PROFILE_PATH}"
     echo "HARNESSES=${HARNESSES}"
     echo "MODES=${MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
-    echo "P0_CONTROL=tool_wait_ms=500,target_prompt_tokens=1024,fillers=0,urgent_agents=1"
-    echo "P3_QUEUE_PRESSURE=tool_wait_ms=50,target_prompt_tokens=4096,fillers=32,urgent_agents=1"
-    echo "P5_BOSS_QUEUE=tool_wait_ms=50,target_prompt_tokens=4096,fillers_per_session=4,urgent_agents=4"
+    echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS}"
+    echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
+    echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC}"
+    echo "P0_CONTROL=$(level_knobs p0_control | tr ' ' ',')"
+    echo "P1_MILD=$(level_knobs p1_mild | tr ' ' ',')"
+    echo "P2_MEDIUM=$(level_knobs p2_medium | tr ' ' ',')"
+    echo "P3_QUEUE_PRESSURE=$(level_knobs p3_high | tr ' ' ',')"
+    echo "P4_CLIFF=$(level_knobs p4_cliff | tr ' ' ',')"
+    echo "P5_BOSS_QUEUE=$(level_knobs p5_boss_queue | tr ' ' ',')"
   } >"${RUN_CONFIG_ENV}"
 }
 
@@ -269,6 +325,7 @@ build_final_report() {
       --out-dir "${REPORT_DIR}" \
       --latest-root "${RESULTS_ROOT}" \
       --report-label "${REPORT_LABEL}" \
+      --run-config "${RUN_CONFIG_ENV}" \
       "${latest_args[@]}"
     return
   fi
@@ -285,7 +342,7 @@ build_final_report() {
       cp -f "${REPORT_DIR}/report/${artifact}" "${REPORT_DIR}/${artifact}"
     fi
   done
-  REPORT_LABEL="${REPORT_LABEL}" MODEL="${MODEL}" RESULTS_ROOT="${RESULTS_ROOT}" RUN_ROOT="${RUN_ROOT}" REPORT_DIR="${REPORT_DIR}" UPDATE_LATEST="${UPDATE_LATEST}" HARNESSES="${HARNESSES}" MODES="${MODES}" PRESSURE_LEVELS="${PRESSURE_LEVELS}" "${PYTHON_BIN}" - <<'PY'
+  REPORT_LABEL="${REPORT_LABEL}" MODEL="${MODEL}" RESULTS_ROOT="${RESULTS_ROOT}" RUN_ROOT="${RUN_ROOT}" REPORT_DIR="${REPORT_DIR}" UPDATE_LATEST="${UPDATE_LATEST}" HARDWARE_PROFILE="${HARDWARE_PROFILE}" HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH}" HARNESSES="${HARNESSES}" MODES="${MODES}" PRESSURE_LEVELS="${PRESSURE_LEVELS}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 from datetime import datetime, timezone
@@ -302,6 +359,8 @@ manifest = {
     "archived_report": str(report_dir / "master_report.html"),
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "script": "scripts/run_harness_deadline_pressure.sh",
+    "hardware_profile": os.environ.get("HARDWARE_PROFILE", ""),
+    "hardware_profile_path": os.environ.get("HARDWARE_PROFILE_PATH", ""),
     "harnesses": os.environ.get("HARNESSES", ""),
     "modes": os.environ.get("MODES", ""),
     "pressure_levels": os.environ.get("PRESSURE_LEVELS", ""),
@@ -316,6 +375,8 @@ PY
 echo "Multi-Harness Replay Deadline Pressure"
 echo "MODEL=${MODEL}"
 echo "REPORT_LABEL=${REPORT_LABEL}"
+echo "HARDWARE_PROFILE=${HARDWARE_PROFILE}"
+echo "HARDWARE_PROFILE_PATH=${HARDWARE_PROFILE_PATH}"
 echo "HARNESSES=${HARNESSES}"
 echo "MODES=${MODES}"
 echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"

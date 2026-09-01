@@ -113,6 +113,20 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def read_run_config(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    config: dict[str, str] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            config[key] = value
+    return config
+
+
 def case_key_from_name(name: str) -> tuple[str, str, str]:
     for harness in sorted(HARNESS_LABELS, key=len, reverse=True):
         prefix = f"{harness}_"
@@ -601,17 +615,28 @@ def render_table(rows: list[dict[str, Any]], columns: list[str]) -> str:
     return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_lines)}</tbody></table>"
 
 
-def render_pressure_definition_table(rows: list[dict[str, Any]]) -> str:
+RUN_CONFIG_PRESSURE_KEYS = {
+    "p0_control": "P0_CONTROL",
+    "p1_mild": "P1_MILD",
+    "p2_medium": "P2_MEDIUM",
+    "p3_high": "P3_QUEUE_PRESSURE",
+    "p4_cliff": "P4_CLIFF",
+    "p5_boss_queue": "P5_BOSS_QUEUE",
+}
+
+
+def render_pressure_definition_table(rows: list[dict[str, Any]], run_config: dict[str, str]) -> str:
     present = {str(row["pressure_level"]) for row in rows}
     definition_rows: list[dict[str, Any]] = []
     for pressure in PRESSURE_ORDER:
         definition = PRESSURE_DEFINITIONS[pressure]
+        knobs = run_config.get(RUN_CONFIG_PRESSURE_KEYS[pressure]) or definition["knobs"]
         definition_rows.append(
             {
                 "level": PRESSURE_LABELS[pressure],
                 "in_this_run": "Yes" if pressure in present else "No",
                 "what_it_means": definition["goal"],
-                "knobs": definition["knobs"],
+                "knobs": knobs,
             }
         )
     return render_table(definition_rows, ["level", "in_this_run", "what_it_means", "knobs"])
@@ -645,11 +670,13 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     )
 
 
-def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], report_label: str) -> str:
+def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], report_label: str, run_config: dict[str, str]) -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    hardware_profile = os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE") or "not recorded"
+    hardware_profile_path = os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH") or "not recorded"
     chart = render_pressure_chart(rows)
     chart_legend = render_chart_legend(rows)
-    pressure_definition_table = render_pressure_definition_table(rows)
+    pressure_definition_table = render_pressure_definition_table(rows, run_config)
     summary_table = render_table(
         summary,
         [
@@ -726,6 +753,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <main>
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
+<p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
 <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel starts the clock when SGLang receives the replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; mode is encoded by color. Lower is better.</p>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
@@ -745,7 +773,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 """
 
 
-def write_manifest(path: Path, args: argparse.Namespace, rows: list[dict[str, Any]], summary: list[dict[str, Any]]) -> None:
+def write_manifest(path: Path, args: argparse.Namespace, rows: list[dict[str, Any]], summary: list[dict[str, Any]], run_config: dict[str, str]) -> None:
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment_kind": "multi_harness_deadline_pressure",
@@ -755,6 +783,8 @@ def write_manifest(path: Path, args: argparse.Namespace, rows: list[dict[str, An
         "report_dir": str(args.out_dir),
         "row_count": len(rows),
         "summary_row_count": len(summary),
+        "hardware_profile": os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE", ""),
+        "hardware_profile_path": os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH", ""),
         "harnesses": sorted({row["harness"] for row in rows}),
         "pressure_levels": sorted({row["pressure_level"] for row in rows}),
         "modes": sorted({row["mode"] for row in rows}),
@@ -768,22 +798,24 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--latest-root", type=Path)
     parser.add_argument("--report-label", default=os.environ.get("REPORT_LABEL") or f"multi_harness_deadline_summary_{int(time.time())}")
+    parser.add_argument("--run-config", type=Path)
     parser.add_argument("--update-latest", action="store_true")
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    run_config = read_run_config(args.run_config or args.out_dir / "run_config.env")
     rows = collect_rows(args.root)
     summary = summarize(rows)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
-    html_text = render_html(rows, summary, args.report_label)
+    html_text = render_html(rows, summary, args.report_label, run_config)
     report_path = args.out_dir / "master_report.html"
     report_path.write_text(html_text, encoding="utf-8")
-    write_manifest(args.out_dir / "manifest.json", args, rows, summary)
+    write_manifest(args.out_dir / "manifest.json", args, rows, summary, run_config)
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
-        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary)
+        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, run_config)
     print(f"wrote {report_path}")
     print(f"rows={len(rows)} summary_rows={len(summary)}")
 
