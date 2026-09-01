@@ -31,12 +31,16 @@ HARNESS_LABELS = {
 MODE_LABELS = {
     "no_prefetch": "NP = No prefetch",
     "e2e_priority_hints": "E2E = End-to-end priority hints",
+    "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill",
 }
 
 MODE_COLORS = {
     "no_prefetch": "#2563eb",
     "e2e_priority_hints": "#0f766e",
+    "e2e_priority_hints_speculative_prefill": "#ea580c",
 }
+
+MODE_ORDER = tuple(MODE_LABELS)
 
 HARNESS_SYMBOLS = {
     "hatcher": "circle",
@@ -138,7 +142,7 @@ def case_key_from_name(name: str) -> tuple[str, str, str]:
             if not rest.startswith(prefix_pressure):
                 continue
             mode_part = rest[len(prefix_pressure) :]
-            mode = "e2e_priority_hints" if mode_part.startswith("e2e_priority_hints") else "no_prefetch"
+            mode = next((candidate for candidate in sorted(MODE_ORDER, key=len, reverse=True) if mode_part.startswith(candidate)), "no_prefetch")
             return harness, pressure, mode
     return "", "", ""
 
@@ -312,6 +316,153 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
     return out
 
 
+def ns_to_ms_delta(start_ns: int, end_ns: int) -> float | None:
+    if not start_ns or not end_ns:
+        return None
+    return (end_ns - start_ns) / 1_000_000.0
+
+
+def prefill_token_stats_by_label(trace_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    stats: dict[str, dict[str, Any]] = defaultdict(dict)
+
+    def update(label: str, request: dict[str, Any], source: str) -> None:
+        if not label:
+            return
+        entry = stats[label]
+        entry["source"] = source
+        for key in (
+            "prefill_full_input_tokens",
+            "prefill_active_input_tokens",
+            "prefill_cached_prefix_tokens",
+            "prefill_uncached_token_count",
+            "prefill_host_hit_tokens",
+            "prefill_scheduler_trimmed_tokens",
+        ):
+            value = optional_float(request.get(key))
+            if value is None:
+                continue
+            current = optional_float(entry.get(key))
+            if current is None or value > current:
+                entry[key] = int(value)
+
+    for row in trace_rows:
+        label = row_agent_label(row)
+        if label:
+            update(label, row, str(row.get("source_event") or row.get("event") or "trace"))
+        attribution = row.get("batch_request_prefill_attribution")
+        if not isinstance(attribution, list):
+            continue
+        for request in attribution:
+            if not isinstance(request, dict):
+                continue
+            update(row_agent_label(request), request, str(row.get("source_event") or row.get("event") or "batch"))
+    return stats
+
+
+def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_by_session = {
+        (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
+        for row in replay_rows
+        if row.get("mode") == "e2e_priority_hints_speculative_prefill"
+    }
+    proof_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        token_stats = prefill_token_stats_by_label(trace_rows)
+        by_event: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in trace_rows:
+            by_event[str(row.get("event") or "")].append(row)
+        warmup_starts = [row for row in by_event.get("m27.request.start", []) if row.get("phase") == "speculative_prefill"]
+        for warmup_start in warmup_starts:
+            session_id = str(warmup_start.get("session_id") or "")
+            replay_row = replay_by_session.get((str(case_dir), session_id), {})
+            warmup_label = str(warmup_start.get("label") or warmup_start.get("request_id") or "")
+            expected_replay = str(warmup_start.get("expected_replay_request_id") or f"{session_id}_replay")
+            warmup_end = next(
+                (
+                    row
+                    for row in by_event.get("m27.request.end", [])
+                    if row.get("phase") == "speculative_prefill"
+                    and str(row.get("label") or row.get("request_id") or "") == warmup_label
+                ),
+                {},
+            )
+            hint_seen = next(
+                (
+                    row
+                    for row in by_event.get("m27.speculative_prefill.hint_seen", [])
+                    if str(row.get("warmup_request_id") or "") == warmup_label
+                ),
+                {},
+            )
+            warmup_start_ns = int(float_value(warmup_start.get("ts_ns")))
+            warmup_end_ns = int(float_value(warmup_end.get("ts_ns")))
+            replay_due_ns = int(float_value(replay_row.get("replay_due_ts_ns")))
+            replay_start_ns = int(float_value(replay_row.get("request_start_ts_ns")))
+            replay_receive_ns = int(float_value(replay_row.get("sglang_receive_ts_ns")))
+            warmup_stats = token_stats.get(warmup_label, {})
+            replay_stats = token_stats.get(expected_replay, {})
+            warmup_before_due = bool(warmup_start_ns and replay_due_ns and warmup_start_ns <= replay_due_ns)
+            completed_before_replay = bool(warmup_end_ns and replay_start_ns and warmup_end_ns <= replay_start_ns)
+            completed_before_backend_receive = bool(
+                warmup_end_ns
+                and (replay_receive_ns or replay_start_ns)
+                and warmup_end_ns <= (replay_receive_ns or replay_start_ns)
+            )
+            cached_tokens = replay_stats.get("prefill_cached_prefix_tokens", "")
+            verdict = "warmup sent"
+            if completed_before_backend_receive and cached_tokens not in ("", 0, "0"):
+                verdict = "warmup completed and replay showed cached prefix"
+            elif completed_before_backend_receive:
+                verdict = "warmup completed before replay, cached-prefix evidence missing"
+            elif warmup_end_ns:
+                verdict = "warmup completed too late for replay"
+            proof_rows.append(
+                {
+                    "harness": replay_row.get("harness", warmup_start.get("harness", "")),
+                    "harness_label": replay_row.get(
+                        "harness_label",
+                        HARNESS_LABELS.get(str(warmup_start.get("harness") or ""), str(warmup_start.get("harness") or "")),
+                    ),
+                    "pressure_level": replay_row.get("pressure_level", ""),
+                    "pressure_level_label": replay_row.get("pressure_level_label", ""),
+                    "mode": "e2e_priority_hints_speculative_prefill",
+                    "session_id": session_id,
+                    "warmup_request_id": warmup_label,
+                    "expected_replay_request_id": expected_replay,
+                    "hint_seen": "yes" if hint_seen else "no",
+                    "strategy": warmup_start.get("speculative_prefill_strategy") or hint_seen.get("strategy", ""),
+                    "warmup_started_before_replay_due": "yes" if warmup_before_due else "no",
+                    "warmup_completed_before_replay": "yes" if completed_before_replay else "no",
+                    "warmup_completed_before_sglang_receive": "yes" if completed_before_backend_receive else "no",
+                    "warmup_total_latency_ms": warmup_end.get("total_latency_ms", ""),
+                    "warmup_prompt_tokens": warmup_start.get("warmup_prompt_tokens", ""),
+                    "warmup_full_input_tokens": warmup_stats.get("prefill_full_input_tokens", ""),
+                    "warmup_uncached_tokens": warmup_stats.get("prefill_uncached_token_count", ""),
+                    "replay_cached_prefix_tokens": replay_stats.get("prefill_cached_prefix_tokens", ""),
+                    "replay_uncached_tokens": replay_stats.get("prefill_uncached_token_count", ""),
+                    "replay_first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
+                    "replay_backend_ms": replay_row.get("sglang_receive_to_first_token_ms", ""),
+                    "warmup_start_to_replay_due_ms": (
+                        round(ns_to_ms_delta(warmup_start_ns, replay_due_ns), 3)
+                        if ns_to_ms_delta(warmup_start_ns, replay_due_ns) is not None
+                        else ""
+                    ),
+                    "warmup_end_to_replay_start_ms": (
+                        round(ns_to_ms_delta(warmup_end_ns, replay_start_ns), 3)
+                        if ns_to_ms_delta(warmup_end_ns, replay_start_ns) is not None
+                        else ""
+                    ),
+                    "verdict": verdict,
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                }
+            )
+    return proof_rows
+
+
 RAW_COLUMNS = [
     "harness",
     "harness_label",
@@ -354,6 +505,31 @@ SUMMARY_COLUMNS = [
     "median_sglang_receive_to_first_token_ms",
     "min_first_token_lateness_ms",
     "max_first_token_lateness_ms",
+]
+
+SPECULATIVE_PREFILL_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "session_id",
+    "warmup_request_id",
+    "expected_replay_request_id",
+    "hint_seen",
+    "strategy",
+    "warmup_started_before_replay_due",
+    "warmup_completed_before_replay",
+    "warmup_completed_before_sglang_receive",
+    "warmup_prompt_tokens",
+    "warmup_full_input_tokens",
+    "warmup_uncached_tokens",
+    "replay_cached_prefix_tokens",
+    "replay_uncached_tokens",
+    "replay_first_token_lateness_ms",
+    "replay_backend_ms",
+    "warmup_start_to_replay_due_ms",
+    "warmup_end_to_replay_start_ms",
+    "verdict",
+    "case_id",
+    "case_dir",
 ]
 
 
@@ -478,6 +654,7 @@ def inline_symbol(kind: str, color: str) -> str:
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     pressures = [pressure for pressure in PRESSURE_ORDER if any(row["pressure_level"] == pressure for row in rows)]
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
+    modes = [mode for mode in MODE_ORDER if any(row["mode"] == mode for row in rows)]
     if not pressures or not harnesses:
         return "<p>No replay rows found.</p>"
 
@@ -494,13 +671,21 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     plot_w = width - left - right
     pressure_group_w = plot_w / len(pressures)
 
+    def mode_offset(mode: str) -> float:
+        if not modes:
+            return 0.0
+        try:
+            index = modes.index(mode)
+        except ValueError:
+            index = 0
+        return (index - (len(modes) - 1) / 2) * 13.0
+
     def x_pos(pressure_index: int, harness_index: int, mode: str, sample_index: int, sample_count: int) -> float:
         pressure_left = left + pressure_index * pressure_group_w
         harness_step = pressure_group_w / max(1, len(harnesses))
         base = pressure_left + harness_step * (harness_index + 0.5)
-        mode_offset = -9 if mode == "no_prefetch" else 9
         jitter = 0.0 if sample_count <= 1 else (sample_index - (sample_count - 1) / 2) * 3.2
-        return base + mode_offset + jitter
+        return base + mode_offset(mode) + jitter
 
     lines = [
         f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Replay Deadline Pressure Chart">',
@@ -551,11 +736,11 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
             cx = x + pressure_group_w / 2
             lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+36:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
-            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; blue = baseline, green = E2E</text>')
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; color = mode, shape = harness</text>')
             for harness_index, harness in enumerate(harnesses):
-                harness_x = x_pos(pressure_index, harness_index, "no_prefetch", 0, 1) + 9
+                harness_x = left + pressure_index * pressure_group_w + (pressure_group_w / max(1, len(harnesses))) * (harness_index + 0.5)
                 lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#f1f5f9" stroke-width="1"/>')
-                for mode in MODE_LABELS:
+                for mode in modes:
                     sample_rows = rows_by_group_mode.get((pressure, harness, mode), [])
                     sample_rows = [row for row in sample_rows if optional_float(row.get(value_key)) is not None]
                     if not sample_rows:
@@ -670,7 +855,13 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     )
 
 
-def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], report_label: str, run_config: dict[str, str]) -> str:
+def render_html(
+    rows: list[dict[str, Any]],
+    summary: list[dict[str, Any]],
+    speculative_prefill_rows: list[dict[str, Any]],
+    report_label: str,
+    run_config: dict[str, str],
+) -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     hardware_profile = os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE") or "not recorded"
     hardware_profile_path = os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH") or "not recorded"
@@ -704,6 +895,7 @@ def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], repor
             "median_first_token_lateness_ms",
         ],
     )
+    speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     raw_table = render_table(
         rows,
         [
@@ -760,6 +952,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <div class="card">{pressure_definition_table}</div>
 <div class="card">{chart}</div>
 {chart_legend}
+<h2>Speculative Prefill Proof</h2>
+<p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
+<div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>
 <h2>Delay Breakdown</h2>
@@ -773,7 +968,14 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 """
 
 
-def write_manifest(path: Path, args: argparse.Namespace, rows: list[dict[str, Any]], summary: list[dict[str, Any]], run_config: dict[str, str]) -> None:
+def write_manifest(
+    path: Path,
+    args: argparse.Namespace,
+    rows: list[dict[str, Any]],
+    summary: list[dict[str, Any]],
+    speculative_prefill_rows: list[dict[str, Any]],
+    run_config: dict[str, str],
+) -> None:
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment_kind": "multi_harness_deadline_pressure",
@@ -783,6 +985,7 @@ def write_manifest(path: Path, args: argparse.Namespace, rows: list[dict[str, An
         "report_dir": str(args.out_dir),
         "row_count": len(rows),
         "summary_row_count": len(summary),
+        "speculative_prefill_row_count": len(speculative_prefill_rows),
         "hardware_profile": os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE", ""),
         "hardware_profile_path": os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH", ""),
         "harnesses": sorted({row["harness"] for row in rows}),
@@ -806,16 +1009,18 @@ def main() -> None:
     run_config = read_run_config(args.run_config or args.out_dir / "run_config.env")
     rows = collect_rows(args.root)
     summary = summarize(rows)
+    speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
-    html_text = render_html(rows, summary, args.report_label, run_config)
+    write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
+    html_text = render_html(rows, summary, speculative_prefill_rows, args.report_label, run_config)
     report_path = args.out_dir / "master_report.html"
     report_path.write_text(html_text, encoding="utf-8")
-    write_manifest(args.out_dir / "manifest.json", args, rows, summary, run_config)
+    write_manifest(args.out_dir / "manifest.json", args, rows, summary, speculative_prefill_rows, run_config)
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
-        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, run_config)
+        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, speculative_prefill_rows, run_config)
     print(f"wrote {report_path}")
     print(f"rows={len(rows)} summary_rows={len(summary)}")
 

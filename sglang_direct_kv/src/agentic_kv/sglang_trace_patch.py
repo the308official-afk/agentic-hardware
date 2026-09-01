@@ -177,6 +177,12 @@ def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
             "agent_correlation_id",
             "agent_case_id",
             "agent_gap_id",
+            "agent_speculative_prefill",
+            "agent_speculative_prefill_role",
+            "agent_speculative_prefill_strategy",
+            "agent_parent_request_id",
+            "agent_expected_replay_request_id",
+            "agent_warmup_prompt_tokens",
         )
         if context.get(key) not in (None, "", [], {})
     }
@@ -1353,6 +1359,16 @@ def _req_context(req: Any) -> dict[str, Any]:
                 context["agent_correlation_id"] = _safe_summary(agentic.get("correlation_id"))
                 context["agent_case_id"] = _safe_summary(agentic.get("case_id"))
                 context["agent_gap_id"] = _safe_summary(agentic.get("gap_id"))
+                context["agent_speculative_prefill"] = _safe_summary(agentic.get("speculative_prefill"))
+                context["agent_speculative_prefill_role"] = _safe_summary(agentic.get("speculative_prefill_role"))
+                context["agent_speculative_prefill_strategy"] = _safe_summary(
+                    agentic.get("speculative_prefill_strategy")
+                )
+                context["agent_parent_request_id"] = _safe_summary(agentic.get("parent_request_id"))
+                context["agent_expected_replay_request_id"] = _safe_summary(
+                    agentic.get("expected_replay_request_id")
+                )
+                context["agent_warmup_prompt_tokens"] = _safe_summary(agentic.get("warmup_prompt_tokens"))
                 if context.get("agent_request_id") and "request_id" not in context:
                     context["request_id"] = context["agent_request_id"]
             request_context = custom_params.get("request_context")
@@ -1377,6 +1393,15 @@ def _req_context(req: Any) -> dict[str, Any]:
                     )
                     context["dynamo_hint_deadline_offset_ms"] = _safe_summary(agent_hints.get("deadline_offset_ms"))
                     context["dynamo_hint_expected_action"] = _safe_summary(agent_hints.get("expected_action"))
+                    context["dynamo_hint_speculative_prefill"] = _safe_summary(
+                        agent_hints.get("speculative_prefill")
+                    )
+                    context["dynamo_hint_speculative_prefill_role"] = _safe_summary(
+                        agent_hints.get("speculative_prefill_role")
+                    )
+                    context["dynamo_hint_speculative_prefill_strategy"] = _safe_summary(
+                        agent_hints.get("speculative_prefill_strategy")
+                    )
                     if context.get("dynamo_hint_request_id") and "request_id" not in context:
                         context["request_id"] = context["dynamo_hint_request_id"]
             bridge = custom_params.get("dynamo_priority_bridge")

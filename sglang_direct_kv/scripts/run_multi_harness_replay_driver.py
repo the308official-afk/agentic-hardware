@@ -32,12 +32,18 @@ SUPPORTED_HARNESSES = (
     "openclaw",
     "hermes_agent",
 )
+SUPPORTED_MODES = (
+    "no_prefetch",
+    "e2e_priority_hints",
+    "e2e_priority_hints_speculative_prefill",
+)
 
 
 @dataclass(frozen=True)
 class HarnessPair:
     session_id: str
     prompt: str
+    warmup_prompt: str
     replay_prompt: str
     task_index: str
     prompt_tokens: int
@@ -82,13 +88,18 @@ def build_pairs(harness: str, pressure_level: str, count: int, prompt_tokens: in
     for idx in range(count):
         session_id = f"{harness}_{pressure_level}_session_{idx:03d}"
         shared = make_shared_prefix(session_id, prompt_tokens)
+        known_next_turn_prefix = (
+            f"{shared}\n\n"
+            "User task: fix the synthetic failing test in this repository.\n"
+            "Assistant response: I will inspect the failing test by calling synthetic_tool."
+        )
         prompt = (
             f"{shared}\n\n"
             "Initial turn: inspect this synthetic coding task context and answer briefly. "
             "The tool result will arrive later."
         )
         replay_prompt = (
-            f"{shared}\n\n"
+            f"{known_next_turn_prefix}\n\n"
             "Replay turn after tool wait: the tool returned one failing assertion and a traceback. "
             "Continue from the same context and answer briefly."
         )
@@ -96,6 +107,7 @@ def build_pairs(harness: str, pressure_level: str, count: int, prompt_tokens: in
             HarnessPair(
                 session_id=session_id,
                 prompt=prompt,
+                warmup_prompt=known_next_turn_prefix,
                 replay_prompt=replay_prompt,
                 task_index=str(idx),
                 prompt_tokens=estimate_tokens(prompt),
@@ -115,6 +127,12 @@ async def run_hatcher_request(gateway_base: str, model: str, prompt: str, meta: 
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
         response.raise_for_status()
+
+
+async def run_gateway_background_warmup(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> None:
+    """Send a Dynamo-like frontend warmup without launching a full harness CLI."""
+
+    await run_hatcher_request(gateway_base, model, prompt, meta)
 
 
 def cli_or_npx(binary: str, package: str) -> list[str]:
@@ -753,7 +771,7 @@ async def run_filler(
 async def main_async() -> None:
     parser = argparse.ArgumentParser(description="Run target replay traffic through the supported harness adapters.")
     parser.add_argument("--harness", choices=SUPPORTED_HARNESSES, required=True)
-    parser.add_argument("--mode", choices=("no_prefetch", "e2e_priority_hints"), required=True)
+    parser.add_argument("--mode", choices=SUPPORTED_MODES, required=True)
     parser.add_argument("--pressure-level", required=True)
     parser.add_argument("--gateway-base", default="http://127.0.0.1:31080")
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
@@ -835,6 +853,7 @@ async def main_async() -> None:
             "mode": args.mode,
             "pressure_level": args.pressure_level,
             "high_priority": 100,
+            "speculative_prefill_priority": 50,
             "low_priority": -100,
             "_trace_path": str(args.trace),
         }
@@ -847,6 +866,7 @@ async def main_async() -> None:
             "prompt_hash": prompt_hash(pair.prompt),
             "priority_label": "high",
             "max_tokens": 8,
+            "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
         }
         await bounded_request(pair.prompt, initial_meta)
         tool_start_ms = offset_ms()
@@ -864,6 +884,93 @@ async def main_async() -> None:
                 "prompt_hash": prompt_hash(pair.prompt),
             },
         )
+        warmup_task: asyncio.Task[None] | None = None
+        if args.mode == "e2e_priority_hints_speculative_prefill":
+            warmup_label = f"{pair.session_id}_speculative_prefill"
+            replay_label = f"{pair.session_id}_replay"
+            warmup_meta = {
+                **base_meta,
+                "session_id": pair.session_id,
+                "phase": "speculative_prefill",
+                "label": warmup_label,
+                "task_index": pair.task_index,
+                "prompt_hash": prompt_hash(pair.warmup_prompt),
+                "priority_label": "background",
+                "deadline_offset_ms": round(replay_due_ms, 3),
+                "max_tokens": 1,
+                "speculative_prefill": True,
+                "speculative_prefill_role": "dynamo_like_background_warmup",
+                "speculative_prefill_strategy": "known_next_turn_prefix",
+                "parent_request_id": str(initial_meta["label"]),
+                "expected_replay_request_id": replay_label,
+                "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
+            }
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.speculative_prefill.hint_seen",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "request_id": initial_meta["label"],
+                    "warmup_request_id": warmup_label,
+                    "expected_replay_request_id": replay_label,
+                    "strategy": "known_next_turn_prefix",
+                    "warmup_prompt_hash": warmup_meta["prompt_hash"],
+                    "warmup_prompt_tokens": warmup_meta["warmup_prompt_tokens"],
+                    "tool_start_offset_ms": round(tool_start_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                },
+            )
+
+            async def run_warmup() -> None:
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.speculative_prefill.warmup_start",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "request_id": warmup_label,
+                        "expected_replay_request_id": replay_label,
+                        "strategy": "known_next_turn_prefix",
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+                try:
+                    await run_gateway_background_warmup(args.gateway_base, args.model, pair.warmup_prompt, warmup_meta)
+                    write_trace(
+                        args.trace,
+                        {
+                            "event": "m27.speculative_prefill.warmup_end",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "harness": args.harness,
+                            "request_id": warmup_label,
+                            "expected_replay_request_id": replay_label,
+                            "strategy": "known_next_turn_prefix",
+                            "offset_ms": round(offset_ms(), 3),
+                            "status": "ok",
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    write_trace(
+                        args.trace,
+                        {
+                            "event": "m27.speculative_prefill.warmup_error",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "harness": args.harness,
+                            "request_id": warmup_label,
+                            "expected_replay_request_id": replay_label,
+                            "strategy": "known_next_turn_prefix",
+                            "offset_ms": round(offset_ms(), 3),
+                            "status": "error",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+
+            warmup_task = asyncio.create_task(run_warmup())
         filler_tasks = [
             asyncio.create_task(run_filler(args.gateway_base, args.model, pair, idx, base_meta, args.filler_prompt_tokens))
             for idx in range(args.filler_sessions)
@@ -877,7 +984,13 @@ async def main_async() -> None:
                 "mode": args.mode,
                 "harness": args.harness,
                 "replay_due_offset_ms": round(replay_due_ms, 3),
-                "expected_reuse": "intercepted_priority" if args.mode == "e2e_priority_hints" else "baseline",
+                "expected_reuse": (
+                    "dynamo_like_speculative_prefill"
+                    if args.mode == "e2e_priority_hints_speculative_prefill"
+                    else "intercepted_priority"
+                    if args.mode == "e2e_priority_hints"
+                    else "baseline"
+                ),
                 "gpu_resident_tokens": "unknown",
                 "host_resident_tokens": "unknown",
                 "missing_tokens": "unknown",
@@ -916,6 +1029,8 @@ async def main_async() -> None:
                 "replay_due_offset_ms": round(replay_due_ms, 3),
             },
         )
+        if warmup_task is not None:
+            await asyncio.gather(warmup_task, return_exceptions=True)
         await asyncio.gather(*filler_tasks, return_exceptions=True)
         rows.append(
             {

@@ -261,7 +261,7 @@ run_case() {
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
   fi
 

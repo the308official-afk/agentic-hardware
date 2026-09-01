@@ -63,14 +63,18 @@ From a local checkout, the common EC2 helper commands are:
 
 ## Core Modes
 
-The current manager-facing comparisons use two modes:
+The current manager-facing comparisons use these modes:
 
 | Mode | Meaning |
 | --- | --- |
 | `no_prefetch` | Baseline. The replay request receives no end-to-end priority treatment. |
 | `e2e_priority_hints` | Current priority path. The driver marks replay urgency and the SGLang boundary carries that priority into scheduling. |
+| `e2e_priority_hints_speculative_prefill` | Dynamo-like proactive path. The replay still gets E2E priority, and the gateway sends a background `max_tokens=1` warmup for the known next-turn prefix during the tool wait. |
 
-Older modes such as `dynamo_priority_hints`, `direct_prefetch`, and
+This speculative prefill mode is not SGLang speculative decoding. It mimics
+Dynamo's agent hint behavior: after the current turn/tool-call prefix is known,
+send a small background prefill so the later replay can reuse warmed KV. Older
+modes such as `dynamo_priority_hints`, `direct_prefetch`, and
 `projected_hardware_bypass` are still useful for historical analysis, but they
 are not the default comparison for the current pressure chart.
 
@@ -248,7 +252,7 @@ HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints" \
+MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="native_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_native_harness_deadline_pressure.sh \
@@ -266,7 +270,7 @@ HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints" \
+MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_deadline_pressure.sh \
@@ -283,7 +287,7 @@ HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints" \
+MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="<existing_report_label>" \
 bash scripts/run_harness_deadline_pressure.sh \
@@ -341,6 +345,7 @@ It runs each harness in:
 ```text
 no_prefetch
 e2e_priority_hints
+e2e_priority_hints_speculative_prefill
 ```
 
 And uses the sentinel pressure levels:
@@ -360,7 +365,7 @@ HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints" \
+MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
@@ -378,7 +383,7 @@ HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints" \
+MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="gh200_apples_to_apples_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_native_harness_deadline_pressure.sh \
@@ -396,7 +401,7 @@ HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=gh200 \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
 PRESSURE_LEVELS="p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints" \
+MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="gh200_scaled_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_native_harness_deadline_pressure.sh \
@@ -615,6 +620,7 @@ the bottom. Important evidence files include:
 | Artifact | What It Shows |
 | --- | --- |
 | `global_kv_readiness_by_mode.csv` | Replay first-token lateness by mode, harness, and pressure level. |
+| `speculative_prefill_proof.csv` | Dynamo-like warmup proof: hint seen, background warmup timing, cached-prefix reuse, and replay timing. |
 | `replay_queue_timing.csv` | Driver release, backend receive, scheduler admission, and first-token timing. |
 | `dynamo_priority_queue_effectiveness.csv` | Priority queue behavior and older lower-priority work bypass evidence. |
 | `request_state_snapshots.csv` | Timestamp-centered state for the target request and surrounding system pressure. |

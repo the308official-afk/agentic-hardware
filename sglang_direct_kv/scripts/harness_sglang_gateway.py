@@ -175,11 +175,18 @@ def metadata_context(meta: dict[str, Any], prompt_hash: str = "") -> dict[str, A
     }
 
 
+def priority_enabled(mode: str) -> bool:
+    return mode in {"e2e_priority_hints", "e2e_priority_hints_speculative_prefill"}
+
+
 def sglang_priority(meta: dict[str, Any]) -> int | None:
-    if str(meta.get("mode") or "") != "e2e_priority_hints":
+    if not priority_enabled(str(meta.get("mode") or "")):
         return None
-    if str(meta.get("phase") or "") == "pressure_filler":
+    phase = str(meta.get("phase") or "")
+    if phase == "pressure_filler":
         return int(meta.get("low_priority") or -100)
+    if phase == "speculative_prefill":
+        return int(meta.get("speculative_prefill_priority") or 50)
     return int(meta.get("high_priority") or 100)
 
 
@@ -205,7 +212,15 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "expected_action": "consume_kv" if context["phase"] == "replay" else "mark_session_priority",
         "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
         "kv_cache_relevant": context["phase"] in {"initial_turn", "replay"},
+        "speculative_prefill": bool(meta.get("speculative_prefill")),
+        "speculative_prefill_role": meta.get("speculative_prefill_role", ""),
+        "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
+        "parent_request_id": meta.get("parent_request_id", ""),
+        "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
     }
+    if context["phase"] == "speculative_prefill":
+        agent_hints["expected_action"] = "warm_next_turn_prefix"
+        agent_hints["kv_cache_relevant"] = True
     custom_params = {
         "agentic_kv": {
             "session_id": context["parent_run_id"],
@@ -225,9 +240,23 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "sglang_priority": priority if priority is not None else "",
             "dynamo_hint_priority": priority if priority is not None else "",
             "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
+            "speculative_prefill": bool(meta.get("speculative_prefill")),
+            "speculative_prefill_role": meta.get("speculative_prefill_role", ""),
+            "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
+            "parent_request_id": meta.get("parent_request_id", ""),
+            "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+            "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
         },
         "request_context": context,
         "nvext": {"agent_hints": agent_hints, "request_context": context},
+        "dynamo_speculative_prefill_bridge": {
+            "speculative_prefill": bool(meta.get("speculative_prefill")),
+            "role": meta.get("speculative_prefill_role", ""),
+            "strategy": meta.get("speculative_prefill_strategy", ""),
+            "parent_request_id": meta.get("parent_request_id", ""),
+            "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+            "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
+        },
     }
     out: dict[str, Any] = {
         "model": model,
@@ -498,6 +527,12 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "dynamo_hint_priority": priority if priority is not None else "",
                 "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
                 "priority_policy": "harness_gateway_intercepted_sglang_priority" if priority is not None else "none",
+                "speculative_prefill": bool(meta.get("speculative_prefill")),
+                "speculative_prefill_role": meta.get("speculative_prefill_role", ""),
+                "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
+                "parent_request_id": meta.get("parent_request_id", ""),
+                "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+                "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
                 **shape,
             }
             write_jsonl(trace_path, {"event": "m27.request.submitted", **common})
