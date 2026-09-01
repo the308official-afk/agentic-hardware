@@ -234,6 +234,11 @@ def emitted_priority_signal(payload: dict[str, Any]) -> dict[str, str]:
     if extra_priority not in (None, "", [], {}):
         signals.append(f"extra_body.agentic_hints.priority_class={extra_priority}")
         sources.append("extra_body.agentic_hints")
+    top_level_agentic_hints = as_dict(payload.get("agentic_hints"))
+    top_level_priority = top_level_agentic_hints.get("priority_class") or top_level_agentic_hints.get("urgency")
+    if top_level_priority not in (None, "", [], {}):
+        signals.append(f"agentic_hints.priority_class={top_level_priority}")
+        sources.append("agentic_hints")
     return {
         "harness_emit_priority_signal": "; ".join(signals),
         "harness_emit_priority_signal_source": ", ".join(dict.fromkeys(sources)),

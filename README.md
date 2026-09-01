@@ -72,6 +72,13 @@ The current manager-facing comparisons use these modes:
 | `pre_harness_priority_hints` | Harness-preservation path. The driver marks replay urgency before the harness sees the request, then the gateway proves whether that intent or a native harness signal survived and was translated into SGLang priority. |
 | `e2e_priority_hints_speculative_prefill` | Dynamo-like proactive path. The replay still gets E2E priority, and the gateway sends a background `max_tokens=1` warmup for the known next-turn prefix during the tool wait. |
 
+For NeMo Agent Toolkit / NAT, `pre_harness_priority_hints` uses NAT's OpenAI
+provider pass-through path. The generated NAT workflow includes
+`service_tier: priority` and `extra_body.agentic_hints.priority_class: urgent`;
+LangChain emits that as `service_tier=priority` plus top-level
+`agentic_hints.priority_class=urgent`. The gateway records those emitted fields
+and translates them to SGLang `priority=100`.
+
 This speculative prefill mode is not SGLang speculative decoding. It mimics
 Dynamo's agent hint behavior: after the current turn/tool-call prefix is known,
 send a small background prefill so the later replay can reuse warmed KV. Older

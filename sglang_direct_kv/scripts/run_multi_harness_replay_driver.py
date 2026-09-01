@@ -89,6 +89,8 @@ def harness_priority_signal(harness: str, priority_class: str) -> tuple[str, str
         return "adapter_metadata.priority_class=background", "adapter_metadata"
     if harness in {"codex", "opencode", "qwen_code", "deepseek_harness", "hatcher"}:
         return "service_tier=priority; metadata.priority_class=urgent", "openai_compatible"
+    if harness == "nemo_agent_toolkit":
+        return "service_tier=priority; agentic_hints.priority_class=urgent", "nat_openai_pass_through"
     if harness == "claude_code":
         return "service_tier=auto; metadata.priority_class=urgent", "anthropic_service_tier"
     return "adapter_metadata.priority_class=urgent", "adapter_metadata"
@@ -140,6 +142,27 @@ def outbound_priority_fields(meta: dict[str, Any], api_kind: str) -> dict[str, A
         "service_tier": "priority",
         "metadata": metadata,
         "extra_body": {"agentic_hints": {"priority_class": "urgent", "reason": metadata["priority_reason"]}},
+    }
+
+
+def nat_openai_priority_config_fields(meta: dict[str, Any]) -> dict[str, Any]:
+    if not pre_harness_priority_enabled(str(meta.get("mode") or "")):
+        return {}
+    intent = meta.get("priority_intent")
+    if not isinstance(intent, dict):
+        return {}
+    priority_class = str(intent.get("class") or "")
+    if priority_class != "urgent":
+        return {}
+    return {
+        "service_tier": "priority",
+        "extra_body": {
+            "agentic_hints": {
+                "priority_class": "urgent",
+                "reason": str(intent.get("reason") or "tool_replay_deadline"),
+                "deadline_ms": str(intent.get("deadline_ms") or ""),
+            }
+        },
     }
 
 
@@ -466,6 +489,7 @@ def nemo_agent_toolkit_command(
                 "max_tokens": int(meta.get("max_tokens") or 8),
                 "request_timeout": 900,
                 "max_retries": 0,
+                **nat_openai_priority_config_fields(meta),
             }
         },
         "workflow": {
