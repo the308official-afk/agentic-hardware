@@ -13,6 +13,7 @@ HARNESSES="${HARNESSES:-hatcher codex claude_code opencode qwen_code nemo_agent_
 MODES="${MODES:-no_prefetch e2e_priority_hints}"
 PRESSURE_LEVELS="${PRESSURE_LEVELS:-p0_control p3_high p5_boss_queue}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-96}"
+REPORT_BUILDER_MODE="${REPORT_BUILDER_MODE:-auto}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SERVER_READY_TIMEOUT_SECS="${SERVER_READY_TIMEOUT_SECS:-900}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-12288}"
@@ -238,6 +239,32 @@ run_case() {
 build_final_report() {
   write_run_config
   collect_run_environment
+  local harness_count pressure_count mode_count case_count report_builder
+  harness_count="$(wc -w <<<"${HARNESSES}")"
+  pressure_count="$(wc -w <<<"${PRESSURE_LEVELS}")"
+  mode_count="$(wc -w <<<"${MODES}")"
+  case_count="$((harness_count * pressure_count * mode_count))"
+  report_builder="${REPORT_BUILDER_MODE}"
+  if [[ "${report_builder}" == "auto" ]]; then
+    if (( case_count > 36 )); then
+      report_builder="lightweight"
+    else
+      report_builder="rich"
+    fi
+  fi
+  if [[ "${report_builder}" == "lightweight" ]]; then
+    local latest_args=()
+    if [[ "${UPDATE_LATEST}" == "1" ]]; then
+      latest_args=(--update-latest)
+    fi
+    "${PYTHON_BIN}" scripts/build_multi_harness_deadline_summary.py \
+      --root "${RUN_ROOT}" \
+      --out-dir "${REPORT_DIR}" \
+      --latest-root "${RESULTS_ROOT}" \
+      --report-label "${REPORT_LABEL}" \
+      "${latest_args[@]}"
+    return
+  fi
   "${PYTHON_BIN}" scripts/build_milestone27_controlled_replay_report.py \
     --root "${RUN_ROOT}" \
     --out-dir "${REPORT_DIR}/report" \

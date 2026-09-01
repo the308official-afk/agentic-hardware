@@ -93,8 +93,8 @@ runs use P0 through P5.
 
 ## Most Recent Experiment: Multi-Harness Deadline Pressure
 
-The newest experiment compares the same SGLang priority boundary across three
-agent harness shapes:
+The newest experiment compares the same SGLang priority boundary across ten
+non-Dynamo agent harness shapes:
 
 | Harness | Meaning |
 | --- | --- |
@@ -146,6 +146,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/smoke_multi_harness_wireability.py](sglang_direct_kv/scripts/smoke_multi_harness_wireability.py) | Fast local smoke test for CLI harness wireability through the gateway. |
 | [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
+| [sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py](sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py) | Lightweight all-harness report builder used when the rich timeline report would be too large. |
 
 Smoke-test only the newest harness adapters without starting the real GPU
 server:
@@ -158,19 +159,33 @@ python scripts/smoke_multi_harness_wireability.py \
   --harnesses pi_agent_harness openclaw hermes_agent
 ```
 
+For large all-harness runs, [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh)
+automatically uses the lightweight summary report when the case count is large.
+Set `REPORT_BUILDER_MODE=rich` to force the full timeline report for smaller
+runs, or `REPORT_BUILDER_MODE=lightweight` to force the compact all-harness
+report.
+
 Current archived run:
 
 ```text
-sglang_direct_kv/artifacts/results/reports/multi_harness_deadline_pressure_20260831_214134/master_report.html
+sglang_direct_kv/artifacts/results/reports/multi_harness_no_dynamo_20260831_232717/master_report.html
 ```
 
-Headline result from that run:
+Headline result from that run. Values are median first-replay-token lateness,
+so lower is better and anything above `0 ms` missed the replay deadline:
 
 | Harness | P0 no-prefetch | P0 E2E | P3 no-prefetch | P3 E2E | P5 no-prefetch | P5 E2E |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Hatcher / Deep Agents-style control | `215 ms` | `237 ms` | `16.1 s` | `10.8 s` | `50.5 s` | `26.5 s` |
-| Codex | `1.18 s` | `1.15 s` | `41.8 s` | `10.1 s` | `41.7 s` | `6.6 s` |
-| Claude Code | `1.29 s` | `1.32 s` | `72.0 s` | `12.2 s` | `50.2 s` | `27.0 s` |
+| Hatcher | `221 ms` | `223 ms` | `33.0 s` | `9.2 s` | `50.4 s` | `26.5 s` |
+| Codex | `1.4 s` | `1.3 s` | `39.9 s` | `10.5 s` | `15.7 s` | `7.7 s` |
+| Claude Code | `1.3 s` | `1.3 s` | `68.9 s` | `11.9 s` | `52.2 s` | `27.9 s` |
+| OpenCode | `3.6 s` | `3.4 s` | `80.6 s` | `15.7 s` | `81.3 s` | `41.3 s` |
+| Qwen Code | `5.9 s` | `5.9 s` | `66.6 s` | `10.9 s` | `44.5 s` | `8.3 s` |
+| NeMo Agent Toolkit / NAT | `8.7 s` | `9.0 s` | `74.2 s` | `12.9 s` | `53.8 s` | `30.6 s` |
+| DeepSeek Harness | `8.8 s` | `9.3 s` | `74.0 s` | `12.9 s` | `53.2 s` | `28.2 s` |
+| Pi Agent Harness | `9.0 s` | `8.9 s` | `74.6 s` | `12.8 s` | `52.9 s` | `29.4 s` |
+| OpenClaw | `8.9 s` | `8.8 s` | `74.6 s` | `12.8 s` | `51.8 s` | `27.4 s` |
+| Hermes Agent | `9.0 s` | `8.8 s` | `69.1 s` | `13.3 s` | `52.1 s` | `27.2 s` |
 
 Interpretation: end-to-end priority hints help, especially under P3/P5
 pressure, but they do not guarantee deadline readiness. Priority metadata can
