@@ -14,6 +14,7 @@ MODES="${MODES:-no_prefetch e2e_priority_hints}"
 PRESSURE_LEVELS="${PRESSURE_LEVELS:-p0_control p3_high p5_boss_queue}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-96}"
 REPORT_BUILDER_MODE="${REPORT_BUILDER_MODE:-auto}"
+SKIP_EXISTING_CASES="${SKIP_EXISTING_CASES:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SERVER_READY_TIMEOUT_SECS="${SERVER_READY_TIMEOUT_SECS:-900}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-12288}"
@@ -147,6 +148,7 @@ write_run_config() {
     echo "HARNESSES=${HARNESSES}"
     echo "MODES=${MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
+    echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "P0_CONTROL=tool_wait_ms=500,target_prompt_tokens=1024,fillers=0,urgent_agents=1"
     echo "P3_QUEUE_PRESSURE=tool_wait_ms=50,target_prompt_tokens=4096,fillers=32,urgent_agents=1"
     echo "P5_BOSS_QUEUE=tool_wait_ms=50,target_prompt_tokens=4096,fillers_per_session=4,urgent_agents=4"
@@ -182,6 +184,11 @@ run_case() {
   local gateway_events="${case_root}/harness_gateway_events.jsonl"
 
   mkdir -p "${case_root}"
+  if [[ "${SKIP_EXISTING_CASES}" == "1" && -s "${metrics}" && -s "${trace}" ]] && grep -q '"event": "m27.workload_end"' "${trace}"; then
+    echo
+    echo "==== Skipping existing completed case: ${case_id} ===="
+    return
+  fi
   rm -f "${trace}" "${telemetry}" "${runtime_telemetry}" "${metrics}" "${server_log}" "${gateway_log}" "${gateway_events}"
 
   echo

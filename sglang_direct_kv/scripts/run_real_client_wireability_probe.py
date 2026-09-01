@@ -228,7 +228,15 @@ def run_client(
     error = ""
     return_code: int | None = None
     with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=handle, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     deadline = time.monotonic() + timeout_secs
     try:
         while time.monotonic() < deadline:

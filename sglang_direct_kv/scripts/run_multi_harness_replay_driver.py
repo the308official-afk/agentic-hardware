@@ -441,6 +441,7 @@ async def run_cli_request(
                 cmd,
                 env=env,
                 cwd=str(log_dir / "qwen_workspace" / str(meta["label"])) if harness == "qwen_code" else "/tmp",
+                stdin=subprocess.DEVNULL,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 text=True,

@@ -297,6 +297,29 @@ def fake_chat_response(text: str, model: str) -> bytes:
     ).encode("utf-8")
 
 
+def chat_sse(text: str, model: str) -> bytes:
+    chunk_id = f"chatcmpl_harness_gateway_{int(time.time() * 1_000_000)}"
+    chunk = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}],
+    }
+    done = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    }
+    return (
+        f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+        f"data: {json.dumps(done, separators=(',', ':'))}\n\n"
+        "data: [DONE]\n\n"
+    ).encode("utf-8")
+
+
 def anthropic_response(text: str, model: str) -> bytes:
     return json.dumps(
         {
@@ -429,6 +452,8 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                     return self._send_bytes(200, anthropic_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
                 if api_kind == "responses":
                     return self._send_bytes(200, responses_sse("probe-ok", str(payload_dict.get("model") or model)), "text/event-stream")
+                if payload_stream_requested(payload):
+                    return self._send_bytes(200, chat_sse("probe-ok", str(payload_dict.get("model") or model)), "text/event-stream")
                 return self._send_bytes(200, fake_chat_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
 
             session_id = str(meta.get("session_id") or "")
@@ -453,6 +478,8 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                     return self._send_bytes(200, anthropic_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
                 if api_kind == "responses":
                     return self._send_bytes(200, responses_sse("probe-ok", str(payload_dict.get("model") or model)), "text/event-stream")
+                if payload_stream_requested(payload):
+                    return self._send_bytes(200, chat_sse("probe-ok", str(payload_dict.get("model") or model)), "text/event-stream")
                 return self._send_bytes(200, fake_chat_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
             seen_labels.add(label)
             setattr(self.server, "seen_request_labels", seen_labels)
@@ -498,6 +525,8 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 return self._send_bytes(200, anthropic_response(text, str(payload_dict.get("model") or model)), "application/json")
             if api_kind == "responses":
                 return self._send_bytes(200, responses_sse(text, str(payload_dict.get("model") or model)), "text/event-stream")
+            if payload_stream_requested(payload):
+                return self._send_bytes(200, chat_sse(text, str(payload_dict.get("model") or model)), "text/event-stream")
             return self._send_bytes(200, fake_chat_response(text, str(payload_dict.get("model") or model)), "application/json")
 
     return Handler

@@ -199,7 +199,15 @@ def run_single_replay_probe(
     env = {**os.environ, **extra_env}
     log_path = log_dir / f"{label}.log"
     with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=handle, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     deadline = time.monotonic() + timeout_secs
     try:
         while time.monotonic() < deadline:

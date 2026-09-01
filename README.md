@@ -91,10 +91,72 @@ Cartesian sweep.
 Quick sentinel experiments often run only P0, P3, and P5 first. Full ladder
 runs use P0 through P5.
 
-## Most Recent Experiment: Multi-Harness Deadline Pressure
+## Most Recent Experiment: Real-Client Deadline Pressure
 
-The newest experiment compares the same SGLang priority boundary across ten
-non-Dynamo agent harness shapes:
+The newest experiment sends real coding-agent CLIs through the inspection
+gateway, then forwards their requests to SGLang with normalized priority
+metadata. This is stronger than the earlier adapter-only run because Codex,
+Claude Code, OpenCode, and Qwen Code each generate their own live request shape.
+
+Current archived run:
+
+```text
+sglang_direct_kv/artifacts/results/reports/real_client_deadline_pressure_20260901_035223/master_report.html
+```
+
+Main run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESSES="codex claude_code opencode qwen_code" \
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+MAX_TOTAL_TOKENS=24576 \
+REPORT_LABEL="real_client_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+If a long EC2 run is interrupted after some cases finish, resume the same
+report label without rerunning completed cases:
+
+```bash
+SKIP_EXISTING_CASES=1 \
+HARNESSES="codex claude_code opencode qwen_code" \
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+MAX_TOTAL_TOKENS=24576 \
+REPORT_LABEL="<existing_report_label>" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Headline result from the current run. Values are median first-replay-token
+lateness, so lower is better and anything above `0 ms` missed the replay
+deadline:
+
+| Harness | P0 no-prefetch | P0 E2E | P3 no-prefetch | P3 E2E | P5 no-prefetch | P5 E2E |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Codex | `1.18 s` | `1.35 s` | `47.31 s` | `5.79 s` | `51.91 s` | `22.81 s` |
+| Claude Code | `1.40 s` | `1.46 s` | `63.26 s` | `10.01 s` | `49.56 s` | `18.66 s` |
+| OpenCode | `3.76 s` | `3.94 s` | `73.99 s` | `14.23 s` | `66.79 s` | `28.97 s` |
+| Qwen Code | `5.78 s` | `5.86 s` | `73.24 s` | `20.77 s` | `92.95 s` | `69.11 s` |
+
+Interpretation: end-to-end priority hints helped every stressed real-client
+harness, especially at P3. But the priority path still missed the tight replay
+deadline under P3 and P5 because priority can move a replay earlier in the
+queue; it cannot create extra GPU compute, KV capacity, or host-to-device
+bandwidth. The P0 rows are also above zero because real CLIs add their own
+startup/protocol overhead around the backend call.
+
+## Multi-Harness Adapter Deadline Pressure
+
+The previous broad experiment compares the same SGLang priority boundary across
+ten non-Dynamo agent harness shapes:
 
 | Harness | Meaning |
 | --- | --- |
@@ -122,7 +184,7 @@ And uses the sentinel pressure levels:
 p0_control p3_high p5_boss_queue
 ```
 
-Main run command:
+Main adapter run command:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -208,7 +270,7 @@ Set `REPORT_BUILDER_MODE=rich` to force the full timeline report for smaller
 runs, or `REPORT_BUILDER_MODE=lightweight` to force the compact all-harness
 report.
 
-Current archived run:
+Previous archived adapter run:
 
 ```text
 sglang_direct_kv/artifacts/results/reports/multi_harness_no_dynamo_20260831_232717/master_report.html
