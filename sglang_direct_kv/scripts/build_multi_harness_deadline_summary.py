@@ -38,6 +38,19 @@ MODE_COLORS = {
     "e2e_priority_hints": "#0f766e",
 }
 
+HARNESS_SYMBOLS = {
+    "hatcher": "circle",
+    "codex": "square",
+    "claude_code": "triangle",
+    "opencode": "diamond",
+    "qwen_code": "cross",
+    "nemo_agent_toolkit": "plus",
+    "deepseek_harness": "star",
+    "pi_agent_harness": "hexagon",
+    "openclaw": "triangle-down",
+    "hermes_agent": "ring",
+}
+
 PRESSURE_LABELS = {
     "p0_control": "P0 Control",
     "p1_mild": "P1 Mild",
@@ -227,16 +240,54 @@ def symlog(value: float, linear_threshold: float = 50.0) -> float:
     return sign * (1.0 + math.log10(value / linear_threshold))
 
 
+def svg_symbol(kind: str, x: float, y: float, color: str, title: str) -> str:
+    escaped_title = html.escape(title)
+    common = f'fill="{color}" stroke="{color}" stroke-width="2" opacity="0.88"'
+    if kind == "square":
+        shape = f'<rect x="{x-5.5:.1f}" y="{y-5.5:.1f}" width="11" height="11" rx="2" {common}/>'
+    elif kind == "triangle":
+        points = f"{x:.1f},{y-7:.1f} {x-6.5:.1f},{y+5.5:.1f} {x+6.5:.1f},{y+5.5:.1f}"
+        shape = f'<polygon points="{points}" {common}/>'
+    elif kind == "triangle-down":
+        points = f"{x:.1f},{y+7:.1f} {x-6.5:.1f},{y-5.5:.1f} {x+6.5:.1f},{y-5.5:.1f}"
+        shape = f'<polygon points="{points}" {common}/>'
+    elif kind == "diamond":
+        points = f"{x:.1f},{y-7:.1f} {x+7:.1f},{y:.1f} {x:.1f},{y+7:.1f} {x-7:.1f},{y:.1f}"
+        shape = f'<polygon points="{points}" {common}/>'
+    elif kind == "cross":
+        shape = (
+            f'<line x1="{x-6:.1f}" x2="{x+6:.1f}" y1="{y-6:.1f}" y2="{y+6:.1f}" {common}/>'
+            f'<line x1="{x-6:.1f}" x2="{x+6:.1f}" y1="{y+6:.1f}" y2="{y-6:.1f}" {common}/>'
+        )
+    elif kind == "plus":
+        shape = (
+            f'<line x1="{x-7:.1f}" x2="{x+7:.1f}" y1="{y:.1f}" y2="{y:.1f}" {common}/>'
+            f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{y-7:.1f}" y2="{y+7:.1f}" {common}/>'
+        )
+    elif kind == "star":
+        points = []
+        for i in range(10):
+            radius = 7 if i % 2 == 0 else 3.2
+            angle = -math.pi / 2 + i * math.pi / 5
+            points.append(f"{x + math.cos(angle) * radius:.1f},{y + math.sin(angle) * radius:.1f}")
+        shape = f'<polygon points="{" ".join(points)}" {common}/>'
+    elif kind == "hexagon":
+        points = []
+        for i in range(6):
+            angle = math.pi / 6 + i * math.pi / 3
+            points.append(f"{x + math.cos(angle) * 7:.1f},{y + math.sin(angle) * 7:.1f}")
+        shape = f'<polygon points="{" ".join(points)}" {common}/>'
+    elif kind == "ring":
+        shape = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.2" fill="#ffffff" stroke="{color}" stroke-width="2.4" opacity="0.95"/>'
+    else:
+        shape = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.8" {common}/>'
+    return f'<g><title>{escaped_title}</title>{shape}</g>'
+
+
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
-    groups: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for harness in HARNESS_LABELS:
-        for pressure in PRESSURE_ORDER:
-            key = (harness, pressure)
-            if any(row["harness"] == harness and row["pressure_level"] == pressure for row in rows):
-                seen.add(key)
-                groups.append(key)
-    if not groups:
+    pressures = [pressure for pressure in PRESSURE_ORDER if any(row["pressure_level"] == pressure for row in rows)]
+    harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
+    if not pressures or not harnesses:
         return "<p>No replay rows found.</p>"
 
     values = [float(row["first_token_lateness_ms"]) for row in rows if row.get("first_token_lateness_ms") != ""]
@@ -247,24 +298,28 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     y_min -= pad
     y_max += pad
 
-    width = max(1200, 150 * len(groups) + 220)
-    height = 720
+    pressure_w = max(420, len(harnesses) * 44 + 110)
+    width = max(1400, pressure_w * len(pressures) + 220)
+    height = 820
     left = 120
     right = 40
     top = 60
-    bottom = 160
+    bottom = 260
     plot_w = width - left - right
     plot_h = height - top - bottom
-    group_w = plot_w / len(groups)
+    pressure_group_w = plot_w / len(pressures)
 
     def y_pos(value: float) -> float:
         mapped = symlog(value)
         return top + (y_max - mapped) / (y_max - y_min) * plot_h
 
-    def x_pos(index: int, mode: str, sample_index: int, sample_count: int) -> float:
-        mode_offset = -16 if mode == "no_prefetch" else 16
-        jitter = 0.0 if sample_count <= 1 else (sample_index - (sample_count - 1) / 2) * 5.0
-        return left + index * group_w + group_w / 2 + mode_offset + jitter
+    def x_pos(pressure_index: int, harness_index: int, mode: str, sample_index: int, sample_count: int) -> float:
+        pressure_left = left + pressure_index * pressure_group_w
+        harness_step = pressure_group_w / max(1, len(harnesses))
+        base = pressure_left + harness_step * (harness_index + 0.5)
+        mode_offset = -9 if mode == "no_prefetch" else 9
+        jitter = 0.0 if sample_count <= 1 else (sample_index - (sample_count - 1) / 2) * 3.2
+        return base + mode_offset + jitter
 
     lines = [
         f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Replay Deadline Pressure Chart">',
@@ -281,40 +336,62 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
     rows_by_group_mode: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        rows_by_group_mode[(str(row["harness"]), str(row["pressure_level"]), str(row["mode"]))].append(row)
+        rows_by_group_mode[(str(row["pressure_level"]), str(row["harness"]), str(row["mode"]))].append(row)
 
-    for index, (harness, pressure) in enumerate(groups):
-        x = left + index * group_w
+    for pressure_index, pressure in enumerate(pressures):
+        x = left + pressure_index * pressure_group_w
         lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{top}" y2="{height-bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
-        label = f"{HARNESS_LABELS.get(harness, harness)} / {PRESSURE_LABELS.get(pressure, pressure)}"
-        escaped = html.escape(label)
-        cx = x + group_w / 2
-        lines.append(f'<text x="{cx:.1f}" y="{height-bottom+36}" text-anchor="middle" font-size="11" fill="#111827">{escaped}</text>')
-        for mode in MODE_LABELS:
-            sample_rows = rows_by_group_mode.get((harness, pressure, mode), [])
-            sample_rows = [row for row in sample_rows if row.get("first_token_lateness_ms") != ""]
-            if not sample_rows:
-                continue
-            med = statistics.median(float(row["first_token_lateness_ms"]) for row in sample_rows)
-            mx = x_pos(index, mode, 0, 1)
-            y = y_pos(med)
-            lines.append(f'<line x1="{mx-18:.1f}" x2="{mx+18:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{MODE_COLORS[mode]}" stroke-width="4" stroke-linecap="round"/>')
-            for sample_index, row in enumerate(sample_rows):
-                value = float(row["first_token_lateness_ms"])
-                dot_x = x_pos(index, mode, sample_index, len(sample_rows))
-                dot_y = y_pos(value)
-                title = html.escape(f"{label} | {MODE_LABELS[mode]} | {value:.1f} ms late")
-                lines.append(f'<circle cx="{dot_x:.1f}" cy="{dot_y:.1f}" r="5.5" fill="{MODE_COLORS[mode]}" opacity="0.88"><title>{title}</title></circle>')
+        if pressure_index % 2 == 1:
+            lines.append(f'<rect x="{x:.1f}" y="{top}" width="{pressure_group_w:.1f}" height="{plot_h}" fill="#f8fafc" opacity="0.62"/>')
+        cx = x + pressure_group_w / 2
+        lines.append(f'<text x="{cx:.1f}" y="{height-bottom+36}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
+        lines.append(f'<text x="{cx:.1f}" y="{height-bottom+56}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; blue = baseline, green = E2E</text>')
+        for harness_index, harness in enumerate(harnesses):
+            harness_x = x_pos(pressure_index, harness_index, "no_prefetch", 0, 1) + 9
+            lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{top}" y2="{height-bottom}" stroke="#f1f5f9" stroke-width="1"/>')
+            for mode in MODE_LABELS:
+                sample_rows = rows_by_group_mode.get((pressure, harness, mode), [])
+                sample_rows = [row for row in sample_rows if row.get("first_token_lateness_ms") != ""]
+                if not sample_rows:
+                    continue
+                med = statistics.median(float(row["first_token_lateness_ms"]) for row in sample_rows)
+                mx = x_pos(pressure_index, harness_index, mode, 0, 1)
+                y = y_pos(med)
+                lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{MODE_COLORS[mode]}" stroke-width="3" stroke-linecap="round"/>')
+                for sample_index, row in enumerate(sample_rows):
+                    value = float(row["first_token_lateness_ms"])
+                    dot_x = x_pos(pressure_index, harness_index, mode, sample_index, len(sample_rows))
+                    dot_y = y_pos(value)
+                    title = (
+                        f"{PRESSURE_LABELS.get(pressure, pressure)} | "
+                        f"{HARNESS_LABELS.get(harness, harness)} | "
+                        f"{MODE_LABELS[mode]} | {value:.1f} ms late"
+                    )
+                    lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), dot_x, dot_y, MODE_COLORS[mode], title))
 
-    lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-40}" text-anchor="middle" font-size="14" font-weight="700">harness / pressure level</text>')
+    lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{top}" y2="{height-bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
+    lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-40}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append(f'<text transform="translate(32 {top + plot_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">lateness vs replay deadline ms (symlog)</text>')
-    legend_y = height - 92
-    lines.append(f'<rect x="{left}" y="{legend_y-28}" width="520" height="54" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>')
+    legend_y = height - 172
+    lines.append(f'<rect x="{left}" y="{legend_y-28}" width="{min(plot_w, 1180):.1f}" height="116" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>')
     legend_x = left + 28
+    lines.append(f'<text x="{legend_x}" y="{legend_y-2}" font-size="13" font-weight="800" fill="#111827">Mode color</text>')
+    legend_x += 96
     for mode in MODE_LABELS:
         lines.append(f'<circle cx="{legend_x}" cy="{legend_y}" r="6" fill="{MODE_COLORS[mode]}"/>')
         lines.append(f'<text x="{legend_x+14}" y="{legend_y+4}" font-size="13" fill="#111827">{html.escape(MODE_LABELS[mode])}</text>')
         legend_x += 240
+    harness_y = legend_y + 48
+    harness_x = left + 28
+    lines.append(f'<text x="{harness_x}" y="{harness_y+4}" font-size="13" font-weight="800" fill="#111827">Harness symbol</text>')
+    harness_x += 126
+    for index, harness in enumerate(harnesses):
+        if index == 5:
+            harness_x = left + 154
+            harness_y += 34
+        lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), harness_x, harness_y, "#334155", HARNESS_LABELS.get(harness, harness)))
+        lines.append(f'<text x="{harness_x+14}" y="{harness_y+4}" font-size="12" fill="#111827">{html.escape(HARNESS_LABELS.get(harness, harness))}</text>')
+        harness_x += 190
     lines.append("</svg>")
     return "\n".join(lines)
 
@@ -380,7 +457,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <main>
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
-<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is one replay request. Higher means later. Values above <code>0 ms</code> missed the replay deadline.</p>
+<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; mode is encoded by color. Higher means later. Values above <code>0 ms</code> missed the replay deadline.</p>
 <div class="card">{chart}</div>
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>

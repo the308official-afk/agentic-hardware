@@ -136,6 +136,10 @@ bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+The lightweight report shows the Replay Deadline Pressure Chart as a
+pressure-first overlay: P0/P3/P5 are the main x-axis sections, color separates
+`no_prefetch` from `e2e_priority_hints`, and symbol shape separates harnesses.
+
 Primary scripts:
 
 | Script | Purpose |
