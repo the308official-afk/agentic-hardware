@@ -125,6 +125,8 @@ HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
 HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+MAX_TOTAL_TOKENS=24576 \
 REPORT_LABEL="native_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_native_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
