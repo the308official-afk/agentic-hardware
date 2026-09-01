@@ -240,6 +240,23 @@ def symlog(value: float, linear_threshold: float = 50.0) -> float:
     return sign * (1.0 + math.log10(value / linear_threshold))
 
 
+def compact_ms(value: float) -> str:
+    abs_value = abs(value)
+    sign = "-" if value < 0 else ""
+    if abs_value >= 1000:
+        return f"{sign}{abs_value / 1000:.1f}s"
+    return f"{sign}{abs_value:.0f}ms"
+
+
+def svg_text_label(text: str, x: float, y: float, color: str, anchor: str = "middle") -> str:
+    escaped = html.escape(text)
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" font-size="9" '
+        f'font-weight="700" fill="{color}" stroke="#ffffff" stroke-width="3" '
+        f'paint-order="stroke" stroke-linejoin="round">{escaped}</text>'
+    )
+
+
 def svg_symbol(kind: str, x: float, y: float, color: str, title: str) -> str:
     escaped_title = html.escape(title)
     common = f'fill="{color}" stroke="{color}" stroke-width="2" opacity="0.88"'
@@ -358,6 +375,9 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                 mx = x_pos(pressure_index, harness_index, mode, 0, 1)
                 y = y_pos(med)
                 lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{MODE_COLORS[mode]}" stroke-width="3" stroke-linecap="round"/>')
+                label_y = y - 10 if mode == "no_prefetch" else y + 16
+                label_y = min(max(label_y, top + 12), height - bottom - 8)
+                lines.append(svg_text_label(compact_ms(med), mx, label_y, MODE_COLORS[mode]))
                 for sample_index, row in enumerate(sample_rows):
                     value = float(row["first_token_lateness_ms"])
                     dot_x = x_pos(pressure_index, harness_index, mode, sample_index, len(sample_rows))
