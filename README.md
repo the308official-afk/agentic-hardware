@@ -118,6 +118,47 @@ Recommended migration sequence for a new GH200 machine:
    its own replay-deadline cliff.
 3. Keep `REPORT_BUILDER_MODE=lightweight` for full multi-harness runs.
 
+### GH200 Architecture Note
+
+The current EC2 machine and a Grace Hopper 200 machine are not the same CPU
+architecture.
+
+| Machine | Expected CPU Architecture | What This Means |
+| --- | --- | --- |
+| Current EC2 GPU machine | `x86_64` | Uses normal x86 Linux packages and venv wheels. |
+| GH200 | `aarch64` / `arm64` | Uses ARM64 packages and ARM64 Python/Node wheels. |
+
+In simple terms: the repo code can move to GH200, but the installed
+dependencies should not be copied from EC2. Rebuild the Python venvs, SGLang
+environment, Node.js CLIs, NAT venv, and Hermes venv directly on GH200.
+
+Before running experiments on GH200, check the machine:
+
+```bash
+uname -m
+nvidia-smi
+python3 --version
+node -p "process.arch"
+```
+
+Expected GH200 architecture output:
+
+```text
+uname -m -> aarch64
+node process.arch -> arm64
+```
+
+After installing dependencies on GH200, run a smoke test before the long
+experiment:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/smoke_multi_harness_wireability.py \
+  --harnesses codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent
+```
+
 ## Most Recent Experiment: Real-Client Deadline Pressure
 
 The newest experiment sends real coding-agent CLIs through the inspection
