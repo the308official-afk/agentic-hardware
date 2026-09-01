@@ -104,7 +104,20 @@ Current archived run:
 sglang_direct_kv/artifacts/results/reports/real_client_deadline_pressure_20260901_035223/master_report.html
 ```
 
-Main run command:
+Native-only run command:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints" \
+REPORT_LABEL="native_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_native_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Mixed native-plus-adapter run command:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -153,23 +166,25 @@ queue; it cannot create extra GPU compute, KV capacity, or host-to-device
 bandwidth. The P0 rows are also above zero because real CLIs add their own
 startup/protocol overhead around the backend call.
 
-## Multi-Harness Adapter Deadline Pressure
+## Multi-Harness Deadline Pressure
 
-The previous broad experiment compares the same SGLang priority boundary across
-ten non-Dynamo agent harness shapes:
+The broad experiment compares the same SGLang priority boundary across ten
+non-Dynamo agent harness shapes. Some entries now launch real native CLIs; the
+remaining entries are still adapter-backed until their native client can be
+installed and smoke-tested cleanly on the experiment host.
 
-| Harness | Meaning |
+| Harness | Current experiment path |
 | --- | --- |
-| `hatcher` | Current in-repo Hatcher / Deep Agents-style control harness. |
-| `codex` | Codex-style coding-agent traffic shape. |
-| `claude_code` | Claude Code-style coding-agent traffic shape. |
-| `opencode` | OpenCode-style coding-agent traffic shape. |
-| `qwen_code` | Qwen Code-style coding-agent traffic shape. |
-| `nemo_agent_toolkit` | NeMo Agent Toolkit / NAT-style workflow adapter. |
-| `deepseek_harness` | DeepSeek Harness-style provider adapter. |
-| `pi_agent_harness` | Pi Agent Harness-style provider adapter. |
-| `openclaw` | OpenClaw-style provider adapter. |
-| `hermes_agent` | Hermes Agent-style provider adapter. |
+| `hatcher` | In-repo Hatcher / Deep Agents-style control harness. |
+| `codex` | Real Codex CLI through the inspection gateway. |
+| `claude_code` | Real Claude Code CLI through the inspection gateway. |
+| `opencode` | Real OpenCode CLI through the inspection gateway. |
+| `qwen_code` | Real Qwen Code CLI through the inspection gateway. |
+| `pi_agent_harness` | Real Pi CLI with a generated OpenAI-compatible gateway provider extension. |
+| `openclaw` | Real OpenClaw CLI with a generated OpenAI-compatible gateway provider config. |
+| `nemo_agent_toolkit` | Adapter-backed; native NAT package is blocked on the current EC2 Python/package constraints. |
+| `deepseek_harness` | Adapter-backed; native `dsh` CLI currently hangs during headless `--help` / `--version` probing. |
+| `hermes_agent` | Adapter-backed on the current EC2 image; Hermes requires Python 3.11+, while the EC2 host is Python 3.9. |
 
 It runs each harness in:
 
@@ -184,7 +199,7 @@ And uses the sentinel pressure levels:
 p0_control p3_high p5_boss_queue
 ```
 
-Main adapter run command:
+Main run command:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -207,6 +222,7 @@ Primary scripts:
 | Script | Purpose |
 | --- | --- |
 | [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness pressure experiment and writes the latest report. |
+| [sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh) | Runs only the native CLI harnesses plus the Hatcher control. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
 | [sglang_direct_kv/scripts/run_real_client_wireability_probe.py](sglang_direct_kv/scripts/run_real_client_wireability_probe.py) | Launches real client CLIs against the inspection gateway and reports the live request shape observed at the boundary. |
@@ -215,15 +231,14 @@ Primary scripts:
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
 | [sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py](sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py) | Lightweight all-harness report builder used when the rich timeline report would be too large. |
 
-Smoke-test only the newest harness adapters without starting the real GPU
-server:
+Smoke-test native CLI wireability without starting the real GPU server:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 python scripts/smoke_multi_harness_wireability.py \
-  --harnesses pi_agent_harness openclaw hermes_agent
+  --harnesses pi_agent_harness openclaw
 ```
 
 Probe real client-generated traffic without running a full pressure sweep:
@@ -233,7 +248,7 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 python scripts/run_real_client_wireability_probe.py \
-  --clients codex claude_code opencode qwen_code \
+  --clients codex claude_code opencode qwen_code pi_agent_harness openclaw \
   --out-dir artifacts/results/real_client_wireability/$(date +%Y%m%d_%H%M%S)
 ```
 
@@ -247,17 +262,20 @@ Recent EC2 wireability result:
 sglang_direct_kv/artifacts/results/real_client_wireability/real_client_probe_20260901_031658/real_client_wireability_report.html
 ```
 
-That run launched the real Codex, Claude Code, OpenCode, and Qwen Code CLIs
-against the inspection gateway. All four reached the gateway, all four were
-tagged with `sglang_priority=100`, and the gateway recorded their live request
-shape without storing prompt bodies:
+Latest local six-client wireability smoke, run on 2026-09-01, launched the real
+Codex, Claude Code, OpenCode, Qwen Code, Pi, and OpenClaw CLIs against the
+inspection gateway. All six reached the gateway, all six were tagged with
+`sglang_priority=100`, and the gateway recorded their live request shape without
+storing prompt bodies:
 
 | Client | API shape | Request body | Prompt chars |
 | --- | --- | ---: | ---: |
-| Codex | `/v1/responses` | `37.6 KB` | `4.3K` |
+| Codex | `/v1/responses` | `164.9 KB` | `7.7K` |
 | Claude Code | `/v1/messages?beta=true` | `5.2 KB` | `1.6K` |
 | OpenCode | `/v1/chat/completions` | `3.6 KB` | `3.2K` |
-| Qwen Code | `/v1/chat/completions` | `97.7 KB` | `36.6K` |
+| Qwen Code | `/v1/chat/completions` | `97.4 KB` | `36.3K` |
+| Pi Agent Harness | `/v1/chat/completions` | `1.5 KB` | `1.2K` |
+| OpenClaw | `/v1/chat/completions` | `29.0 KB` | `20.8K` |
 
 This is a wireability probe, not a pressure result. Its purpose is to prove
 that real client-generated traffic can be inspected and priority-tagged at the
@@ -430,27 +448,25 @@ the detailed lab notebook, older commands, or historical context.
 
 ## Harness Backlog
 
-Recently added:
+Native client status:
 
-```text
-OpenCode
-Qwen Code
-NeMo Agent Toolkit / NAT
-DeepSeek Harness
-Pi Agent Harness
-OpenClaw
-Hermes Agent
-```
-
-The NAT, DeepSeek Harness, Pi Agent Harness, OpenClaw, and Hermes Agent entries
-are currently smoke-level wireability adapters. They prove the SGLang boundary
-can receive their harness-shaped replay traffic and priority metadata. Full
-native framework runs can be added once we want them in the pressure chart.
+| Harness | Status | Next action |
+| --- | --- | --- |
+| Codex | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
+| Claude Code | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
+| OpenCode | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
+| Qwen Code | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
+| Pi Agent Harness | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
+| OpenClaw | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
+| NeMo Agent Toolkit / NAT | Adapter-backed. | Re-probe on a Python 3.11+ EC2 image or install-compatible NAT environment. |
+| DeepSeek Harness | Adapter-backed. | Re-probe after the `dsh` CLI exposes a reliable headless command path. |
+| Hermes Agent | Adapter-backed on current EC2. | Re-probe after the EC2 image has Python 3.11+. |
 
 The next recommended path is:
 
-1. Run the same P0/P3/P5 sentinel ladder across all ten non-Dynamo harness adapters through [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh).
-2. Replace the smoke-level framework adapters with full native profile invocations if those frameworks become part of the manager-facing pressure comparison.
+1. Run the P0/P3/P5 sentinel ladder across the six native harness paths through [run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh).
+2. Rebuild the EC2 Python side with Python 3.11+ before promoting NAT and Hermes from adapters to real clients.
+3. Keep DeepSeek Harness adapter-backed until `dsh` can run a non-interactive smoke request without hanging.
 
 ## Current Research Claim
 

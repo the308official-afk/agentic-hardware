@@ -376,7 +376,74 @@ def pi_agent_harness_command(
     meta: dict[str, Any],
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
-    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "pi_agent_harness")
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    pi_dir = (log_dir / "pi_agent_config" / str(meta["label"])).resolve()
+    extension_dir = pi_dir / "extensions"
+    session_dir = pi_dir / "sessions"
+    extension_dir.mkdir(parents=True, exist_ok=True)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    extension_path = extension_dir / "harness-gateway-provider.mjs"
+    extension_path.write_text(
+        "\n".join(
+            [
+                "export default function(pi) {",
+                "  pi.registerProvider('harness', {",
+                "    name: 'Harness Gateway',",
+                f"    baseUrl: {json.dumps(provider_base)},",
+                "    apiKey: '$HARNESS_GATEWAY_API_KEY',",
+                "    api: 'openai-completions',",
+                "    models: [{",
+                f"      id: {json.dumps(model)},",
+                f"      name: {json.dumps(model)},",
+                "      reasoning: false,",
+                "      input: ['text'],",
+                "      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },",
+                "      contextWindow: 32768,",
+                "      maxTokens: 4096",
+                "    }]",
+                "  });",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cmd = [
+        *cli_or_npx("pi", "@earendil-works/pi-coding-agent@latest"),
+        "--provider",
+        "harness",
+        "--model",
+        model,
+        "--api-key",
+        "dummy",
+        "--system-prompt",
+        "You are a concise coding-agent wireability probe. Do not use tools.",
+        "--mode",
+        "json",
+        "--print",
+        "--no-tools",
+        "--no-session",
+        "--session-dir",
+        str(session_dir),
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-extensions",
+        "--extension",
+        str(extension_path),
+        "--approve",
+        "--offline",
+        f"{prompt}\n\n{marker(meta)}",
+    ]
+    return cmd, {
+        "HARNESS_GATEWAY_API_KEY": "dummy",
+        "OPENAI_API_KEY": "dummy",
+        "PI_CODING_AGENT_DIR": str(pi_dir),
+        "PI_CODING_AGENT_SESSION_DIR": str(session_dir),
+        "PI_OFFLINE": "1",
+        "PI_TELEMETRY": "0",
+    }
 
 
 def openclaw_command(
@@ -386,7 +453,63 @@ def openclaw_command(
     meta: dict[str, Any],
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
-    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "openclaw")
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    openclaw_dir = (log_dir / "openclaw_config" / str(meta["label"])).resolve()
+    state_dir = openclaw_dir / "state"
+    openclaw_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    config_path = openclaw_dir / "config.json"
+    config = {
+        "models": {
+            "mode": "merge",
+            "providers": {
+                "harness": {
+                    "baseUrl": provider_base,
+                    "apiKey": "dummy",
+                    "auth": "api-key",
+                    "api": "openai-completions",
+                    "timeoutSeconds": 900,
+                    "models": [
+                        {
+                            "id": model,
+                            "name": model,
+                            "api": "openai-completions",
+                            "baseUrl": provider_base,
+                            "reasoning": False,
+                            "input": ["text"],
+                            "contextWindow": 32768,
+                            "maxTokens": 4096,
+                        }
+                    ],
+                }
+            },
+        }
+    }
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+    cmd = [
+        *cli_or_npx("openclaw", "openclaw@latest"),
+        "agent",
+        "exec",
+        "--config",
+        str(config_path),
+        "--state-dir",
+        str(state_dir),
+        "--model",
+        f"harness/{model}",
+        "--code-mode",
+        "direct",
+        "--local-model-lean",
+        "--timeout",
+        "900",
+        "--json",
+        f"{prompt}\n\n{marker(meta)}",
+    ]
+    return cmd, {
+        "OPENAI_API_KEY": "dummy",
+        "HARNESS_GATEWAY_API_KEY": "dummy",
+        "OPENCLAW_STATE_DIR": str(state_dir),
+        "OPENCLAW_CONFIG_PATH": str(config_path),
+    }
 
 
 def hermes_agent_command(

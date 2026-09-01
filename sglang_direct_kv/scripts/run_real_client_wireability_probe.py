@@ -19,11 +19,13 @@ from run_multi_harness_replay_driver import (
     codex_command,
     marker,
     opencode_command,
+    openclaw_command,
+    pi_agent_harness_command,
     qwen_command,
 )
 
 
-CLIENTS = ("codex", "claude_code", "opencode", "qwen_code")
+CLIENTS = ("codex", "claude_code", "opencode", "qwen_code", "pi_agent_harness", "openclaw")
 
 
 class FakeSGLangHandler(BaseHTTPRequestHandler):
@@ -180,6 +182,12 @@ def command_for_client(
     if client == "qwen_code":
         cmd, env = qwen_command(gateway_base, model, prompt, meta, log_dir)
         return cmd, env, log_dir / "qwen_workspace" / str(meta["label"])
+    if client == "pi_agent_harness":
+        cmd, env = pi_agent_harness_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, Path("/tmp")
+    if client == "openclaw":
+        cmd, env = openclaw_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, Path("/tmp")
     raise ValueError(f"unsupported real client probe: {client}")
 
 
