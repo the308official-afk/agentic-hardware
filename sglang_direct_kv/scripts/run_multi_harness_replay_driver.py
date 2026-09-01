@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -121,6 +122,13 @@ def cli_or_npx(binary: str, package: str) -> list[str]:
     if installed:
         return [installed]
     return ["npx", "-y", package]
+
+
+def qwen_workspace_path(log_dir: Path, meta: dict[str, Any]) -> Path:
+    label = str(meta["label"])
+    safe_label = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in label)
+    digest = hashlib.sha1(str(log_dir.resolve()).encode("utf-8")).hexdigest()[:10]
+    return Path(os.environ.get("HARNESS_QWEN_WORKSPACE_ROOT", "/tmp/agentic_hardware_qwen")) / f"{safe_label[:58]}_{digest}"
 
 
 def codex_command(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
@@ -251,9 +259,11 @@ def qwen_command(
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
     provider_base = f"{gateway_base.rstrip('/')}/v1"
-    workspace = log_dir / "qwen_workspace" / str(meta["label"])
+    workspace = qwen_workspace_path(log_dir, meta)
     settings_dir = workspace / ".qwen"
     settings_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / f"{meta['label']}.qwen_workspace.txt").write_text(str(workspace) + "\n", encoding="utf-8")
     settings = {
         "$version": 3,
         "model": {
@@ -674,7 +684,7 @@ async def run_cli_request(
             proc = subprocess.Popen(
                 cmd,
                 env=env,
-                cwd=str(log_dir / "qwen_workspace" / str(meta["label"])) if harness == "qwen_code" else "/tmp",
+                cwd=str(qwen_workspace_path(log_dir, meta)) if harness == "qwen_code" else "/tmp",
                 stdin=subprocess.DEVNULL,
                 stdout=handle,
                 stderr=subprocess.STDOUT,

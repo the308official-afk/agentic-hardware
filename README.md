@@ -102,7 +102,7 @@ priority at the SGLang boundary.
 Current archived native run:
 
 ```text
-sglang_direct_kv/artifacts/results/reports/native_harness_deadline_pressure_20260901_061452/master_report.html
+sglang_direct_kv/artifacts/results/reports/native_harness_deadline_pressure_backend_20260901_035640/master_report.html
 ```
 
 Native client smoke status as of September 1, 2026:
@@ -111,9 +111,10 @@ Native client smoke status as of September 1, 2026:
 codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent
 ```
 
-`nemo_agent_toolkit` and `hermes_agent` are installed in isolated Python 3.11
-venvs on EC2 and should be passed into experiment runs with
-`HARNESS_NAT_BIN` and `HARNESS_HERMES_BIN`.
+`nemo_agent_toolkit` and `hermes_agent` are installed in persistent isolated
+Python 3.11 venvs on EC2 and should be passed into experiment runs with
+`HARNESS_NAT_BIN` and `HARNESS_HERMES_BIN`. NAT needs the LangChain integration
+extra, so install it as `nvidia-nat[langchain]`, not plain `nvidia-nat`.
 
 Native-only run command:
 
@@ -121,8 +122,8 @@ Native-only run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
-HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_BUILDER_MODE=lightweight \
@@ -138,8 +139,8 @@ Mixed native-plus-adapter run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
-HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
@@ -155,8 +156,8 @@ report label without rerunning completed cases:
 
 ```bash
 SKIP_EXISTING_CASES=1 \
-HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
-HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
@@ -173,24 +174,25 @@ deadline:
 
 | Harness | P0 no-prefetch | P0 E2E | P3 no-prefetch | P3 E2E | P5 no-prefetch | P5 E2E |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Hatcher | `0.22 s` | `0.22 s` | `24.46 s` | `4.73 s` | `35.59 s` | `21.35 s` |
-| Codex | `1.21 s` | `1.19 s` | `45.52 s` | `10.75 s` | `53.95 s` | `21.96 s` |
-| Claude Code | `1.38 s` | `1.36 s` | `63.41 s` | `11.73 s` | `49.62 s` | `18.18 s` |
-| OpenCode | `3.48 s` | `5.50 s` | `84.00 s` | `13.78 s` | `91.53 s` | `48.70 s` |
-| Qwen Code | `5.73 s` | `5.89 s` | `76.36 s` | `20.90 s` | `93.73 s` | `68.66 s` |
-| Pi Agent Harness | `1.29 s` | `1.35 s` | `60.83 s` | `10.55 s` | `46.35 s` | `18.83 s` |
-| OpenClaw | `6.82 s` | `6.96 s` | `74.94 s` | `18.58 s` | `84.24 s` | `54.60 s` |
-| NeMo Agent Toolkit / NAT | `3.60 s` | `3.64 s` | `67.73 s` | `10.25 s` | `51.43 s` | `19.01 s` |
-| Hermes Agent | `12.36 s` | `12.41 s` | `72.62 s` | `19.64 s` | `66.33 s` | `39.88 s` |
+| Hatcher | `0.22 s` | `0.21 s` | `37.17 s` | `4.99 s` | `46.87 s` | `21.56 s` |
+| Codex | `1.78 s` | `1.23 s` | `47.36 s` | `11.85 s` | `53.74 s` | `22.49 s` |
+| Claude Code | `1.46 s` | `1.39 s` | `60.75 s` | `11.77 s` | `50.19 s` | `18.32 s` |
+| OpenCode | `3.52 s` | `3.66 s` | `82.93 s` | `13.99 s` | `85.86 s` | `47.52 s` |
+| Qwen Code | `5.86 s` | `5.69 s` | `76.81 s` | `19.90 s` | `95.11 s` | `67.11 s` |
+| Pi Agent Harness | `1.42 s` | `1.30 s` | `57.52 s` | `11.77 s` | `52.60 s` | `18.72 s` |
+| OpenClaw | `9.50 s` | `6.93 s` | `74.91 s` | `19.76 s` | `83.86 s` | `54.65 s` |
+| NeMo Agent Toolkit / NAT | `3.62 s` | `3.62 s` | `67.66 s` | `10.57 s` | `50.88 s` | `19.73 s` |
+| Hermes Agent | `12.67 s` | `12.44 s` | `72.94 s` | `19.63 s` | `67.45 s` | `40.29 s` |
 
 Interpretation from this run: end-to-end priority hints helped every harness
-under P3 queue pressure and helped every reliable P5 boss-queue comparison, but
-the priority path still missed the tight replay deadline under P3 and P5.
-Priority can move a replay earlier in the queue; it cannot create extra GPU
-compute, KV capacity, or host-to-device bandwidth. The P0 rows are also above
-zero because real CLIs add startup/protocol overhead around the backend call.
-OpenCode P5 no-prefetch produced only one replay sample, so that one baseline
-median should be read as weaker evidence than the other P5 rows.
+under P3 queue pressure and helped every P5 boss-queue comparison, but the
+priority path still missed the tight replay deadline under P3 and P5. Priority
+can move a replay earlier in the queue; it cannot create extra GPU compute, KV
+capacity, or host-to-device bandwidth. The P0 rows are also above zero because
+real CLIs add startup/protocol overhead around the backend call. OpenCode's P3
+and P5 no-prefetch rows use a backend decode-result fallback because the client
+closed the stream before the gateway emitted `m27.request.end`; the raw proof
+marks those rows with `first_token_source=scheduler_process_decode_result`.
 
 ## Multi-Harness Deadline Pressure
 
@@ -231,8 +233,8 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
-HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
@@ -242,8 +244,12 @@ bash scripts/run_harness_deadline_pressure.sh \
 ```
 
 The lightweight report shows the Replay Deadline Pressure Chart as a
-pressure-first overlay: P0/P3/P5 are the main x-axis sections, color separates
-`no_prefetch` from `e2e_priority_hints`, and symbol shape separates harnesses.
+pressure-first overlay with two panels. Panel A measures full replay-deadline
+lateness from replay due time to first token. Panel B measures backend-only time
+from SGLang receive to first token, which separates harness/client overhead from
+SGLang queueing, KV movement, and compute. P0/P3/P5 are the main x-axis
+sections, color separates `no_prefetch` from `e2e_priority_hints`, and symbol
+shape separates harnesses.
 
 Primary scripts:
 
@@ -485,9 +491,9 @@ Native client status:
 | Qwen Code | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
 | Pi Agent Harness | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
 | OpenClaw | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
-| NeMo Agent Toolkit / NAT | Native CLI wired and smoke-tested with `/tmp/nat_py311_venv/bin/nat`. | Include in real-client pressure runs with `HARNESS_NAT_BIN` set. |
+| NeMo Agent Toolkit / NAT | Native CLI wired and smoke-tested with `$HOME/agentic_hardware/.venvs/nat_py311/bin/nat`. | Include in real-client pressure runs with `HARNESS_NAT_BIN` set. |
 | DeepSeek Harness | Adapter-backed. | Re-probe after the `dsh` CLI exposes a reliable headless command path. |
-| Hermes Agent | Native CLI wired and smoke-tested with `/tmp/hermes_agent_py311_venv/bin/hermes`. | Include in real-client pressure runs with `HARNESS_HERMES_BIN` set. |
+| Hermes Agent | Native CLI wired and smoke-tested with `$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes`. | Include in real-client pressure runs with `HARNESS_HERMES_BIN` set. |
 
 The next recommended path is:
 

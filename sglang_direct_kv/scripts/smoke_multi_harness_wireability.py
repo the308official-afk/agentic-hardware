@@ -24,6 +24,7 @@ from run_multi_harness_replay_driver import (
     opencode_command,
     pi_agent_harness_command,
     qwen_command,
+    qwen_workspace_path,
 )
 
 
@@ -146,7 +147,7 @@ def command_for_harness(
         return cmd, env, "/tmp"
     if harness == "qwen_code":
         cmd, env = qwen_command(gateway_base, model, prompt, meta, log_dir)
-        return cmd, env, str(log_dir / "qwen_workspace" / str(meta["label"]))
+        return cmd, env, str(qwen_workspace_path(log_dir, meta))
     if harness == "nemo_agent_toolkit":
         cmd, env = nemo_agent_toolkit_command(gateway_base, model, prompt, meta, log_dir)
         return cmd, env, "/tmp"

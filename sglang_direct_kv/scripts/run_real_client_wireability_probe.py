@@ -24,6 +24,7 @@ from run_multi_harness_replay_driver import (
     openclaw_command,
     pi_agent_harness_command,
     qwen_command,
+    qwen_workspace_path,
 )
 
 
@@ -192,7 +193,7 @@ def command_for_client(
         return cmd, env, Path("/tmp")
     if client == "qwen_code":
         cmd, env = qwen_command(gateway_base, model, prompt, meta, log_dir)
-        return cmd, env, log_dir / "qwen_workspace" / str(meta["label"])
+        return cmd, env, qwen_workspace_path(log_dir, meta)
     if client == "pi_agent_harness":
         cmd, env = pi_agent_harness_command(gateway_base, model, prompt, meta, log_dir)
         return cmd, env, Path("/tmp")

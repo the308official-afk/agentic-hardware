@@ -136,6 +136,26 @@ def float_value(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def optional_float(value: Any) -> float | None:
+    try:
+        if value == "":
+            return None
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def row_agent_label(row: dict[str, Any]) -> str:
+    for key in ("agent_label", "agent_request_id", "request_id", "label"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
 def collect_rows(root: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -144,6 +164,8 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
         due_by_session: dict[str, dict[str, Any]] = {}
         replay_starts: list[dict[str, Any]] = []
         replay_ends: list[dict[str, Any]] = []
+        sglang_receive_by_label: dict[str, dict[str, Any]] = {}
+        first_decode_by_label: dict[str, dict[str, Any]] = {}
         for row in trace_rows:
             event = row.get("event")
             phase = row.get("phase")
@@ -153,38 +175,125 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                 replay_starts.append(row)
             elif event == "m27.request.end" and phase == "replay":
                 replay_ends.append(row)
-        start_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in replay_starts}
-        for end in replay_ends:
-            label = str(end.get("label") or end.get("request_id") or "")
-            session_id = str(end.get("session_id") or "")
-            start = start_by_label.get(label, {})
-            due = due_by_session.get(session_id, {})
+            elif (
+                event == "kv_telemetry.request_stage"
+                and row.get("category") == "sglang_receive"
+                and row_agent_label(row)
+            ):
+                label = row_agent_label(row)
+                current = sglang_receive_by_label.get(label)
+                if current is None or int(float_value(row.get("ts_ns"))) < int(float_value(current.get("ts_ns"))):
+                    sglang_receive_by_label[label] = row
+            elif (
+                event == "kv_telemetry.request_stage"
+                and row.get("category") == "scheduler_process_decode_result"
+                and phase == "end"
+                and row_agent_label(row)
+            ):
+                label = row_agent_label(row)
+                current = first_decode_by_label.get(label)
+                if current is None or int(float_value(row.get("ts_ns"))) < int(float_value(current.get("ts_ns"))):
+                    first_decode_by_label[label] = row
+
+        def append_replay_row(
+            *,
+            label: str,
+            session_id: str,
+            source_row: dict[str, Any],
+            start: dict[str, Any],
+            due: dict[str, Any],
+            first_token_ts_ns: int,
+            request_end_ts_ns: int | str,
+            first_token_source: str,
+            status: Any,
+            error: Any,
+        ) -> None:
             start_ts_ns = int(float_value(start.get("ts_ns")))
             due_ts_ns = int(float_value(due.get("ts_ns")))
-            ttft_ms = float_value(end.get("ttft_ms"))
-            first_token_ts_ns = start_ts_ns + int(round(ttft_ms * 1_000_000))
-            lateness_ms = ((first_token_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and start_ts_ns else float("nan")
+            ttft_ms = ((first_token_ts_ns - start_ts_ns) / 1_000_000.0) if first_token_ts_ns and start_ts_ns else float("nan")
+            lateness_ms = ((first_token_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and first_token_ts_ns else float("nan")
+            sglang_receive = sglang_receive_by_label.get(label, {})
+            sglang_receive_ts_ns = int(float_value(sglang_receive.get("ts_ns")))
+            receive_source = "sglang_receive_hook" if sglang_receive_ts_ns else "gateway_request_start_fallback"
+            backend_start_ts_ns = sglang_receive_ts_ns or start_ts_ns
+            due_to_request_start_ms = ((start_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and start_ts_ns else float("nan")
+            due_to_sglang_receive_ms = ((backend_start_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and backend_start_ts_ns else float("nan")
+            sglang_receive_to_first_token_ms = (
+                ((first_token_ts_ns - backend_start_ts_ns) / 1_000_000.0)
+                if first_token_ts_ns and backend_start_ts_ns
+                else float("nan")
+            )
+            row_harness = str(source_row.get("harness") or harness)
+            row_mode = str(source_row.get("mode") or mode)
             out.append(
                 {
                     "case_id": case_dir.name,
                     "case_dir": str(case_dir),
-                    "harness": str(end.get("harness") or harness),
-                    "harness_label": HARNESS_LABELS.get(str(end.get("harness") or harness), str(end.get("harness") or harness)),
-                    "mode": str(end.get("mode") or mode),
-                    "mode_label": MODE_LABELS.get(str(end.get("mode") or mode), str(end.get("mode") or mode)),
+                    "harness": row_harness,
+                    "harness_label": HARNESS_LABELS.get(row_harness, row_harness),
+                    "mode": row_mode,
+                    "mode_label": MODE_LABELS.get(row_mode, row_mode),
                     "pressure_level": pressure,
                     "pressure_level_label": PRESSURE_LABELS.get(pressure, pressure),
                     "session_id": session_id,
                     "request_id": label,
                     "first_token_lateness_ms": round(lateness_ms, 3) if math.isfinite(lateness_ms) else "",
-                    "ttft_ms": round(ttft_ms, 3),
+                    "due_to_request_start_ms": round(due_to_request_start_ms, 3) if math.isfinite(due_to_request_start_ms) else "",
+                    "due_to_sglang_receive_ms": round(due_to_sglang_receive_ms, 3) if math.isfinite(due_to_sglang_receive_ms) else "",
+                    "sglang_receive_to_first_token_ms": round(sglang_receive_to_first_token_ms, 3) if math.isfinite(sglang_receive_to_first_token_ms) else "",
+                    "ttft_ms": round(ttft_ms, 3) if math.isfinite(ttft_ms) else "",
                     "request_start_ts_ns": start_ts_ns,
+                    "sglang_receive_ts_ns": sglang_receive_ts_ns,
+                    "first_token_ts_ns": first_token_ts_ns,
                     "replay_due_ts_ns": due_ts_ns,
-                    "request_end_ts_ns": int(float_value(end.get("ts_ns"))),
-                    "sglang_priority": end.get("sglang_priority", ""),
-                    "status": end.get("status", ""),
-                    "error": end.get("error", ""),
+                    "request_end_ts_ns": request_end_ts_ns,
+                    "backend_receive_source": receive_source,
+                    "first_token_source": first_token_source,
+                    "sglang_priority": source_row.get("sglang_priority", ""),
+                    "status": status,
+                    "error": error,
                 }
+            )
+
+        start_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in replay_starts}
+        ended_labels: set[str] = set()
+        for end in replay_ends:
+            label = str(end.get("label") or end.get("request_id") or "")
+            ended_labels.add(label)
+            session_id = str(end.get("session_id") or "")
+            start = start_by_label.get(label, {})
+            due = due_by_session.get(session_id, {})
+            start_ts_ns = int(float_value(start.get("ts_ns")))
+            ttft_ms = float_value(end.get("ttft_ms"))
+            first_token_ts_ns = start_ts_ns + int(round(ttft_ms * 1_000_000))
+            append_replay_row(
+                label=label,
+                session_id=session_id,
+                source_row=end,
+                start=start,
+                due=due,
+                first_token_ts_ns=first_token_ts_ns,
+                request_end_ts_ns=int(float_value(end.get("ts_ns"))),
+                first_token_source="gateway_request_end_ttft",
+                status=end.get("status", ""),
+                error=end.get("error", ""),
+            )
+        for label, start in start_by_label.items():
+            if label in ended_labels or label not in first_decode_by_label:
+                continue
+            session_id = str(start.get("session_id") or label.rsplit("_replay", 1)[0])
+            due = due_by_session.get(session_id, {})
+            append_replay_row(
+                label=label,
+                session_id=session_id,
+                source_row=start,
+                start=start,
+                due=due,
+                first_token_ts_ns=int(float_value(first_decode_by_label[label].get("ts_ns"))),
+                request_end_ts_ns="",
+                first_token_source="scheduler_process_decode_result",
+                status="backend_first_token_only",
+                error="client_stream_incomplete",
             )
     return out
 
@@ -199,15 +308,22 @@ RAW_COLUMNS = [
     "session_id",
     "request_id",
     "first_token_lateness_ms",
+    "due_to_request_start_ms",
+    "due_to_sglang_receive_ms",
+    "sglang_receive_to_first_token_ms",
     "ttft_ms",
     "sglang_priority",
+    "first_token_source",
     "status",
     "error",
     "case_id",
     "case_dir",
     "replay_due_ts_ns",
     "request_start_ts_ns",
+    "sglang_receive_ts_ns",
+    "first_token_ts_ns",
     "request_end_ts_ns",
+    "backend_receive_source",
 ]
 
 SUMMARY_COLUMNS = [
@@ -219,6 +335,9 @@ SUMMARY_COLUMNS = [
     "mode_label",
     "samples",
     "median_first_token_lateness_ms",
+    "median_due_to_request_start_ms",
+    "median_due_to_sglang_receive_ms",
+    "median_sglang_receive_to_first_token_ms",
     "min_first_token_lateness_ms",
     "max_first_token_lateness_ms",
 ]
@@ -234,14 +353,17 @@ def write_csv(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> Non
 
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        value = row.get("first_token_lateness_ms")
-        if value == "":
+        if row.get("first_token_lateness_ms") == "":
             continue
-        grouped[(str(row["harness"]), str(row["pressure_level"]), str(row["mode"]))].append(float(value))
+        grouped[(str(row["harness"]), str(row["pressure_level"]), str(row["mode"]))].append(row)
     out: list[dict[str, Any]] = []
-    for (harness, pressure, mode), values in sorted(grouped.items(), key=lambda item: (item[0][0], PRESSURE_ORDER.index(item[0][1]) if item[0][1] in PRESSURE_ORDER else 999, item[0][2])):
+    for (harness, pressure, mode), group_rows in sorted(grouped.items(), key=lambda item: (item[0][0], PRESSURE_ORDER.index(item[0][1]) if item[0][1] in PRESSURE_ORDER else 999, item[0][2])):
+        values = [float(row["first_token_lateness_ms"]) for row in group_rows if row.get("first_token_lateness_ms") != ""]
+        due_to_request_start = [value for row in group_rows if (value := optional_float(row.get("due_to_request_start_ms"))) is not None]
+        due_to_sglang_receive = [value for row in group_rows if (value := optional_float(row.get("due_to_sglang_receive_ms"))) is not None]
+        backend_values = [value for row in group_rows if (value := optional_float(row.get("sglang_receive_to_first_token_ms"))) is not None]
         out.append(
             {
                 "harness": harness,
@@ -252,6 +374,9 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "mode_label": MODE_LABELS.get(mode, mode),
                 "samples": len(values),
                 "median_first_token_lateness_ms": round(statistics.median(values), 3),
+                "median_due_to_request_start_ms": round(statistics.median(due_to_request_start), 3) if due_to_request_start else "",
+                "median_due_to_sglang_receive_ms": round(statistics.median(due_to_sglang_receive), 3) if due_to_sglang_receive else "",
+                "median_sglang_receive_to_first_token_ms": round(statistics.median(backend_values), 3) if backend_values else "",
                 "min_first_token_lateness_ms": round(min(values), 3),
                 "max_first_token_lateness_ms": round(max(values), 3),
             }
@@ -342,28 +467,18 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     if not pressures or not harnesses:
         return "<p>No replay rows found.</p>"
 
-    values = [float(row["first_token_lateness_ms"]) for row in rows if row.get("first_token_lateness_ms") != ""]
-    transformed = [symlog(value) for value in values] + [symlog(0.0), symlog(50.0), symlog(500.0), symlog(10_000.0)]
-    y_min = min(transformed)
-    y_max = max(transformed)
-    pad = max(0.2, (y_max - y_min) * 0.08)
-    y_min -= pad
-    y_max += pad
-
     pressure_w = max(420, len(harnesses) * 44 + 110)
     width = max(1400, pressure_w * len(pressures) + 220)
-    height = 680
+    height = 980
     left = 120
     right = 40
-    top = 60
-    bottom = 120
+    panel_h = 310
+    panel_gap = 145
+    top_a = 82
+    top_b = top_a + panel_h + panel_gap
+    bottom_margin = 95
     plot_w = width - left - right
-    plot_h = height - top - bottom
     pressure_group_w = plot_w / len(pressures)
-
-    def y_pos(value: float) -> float:
-        mapped = symlog(value)
-        return top + (y_max - mapped) / (y_max - y_min) * plot_h
 
     def x_pos(pressure_index: int, harness_index: int, mode: str, sample_index: int, sample_count: int) -> float:
         pressure_left = left + pressure_index * pressure_group_w
@@ -377,56 +492,102 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Replay Deadline Pressure Chart">',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
     ]
-    tick_values = [-1000, -500, -100, 0, 50, 500, 1000, 5000, 10000, 60000]
-    for tick in tick_values:
-        y = y_pos(float(tick))
-        stroke = "#111827" if tick == 0 else "#e5e7eb"
-        width_attr = "1.5" if tick == 0 else "1"
-        lines.append(f'<line x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="{stroke}" stroke-width="{width_attr}"/>')
-        lines.append(f'<text x="{left-12}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#374151">{tick} ms</text>')
-    lines.append(f'<text x="{width-right-4}" y="{y_pos(0)-8:.1f}" text-anchor="end" font-size="13" font-weight="700">0 ms deadline</text>')
 
     rows_by_group_mode: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         rows_by_group_mode[(str(row["pressure_level"]), str(row["harness"]), str(row["mode"]))].append(row)
 
-    for pressure_index, pressure in enumerate(pressures):
-        x = left + pressure_index * pressure_group_w
-        lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{top}" y2="{height-bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
-        if pressure_index % 2 == 1:
-            lines.append(f'<rect x="{x:.1f}" y="{top}" width="{pressure_group_w:.1f}" height="{plot_h}" fill="#f8fafc" opacity="0.62"/>')
-        cx = x + pressure_group_w / 2
-        lines.append(f'<text x="{cx:.1f}" y="{height-bottom+36}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
-        lines.append(f'<text x="{cx:.1f}" y="{height-bottom+56}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; blue = baseline, green = E2E</text>')
-        for harness_index, harness in enumerate(harnesses):
-            harness_x = x_pos(pressure_index, harness_index, "no_prefetch", 0, 1) + 9
-            lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{top}" y2="{height-bottom}" stroke="#f1f5f9" stroke-width="1"/>')
-            for mode in MODE_LABELS:
-                sample_rows = rows_by_group_mode.get((pressure, harness, mode), [])
-                sample_rows = [row for row in sample_rows if row.get("first_token_lateness_ms") != ""]
-                if not sample_rows:
-                    continue
-                med = statistics.median(float(row["first_token_lateness_ms"]) for row in sample_rows)
-                mx = x_pos(pressure_index, harness_index, mode, 0, 1)
-                y = y_pos(med)
-                lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{MODE_COLORS[mode]}" stroke-width="3" stroke-linecap="round"/>')
-                label_y = y - 10 if mode == "no_prefetch" else y + 16
-                label_y = min(max(label_y, top + 12), height - bottom - 8)
-                lines.append(svg_text_label(compact_ms(med), mx, label_y, MODE_COLORS[mode]))
-                for sample_index, row in enumerate(sample_rows):
-                    value = float(row["first_token_lateness_ms"])
-                    dot_x = x_pos(pressure_index, harness_index, mode, sample_index, len(sample_rows))
-                    dot_y = y_pos(value)
-                    title = (
-                        f"{PRESSURE_LABELS.get(pressure, pressure)} | "
-                        f"{HARNESS_LABELS.get(harness, harness)} | "
-                        f"{MODE_LABELS[mode]} | {value:.1f} ms late"
-                    )
-                    lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), dot_x, dot_y, MODE_COLORS[mode], title))
+    def draw_panel(
+        panel_top: float,
+        value_key: str,
+        heading: str,
+        note: str,
+        y_axis_label: str,
+        zero_label: str,
+        unit_label: str,
+        tick_values: list[int],
+    ) -> None:
+        panel_bottom = panel_top + panel_h
+        panel_values = [value for row in rows if (value := optional_float(row.get(value_key))) is not None]
+        transformed = [symlog(value) for value in panel_values + [float(tick) for tick in tick_values]]
+        y_min = min(transformed)
+        y_max = max(transformed)
+        pad = max(0.2, (y_max - y_min) * 0.08)
+        y_min -= pad
+        y_max += pad
 
-    lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{top}" y2="{height-bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
-    lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-40}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
-    lines.append(f'<text transform="translate(32 {top + plot_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">lateness vs replay deadline ms (symlog)</text>')
+        def y_pos_panel(value: float) -> float:
+            mapped = symlog(value)
+            return panel_top + (y_max - mapped) / (y_max - y_min) * panel_h
+
+        lines.append(f'<text x="{left}" y="{panel_top-46:.1f}" font-size="18" font-weight="800" fill="#111827">{html.escape(heading)}</text>')
+        lines.append(f'<text x="{left}" y="{panel_top-24:.1f}" font-size="12" fill="#64748b">{html.escape(note)}</text>')
+        for tick in tick_values:
+            y = y_pos_panel(float(tick))
+            stroke = "#111827" if tick == 0 else "#e5e7eb"
+            width_attr = "1.5" if tick == 0 else "1"
+            lines.append(f'<line x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="{stroke}" stroke-width="{width_attr}"/>')
+            lines.append(f'<text x="{left-12}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#374151">{tick} ms</text>')
+        lines.append(f'<text x="{width-right-4}" y="{y_pos_panel(0)-8:.1f}" text-anchor="end" font-size="13" font-weight="700">{html.escape(zero_label)}</text>')
+
+        for pressure_index, pressure in enumerate(pressures):
+            x = left + pressure_index * pressure_group_w
+            lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
+            if pressure_index % 2 == 1:
+                lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
+            cx = x + pressure_group_w / 2
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+36:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; blue = baseline, green = E2E</text>')
+            for harness_index, harness in enumerate(harnesses):
+                harness_x = x_pos(pressure_index, harness_index, "no_prefetch", 0, 1) + 9
+                lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#f1f5f9" stroke-width="1"/>')
+                for mode in MODE_LABELS:
+                    sample_rows = rows_by_group_mode.get((pressure, harness, mode), [])
+                    sample_rows = [row for row in sample_rows if optional_float(row.get(value_key)) is not None]
+                    if not sample_rows:
+                        continue
+                    med = statistics.median(float(row[value_key]) for row in sample_rows)
+                    mx = x_pos(pressure_index, harness_index, mode, 0, 1)
+                    y = y_pos_panel(med)
+                    lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{MODE_COLORS[mode]}" stroke-width="3" stroke-linecap="round"/>')
+                    label_y = y - 10 if mode == "no_prefetch" else y + 16
+                    label_y = min(max(label_y, panel_top + 12), panel_bottom - 8)
+                    lines.append(svg_text_label(compact_ms(med), mx, label_y, MODE_COLORS[mode]))
+                    for sample_index, row in enumerate(sample_rows):
+                        value = float(row[value_key])
+                        dot_x = x_pos(pressure_index, harness_index, mode, sample_index, len(sample_rows))
+                        dot_y = y_pos_panel(value)
+                        title = (
+                            f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
+                            f"{HARNESS_LABELS.get(harness, harness)} | "
+                            f"{MODE_LABELS[mode]} | {value:.1f} {unit_label}"
+                        )
+                        lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), dot_x, dot_y, MODE_COLORS[mode], title))
+        lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
+        lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
+
+    draw_panel(
+        top_a,
+        "first_token_lateness_ms",
+        "A. Due -> First Token",
+        "Full path: harness/client, gateway, SGLang queueing, KV movement, compute, and first token.",
+        "lateness vs replay deadline ms (symlog)",
+        "0 ms deadline",
+        "ms vs deadline",
+        [-1000, -500, -100, 0, 50, 500, 1000, 5000, 10000, 60000],
+    )
+    draw_panel(
+        top_b,
+        "sglang_receive_to_first_token_ms",
+        "B. SGLang Receive -> First Token",
+        "Backend-only path after SGLang sees the replay request. This removes most harness/client overhead.",
+        "backend time after SGLang receive ms (symlog)",
+        "0 ms receive",
+        "ms after SGLang receive",
+        [0, 50, 500, 1000, 5000, 10000, 60000],
+    )
+
+    lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-bottom_margin+34}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)
 
@@ -497,8 +658,23 @@ def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], repor
             "mode_label",
             "samples",
             "median_first_token_lateness_ms",
+            "median_sglang_receive_to_first_token_ms",
+            "median_due_to_sglang_receive_ms",
             "min_first_token_lateness_ms",
             "max_first_token_lateness_ms",
+        ],
+    )
+    breakdown_table = render_table(
+        summary,
+        [
+            "harness_label",
+            "pressure_level_label",
+            "mode_label",
+            "samples",
+            "median_due_to_request_start_ms",
+            "median_due_to_sglang_receive_ms",
+            "median_sglang_receive_to_first_token_ms",
+            "median_first_token_lateness_ms",
         ],
     )
     raw_table = render_table(
@@ -509,8 +685,13 @@ def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], repor
             "mode_label",
             "session_id",
             "first_token_lateness_ms",
+            "due_to_request_start_ms",
+            "due_to_sglang_receive_ms",
+            "sglang_receive_to_first_token_ms",
             "ttft_ms",
             "sglang_priority",
+            "backend_receive_source",
+            "first_token_source",
             "status",
             "error",
         ],
@@ -545,7 +726,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <main>
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
-<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; mode is encoded by color. Higher means later. Values above <code>0 ms</code> missed the replay deadline.</p>
+<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel starts the clock when SGLang receives the replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; mode is encoded by color. Lower is better.</p>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 <div class="card">{pressure_definition_table}</div>
@@ -553,6 +734,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 {chart_legend}
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>
+<h2>Delay Breakdown</h2>
+<p>This table separates client/gateway arrival time from backend service time. <code>median_sglang_receive_to_first_token_ms</code> is the backend-only number used in panel B.</p>
+<div class="card">{breakdown_table}</div>
 <h2>Raw Replay Proof</h2>
 <div class="card">{raw_table}</div>
 </main>
