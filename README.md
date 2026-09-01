@@ -132,6 +132,60 @@ In simple terms: the repo code can move to GH200, but the installed
 dependencies should not be copied from EC2. Rebuild the Python venvs, SGLang
 environment, Node.js CLIs, NAT venv, and Hermes venv directly on GH200.
 
+### GH200 Setup
+
+After cloning or pulling this repository on the GH200 machine, rebuild the
+Python environment directly on GH200:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+bash scripts/setup_gh200.sh
+```
+
+That script creates:
+
+| Path | Purpose |
+| --- | --- |
+| `sglang_direct_kv/.venv` | Main project Python environment. Installs `requirements.txt`, editable `agentic-kv`, and analysis extras such as `scikit-learn`. |
+| `$HOME/agentic_hardware/.venvs/nat_py311` | Isolated NeMo Agent Toolkit / NAT environment. |
+| `$HOME/agentic_hardware/.venvs/hermes_agent_py311` | Isolated Hermes Agent environment. |
+
+If you need a different Python binary:
+
+```bash
+PYTHON_BIN=python3.10 bash scripts/setup_gh200.sh
+```
+
+If the GH200 image already has system packages and CUDA configured:
+
+```bash
+INSTALL_SYSTEM_DEPS=0 bash scripts/setup_gh200.sh
+```
+
+If you want to add or change optional analysis packages:
+
+```bash
+EXTRA_PYTHON_PACKAGES="scikit-learn matplotlib seaborn pyarrow" \
+bash scripts/setup_gh200.sh
+```
+
+The native CLI harnesses use Node.js through `npx`, so GH200 also needs an ARM64
+Node.js install. If `setup_gh200.sh` says Node is missing, install Node LTS:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source "$HOME/.nvm/nvm.sh"
+nvm install --lts
+node -p "process.arch"
+```
+
+The expected Node architecture on GH200 is:
+
+```text
+arm64
+```
+
 Before running experiments on GH200, check the machine:
 
 ```bash
