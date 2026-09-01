@@ -256,26 +256,25 @@ If `--target-base` is omitted, the probe uses a fake local SGLang-compatible
 backend. Pass `--target-base http://127.0.0.1:30000` to observe real clients
 through the gateway while forwarding to a running SGLang server.
 
-Recent EC2 wireability result:
+Latest EC2 wireability result:
 
 ```text
-sglang_direct_kv/artifacts/results/real_client_wireability/real_client_probe_20260901_031658/real_client_wireability_report.html
+sglang_direct_kv/artifacts/results/real_client_wireability/real_client_probe_six_20260901_055102/real_client_wireability_report.html
 ```
 
-Latest local six-client wireability smoke, run on 2026-09-01, launched the real
-Codex, Claude Code, OpenCode, Qwen Code, Pi, and OpenClaw CLIs against the
-inspection gateway. All six reached the gateway, all six were tagged with
-`sglang_priority=100`, and the gateway recorded their live request shape without
-storing prompt bodies:
+That EC2 smoke, run on 2026-09-01, launched the real Codex, Claude Code,
+OpenCode, Qwen Code, Pi, and OpenClaw CLIs against the inspection gateway. All
+six reached the gateway, all six were tagged with `sglang_priority=100`, and the
+gateway recorded their live request shape without storing prompt bodies:
 
 | Client | API shape | Request body | Prompt chars |
 | --- | --- | ---: | ---: |
-| Codex | `/v1/responses` | `164.9 KB` | `7.7K` |
-| Claude Code | `/v1/messages?beta=true` | `5.2 KB` | `1.6K` |
+| Codex | `/v1/responses` | `37.6 KB` | `4.3K` |
+| Claude Code | `/v1/messages?beta=true` | `5.3 KB` | `1.6K` |
 | OpenCode | `/v1/chat/completions` | `3.6 KB` | `3.2K` |
-| Qwen Code | `/v1/chat/completions` | `97.4 KB` | `36.3K` |
-| Pi Agent Harness | `/v1/chat/completions` | `1.5 KB` | `1.2K` |
-| OpenClaw | `/v1/chat/completions` | `29.0 KB` | `20.8K` |
+| Qwen Code | `/v1/chat/completions` | `97.8 KB` | `36.6K` |
+| Pi Agent Harness | `/v1/chat/completions` | `1.5 KB` | `1.3K` |
+| OpenClaw | `/v1/chat/completions` | `28.0 KB` | `19.9K` |
 
 This is a wireability probe, not a pressure result. Its purpose is to prove
 that real client-generated traffic can be inspected and priority-tagged at the
