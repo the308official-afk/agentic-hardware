@@ -501,6 +501,7 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
         submits = [row for row in trace_rows if row.get("event") == "m27.nat_service_probe.client_submit"]
         if not submits:
             continue
+        probe_start = next((row for row in trace_rows if row.get("event") == "m27.nat_service_probe.start"), {})
         gateway_starts = [
             row
             for row in trace_rows
@@ -575,6 +576,8 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
                 {
                     "case_id": case_dir.name,
                     "case_dir": str(case_dir),
+                    "nat_provider": probe_start.get("nat_provider", ""),
+                    "nat_dynamo_enable_nvext_hints": probe_start.get("nat_dynamo_enable_nvext_hints", ""),
                     "request_id": label,
                     "priority_class": priority_class,
                     "submit_rank_into_nat": submit_order.get(label, ""),
@@ -833,6 +836,8 @@ HARNESS_PRIORITY_COLUMNS = [
 ]
 
 NAT_SERVICE_PRIORITY_COLUMNS = [
+    "nat_provider",
+    "nat_dynamo_enable_nvext_hints",
     "request_id",
     "priority_class",
     "submit_rank_into_nat",

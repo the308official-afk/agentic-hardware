@@ -466,7 +466,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh) | Runs only the native CLI harnesses plus the Hatcher control. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py](sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py) | Portable NAT wrapper that records config, process, and gateway-emission lifecycle events without patching NAT itself. |
-| [sglang_direct_kv/scripts/run_nemo_nat_service_priority_probe.py](sglang_direct_kv/scripts/run_nemo_nat_service_priority_probe.py) | Runs real `nat serve` as one shared service and checks whether urgent requests leave NAT before older background requests. |
+| [sglang_direct_kv/scripts/run_nemo_nat_service_priority_probe.py](sglang_direct_kv/scripts/run_nemo_nat_service_priority_probe.py) | Runs real `nat serve` as one shared service and can also inspect NAT Dynamo-provider `nvext.agent_hints` without a full Dynamo runtime. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
 | [sglang_direct_kv/configs/hardware/](sglang_direct_kv/configs/hardware/) | EC2 and GH200 pressure profiles. |
 | [sglang_direct_kv/scripts/run_real_client_wireability_probe.py](sglang_direct_kv/scripts/run_real_client_wireability_probe.py) | Launches real client CLIs against the inspection gateway and reports the live request shape observed at the boundary. |
@@ -527,6 +527,38 @@ Read `nat_service_priority_probe.csv` in the report folder. The key columns are
 NAT emitted it earlier. If NAT also preserves structured priority fields, the
 evidence is stronger; if priority is recovered only from the experiment marker,
 the report says the priority cause is not proven.
+
+To inspect NAT's Dynamo-provider hint format without installing the full Dynamo
+runtime, run the same probe with NAT's Dynamo transport path:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+$HOME/agentic_hardware/.venvs/nat_py311/bin/python \
+  scripts/run_nemo_nat_service_priority_probe.py \
+  --report-label "nat_dynamo_direct_wireability_probe_$(date +%Y%m%d_%H%M%S)" \
+  --nat-provider dynamo_direct \
+  --low-count 2 \
+  --urgent-count 1 \
+  --low-lead-ms 100 \
+  --low-stagger-ms 5 \
+  --fake-backend-delay-ms 200 \
+  --nat-workers 1 \
+  --nvext-prefix-total-requests 10 \
+  --nvext-prefix-osl 512 \
+  --nvext-prefix-iat 50 \
+  --update-latest
+```
+
+This is a lightweight wire-format probe. It imports NAT's Dynamo HTTP transport
+and sends requests through our gateway/fake backend, so it does not require a
+running Dynamo router. The expected proof is that background requests emit
+`nvext.agent_hints.priority=2`, while urgent requests emit
+`nvext.agent_hints.priority=100` plus prefix, OSL, IAT, total-request, and
+cache-control hints. A real end-to-end Dynamo scheduling result still requires
+the full NAT -> Dynamo -> SGLang stack, which is better suited for a larger
+machine such as GH200.
 
 Latest EC2 wireability result:
 
@@ -693,7 +725,7 @@ the bottom. Important evidence files include:
 | --- | --- |
 | `global_kv_readiness_by_mode.csv` | Replay first-token lateness by mode, harness, and pressure level. |
 | `harness_priority_preservation_proof.csv` | Pre-harness priority proof: driver intent, harness input signal, emitted harness signal, gateway translation, SGLang priority, and NAT wrapper lifecycle fields when NAT is used. |
-| `nat_service_priority_probe.csv` | NAT shared-service proof: request order into `nat serve`, emitted order to the gateway, older background work ahead, and whether urgent work overtook older requests. |
+| `nat_service_priority_probe.csv` | NAT shared-service and Dynamo-provider proof: request order into `nat serve` or NAT's Dynamo transport, emitted order to the gateway, older background work ahead, `nvext.agent_hints` when present, and whether urgent work overtook older requests. |
 | `speculative_prefill_proof.csv` | Dynamo-like warmup proof: hint seen, background warmup timing, cached-prefix reuse, and replay timing. |
 | `replay_queue_timing.csv` | Driver release, backend receive, scheduler admission, and first-token timing. |
 | `dynamo_priority_queue_effectiveness.csv` | Priority queue behavior and older lower-priority work bypass evidence. |

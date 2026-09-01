@@ -239,10 +239,60 @@ def emitted_priority_signal(payload: dict[str, Any]) -> dict[str, str]:
     if top_level_priority not in (None, "", [], {}):
         signals.append(f"agentic_hints.priority_class={top_level_priority}")
         sources.append("agentic_hints")
+    nvext = as_dict(payload.get("nvext"))
+    nvext_agent_hints = as_dict(nvext.get("agent_hints"))
+    nvext_priority = nvext_agent_hints.get("priority")
+    if nvext_priority not in (None, "", [], {}):
+        signals.append(f"nvext.agent_hints.priority={nvext_priority}")
+        sources.append("nvext.agent_hints")
+    nvext_latency = nvext_agent_hints.get("latency_sensitivity")
+    if nvext_latency not in (None, "", [], {}):
+        signals.append(f"nvext.agent_hints.latency_sensitivity={nvext_latency}")
+        sources.append("nvext.agent_hints")
+    nvext_prefix = nvext_agent_hints.get("prefix_id")
+    if nvext_prefix not in (None, "", [], {}):
+        signals.append(f"nvext.agent_hints.prefix_id={nvext_prefix}")
+        sources.append("nvext.agent_hints")
+    nvext_osl = nvext_agent_hints.get("osl")
+    if nvext_osl not in (None, "", [], {}):
+        signals.append(f"nvext.agent_hints.osl={nvext_osl}")
+        sources.append("nvext.agent_hints")
+    nvext_iat = nvext_agent_hints.get("iat")
+    if nvext_iat not in (None, "", [], {}):
+        signals.append(f"nvext.agent_hints.iat={nvext_iat}")
+        sources.append("nvext.agent_hints")
+    nvext_total = nvext_agent_hints.get("total_requests")
+    if nvext_total not in (None, "", [], {}):
+        signals.append(f"nvext.agent_hints.total_requests={nvext_total}")
+        sources.append("nvext.agent_hints")
+    nvext_cache_control = as_dict(nvext.get("cache_control"))
+    if nvext_cache_control:
+        signals.append(f"nvext.cache_control={compact_json(nvext_cache_control)}")
+        sources.append("nvext.cache_control")
     return {
         "harness_emit_priority_signal": "; ".join(signals),
         "harness_emit_priority_signal_source": ", ".join(dict.fromkeys(sources)),
     }
+
+
+def emitted_signal_is_urgent(payload: dict[str, Any]) -> bool:
+    service_tier = str(payload.get("service_tier") or "").lower()
+    if service_tier in {"priority", "scale"}:
+        return True
+    metadata_priority = str(as_dict(payload.get("metadata")).get("priority_class") or "").lower()
+    if metadata_priority in {"urgent", "high", "priority"}:
+        return True
+    extra_priority = str(as_dict(as_dict(payload.get("extra_body")).get("agentic_hints")).get("priority_class") or "").lower()
+    if extra_priority in {"urgent", "high", "priority"}:
+        return True
+    top_priority = str(as_dict(payload.get("agentic_hints")).get("priority_class") or "").lower()
+    if top_priority in {"urgent", "high", "priority"}:
+        return True
+    nvext_priority = as_dict(as_dict(payload.get("nvext")).get("agent_hints")).get("priority")
+    try:
+        return int(float(nvext_priority)) >= 100
+    except (TypeError, ValueError):
+        return False
 
 
 def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -252,7 +302,7 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
     if priority is None:
         source = "none"
     elif mode == PRE_HARNESS_PRIORITY_MODE:
-        if emitted["harness_emit_priority_signal"]:
+        if emitted["harness_emit_priority_signal"] and emitted_signal_is_urgent(payload):
             source = "harness_emitted_signal"
         elif meta.get("priority_intent"):
             source = "experiment_marker_priority_intent"

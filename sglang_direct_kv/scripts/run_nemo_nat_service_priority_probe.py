@@ -135,7 +135,37 @@ def start_fake_sglang(trace_path: Path, backend_delay_ms: int, model: str) -> tu
     return server, f"http://127.0.0.1:{int(server.server_address[1])}"
 
 
-def build_nat_config(gateway_base: str, model: str) -> dict[str, Any]:
+def build_nat_config(
+    gateway_base: str,
+    model: str,
+    provider: str,
+    prefix_total_requests: int,
+    prefix_osl: int,
+    prefix_iat: int,
+) -> dict[str, Any]:
+    llm_config: dict[str, Any] = {
+        "_type": "dynamo" if provider == "dynamo" else "openai",
+        "api_key": "dummy",
+        "base_url": f"{gateway_base.rstrip('/')}/v1",
+        "model_name": model,
+        "api_type": "chat_completion",
+        "temperature": 0,
+        "max_tokens": 8,
+        "request_timeout": 900,
+        "max_retries": 0,
+    }
+    if provider == "dynamo":
+        llm_config.update(
+            {
+                "enable_nvext_hints": True,
+                "nvext_prefix_total_requests": prefix_total_requests,
+                "nvext_prefix_osl": prefix_osl,
+                "nvext_prefix_iat": prefix_iat,
+                "nvext_cache_pin_type": "ephemeral",
+                "nvext_cache_control_mode": "always",
+                "nvext_max_sensitivity": 1000,
+            }
+        )
     return {
         "general": {
             "front_end": {
@@ -151,17 +181,7 @@ def build_nat_config(gateway_base: str, model: str) -> dict[str, Any]:
             }
         },
         "llms": {
-            "harness_llm": {
-                "_type": "openai",
-                "api_key": "dummy",
-                "base_url": f"{gateway_base.rstrip('/')}/v1",
-                "model_name": model,
-                "api_type": "chat_completion",
-                "temperature": 0,
-                "max_tokens": 8,
-                "request_timeout": 900,
-                "max_retries": 0,
-            }
+            "harness_llm": llm_config,
         },
         "workflow": {
             "_type": "chat_completion",
@@ -169,6 +189,87 @@ def build_nat_config(gateway_base: str, model: str) -> dict[str, Any]:
             "system_prompt": "You are a concise coding-agent service probe. Do not use tools.",
         },
     }
+
+
+async def send_dynamo_transport_request(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    trace_path: Path,
+    total_requests: int,
+    osl: int,
+    iat: int,
+) -> dict[str, Any]:
+    from nat.builder.context import Context
+    from nat.llm.dynamo_llm import CacheControlMode
+    from nat.llm.dynamo_llm import CachePinType
+    from nat.llm.dynamo_llm import DynamoPrefixContext
+    from nat.llm.dynamo_llm import _DynamoTransport
+
+    request_id = str(meta["label"])
+    priority_class = str(as_dict(meta.get("priority_intent")).get("class") or "")
+    sensitivity = 100 if priority_class == "urgent" else 2
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"{prompt}\n\n{marker(meta)}"}],
+        "max_tokens": 8,
+        "temperature": 0,
+        "stream": False,
+    }
+    submit_ns = time.time_ns()
+    write_jsonl(
+        trace_path,
+        {
+            "event": "m27.nat_service_probe.client_submit",
+            "request_id": request_id,
+            "label": request_id,
+            "session_id": meta.get("session_id", ""),
+            "phase": meta.get("phase", ""),
+            "harness": meta.get("harness", ""),
+            "mode": meta.get("mode", ""),
+            "priority_intent": compact_json(meta.get("priority_intent")),
+            "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
+            "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
+            "dynamo_direct_latency_sensitivity": sensitivity,
+        },
+    )
+    transport = _DynamoTransport(
+        transport=httpx.AsyncHTTPTransport(),
+        total_requests=total_requests,
+        osl=osl,
+        iat=iat,
+        cache_pin_type=CachePinType.EPHEMERAL,
+        cache_control_mode=CacheControlMode.ALWAYS,
+        max_sensitivity=1000,
+    )
+    status = 0
+    error = ""
+    try:
+        with DynamoPrefixContext.scope("nat-service-priority-probe"):
+            with Context.get().push_latency_sensitivity(sensitivity):
+                async with httpx.AsyncClient(transport=transport, timeout=None) as client:
+                    response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
+                    status = response.status_code
+                    response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        error = f"{type(exc).__name__}: {exc}"
+    done_ns = time.time_ns()
+    row = {
+        "event": "m27.nat_service_probe.client_done",
+        "request_id": request_id,
+        "label": request_id,
+        "session_id": meta.get("session_id", ""),
+        "phase": meta.get("phase", ""),
+        "harness": meta.get("harness", ""),
+        "mode": meta.get("mode", ""),
+        "status": status,
+        "error": error,
+        "client_latency_ms": round((done_ns - submit_ns) / 1_000_000.0, 3),
+        "dynamo_direct_latency_sensitivity": sensitivity,
+    }
+    write_jsonl(trace_path, row)
+    return row
 
 
 def wait_for_http(url: str, proc: subprocess.Popen[Any] | None, timeout_s: int, log_path: Path) -> None:
@@ -416,6 +517,64 @@ async def run_load(
     return await asyncio.gather(*tasks)
 
 
+async def run_dynamo_direct_transport_load(
+    gateway_base: str,
+    model: str,
+    trace_path: Path,
+    low_count: int,
+    urgent_count: int,
+    low_lead_ms: int,
+    low_stagger_ms: int,
+    prompt_tokens: int,
+    deadline_ms: int,
+    total_requests: int,
+    osl: int,
+    iat: int,
+) -> list[dict[str, Any]]:
+    lows = build_probe_metas(low_count, 0, deadline_ms)
+    urgents = build_probe_metas(0, urgent_count, deadline_ms)
+    prompt = (
+        f"{make_shared_prefix('nat_dynamo_direct_transport_probe', prompt_tokens)}\n\n"
+        "Dynamo-provider wireability probe: answer with one short sentence."
+    )
+    tasks: list[asyncio.Task[dict[str, Any]]] = []
+    for idx, meta in enumerate(lows):
+        tasks.append(
+            asyncio.create_task(
+                send_dynamo_transport_request(
+                    gateway_base,
+                    model,
+                    prompt,
+                    meta,
+                    trace_path,
+                    total_requests,
+                    osl,
+                    iat,
+                )
+            )
+        )
+        if low_stagger_ms > 0 and idx != len(lows) - 1:
+            await asyncio.sleep(low_stagger_ms / 1000.0)
+    if low_lead_ms > 0:
+        await asyncio.sleep(low_lead_ms / 1000.0)
+    for meta in urgents:
+        tasks.append(
+            asyncio.create_task(
+                send_dynamo_transport_request(
+                    gateway_base,
+                    model,
+                    prompt,
+                    meta,
+                    trace_path,
+                    total_requests,
+                    osl,
+                    iat,
+                )
+            )
+        )
+    return await asyncio.gather(*tasks)
+
+
 def write_run_config(path: Path, args: argparse.Namespace, report_label: str, run_root: Path, report_dir: Path) -> None:
     path.write_text(
         "\n".join(
@@ -434,6 +593,11 @@ def write_run_config(path: Path, args: argparse.Namespace, report_label: str, ru
                 f"NAT_SERVICE_LOW_STAGGER_MS={args.low_stagger_ms}",
                 f"NAT_SERVICE_FAKE_BACKEND_DELAY_MS={args.fake_backend_delay_ms}",
                 f"NAT_SERVICE_WORKERS={args.nat_workers}",
+                f"NAT_PROVIDER={args.nat_provider}",
+                f"NAT_DYNAMO_ENABLE_NVEXT_HINTS={1 if args.nat_provider in {'dynamo', 'dynamo_direct'} else 0}",
+                f"NAT_DYNAMO_PREFIX_TOTAL_REQUESTS={args.nvext_prefix_total_requests}",
+                f"NAT_DYNAMO_PREFIX_OSL={args.nvext_prefix_osl}",
+                f"NAT_DYNAMO_PREFIX_IAT={args.nvext_prefix_iat}",
                 "",
             ]
         ),
@@ -455,6 +619,10 @@ def main() -> None:
     parser.add_argument("--prompt-tokens", type=int, default=1024)
     parser.add_argument("--fake-backend-delay-ms", type=int, default=1200)
     parser.add_argument("--nat-workers", type=int, default=1)
+    parser.add_argument("--nat-provider", choices=("openai", "dynamo", "dynamo_direct"), default="openai")
+    parser.add_argument("--nvext-prefix-total-requests", type=int, default=10)
+    parser.add_argument("--nvext-prefix-osl", type=int, default=512)
+    parser.add_argument("--nvext-prefix-iat", type=int, default=50)
     parser.add_argument("--update-latest", action="store_true")
     args = parser.parse_args()
 
@@ -489,6 +657,11 @@ def main() -> None:
             "low_stagger_ms": args.low_stagger_ms,
             "fake_backend_delay_ms": args.fake_backend_delay_ms,
             "nat_workers": args.nat_workers,
+            "nat_provider": args.nat_provider,
+            "nat_dynamo_enable_nvext_hints": args.nat_provider in {"dynamo", "dynamo_direct"},
+            "nat_dynamo_prefix_total_requests": args.nvext_prefix_total_requests,
+            "nat_dynamo_prefix_osl": args.nvext_prefix_osl,
+            "nat_dynamo_prefix_iat": args.nvext_prefix_iat,
         },
     )
 
@@ -500,31 +673,67 @@ def main() -> None:
         write_jsonl(trace_path, {"event": "m27.nat_service_probe.fake_sglang_ready", "base_url": fake_base})
         gateway_proc, gateway_base = start_gateway(script_dir, trace_path, gateway_events, fake_base, args.model)
         write_jsonl(trace_path, {"event": "m27.nat_service_probe.gateway_ready", "base_url": gateway_base})
-        nat_config = build_nat_config(gateway_base, args.model)
-        nat_config_path.write_text(json.dumps(nat_config, indent=2, sort_keys=True), encoding="utf-8")
-        write_jsonl(
-            trace_path,
-            {
-                "event": "m27.nat_service_probe.config_written",
-                "nat_config_path": str(nat_config_path),
-                "gateway_base": gateway_base,
-            },
-        )
-        nat_proc, nat_base = start_nat_server(args.nat_bin, nat_config_path, nat_home, nat_log_path, args.nat_workers)
-        write_jsonl(trace_path, {"event": "m27.nat_service_probe.nat_ready", "base_url": nat_base})
-        done_rows = asyncio.run(
-            run_load(
-                nat_base,
-                args.model,
+        if args.nat_provider == "dynamo_direct":
+            write_jsonl(
                 trace_path,
-                args.low_count,
-                args.urgent_count,
-                args.low_lead_ms,
-                args.low_stagger_ms,
-                args.prompt_tokens,
-                args.deadline_ms,
+                {
+                    "event": "m27.nat_service_probe.dynamo_direct_transport_ready",
+                    "gateway_base": gateway_base,
+                    "nat_provider": args.nat_provider,
+                    "nat_dynamo_enable_nvext_hints": True,
+                },
             )
-        )
+            done_rows = asyncio.run(
+                run_dynamo_direct_transport_load(
+                    gateway_base,
+                    args.model,
+                    trace_path,
+                    args.low_count,
+                    args.urgent_count,
+                    args.low_lead_ms,
+                    args.low_stagger_ms,
+                    args.prompt_tokens,
+                    args.deadline_ms,
+                    args.nvext_prefix_total_requests,
+                    args.nvext_prefix_osl,
+                    args.nvext_prefix_iat,
+                )
+            )
+        else:
+            nat_config = build_nat_config(
+                gateway_base,
+                args.model,
+                args.nat_provider,
+                args.nvext_prefix_total_requests,
+                args.nvext_prefix_osl,
+                args.nvext_prefix_iat,
+            )
+            nat_config_path.write_text(json.dumps(nat_config, indent=2, sort_keys=True), encoding="utf-8")
+            write_jsonl(
+                trace_path,
+                {
+                    "event": "m27.nat_service_probe.config_written",
+                    "nat_config_path": str(nat_config_path),
+                    "gateway_base": gateway_base,
+                    "nat_provider": args.nat_provider,
+                    "nat_dynamo_enable_nvext_hints": args.nat_provider == "dynamo",
+                },
+            )
+            nat_proc, nat_base = start_nat_server(args.nat_bin, nat_config_path, nat_home, nat_log_path, args.nat_workers)
+            write_jsonl(trace_path, {"event": "m27.nat_service_probe.nat_ready", "base_url": nat_base})
+            done_rows = asyncio.run(
+                run_load(
+                    nat_base,
+                    args.model,
+                    trace_path,
+                    args.low_count,
+                    args.urgent_count,
+                    args.low_lead_ms,
+                    args.low_stagger_ms,
+                    args.prompt_tokens,
+                    args.deadline_ms,
+                )
+            )
         errors = [row for row in done_rows if row.get("error")]
         write_jsonl(
             trace_path,
