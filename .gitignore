@@ -2,5 +2,11 @@
 __pycache__/
 *.py[cod]
 .venv/
+node_modules
+node_modules/
+**/node_modules
+**/node_modules/
+~$*.pptx
+presentation/~$*.pptx
 artifacts/
 sglang_direct_kv/artifacts/

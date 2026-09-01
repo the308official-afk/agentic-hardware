@@ -32,14 +32,14 @@ const slides = [
     title: "2. Scheduling and workload-prediction signals",
     columns: ["Canonical signal", "Dynamo", "NeMo Agent Toolkit", "Claude Code", "Codex", "DeepSeek Harness", "Deep Agents", "Qwen Code"],
     rows: [
-      ["Soft priority", "nvext.agent_hints.priority", "Emits priority", "None", "None", "None", "Custom middleware only", "extra_body pass-through"],
-      ["Strict priority tier", "strict_priority", "Not emitted", "None", "None", "None", "Custom only", "Pass-through only"],
-      ["Latency sensitivity", "Legacy field; removed from current schema", "Experimental latency_sensitivity", "None", "None", "None", "Custom only", "Pass-through only"],
-      ["Provider speed/QoS tier", "No equivalent standard field", "Provider-dependent", "Fast mode / speed", "service_tier", "None", "Provider-dependent", "Provider-specific extra_body"],
-      ["Expected output length", "osl", "Emits osl", "None", "None", "None", "Could infer internally", "Pass-through only"],
-      ["Expected interarrival time", "No current public field", "Custom iat", "None", "None", "None", "None", "Pass-through only"],
-      ["Predicted remaining calls", "No current public field", "Custom total_requests", "None", "None", "None", "Workflow may know internally", "Pass-through only"],
-      ["Prefix/workflow reuse ID", "Session ID is closest current concept", "Custom prefix_id", "Session/agent IDs", "Thread/cache key", "Session ID", "thread_id", "Internal session only"],
+      ["Soft priority", "nvext.agent_hints.priority", "Emits priority", "None", "None", "None", "None", "None"],
+      ["Strict priority tier", "strict_priority", "None", "None", "None", "None", "None", "None"],
+      ["Latency sensitivity", "None", "Experimental latency_sensitivity", "None", "None", "None", "None", "None"],
+      ["Provider speed/QoS tier", "None", "Provider-dependent", "Fast mode / speed", "service_tier", "None", "Provider-dependent", "Provider-specific extra_body"],
+      ["Expected output length", "osl", "Emits osl", "None", "None", "None", "None", "None"],
+      ["Expected interarrival time", "None", "Custom iat", "None", "None", "None", "None", "None"],
+      ["Predicted remaining calls", "None", "Custom total_requests", "None", "None", "None", "None", "None"],
+      ["Prefix/workflow reuse ID", "None", "Custom prefix_id", "None", "None", "None", "None", "None"],
     ],
   },
   {
@@ -198,6 +198,8 @@ function compactCell(raw, signalLabel, harness) {
     lower.startsWith("no equivalent") ||
     lower.startsWith("no abstract") ||
     lower.startsWith("no generic") ||
+    lower.startsWith("no native") ||
+    lower.startsWith("no osl hint") ||
     lower.startsWith("no standard") ||
     lower.startsWith("none as") ||
     lower.startsWith("none for") ||
@@ -217,6 +219,9 @@ function compactCell(raw, signalLabel, harness) {
   }
   if (value === "Normal request") return compactJson({ [signal]: "default" });
 
+  if (lower.includes("task metadata") || lower.includes("orchestration metadata")) {
+    return compactJson({ via: "orchestration_metadata" });
+  }
   if (lower.includes("provider-dependent") || lower.includes("provider/model-dependent") || lower.includes("provider-managed") || lower.includes("underlying provider") || lower.includes("provider cache") || lower.includes("provider request") || lower.includes("provider trace") || lower.includes("provider response") || lower.includes("provider metadata") || lower.includes("depends on provider") || lower.includes("depends on inference provider")) {
     return compactJson({ via: "provider" });
   }
@@ -229,7 +234,7 @@ function compactCell(raw, signalLabel, harness) {
   if (lower.includes("not inference placement")) {
     return compactJson({ via: "checkpoint" });
   }
-  if (lower.includes("custom middleware") || value === "Custom only" || value === "Custom" || lower.includes("custom processor")) {
+  if (lower.includes("custom middleware") || lower.includes("custom extension") || lower.includes("custom plugin") || value === "Custom only" || value === "Custom" || lower.includes("custom processor")) {
     return compactJson({ via: "middleware" });
   }
   if (lower.includes("could pass through") || lower.includes("pass-through only") || lower.includes("pass-through")) {
@@ -241,6 +246,9 @@ function compactCell(raw, signalLabel, harness) {
     return compactJson({ via: "extra_body", [signal]: "extra_body" });
   }
   if (lower.includes("internal")) {
+    return compactJson({ via: "internal" });
+  }
+  if (lower.includes("session context only") || lower.includes("session/tree context only") || lower.includes("session id only") || lower.includes("session/model route context only")) {
     return compactJson({ via: "internal" });
   }
   if (lower.includes("middleware")) {
@@ -259,6 +267,15 @@ function compactCell(raw, signalLabel, harness) {
     "Custom iat": "iat",
     "Custom total_requests": "total_requests",
     "Custom prefix_id": "prefix_id",
+    "Provider-specific; before_provider_request can add service_tier": ["before_provider_request", "service_tier"],
+    "Provider max_tokens only; no OSL hint": "max_tokens",
+    "Provider model/output limits only; no OSL hint": "provider_limits",
+    "Automatic provider prompt caching; no client cache key": "provider_prompt_cache",
+    "Prompt tiers/cache boundaries; model participates in cache key": ["prompt_tiers", "model"],
+    "Provider/account isolation only": "provider_account",
+    "Provider/plugin-dependent": "provider_or_plugin",
+    "Provider/session isolation only": "provider_session",
+    "Provider/session/model isolation only": "provider_session_model",
     "Fast mode / speed": ["fast", "speed"],
     "Thread/cache key": ["thread_id", "cache_key"],
     "Session/agent IDs": ["session_id", "agent_id"],
@@ -332,6 +349,9 @@ function compactCell(raw, signalLabel, harness) {
   }
   if (lower.includes("websocket prewarm")) {
     return compactJson({ [signal]: "websocket_prewarm" });
+  }
+  if (lower.includes("not kv prefill") || lower.includes("not kv speculative")) {
+    return compactJson({ via: "different_mechanism" });
   }
   if (lower.includes("ui speculation")) {
     return compactJson({ via: "ui", [signal]: "speculation" });
@@ -409,19 +429,19 @@ function drawCell(slide, value, left, top, width, height, opts = {}) {
   if (opts.compact) {
     if (displayValue === "-") {
       addText(slide, "-", left + 10, top + 9, width - 20, height - 16, {
-        size: 15,
+        size: 19,
         color: C.muted,
         font: "Helvetica Neue",
       });
       return;
     }
     addText(slide, value, left + 10, top + 8, width - 20, Math.max(26, height * 0.43), {
-      size: 12.8,
+      size: opts.compactDescSize ?? 16,
       color: C.ink,
       font: "Helvetica Neue",
     });
     addText(slide, displayValue, left + 10, top + Math.max(39, height * 0.46), width - 20, Math.max(26, height * 0.48), {
-      size: 11.2,
+      size: opts.compactJsonSize ?? 13.4,
       color: C.sub,
       font: "Courier New",
     });
@@ -443,7 +463,7 @@ function addFooter(slide, slideNumber, sourcePath) {
     fill: "none",
     line: { style: "solid", fill: C.grid, width: 1 },
   });
-  addText(slide, "Source: user-provided screenshot; each populated cell shows description plus compact JSON; '-' indicates unsupported.", 58, 1030, 1190, 24, { size: 15, color: C.muted });
+  addText(slide, "Sources: user screenshots and public docs in speaker notes; each populated cell shows description plus compact JSON; '-' indicates unsupported.", 58, 1030, 1450, 24, { size: 15, color: C.muted });
   addText(slide, String(slideNumber), 1814, 1030, 48, 24, { size: 15, color: C.muted, align: "right" });
   slide.speakerNotes.textFrame.setText(`[Sources]\n- ${sourcePath}\n`);
 }
@@ -536,7 +556,7 @@ const schedulingFocus = cloneWithRows(
     "Predicted remaining calls",
     "Prefix/workflow reuse ID"
   ],
-  "Signals that can influence queue order, service tier, latency treatment, or predicted serving load."
+  "Strict view: nearby task metadata, internal state, and generic pass-through are shown as '-' unless they expose a real backend/provider signal."
 );
 
 const cacheFocus = {
@@ -545,41 +565,161 @@ const cacheFocus = {
   subtitle: "Signals that can influence cache reuse, cache isolation, retention, eviction, prefill, or cache feedback."
 };
 
-const routingFocus = {
-  ...slides[5],
-  title: "Routing, placement, and worker selection",
-  subtitle: "Signals that can influence backend choice, prefill/decode worker choice, rank choice, sticky routing, or cache-aware placement."
-};
+function selectHarnessColumns(spec, title, harnessColumns, source) {
+  const indexes = [0, ...harnessColumns.map((name) => spec.columns.indexOf(name)).filter((index) => index > 0)];
+  return {
+    spec: {
+      ...spec,
+      title,
+      columns: indexes.map((index) => spec.columns[index]),
+      rows: spec.rows.map((row) => indexes.map((index) => row[index]))
+    },
+    source
+  };
+}
 
-const affinityFocus = {
-  title: "Affinity identity signals needed for routing",
-  subtitle: "Minimal identity fields that matter because they can help preserve session affinity, workflow reuse, or trace correlation.",
-  columns: slides[3].columns,
+const focusedSchedulingSlides = [
+  selectHarnessColumns(
+    schedulingFocus,
+    "Scheduling hints — Dynamo, NAT, Claude, Codex",
+    ["Dynamo", "NeMo Agent Toolkit", "Claude Code", "Codex"],
+    screenshots[0]
+  ),
+  selectHarnessColumns(
+    schedulingFocus,
+    "Scheduling hints — DeepSeek, Deep Agents, Qwen",
+    ["DeepSeek Harness", "Deep Agents", "Qwen Code"],
+    screenshots[0]
+  )
+];
+
+const focusedCacheSlides = [
+  selectHarnessColumns(
+    cacheFocus,
+    "KV / prompt cache — Dynamo, NAT, Claude, Codex",
+    ["Dynamo", "NeMo Agent Toolkit", "Claude Code", "Codex"],
+    screenshots[2]
+  ),
+  selectHarnessColumns(
+    cacheFocus,
+    "KV / prompt cache — DeepSeek, Deep Agents, Qwen",
+    ["DeepSeek Harness", "Deep Agents", "Qwen Code"],
+    screenshots[2]
+  )
+];
+
+const additionalHarnessSources = [
+  "https://pi.dev/",
+  "https://github.com/earendil-works/pi",
+  "https://opencode.ai/",
+  "https://opencode.ai/docs/",
+  "https://docs.openclaw.ai/plugins/sdk-agent-harness",
+  "https://docs.openclaw.ai/tools/plugin",
+  "https://hermes-agent.nousresearch.com/docs/",
+  "https://github.com/NousResearch/hermes-agent",
+  "https://pi.dev/docs/latest/providers",
+  "https://pi.dev/docs/latest/extensions",
+  "https://pi.dev/docs/latest/models",
+  "https://pi.dev/docs/latest/compaction",
+  "https://opencode.ai/docs/cli/",
+  "https://opencode.ai/docs/plugins/",
+  "https://opencode.ai/docs/providers/",
+  "https://docs.openclaw.ai/providers/openai",
+  "https://docs.openclaw.ai/concepts/model-providers",
+  "https://docs.openclaw.ai/plugins/sdk-agent-harness",
+  "https://hermes-agent.nousresearch.com/docs/integrations/providers",
+  "https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching",
+  "https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation",
+  "https://hermes-agent.nousresearch.com/docs/developer-guide/agent-loop"
+].join("; ");
+
+const harnessAdditions = [
+  [
+    "Yes",
+    "Pi Agent Harness",
+    "Distinct lightweight agent harness; worth evaluating separately. Pi describes itself as a minimal agent harness, and its repo identifies Pi Agent Harness components.",
+    "pi.dev; GitHub"
+  ],
+  [
+    "Yes",
+    "OpenCode",
+    "Distinct open-source coding agent/harness with terminal, desktop, and IDE surfaces.",
+    "opencode.ai"
+  ],
+  [
+    "Yes",
+    "OpenClaw",
+    "Distinct agent runtime and plugin harness ecosystem. It has explicit agent harness plugin docs, so it fits this comparison.",
+    "OpenClaw docs"
+  ],
+  [
+    "Yes",
+    "Hermes Agent",
+    "Distinct Nous Research agent harness with memory, skills, messaging, and long-running behavior.",
+    "Hermes docs; GitHub"
+  ]
+];
+
+const additionalScheduling = {
+  title: "Additional harnesses — scheduling and workload hints",
+  subtitle: "Strict view: nearby orchestration metadata is shown as '-' unless it maps to a concrete backend/provider request field.",
+  columns: ["Canonical signal", "Pi Agent Harness", "OpenCode", "OpenClaw", "Hermes Agent"],
   rows: [
-    slides[0].rows.find((row) => row[0] === "Prefix/workflow reuse ID"),
-    slides[3].rows.find((row) => row[0] === "Session ID"),
-    slides[3].rows.find((row) => row[0] === "Parent session"),
-    slides[3].rows.find((row) => row[0] === "W3C trace context")
+    ["Soft priority", "None", "None", "None", "None"],
+    ["Strict priority tier", "None", "None", "None", "None"],
+    ["Latency sensitivity", "None", "None", "None", "None"],
+    ["Provider speed/QoS tier", "None", "None", "Fast mode maps to service_tier=priority on supported OpenAI requests", "request_overrides can set service_tier; /fast can layer service_tier/speed"],
+    ["Expected output length", "None", "None", "None", "None"],
+    ["Expected interarrival time", "None", "None", "None", "None"],
+    ["Predicted remaining calls", "None", "None", "None", "None"],
+    ["Prefix/workflow reuse ID", "None", "None", "None", "None"]
   ]
 };
 
-const focusedSlides = [
-  {
-    spec: schedulingFocus,
-    source: screenshots[0]
-  },
-  {
-    spec: cacheFocus,
-    source: screenshots[2]
-  },
-  {
-    spec: routingFocus,
-    source: screenshots[5]
-  },
-  {
-    spec: affinityFocus,
-    source: `${screenshots[0]}; ${screenshots[3]}`
-  }
+const additionalCache = {
+  title: "Additional harnesses — KV cache and prompt-cache handling",
+  subtitle: "These harnesses mostly preserve or configure provider prompt caching rather than controlling KV cache placement directly.",
+  columns: ["Canonical signal", "Pi Agent Harness", "OpenCode", "OpenClaw", "Hermes Agent"],
+  rows: [
+    ["Cache key/bucket", "Automatic provider prompt caching; no client cache key", "Provider-managed; optional Helicone response-cache headers via plugin", "Provider-managed; cached WebSocket can reuse prior response state", "Prompt tiers/cache boundaries; model participates in cache key"],
+    ["Cache namespace/isolation", "Provider/account isolation only", "Provider/plugin-dependent", "Provider/session isolation only", "Provider/session/model isolation only"],
+    ["Cache TTL", "prompt_cache_retention or cache_control.ttl in custom model/provider settings", "No native prompt-cache TTL; response cache possible through provider/plugin", "Provider-managed TTL; no generic TTL hint", "Default 5m; 1h for long-running sessions where supported"],
+    ["Cache entry type", "Provider-specific cache_control format", "None", "Provider-managed", "Anthropic prompt-caching markers"],
+    ["Eviction priority", "None", "None", "None", "None"],
+    ["Speculative prefill", "None", "None", "Cached WebSocket/prewarm; not KV prefill", "None"],
+    ["Cache-hit feedback", "Footer shows token/cache usage and cost", "Stats/provider usage; cache feedback depends on provider/plugin", "Provider usage/tracing", "Prompt cache metrics"],
+    ["Cache pinning", "Long retention where provider supports it; not pinning", "None", "Provider-managed only", "1h retention where supported; not pinning"]
+  ]
+};
+
+const additionalSchedulingSlides = [
+  selectHarnessColumns(
+    additionalScheduling,
+    "Additional scheduling hints — Pi and OpenCode",
+    ["Pi Agent Harness", "OpenCode"],
+    additionalHarnessSources
+  ),
+  selectHarnessColumns(
+    additionalScheduling,
+    "Additional scheduling hints — OpenClaw and Hermes",
+    ["OpenClaw", "Hermes Agent"],
+    additionalHarnessSources
+  )
+];
+
+const additionalCacheSlides = [
+  selectHarnessColumns(
+    additionalCache,
+    "Additional KV / prompt cache — Pi and OpenCode",
+    ["Pi Agent Harness", "OpenCode"],
+    additionalHarnessSources
+  ),
+  selectHarnessColumns(
+    additionalCache,
+    "Additional KV / prompt cache — OpenClaw and Hermes",
+    ["OpenClaw", "Hermes Agent"],
+    additionalHarnessSources
+  )
 ];
 
 function addDeckFooter(slide, slideNumber, textValue) {
@@ -605,7 +745,7 @@ function buildOverviewSlide(p) {
   });
   addText(
     slide,
-    "This deck keeps only signals that can plausibly affect when a request runs, where it is placed, or how KV/cache state is reused.",
+    "This deck keeps only signals that can plausibly affect when a request runs, how serving load is predicted, or how KV/cache state is reused.",
     70,
     158,
     1450,
@@ -614,21 +754,73 @@ function buildOverviewSlide(p) {
   );
   const lanes = [
     ["Scheduling", "Queue order, QoS tier, latency sensitivity, output-length and arrival predictions", ["priority", "latency_sensitivity", "osl", "prefix_id", "total_requests", "iat"]],
-    ["KV / Cache", "Cache keying, namespace, TTL, entry type, eviction priority, prefill, hit feedback", ["prompt_cache_key", "cache_control", "cache_salt", "speculative_prefill"]],
-    ["Routing / Worker", "Backend selection, prefill/decode worker placement, data-parallel rank, sticky routing", ["backend_instance_id", "prefill_worker_id", "decode_worker_id", "dp_rank"]],
-    ["Affinity Identity", "Session, parent session, workflow prefix, and trace context used to correlate or preserve placement", ["session_id", "parent_session_id", "prefix_id", "traceparent"]]
+    ["KV / Cache", "Cache keying, namespace, TTL, entry type, eviction priority, prefill, hit feedback", ["prompt_cache_key", "cache_control", "cache_salt", "speculative_prefill"]]
   ];
   lanes.forEach((lane, i) => {
-    const x = 78 + i * 450;
-    addRect(slide, x, 260, 382, 330, i % 2 === 0 ? C.white : C.alt, C.grid, 1);
-    addText(slide, lane[0], x + 22, 282, 330, 34, { size: 25, bold: true });
-    addText(slide, lane[1], x + 22, 330, 328, 76, { size: 17, color: C.sub });
-    addText(slide, lane[2].map((item) => `- ${item}`).join("\n"), x + 22, 430, 328, 124, { size: 16, color: C.ink, font: "Courier New" });
+    const x = 118 + i * 860;
+    addRect(slide, x, 252, 760, 350, i % 2 === 0 ? C.white : C.alt, C.grid, 1);
+    addText(slide, lane[0], x + 28, 282, 600, 40, { size: 28, bold: true });
+    addText(slide, lane[1], x + 28, 342, 620, 76, { size: 20, color: C.sub });
+    addText(slide, lane[2].map((item) => `- ${item}`).join("\n"), x + 28, 448, 620, 120, { size: 18, color: C.ink, font: "Courier New" });
   });
-  addText(slide, "Dropped from this focused deck: general reasoning controls, sampling, output verbosity, lifecycle metadata, and broad observability fields that do not directly control serving behavior.", 82, 676, 1540, 52, { size: 22, bold: true });
+  addText(slide, "Out of scope for this research pass: routing, placement, worker selection, affinity identity, general reasoning controls, lifecycle metadata, and broad observability fields.", 82, 676, 1540, 52, { size: 22, bold: true });
   addText(slide, "NeMo/NAT NVIDIA-extension hint bundle: priority, latency_sensitivity, osl, prefix_id, total_requests, iat.", 82, 748, 1540, 32, { size: 20, color: C.sub, font: "Courier New" });
-  addDeckFooter(slide, 2, "Scope rule: keep signals that affect scheduling, KV/cache handling, worker placement, routing, or affinity.");
-  slide.speakerNotes.textFrame.setText("[Sources]\n- User request to narrow to KV cache handling, scheduling handling, and worker selection handling.\n");
+  addDeckFooter(slide, 2, "Scope rule: keep signals that affect scheduling/workload prediction or KV/prompt-cache handling.");
+  slide.speakerNotes.textFrame.setText("[Sources]\n- User request to narrow to KV cache handling and scheduling/workload prediction hints.\n");
+}
+
+function buildHarnessAdditionsSlide(p, slideNumber) {
+  const slide = p.slides.add();
+  slide.background.fill = C.white;
+  addText(slide, "New harnesses added to the evaluation", 56, 42, 1500, 56, { size: 38, bold: true });
+  addText(slide, "These additions are distinct agent harnesses, but they are evaluated only for scheduling/workload and KV/prompt-cache signals.", 56, 104, 1540, 40, { size: 22, color: C.sub });
+  slide.shapes.add({
+    geometry: "straightConnector1",
+    position: { left: 56, top: 158, width: 1806, height: 0 },
+    fill: "none",
+    line: { style: "solid", fill: C.rule, width: 1 },
+  });
+
+  const left = 66;
+  const top = 188;
+  const widths = [92, 280, 1020, 392];
+  const headerH = 58;
+  const rowH = 142;
+  const headers = ["Add?", "Harness", "Why included", "Verified source"];
+  let x = left;
+  headers.forEach((header, i) => {
+    drawCell(slide, header, x, top, widths[i], headerH, { fill: C.head, bold: true, size: 18, font: "Helvetica Neue" });
+    x += widths[i];
+  });
+
+  harnessAdditions.forEach((row, r) => {
+    let cx = left;
+    row.forEach((value, c) => {
+      const y = top + headerH + r * rowH;
+      addRect(slide, cx, y, widths[c], rowH, r % 2 === 0 ? C.white : C.alt, C.grid, 1);
+      addText(slide, value, cx + 12, y + 14, widths[c] - 24, rowH - 24, {
+        size: c === 2 ? 20 : 19,
+        bold: c === 0 || c === 1,
+        color: c === 3 ? C.sub : C.ink,
+        font: "Helvetica Neue",
+      });
+      cx += widths[c];
+    });
+  });
+
+  addText(slide, "Excluded as already covered: NeMo/NAT, Qwen Code, Codex, Claude Code, Dynamo, and Deep Agents.", 70, 852, 1450, 34, { size: 21, bold: true });
+  addDeckFooter(slide, slideNumber, "New additions verified against official docs and repositories.");
+  slide.speakerNotes.textFrame.setText(
+    "[Sources]\n" +
+      "- https://pi.dev/\n" +
+      "- https://github.com/earendil-works/pi\n" +
+      "- https://opencode.ai/\n" +
+      "- https://opencode.ai/docs/\n" +
+      "- https://docs.openclaw.ai/plugins/sdk-agent-harness\n" +
+      "- https://docs.openclaw.ai/tools/plugin\n" +
+      "- https://hermes-agent.nousresearch.com/docs/\n" +
+      "- https://github.com/NousResearch/hermes-agent\n"
+  );
 }
 
 const definitionSections = [
@@ -652,26 +844,6 @@ const definitionSections = [
       ["cache_control", "Instructions about how cache should behave. For example: whether to cache, how long to keep it, or what kind of cache entry it is."],
       ["cache_salt", "A namespace separator for cache entries. It prevents two users, tenants, or workloads from accidentally sharing the same cache entry even if their prompt text looks similar."],
       ["speculative_prefill", "A hint to prepare or precompute part of the prompt before it is definitely needed. It can reduce latency if the prediction is right."]
-    ]
-  },
-  {
-    title: "Routing and worker signals in simple English",
-    subtitle: "These hints affect where the request goes and which worker performs each part of inference.",
-    items: [
-      ["backend_instance_id", "Directly asks for a specific backend server or model instance to handle the request."],
-      ["prefill_worker_id", "Chooses the worker that should run the prefill phase, where the prompt is processed and KV cache is built."],
-      ["decode_worker_id", "Chooses the worker that should run the decode phase, where output tokens are generated."],
-      ["dp_rank", "Means data-parallel rank. It identifies a specific replica or shard among multiple parallel workers."]
-    ]
-  },
-  {
-    title: "Affinity identity signals in simple English",
-    subtitle: "These identifiers help keep related requests connected for routing, reuse, or tracing.",
-    items: [
-      ["session_id", "A stable ID for a conversation or workflow session. It helps keep related requests together."],
-      ["parent_session_id", "Links a session to a parent session. Useful when one agent or workflow spawns another."],
-      ["prefix_id", "Identifies a shared reusable prefix. In affinity context, it helps route related requests toward cache reuse."],
-      ["traceparent", "A standard tracing header. It helps observability systems connect one request to the larger distributed trace it belongs to."]
     ]
   }
 ];
@@ -738,21 +910,6 @@ function buildSchemaSlide(p, slideNumber) {
     "eviction_priority": "...",
     "speculative_prefill": true,
     "hit_feedback": "..."
-  },
-  "routing": {
-    "backend_instance_id": "...",
-    "prefill_worker_id": "...",
-    "decode_worker_id": "...",
-    "dp_rank": "...",
-    "sticky_routing": "...",
-    "provider_routing_hint": "...",
-    "cache_aware_placement": "..."
-  },
-  "affinity": {
-    "session_id": "...",
-    "parent_session_id": "...",
-    "prefix_id": "...",
-    "trace_context": "..."
   }
 }`;
   addRect(slide, 82, 238, 980, 676, C.alt, C.grid, 1);
@@ -791,15 +948,15 @@ function buildSlide(p, spec, slideNumber, sourcePath) {
   const left = 56;
   const tableW = 1806;
   const availableH = 850 - (spec.subtitle ? 20 : 0);
-  const headerH = 58;
+  const headerH = 64;
   const rowH = Math.floor((availableH - headerH) / spec.rows.length);
-  const firstW = spec.columns[0].length > 9 ? 245 : 225;
+  const firstW = spec.columns.length <= 3 ? 310 : (spec.columns.length <= 5 ? 265 : (spec.columns[0].length > 9 ? 245 : 225));
   const restW = (tableW - firstW) / (spec.columns.length - 1);
   const widths = [firstW, ...Array(spec.columns.length - 1).fill(restW)];
 
   let x = left;
   spec.columns.forEach((col, i) => {
-    drawCell(slide, col, x, top, widths[i], headerH, { fill: C.head, bold: true, size: i === 0 ? 19 : 17, font: "Helvetica Neue" });
+    drawCell(slide, col, x, top, widths[i], headerH, { fill: C.head, bold: true, size: i === 0 ? 21 : 20, font: "Helvetica Neue" });
     x += widths[i];
   });
 
@@ -816,6 +973,8 @@ function buildSlide(p, spec, slideNumber, sourcePath) {
         compact: c > 0,
         signalLabel: row[0],
         harness: spec.columns[c],
+        compactDescSize: spec.columns.length <= 3 ? 18 : (spec.columns.length <= 5 ? 16.5 : 16),
+        compactJsonSize: spec.columns.length <= 3 ? 15 : (spec.columns.length <= 5 ? 14 : 13.4),
       });
       cx += widths[c];
     });
@@ -829,10 +988,20 @@ async function main() {
   const p = Presentation.create({ slideSize: { width: W, height: H } });
   buildLegendSlide(p);
   buildOverviewSlide(p);
-  definitionSections.forEach((section, i) => buildDefinitionSlide(p, section, i + 3));
-  const tableStart = 3 + definitionSections.length;
-  focusedSlides.forEach((entry, i) => buildSlide(p, entry.spec, tableStart + i, entry.source));
-  buildSchemaSlide(p, tableStart + focusedSlides.length);
+  buildHarnessAdditionsSlide(p, 3);
+
+  let slideNumber = 4;
+  buildDefinitionSlide(p, definitionSections[0], slideNumber++);
+  [...focusedSchedulingSlides, ...additionalSchedulingSlides].forEach((entry) => {
+    buildSlide(p, entry.spec, slideNumber++, entry.source);
+  });
+
+  buildDefinitionSlide(p, definitionSections[1], slideNumber++);
+  [...focusedCacheSlides, ...additionalCacheSlides].forEach((entry) => {
+    buildSlide(p, entry.spec, slideNumber++, entry.source);
+  });
+
+  buildSchemaSlide(p, slideNumber++);
 
   for (const [index, slide] of p.slides.items.entries()) {
     const stem = `slide-${String(index + 1).padStart(2, "0")}`;
