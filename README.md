@@ -95,14 +95,25 @@ runs use P0 through P5.
 
 The newest experiment sends real coding-agent CLIs through the inspection
 gateway, then forwards their requests to SGLang with normalized priority
-metadata. This is stronger than the earlier adapter-only run because Codex,
-Claude Code, OpenCode, and Qwen Code each generate their own live request shape.
+metadata. This is stronger than the earlier adapter-only run because each
+native CLI generates its own live request shape before our gateway normalizes
+priority at the SGLang boundary.
 
-Current archived run:
+Current archived four-client run:
 
 ```text
 sglang_direct_kv/artifacts/results/reports/real_client_deadline_pressure_20260901_035223/master_report.html
 ```
+
+Native client smoke status as of September 1, 2026:
+
+```text
+codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent
+```
+
+`nemo_agent_toolkit` and `hermes_agent` are installed in isolated Python 3.11
+venvs on EC2 and should be passed into experiment runs with
+`HARNESS_NAT_BIN` and `HARNESS_HERMES_BIN`.
 
 Native-only run command:
 
@@ -110,6 +121,8 @@ Native-only run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
+HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
+HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_LABEL="native_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
@@ -123,12 +136,14 @@ Mixed native-plus-adapter run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESSES="codex claude_code opencode qwen_code" \
+HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
+HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_BUILDER_MODE=lightweight \
 MAX_TOTAL_TOKENS=24576 \
-REPORT_LABEL="real_client_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
+REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
@@ -138,7 +153,9 @@ report label without rerunning completed cases:
 
 ```bash
 SKIP_EXISTING_CASES=1 \
-HARNESSES="codex claude_code opencode qwen_code" \
+HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
+HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_BUILDER_MODE=lightweight \
@@ -148,7 +165,7 @@ bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-Headline result from the current run. Values are median first-replay-token
+Headline result from the archived four-client run. Values are median first-replay-token
 lateness, so lower is better and anything above `0 ms` missed the replay
 deadline:
 
@@ -159,19 +176,19 @@ deadline:
 | OpenCode | `3.76 s` | `3.94 s` | `73.99 s` | `14.23 s` | `66.79 s` | `28.97 s` |
 | Qwen Code | `5.78 s` | `5.86 s` | `73.24 s` | `20.77 s` | `92.95 s` | `69.11 s` |
 
-Interpretation: end-to-end priority hints helped every stressed real-client
-harness, especially at P3. But the priority path still missed the tight replay
-deadline under P3 and P5 because priority can move a replay earlier in the
-queue; it cannot create extra GPU compute, KV capacity, or host-to-device
+Interpretation from that run: end-to-end priority hints helped every stressed
+real-client harness, especially at P3. But the priority path still missed the
+tight replay deadline under P3 and P5 because priority can move a replay earlier
+in the queue; it cannot create extra GPU compute, KV capacity, or host-to-device
 bandwidth. The P0 rows are also above zero because real CLIs add their own
 startup/protocol overhead around the backend call.
 
 ## Multi-Harness Deadline Pressure
 
 The broad experiment compares the same SGLang priority boundary across ten
-non-Dynamo agent harness shapes. Some entries now launch real native CLIs; the
-remaining entries are still adapter-backed until their native client can be
-installed and smoke-tested cleanly on the experiment host.
+non-Dynamo agent harness shapes. Eight entries now launch real native CLIs; the
+DeepSeek Harness path remains adapter-backed until its native CLI exposes a
+reliable headless command path.
 
 | Harness | Current experiment path |
 | --- | --- |
@@ -182,9 +199,9 @@ installed and smoke-tested cleanly on the experiment host.
 | `qwen_code` | Real Qwen Code CLI through the inspection gateway. |
 | `pi_agent_harness` | Real Pi CLI with a generated OpenAI-compatible gateway provider extension. |
 | `openclaw` | Real OpenClaw CLI with a generated OpenAI-compatible gateway provider config. |
-| `nemo_agent_toolkit` | Adapter-backed; native NAT package is blocked on the current EC2 Python/package constraints. |
+| `nemo_agent_toolkit` | Real NAT CLI through a generated OpenAI-compatible workflow config. |
 | `deepseek_harness` | Adapter-backed; native `dsh` CLI currently hangs during headless `--help` / `--version` probing. |
-| `hermes_agent` | Adapter-backed on the current EC2 image; Hermes requires Python 3.11+, while the EC2 host is Python 3.9. |
+| `hermes_agent` | Real Hermes Agent CLI through a generated OpenAI-compatible provider config. |
 
 It runs each harness in:
 
@@ -205,7 +222,9 @@ Main run command:
 cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
-HARNESSES="hatcher codex claude_code opencode qwen_code nemo_agent_toolkit deepseek_harness pi_agent_harness openclaw hermes_agent" \
+HARNESS_NAT_BIN=/tmp/nat_py311_venv/bin/nat \
+HARNESS_HERMES_BIN=/tmp/hermes_agent_py311_venv/bin/hermes \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent deepseek_harness" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints" \
 REPORT_LABEL="multi_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
@@ -457,15 +476,15 @@ Native client status:
 | Qwen Code | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
 | Pi Agent Harness | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
 | OpenClaw | Native CLI wired and smoke-tested. | Include in real-client pressure runs. |
-| NeMo Agent Toolkit / NAT | Adapter-backed. | Re-probe on a Python 3.11+ EC2 image or install-compatible NAT environment. |
+| NeMo Agent Toolkit / NAT | Native CLI wired and smoke-tested with `/tmp/nat_py311_venv/bin/nat`. | Include in real-client pressure runs with `HARNESS_NAT_BIN` set. |
 | DeepSeek Harness | Adapter-backed. | Re-probe after the `dsh` CLI exposes a reliable headless command path. |
-| Hermes Agent | Adapter-backed on current EC2. | Re-probe after the EC2 image has Python 3.11+. |
+| Hermes Agent | Native CLI wired and smoke-tested with `/tmp/hermes_agent_py311_venv/bin/hermes`. | Include in real-client pressure runs with `HARNESS_HERMES_BIN` set. |
 
 The next recommended path is:
 
-1. Run the P0/P3/P5 sentinel ladder across the six native harness paths through [run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh).
-2. Rebuild the EC2 Python side with Python 3.11+ before promoting NAT and Hermes from adapters to real clients.
-3. Keep DeepSeek Harness adapter-backed until `dsh` can run a non-interactive smoke request without hanging.
+1. Run the P0/P3/P5 sentinel ladder across the eight real CLI harness paths plus the Hatcher control through [run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh).
+2. Keep DeepSeek Harness adapter-backed until `dsh` can run a non-interactive smoke request without hanging.
+3. Leave Dynamo out of local EC2 runs unless the host has enough spare CPU, memory, and disk for its runtime stack.
 
 ## Current Research Claim
 

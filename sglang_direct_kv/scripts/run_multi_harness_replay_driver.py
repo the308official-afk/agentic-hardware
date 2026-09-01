@@ -356,7 +356,51 @@ def nemo_agent_toolkit_command(
     meta: dict[str, Any],
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
-    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "nemo_agent_toolkit")
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    nat_home = (log_dir / "nemo_agent_toolkit_config" / str(meta["label"])).resolve()
+    nat_home.mkdir(parents=True, exist_ok=True)
+    config_path = nat_home / "workflow.json"
+    config = {
+        "llms": {
+            "harness_llm": {
+                "_type": "openai",
+                "api_key": "dummy",
+                "base_url": provider_base,
+                "model_name": model,
+                "api_type": "chat_completion",
+                "temperature": 0,
+                "max_tokens": int(meta.get("max_tokens") or 8),
+                "request_timeout": 900,
+                "max_retries": 0,
+            }
+        },
+        "workflow": {
+            "_type": "chat_completion",
+            "llm_name": "harness_llm",
+            "system_prompt": "You are a concise coding-agent wireability probe. Do not use tools.",
+        },
+    }
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+    nat = os.environ.get("HARNESS_NAT_BIN") or shutil.which("nat")
+    if not nat:
+        raise FileNotFoundError("nat CLI not found; set HARNESS_NAT_BIN or install nvidia-nat.")
+    cmd = [
+        nat,
+        "run",
+        "--config_file",
+        str(config_path),
+        "--input",
+        f"{prompt}\n\n{marker(meta)}",
+        "--user_id",
+        "harness_probe_user",
+        "--conversation_id",
+        str(meta["label"]),
+    ]
+    return cmd, {
+        "OPENAI_API_KEY": "dummy",
+        "NAT_CONFIG_FILE": str(config_path),
+        "NAT_HOME": str(nat_home),
+    }
 
 
 def deepseek_harness_command(
@@ -519,7 +563,74 @@ def hermes_agent_command(
     meta: dict[str, Any],
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
-    return openai_chat_probe_command(gateway_base, model, prompt, meta, log_dir, "hermes_agent")
+    provider_base = f"{gateway_base.rstrip('/')}/v1"
+    hermes_home = (log_dir / "hermes_agent_config" / str(meta["label"])).resolve()
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    config_path = hermes_home / "config.yaml"
+    env_path = hermes_home / ".env"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model:",
+                "  provider: harness",
+                f"  default: {json.dumps(model)}",
+                f"  model: {json.dumps(model)}",
+                f"  base_url: {json.dumps(provider_base)}",
+                '  api_key: "$HARNESS_GATEWAY_API_KEY"',
+                "  api_mode: chat_completions",
+                "  context_length: 65536",
+                "providers:",
+                "  harness:",
+                "    name: Harness Gateway",
+                f"    base_url: {json.dumps(provider_base)}",
+                '    api_key: "$HARNESS_GATEWAY_API_KEY"',
+                "    api_mode: chat_completions",
+                f"    model: {json.dumps(model)}",
+                "    models:",
+                f"      {json.dumps(model)}:",
+                "        context_length: 65536",
+                "toolsets: []",
+                "agent:",
+                "  max_turns: 1",
+                "  api_max_retries: 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env_path.write_text("HARNESS_GATEWAY_API_KEY=dummy\nOPENAI_API_KEY=dummy\n", encoding="utf-8")
+    hermes = os.environ.get("HARNESS_HERMES_BIN") or shutil.which("hermes") or shutil.which("hermes-agent")
+    if hermes:
+        cmd = [hermes]
+    else:
+        cmd = [sys.executable, "-m", "hermes_cli"]
+    cmd.extend(
+        [
+            "--ignore-rules",
+            "--accept-hooks",
+            "--yolo",
+            "--provider",
+            "harness",
+            "--model",
+            model,
+            "--toolsets",
+            "",
+            "--oneshot",
+            f"{prompt}\n\n{marker(meta)}",
+        ]
+    )
+    return cmd, {
+        "HERMES_HOME": str(hermes_home),
+        "HERMES_CONFIG": str(config_path),
+        "HERMES_ENV": str(env_path),
+        "HERMES_ACCEPT_HOOKS": "1",
+        "HERMES_YOLO_MODE": "1",
+        "HERMES_INFERENCE_PROVIDER": "harness",
+        "HERMES_INFERENCE_MODEL": model,
+        "HARNESS_GATEWAY_API_KEY": "dummy",
+        "OPENAI_API_KEY": "dummy",
+        "OPENAI_BASE_URL": provider_base,
+    }
 
 
 async def run_cli_request(

@@ -5,7 +5,7 @@ set -euo pipefail
 # in-repo Hatcher control. Adapter-only harnesses stay out of this run by
 # default so the Replay Deadline Pressure Chart is not mixed.
 
-export HARNESSES="${HARNESSES:-hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw}"
+export HARNESSES="${HARNESSES:-hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent}"
 export REPORT_LABEL="${REPORT_LABEL:-native_harness_deadline_pressure_$(date +%Y%m%d_%H%M%S)}"
 export REPORT_BUILDER_MODE="${REPORT_BUILDER_MODE:-lightweight}"
 

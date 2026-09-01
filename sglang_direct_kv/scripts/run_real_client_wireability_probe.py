@@ -17,7 +17,9 @@ from typing import Any
 from run_multi_harness_replay_driver import (
     claude_command,
     codex_command,
+    hermes_agent_command,
     marker,
+    nemo_agent_toolkit_command,
     opencode_command,
     openclaw_command,
     pi_agent_harness_command,
@@ -25,7 +27,16 @@ from run_multi_harness_replay_driver import (
 )
 
 
-CLIENTS = ("codex", "claude_code", "opencode", "qwen_code", "pi_agent_harness", "openclaw")
+CLIENTS = (
+    "codex",
+    "claude_code",
+    "opencode",
+    "qwen_code",
+    "pi_agent_harness",
+    "openclaw",
+    "nemo_agent_toolkit",
+    "hermes_agent",
+)
 
 
 class FakeSGLangHandler(BaseHTTPRequestHandler):
@@ -187,6 +198,12 @@ def command_for_client(
         return cmd, env, Path("/tmp")
     if client == "openclaw":
         cmd, env = openclaw_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, Path("/tmp")
+    if client == "nemo_agent_toolkit":
+        cmd, env = nemo_agent_toolkit_command(gateway_base, model, prompt, meta, log_dir)
+        return cmd, env, Path("/tmp")
+    if client == "hermes_agent":
+        cmd, env = hermes_agent_command(gateway_base, model, prompt, meta, log_dir)
         return cmd, env, Path("/tmp")
     raise ValueError(f"unsupported real client probe: {client}")
 
