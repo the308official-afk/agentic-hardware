@@ -99,10 +99,10 @@ metadata. This is stronger than the earlier adapter-only run because each
 native CLI generates its own live request shape before our gateway normalizes
 priority at the SGLang boundary.
 
-Current archived four-client run:
+Current archived native run:
 
 ```text
-sglang_direct_kv/artifacts/results/reports/real_client_deadline_pressure_20260901_035223/master_report.html
+sglang_direct_kv/artifacts/results/reports/native_harness_deadline_pressure_20260901_061452/master_report.html
 ```
 
 Native client smoke status as of September 1, 2026:
@@ -167,23 +167,30 @@ bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-Headline result from the archived four-client run. Values are median first-replay-token
+Headline result from the current native run. Values are median first-replay-token
 lateness, so lower is better and anything above `0 ms` missed the replay
 deadline:
 
 | Harness | P0 no-prefetch | P0 E2E | P3 no-prefetch | P3 E2E | P5 no-prefetch | P5 E2E |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex | `1.18 s` | `1.35 s` | `47.31 s` | `5.79 s` | `51.91 s` | `22.81 s` |
-| Claude Code | `1.40 s` | `1.46 s` | `63.26 s` | `10.01 s` | `49.56 s` | `18.66 s` |
-| OpenCode | `3.76 s` | `3.94 s` | `73.99 s` | `14.23 s` | `66.79 s` | `28.97 s` |
-| Qwen Code | `5.78 s` | `5.86 s` | `73.24 s` | `20.77 s` | `92.95 s` | `69.11 s` |
+| Hatcher | `0.22 s` | `0.22 s` | `24.46 s` | `4.73 s` | `35.59 s` | `21.35 s` |
+| Codex | `1.21 s` | `1.19 s` | `45.52 s` | `10.75 s` | `53.95 s` | `21.96 s` |
+| Claude Code | `1.38 s` | `1.36 s` | `63.41 s` | `11.73 s` | `49.62 s` | `18.18 s` |
+| OpenCode | `3.48 s` | `5.50 s` | `84.00 s` | `13.78 s` | `91.53 s` | `48.70 s` |
+| Qwen Code | `5.73 s` | `5.89 s` | `76.36 s` | `20.90 s` | `93.73 s` | `68.66 s` |
+| Pi Agent Harness | `1.29 s` | `1.35 s` | `60.83 s` | `10.55 s` | `46.35 s` | `18.83 s` |
+| OpenClaw | `6.82 s` | `6.96 s` | `74.94 s` | `18.58 s` | `84.24 s` | `54.60 s` |
+| NeMo Agent Toolkit / NAT | `3.60 s` | `3.64 s` | `67.73 s` | `10.25 s` | `51.43 s` | `19.01 s` |
+| Hermes Agent | `12.36 s` | `12.41 s` | `72.62 s` | `19.64 s` | `66.33 s` | `39.88 s` |
 
-Interpretation from that run: end-to-end priority hints helped every stressed
-real-client harness, especially at P3. But the priority path still missed the
-tight replay deadline under P3 and P5 because priority can move a replay earlier
-in the queue; it cannot create extra GPU compute, KV capacity, or host-to-device
-bandwidth. The P0 rows are also above zero because real CLIs add their own
-startup/protocol overhead around the backend call.
+Interpretation from this run: end-to-end priority hints helped every harness
+under P3 queue pressure and helped every reliable P5 boss-queue comparison, but
+the priority path still missed the tight replay deadline under P3 and P5.
+Priority can move a replay earlier in the queue; it cannot create extra GPU
+compute, KV capacity, or host-to-device bandwidth. The P0 rows are also above
+zero because real CLIs add startup/protocol overhead around the backend call.
+OpenCode P5 no-prefetch produced only one replay sample, so that one baseline
+median should be read as weaker evidence than the other P5 rows.
 
 ## Multi-Harness Deadline Pressure
 
