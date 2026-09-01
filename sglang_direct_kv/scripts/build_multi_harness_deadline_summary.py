@@ -504,13 +504,22 @@ def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]
             label = str(row.get("label") or row.get("request_id") or "")
             replay_row = replay_by_label.get((str(case_dir), label), {})
             gateway_start = by_label_event.get((label, "m27.request.start"), {})
+            nat_config = by_label_event.get((label, "m27.nat_wrapper.config_written"), {})
+            nat_process_start = by_label_event.get((label, "m27.nat_wrapper.process_start"), {})
+            nat_gateway_emit = by_label_event.get((label, "m27.nat_wrapper.first_gateway_emit"), {})
+            nat_process_exit = by_label_event.get((label, "m27.nat_wrapper.process_exit"), {})
             input_ns = int(float_value(row.get("ts_ns")))
             gateway_start_ns = int(float_value(gateway_start.get("ts_ns")))
+            nat_config_ns = int(float_value(nat_config.get("ts_ns")))
+            nat_process_start_ns = int(float_value(nat_process_start.get("ts_ns")))
+            nat_gateway_emit_ns = int(float_value(nat_gateway_emit.get("ts_ns")))
+            nat_process_exit_ns = int(float_value(nat_process_exit.get("ts_ns")))
             sglang_priority = replay_row.get("sglang_priority", gateway_start.get("sglang_priority", ""))
             translated = gateway_start.get("gateway_priority_translation", replay_row.get("gateway_priority_translation", ""))
             driver_intent_seen = "yes" if row.get("priority_intent") else "no"
             gateway_saw_intent = "yes" if gateway_start.get("experiment_priority_intent") else "no"
             native_signal = gateway_start.get("harness_emit_priority_signal", "")
+            nat_wrapper_seen = "yes" if nat_config or nat_process_start or nat_process_exit else "no"
             if driver_intent_seen != "yes":
                 verdict = "driver intent missing"
             elif not gateway_start:
@@ -546,6 +555,31 @@ def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]
                         replay_row.get("gateway_priority_translation_source", ""),
                     ),
                     "sglang_priority_seen": sglang_priority,
+                    "nat_wrapper_seen": nat_wrapper_seen,
+                    "nat_priority_fields": nat_config.get("nat_priority_fields", ""),
+                    "nat_priority_field_source": nat_config.get("nat_priority_field_source", ""),
+                    "nat_config_delay_ms": (
+                        round(ns_to_ms_delta(input_ns, nat_config_ns), 3)
+                        if ns_to_ms_delta(input_ns, nat_config_ns) is not None
+                        else ""
+                    ),
+                    "nat_process_start_delay_ms": (
+                        round(ns_to_ms_delta(input_ns, nat_process_start_ns), 3)
+                        if ns_to_ms_delta(input_ns, nat_process_start_ns) is not None
+                        else ""
+                    ),
+                    "nat_first_gateway_emit_delay_ms": (
+                        round(ns_to_ms_delta(input_ns, nat_gateway_emit_ns), 3)
+                        if ns_to_ms_delta(input_ns, nat_gateway_emit_ns) is not None
+                        else ""
+                    ),
+                    "nat_process_exit_delay_ms": (
+                        round(ns_to_ms_delta(input_ns, nat_process_exit_ns), 3)
+                        if ns_to_ms_delta(input_ns, nat_process_exit_ns) is not None
+                        else ""
+                    ),
+                    "nat_gateway_emit_seen": nat_process_exit.get("gateway_emit_seen", ""),
+                    "nat_wrapper_total_ms": nat_process_exit.get("wrapper_total_ms", ""),
                     "harness_emit_delay_ms": (
                         round(ns_to_ms_delta(input_ns, gateway_start_ns), 3)
                         if ns_to_ms_delta(input_ns, gateway_start_ns) is not None
@@ -651,6 +685,15 @@ HARNESS_PRIORITY_COLUMNS = [
     "gateway_translated_priority",
     "gateway_translation_source",
     "sglang_priority_seen",
+    "nat_wrapper_seen",
+    "nat_priority_fields",
+    "nat_priority_field_source",
+    "nat_config_delay_ms",
+    "nat_process_start_delay_ms",
+    "nat_first_gateway_emit_delay_ms",
+    "nat_process_exit_delay_ms",
+    "nat_gateway_emit_seen",
+    "nat_wrapper_total_ms",
     "harness_emit_delay_ms",
     "backend_ms",
     "first_token_lateness_ms",

@@ -79,6 +79,13 @@ LangChain emits that as `service_tier=priority` plus top-level
 `agentic_hints.priority_class=urgent`. The gateway records those emitted fields
 and translates them to SGLang `priority=100`.
 
+NAT instrumentation is intentionally kept outside the installed NAT package.
+The driver calls
+[`sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py`](sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py),
+which writes the NAT workflow config, launches `nat run`, records wrapper
+lifecycle events, and lets the gateway prove the emitted priority-bearing HTTP
+request. This keeps the test portable across NAT versions, EC2, and GH200.
+
 This speculative prefill mode is not SGLang speculative decoding. It mimics
 Dynamo's agent hint behavior: after the current turn/tool-call prefix is known,
 send a small background prefill so the later replay can reuse warmed KV. Older
@@ -452,6 +459,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness pressure experiment and writes the latest report. |
 | [sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh) | Runs only the native CLI harnesses plus the Hatcher control. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
+| [sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py](sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py) | Portable NAT wrapper that records config, process, and gateway-emission lifecycle events without patching NAT itself. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
 | [sglang_direct_kv/configs/hardware/](sglang_direct_kv/configs/hardware/) | EC2 and GH200 pressure profiles. |
 | [sglang_direct_kv/scripts/run_real_client_wireability_probe.py](sglang_direct_kv/scripts/run_real_client_wireability_probe.py) | Launches real client CLIs against the inspection gateway and reports the live request shape observed at the boundary. |
@@ -484,6 +492,14 @@ python scripts/run_real_client_wireability_probe.py \
 If `--target-base` is omitted, the probe uses a fake local SGLang-compatible
 backend. Pass `--target-base http://127.0.0.1:30000` to observe real clients
 through the gateway while forwarding to a running SGLang server.
+
+For a stronger NAT-specific internal scheduling test, NAT also exposes
+`nat serve`, which runs a workflow through the FastAPI front end. Use that path
+when the goal is to send urgent and non-urgent requests into one shared NAT
+service and check whether urgent requests exit NAT before older non-urgent
+requests. The current wrapper proves process-level pass-through and overhead;
+the shared-service probe is the right next step for proving internal NAT
+priority scheduling behavior.
 
 Latest EC2 wireability result:
 
@@ -649,6 +665,7 @@ the bottom. Important evidence files include:
 | Artifact | What It Shows |
 | --- | --- |
 | `global_kv_readiness_by_mode.csv` | Replay first-token lateness by mode, harness, and pressure level. |
+| `harness_priority_preservation_proof.csv` | Pre-harness priority proof: driver intent, harness input signal, emitted harness signal, gateway translation, SGLang priority, and NAT wrapper lifecycle fields when NAT is used. |
 | `speculative_prefill_proof.csv` | Dynamo-like warmup proof: hint seen, background warmup timing, cached-prefix reuse, and replay timing. |
 | `replay_queue_timing.csv` | Driver release, backend receive, scheduler admission, and first-token timing. |
 | `dynamo_priority_queue_effectiveness.csv` | Priority queue behavior and older lower-priority work bypass evidence. |

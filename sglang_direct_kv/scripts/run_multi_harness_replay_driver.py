@@ -145,27 +145,6 @@ def outbound_priority_fields(meta: dict[str, Any], api_kind: str) -> dict[str, A
     }
 
 
-def nat_openai_priority_config_fields(meta: dict[str, Any]) -> dict[str, Any]:
-    if not pre_harness_priority_enabled(str(meta.get("mode") or "")):
-        return {}
-    intent = meta.get("priority_intent")
-    if not isinstance(intent, dict):
-        return {}
-    priority_class = str(intent.get("class") or "")
-    if priority_class != "urgent":
-        return {}
-    return {
-        "service_tier": "priority",
-        "extra_body": {
-            "agentic_hints": {
-                "priority_class": "urgent",
-                "reason": str(intent.get("reason") or "tool_replay_deadline"),
-                "deadline_ms": str(intent.get("deadline_ms") or ""),
-            }
-        },
-    }
-
-
 def estimate_tokens(prompt: str) -> int:
     return max(1, int(round(len(prompt.split()) * 1.35)))
 
@@ -473,47 +452,32 @@ def nemo_agent_toolkit_command(
     meta: dict[str, Any],
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
-    provider_base = f"{gateway_base.rstrip('/')}/v1"
     nat_home = (log_dir / "nemo_agent_toolkit_config" / str(meta["label"])).resolve()
     nat_home.mkdir(parents=True, exist_ok=True)
     config_path = nat_home / "workflow.json"
-    config = {
-        "llms": {
-            "harness_llm": {
-                "_type": "openai",
-                "api_key": "dummy",
-                "base_url": provider_base,
-                "model_name": model,
-                "api_type": "chat_completion",
-                "temperature": 0,
-                "max_tokens": int(meta.get("max_tokens") or 8),
-                "request_timeout": 900,
-                "max_retries": 0,
-                **nat_openai_priority_config_fields(meta),
-            }
-        },
-        "workflow": {
-            "_type": "chat_completion",
-            "llm_name": "harness_llm",
-            "system_prompt": "You are a concise coding-agent wireability probe. Do not use tools.",
-        },
-    }
-    config_path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
     nat = os.environ.get("HARNESS_NAT_BIN") or shutil.which("nat")
     if not nat:
         raise FileNotFoundError("nat CLI not found; set HARNESS_NAT_BIN or install nvidia-nat.")
-    cmd = [
-        nat,
-        "run",
-        "--config_file",
-        str(config_path),
-        "--input",
-        f"{prompt}\n\n{marker(meta)}",
-        "--user_id",
-        "harness_probe_user",
-        "--conversation_id",
-        str(meta["label"]),
-    ]
+    wrapper_path = Path(__file__).with_name("nemo_agent_toolkit_wrapper.py")
+    request_path = nat_home / "wrapper_request.json"
+    nat_log_path = nat_home / "nat_run.log"
+    request = {
+        "gateway_base": gateway_base,
+        "model": model,
+        "prompt": f"{prompt}\n\n{marker(meta)}",
+        "meta": meta,
+        "config_path": str(config_path),
+        "nat_log_path": str(nat_log_path),
+        "nat_bin": nat,
+        "cwd": "/tmp",
+        "env": {
+            "OPENAI_API_KEY": "dummy",
+            "NAT_CONFIG_FILE": str(config_path),
+            "NAT_HOME": str(nat_home),
+        },
+    }
+    request_path.write_text(json.dumps(request, indent=2, sort_keys=True), encoding="utf-8")
+    cmd = [sys.executable, str(wrapper_path), "--request-json", str(request_path)]
     return cmd, {
         "OPENAI_API_KEY": "dummy",
         "NAT_CONFIG_FILE": str(config_path),
@@ -786,6 +750,8 @@ async def run_cli_request(
     trace_path = Path(str(meta.get("_trace_path") or ""))
     request_timeout_secs = float(os.environ.get("HARNESS_REQUEST_TIMEOUT_SECS", "900"))
     stop_when_gateway_done = str(os.environ.get("HARNESS_STOP_WHEN_GATEWAY_DONE", "1")) == "1"
+    if harness == "nemo_agent_toolkit":
+        stop_when_gateway_done = False
 
     def run() -> None:
         with log_path.open("w", encoding="utf-8") as handle:
