@@ -31,12 +31,14 @@ HARNESS_LABELS = {
 MODE_LABELS = {
     "no_prefetch": "NP = No prefetch",
     "e2e_priority_hints": "E2E = End-to-end priority hints",
+    "pre_harness_priority_hints": "PH = Pre-harness priority hints",
     "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill",
 }
 
 MODE_COLORS = {
     "no_prefetch": "#2563eb",
     "e2e_priority_hints": "#0f766e",
+    "pre_harness_priority_hints": "#7c3aed",
     "e2e_priority_hints_speculative_prefill": "#ea580c",
 }
 
@@ -268,6 +270,13 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                     "backend_receive_source": receive_source,
                     "first_token_source": first_token_source,
                     "sglang_priority": source_row.get("sglang_priority", ""),
+                    "experiment_priority_intent": source_row.get("experiment_priority_intent", ""),
+                    "harness_input_priority_signal": source_row.get("harness_input_priority_signal", ""),
+                    "harness_input_priority_signal_source": source_row.get("harness_input_priority_signal_source", ""),
+                    "harness_emit_priority_signal": source_row.get("harness_emit_priority_signal", ""),
+                    "harness_emit_priority_signal_source": source_row.get("harness_emit_priority_signal_source", ""),
+                    "gateway_priority_translation": source_row.get("gateway_priority_translation", ""),
+                    "gateway_priority_translation_source": source_row.get("gateway_priority_translation_source", ""),
                     "status": status,
                     "error": error,
                 }
@@ -463,6 +472,95 @@ def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, An
     return proof_rows
 
 
+def priority_value_is_urgent(value: Any) -> bool:
+    try:
+        return int(float(value)) >= 100
+    except (TypeError, ValueError):
+        return False
+
+
+def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_by_label = {
+        (str(row.get("case_dir") or ""), str(row.get("request_id") or "")): row
+        for row in replay_rows
+        if row.get("mode") == "pre_harness_priority_hints"
+    }
+    proof_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        by_label_event: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in trace_rows:
+            label = str(row.get("label") or row.get("request_id") or "")
+            event = str(row.get("event") or "")
+            if label:
+                by_label_event[(label, event)] = row
+        for row in trace_rows:
+            if row.get("event") != "m27.harness.request_input":
+                continue
+            if row.get("phase") != "replay" or row.get("mode") != "pre_harness_priority_hints":
+                continue
+            label = str(row.get("label") or row.get("request_id") or "")
+            replay_row = replay_by_label.get((str(case_dir), label), {})
+            gateway_start = by_label_event.get((label, "m27.request.start"), {})
+            input_ns = int(float_value(row.get("ts_ns")))
+            gateway_start_ns = int(float_value(gateway_start.get("ts_ns")))
+            sglang_priority = replay_row.get("sglang_priority", gateway_start.get("sglang_priority", ""))
+            translated = gateway_start.get("gateway_priority_translation", replay_row.get("gateway_priority_translation", ""))
+            driver_intent_seen = "yes" if row.get("priority_intent") else "no"
+            gateway_saw_intent = "yes" if gateway_start.get("experiment_priority_intent") else "no"
+            native_signal = gateway_start.get("harness_emit_priority_signal", "")
+            if driver_intent_seen != "yes":
+                verdict = "driver intent missing"
+            elif not gateway_start:
+                verdict = "harness did not emit marked request"
+            elif not priority_value_is_urgent(translated):
+                verdict = "gateway did not translate urgent priority"
+            elif not priority_value_is_urgent(sglang_priority):
+                verdict = "translated priority missing from SGLang payload"
+            elif native_signal:
+                verdict = "native emitted signal translated to SGLang priority"
+            else:
+                verdict = "adapter marker intent translated to SGLang priority"
+            proof_rows.append(
+                {
+                    "harness": replay_row.get("harness", row.get("harness", "")),
+                    "harness_label": replay_row.get(
+                        "harness_label",
+                        HARNESS_LABELS.get(str(row.get("harness") or ""), str(row.get("harness") or "")),
+                    ),
+                    "pressure_level": replay_row.get("pressure_level", ""),
+                    "pressure_level_label": replay_row.get("pressure_level_label", ""),
+                    "session_id": row.get("session_id", ""),
+                    "request_id": label,
+                    "driver_intent_seen": driver_intent_seen,
+                    "gateway_saw_intent": gateway_saw_intent,
+                    "harness_input_signal": row.get("harness_input_priority_signal", ""),
+                    "harness_input_signal_source": row.get("harness_input_priority_signal_source", ""),
+                    "harness_output_signal": native_signal,
+                    "harness_output_signal_source": gateway_start.get("harness_emit_priority_signal_source", ""),
+                    "gateway_translated_priority": translated,
+                    "gateway_translation_source": gateway_start.get(
+                        "gateway_priority_translation_source",
+                        replay_row.get("gateway_priority_translation_source", ""),
+                    ),
+                    "sglang_priority_seen": sglang_priority,
+                    "harness_emit_delay_ms": (
+                        round(ns_to_ms_delta(input_ns, gateway_start_ns), 3)
+                        if ns_to_ms_delta(input_ns, gateway_start_ns) is not None
+                        else ""
+                    ),
+                    "backend_ms": replay_row.get("sglang_receive_to_first_token_ms", ""),
+                    "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
+                    "verdict": verdict,
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                }
+            )
+    return proof_rows
+
+
 RAW_COLUMNS = [
     "harness",
     "harness_label",
@@ -478,6 +576,13 @@ RAW_COLUMNS = [
     "sglang_receive_to_first_token_ms",
     "ttft_ms",
     "sglang_priority",
+    "experiment_priority_intent",
+    "harness_input_priority_signal",
+    "harness_input_priority_signal_source",
+    "harness_emit_priority_signal",
+    "harness_emit_priority_signal_source",
+    "gateway_priority_translation",
+    "gateway_priority_translation_source",
     "first_token_source",
     "status",
     "error",
@@ -527,6 +632,28 @@ SPECULATIVE_PREFILL_COLUMNS = [
     "replay_backend_ms",
     "warmup_start_to_replay_due_ms",
     "warmup_end_to_replay_start_ms",
+    "verdict",
+    "case_id",
+    "case_dir",
+]
+
+HARNESS_PRIORITY_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "session_id",
+    "request_id",
+    "driver_intent_seen",
+    "gateway_saw_intent",
+    "harness_input_signal",
+    "harness_input_signal_source",
+    "harness_output_signal",
+    "harness_output_signal_source",
+    "gateway_translated_priority",
+    "gateway_translation_source",
+    "sglang_priority_seen",
+    "harness_emit_delay_ms",
+    "backend_ms",
+    "first_token_lateness_ms",
     "verdict",
     "case_id",
     "case_dir",
@@ -859,6 +986,7 @@ def render_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
+    harness_priority_rows: list[dict[str, Any]],
     report_label: str,
     run_config: dict[str, str],
 ) -> str:
@@ -896,6 +1024,7 @@ def render_html(
         ],
     )
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
+    harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     raw_table = render_table(
         rows,
         [
@@ -909,6 +1038,10 @@ def render_html(
             "sglang_receive_to_first_token_ms",
             "ttft_ms",
             "sglang_priority",
+            "harness_input_priority_signal",
+            "harness_emit_priority_signal",
+            "gateway_priority_translation",
+            "gateway_priority_translation_source",
             "backend_receive_source",
             "first_token_source",
             "status",
@@ -952,6 +1085,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <div class="card">{pressure_definition_table}</div>
 <div class="card">{chart}</div>
 {chart_legend}
+<h2>Harness Priority Preservation Proof</h2>
+<p>This table appears when the run includes <code>pre_harness_priority_hints</code>. It proves whether the driver supplied an urgent intent before the harness, whether the gateway saw that intent or a native emitted signal, and whether it translated to SGLang priority.</p>
+<div class="card">{harness_priority_table if harness_priority_rows else "<p>No pre-harness priority proof rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -974,6 +1110,7 @@ def write_manifest(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
+    harness_priority_rows: list[dict[str, Any]],
     run_config: dict[str, str],
 ) -> None:
     manifest = {
@@ -986,6 +1123,7 @@ def write_manifest(
         "row_count": len(rows),
         "summary_row_count": len(summary),
         "speculative_prefill_row_count": len(speculative_prefill_rows),
+        "harness_priority_row_count": len(harness_priority_rows),
         "hardware_profile": os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE", ""),
         "hardware_profile_path": os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH", ""),
         "harnesses": sorted({row["harness"] for row in rows}),
@@ -1010,17 +1148,19 @@ def main() -> None:
     rows = collect_rows(args.root)
     summary = summarize(rows)
     speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
+    harness_priority_rows = collect_harness_priority_proof(args.root, rows)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
-    html_text = render_html(rows, summary, speculative_prefill_rows, args.report_label, run_config)
+    write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
+    html_text = render_html(rows, summary, speculative_prefill_rows, harness_priority_rows, args.report_label, run_config)
     report_path = args.out_dir / "master_report.html"
     report_path.write_text(html_text, encoding="utf-8")
-    write_manifest(args.out_dir / "manifest.json", args, rows, summary, speculative_prefill_rows, run_config)
+    write_manifest(args.out_dir / "manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, run_config)
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
-        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, speculative_prefill_rows, run_config)
+        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, run_config)
     print(f"wrote {report_path}")
     print(f"rows={len(rows)} summary_rows={len(summary)}")
 

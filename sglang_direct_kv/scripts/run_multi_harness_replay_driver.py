@@ -35,6 +35,7 @@ SUPPORTED_HARNESSES = (
 SUPPORTED_MODES = (
     "no_prefetch",
     "e2e_priority_hints",
+    "pre_harness_priority_hints",
     "e2e_priority_hints_speculative_prefill",
 )
 
@@ -77,6 +78,69 @@ def trace_has_event(path: Path, label: str, event: str) -> bool:
 def marker(meta: dict[str, Any]) -> str:
     raw = json.dumps(meta, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return MARKER + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def pre_harness_priority_enabled(mode: str) -> bool:
+    return mode == "pre_harness_priority_hints"
+
+
+def harness_priority_signal(harness: str, priority_class: str) -> tuple[str, str]:
+    if priority_class == "background":
+        return "adapter_metadata.priority_class=background", "adapter_metadata"
+    if harness in {"codex", "opencode", "qwen_code", "deepseek_harness", "hatcher"}:
+        return "service_tier=priority; metadata.priority_class=urgent", "openai_compatible"
+    if harness == "claude_code":
+        return "service_tier=auto; metadata.priority_class=urgent", "anthropic_service_tier"
+    return "adapter_metadata.priority_class=urgent", "adapter_metadata"
+
+
+def attach_pre_harness_priority_intent(meta: dict[str, Any]) -> dict[str, Any]:
+    if not pre_harness_priority_enabled(str(meta.get("mode") or "")):
+        return meta
+    phase = str(meta.get("phase") or "")
+    priority_class = "background" if phase == "pressure_filler" else "urgent"
+    reason = "tool_replay_deadline" if phase == "replay" else "session_priority_seed"
+    if phase == "pressure_filler":
+        reason = "pressure_filler_background_load"
+    signal, source = harness_priority_signal(str(meta.get("harness") or ""), priority_class)
+    out = dict(meta)
+    out["priority_intent"] = {
+        "class": priority_class,
+        "reason": reason,
+        "deadline_ms": meta.get("tool_wait_ms", meta.get("deadline_offset_ms", "")),
+        "source": "experiment_driver",
+    }
+    out["harness_input_priority_signal"] = signal
+    out["harness_input_priority_signal_source"] = source
+    return out
+
+
+def outbound_priority_fields(meta: dict[str, Any], api_kind: str) -> dict[str, Any]:
+    if not pre_harness_priority_enabled(str(meta.get("mode") or "")):
+        return {}
+    intent = meta.get("priority_intent")
+    if not isinstance(intent, dict):
+        return {}
+    priority_class = str(intent.get("class") or "")
+    if priority_class != "urgent":
+        return {
+            "metadata": {
+                "priority_class": priority_class,
+                "priority_reason": str(intent.get("reason") or ""),
+            }
+        }
+    metadata = {
+        "priority_class": "urgent",
+        "priority_reason": str(intent.get("reason") or "tool_replay_deadline"),
+        "priority_deadline_ms": str(intent.get("deadline_ms") or ""),
+    }
+    if api_kind == "anthropic":
+        return {"service_tier": "auto", "metadata": metadata}
+    return {
+        "service_tier": "priority",
+        "metadata": metadata,
+        "extra_body": {"agentic_hints": {"priority_class": "urgent", "reason": metadata["priority_reason"]}},
+    }
 
 
 def estimate_tokens(prompt: str) -> int:
@@ -124,6 +188,7 @@ async def run_hatcher_request(gateway_base: str, model: str, prompt: str, meta: 
         "temperature": 0,
         "stream": False,
     }
+    payload.update(outbound_priority_fields(meta, "openai_chat"))
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
         response.raise_for_status()
@@ -350,6 +415,7 @@ def openai_chat_probe_command(
             "stream": False,
         },
     }
+    payload["body"].update(outbound_priority_fields(meta, "openai_chat"))
     request_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     script_path.write_text(
         "\n".join(
@@ -765,6 +831,7 @@ async def run_filler(
         "priority_label": "low",
         "max_tokens": 2,
     }
+    meta = attach_pre_harness_priority_intent(meta)
     await run_hatcher_request(gateway_base, model, prompt, meta)
 
 
@@ -830,7 +897,37 @@ async def main_async() -> None:
 
     async def bounded_request(prompt: str, meta: dict[str, Any]) -> None:
         async with sem:
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.harness.request_input",
+                    "session_id": meta.get("session_id", ""),
+                    "phase": meta.get("phase", ""),
+                    "mode": meta.get("mode", ""),
+                    "harness": meta.get("harness", args.harness),
+                    "label": meta.get("label", ""),
+                    "request_id": meta.get("label", ""),
+                    "prompt_hash": meta.get("prompt_hash", ""),
+                    "offset_ms": round(offset_ms(), 3),
+                    "priority_intent": meta.get("priority_intent", ""),
+                    "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
+                    "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
+                },
+            )
             await run_harness_request(args.harness, args.gateway_base, args.model, prompt, meta, args.log_dir)
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.harness.request_done",
+                    "session_id": meta.get("session_id", ""),
+                    "phase": meta.get("phase", ""),
+                    "mode": meta.get("mode", ""),
+                    "harness": meta.get("harness", args.harness),
+                    "label": meta.get("label", ""),
+                    "request_id": meta.get("label", ""),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
 
     async def run_pair(pair: HarnessPair, index: int) -> None:
         await sleep_until(index * args.arrival_gap_ms)
@@ -855,6 +952,7 @@ async def main_async() -> None:
             "high_priority": 100,
             "speculative_prefill_priority": 50,
             "low_priority": -100,
+            "tool_wait_ms": args.tool_wait_ms,
             "_trace_path": str(args.trace),
         }
         initial_meta = {
@@ -868,6 +966,7 @@ async def main_async() -> None:
             "max_tokens": 8,
             "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
         }
+        initial_meta = attach_pre_harness_priority_intent(initial_meta)
         await bounded_request(pair.prompt, initial_meta)
         tool_start_ms = offset_ms()
         replay_due_ms = tool_start_ms + args.tool_wait_ms
@@ -905,6 +1004,7 @@ async def main_async() -> None:
                 "expected_replay_request_id": replay_label,
                 "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
             }
+            warmup_meta = attach_pre_harness_priority_intent(warmup_meta)
             write_trace(
                 args.trace,
                 {
@@ -1018,6 +1118,7 @@ async def main_async() -> None:
             "deadline_offset_ms": round(replay_due_ms, 3),
             "max_tokens": 8,
         }
+        replay_meta = attach_pre_harness_priority_intent(replay_meta)
         await bounded_request(pair.replay_prompt, replay_meta)
         write_trace(
             args.trace,

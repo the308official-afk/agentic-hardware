@@ -16,6 +16,12 @@ from typing import Any
 import httpx
 
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
+PRIORITY_ENABLED_MODES = {
+    "e2e_priority_hints",
+    "pre_harness_priority_hints",
+    "e2e_priority_hints_speculative_prefill",
+}
+PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 
 
 def write_jsonl(path: Path | None, row: dict[str, Any]) -> None:
@@ -30,6 +36,17 @@ def write_jsonl(path: Path | None, row: dict[str, Any]) -> None:
 
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def compact_json(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return str(value)
 
 
 def parse_b64_json(value: str) -> dict[str, Any]:
@@ -176,7 +193,7 @@ def metadata_context(meta: dict[str, Any], prompt_hash: str = "") -> dict[str, A
 
 
 def priority_enabled(mode: str) -> bool:
-    return mode in {"e2e_priority_hints", "e2e_priority_hints_speculative_prefill"}
+    return mode in PRIORITY_ENABLED_MODES
 
 
 def sglang_priority(meta: dict[str, Any]) -> int | None:
@@ -187,7 +204,67 @@ def sglang_priority(meta: dict[str, Any]) -> int | None:
         return int(meta.get("low_priority") or -100)
     if phase == "speculative_prefill":
         return int(meta.get("speculative_prefill_priority") or 50)
+    if str(meta.get("mode") or "") == PRE_HARNESS_PRIORITY_MODE:
+        intent = as_dict(meta.get("priority_intent"))
+        priority_class = str(intent.get("class") or "")
+        if priority_class not in {"urgent", "high"}:
+            return None
     return int(meta.get("high_priority") or 100)
+
+
+def emitted_priority_signal(payload: dict[str, Any]) -> dict[str, str]:
+    signals: list[str] = []
+    sources: list[str] = []
+    service_tier = payload.get("service_tier")
+    if service_tier not in (None, "", [], {}):
+        signals.append(f"service_tier={service_tier}")
+        sources.append("service_tier")
+    speed = payload.get("speed")
+    if speed not in (None, "", [], {}):
+        signals.append(f"speed={speed}")
+        sources.append("speed")
+    metadata = as_dict(payload.get("metadata"))
+    metadata_priority = metadata.get("priority_class") or metadata.get("urgency")
+    if metadata_priority not in (None, "", [], {}):
+        signals.append(f"metadata.priority_class={metadata_priority}")
+        sources.append("metadata")
+    extra_body = as_dict(payload.get("extra_body"))
+    agentic_hints = as_dict(extra_body.get("agentic_hints"))
+    extra_priority = agentic_hints.get("priority_class") or agentic_hints.get("urgency")
+    if extra_priority not in (None, "", [], {}):
+        signals.append(f"extra_body.agentic_hints.priority_class={extra_priority}")
+        sources.append("extra_body.agentic_hints")
+    return {
+        "harness_emit_priority_signal": "; ".join(signals),
+        "harness_emit_priority_signal_source": ", ".join(dict.fromkeys(sources)),
+    }
+
+
+def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    emitted = emitted_priority_signal(payload)
+    priority = sglang_priority(meta)
+    mode = str(meta.get("mode") or "")
+    if priority is None:
+        source = "none"
+    elif mode == PRE_HARNESS_PRIORITY_MODE:
+        if emitted["harness_emit_priority_signal"]:
+            source = "harness_emitted_signal"
+        elif meta.get("priority_intent"):
+            source = "experiment_marker_priority_intent"
+        else:
+            source = "none"
+    elif str(meta.get("phase") or "") == "speculative_prefill":
+        source = "speculative_prefill_background_priority"
+    else:
+        source = "gateway_boundary_priority_mode"
+    return {
+        "experiment_priority_intent": compact_json(meta.get("priority_intent")),
+        "harness_input_priority_signal": compact_json(meta.get("harness_input_priority_signal")),
+        "harness_input_priority_signal_source": compact_json(meta.get("harness_input_priority_signal_source")),
+        **emitted,
+        "gateway_priority_translation": priority if priority is not None else "",
+        "gateway_priority_translation_source": source,
+    }
 
 
 def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind: str, model: str) -> dict[str, Any]:
@@ -200,6 +277,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
     prompt_text = "\n\n".join(part for part in [system, user] if part).strip() or "Continue."
     context = metadata_context(meta, prompt_hash=str(meta.get("prompt_hash") or "")[:32])
     priority = sglang_priority(meta)
+    priority_chain = priority_translation_context(meta, payload)
     agent_hints = {
         "schema": "nvext.agent_hints",
         "session_id": context["parent_run_id"],
@@ -217,6 +295,11 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
         "parent_request_id": meta.get("parent_request_id", ""),
         "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+        "experiment_priority_intent": priority_chain["experiment_priority_intent"],
+        "harness_input_priority_signal": priority_chain["harness_input_priority_signal"],
+        "harness_emit_priority_signal": priority_chain["harness_emit_priority_signal"],
+        "gateway_priority_translation": priority_chain["gateway_priority_translation"],
+        "gateway_priority_translation_source": priority_chain["gateway_priority_translation_source"],
     }
     if context["phase"] == "speculative_prefill":
         agent_hints["expected_action"] = "warm_next_turn_prefix"
@@ -246,6 +329,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
+            **priority_chain,
         },
         "request_context": context,
         "nvext": {"agent_hints": agent_hints, "request_context": context},
@@ -513,6 +597,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             seen_labels.add(label)
             setattr(self.server, "seen_request_labels", seen_labels)
             priority = sglang_priority(meta)
+            priority_chain = priority_translation_context(meta, payload_dict)
             common = {
                 "session_id": session_id,
                 "phase": phase,
@@ -533,6 +618,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "parent_request_id": meta.get("parent_request_id", ""),
                 "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
                 "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
+                **priority_chain,
                 **shape,
             }
             write_jsonl(trace_path, {"event": "m27.request.submitted", **common})

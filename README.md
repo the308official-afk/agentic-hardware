@@ -69,6 +69,7 @@ The current manager-facing comparisons use these modes:
 | --- | --- |
 | `no_prefetch` | Baseline. The replay request receives no end-to-end priority treatment. |
 | `e2e_priority_hints` | Current priority path. The driver marks replay urgency and the SGLang boundary carries that priority into scheduling. |
+| `pre_harness_priority_hints` | Harness-preservation path. The driver marks replay urgency before the harness sees the request, then the gateway proves whether that intent or a native harness signal survived and was translated into SGLang priority. |
 | `e2e_priority_hints_speculative_prefill` | Dynamo-like proactive path. The replay still gets E2E priority, and the gateway sends a background `max_tokens=1` warmup for the known next-turn prefix during the tool wait. |
 
 This speculative prefill mode is not SGLang speculative decoding. It mimics
@@ -277,6 +278,26 @@ bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Pre-harness priority preservation smoke. This is the cleanest first run when
+you want to see whether a harness preserves urgency before the request reaches
+SGLang:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES="hatcher codex claude_code opencode qwen_code" \
+PRESSURE_LEVELS="p0_control p3_high" \
+MODES="no_prefetch e2e_priority_hints pre_harness_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="pre_harness_priority_smoke_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 If a long EC2 run is interrupted after some cases finish, resume the same
 report label without rerunning completed cases:
 
@@ -345,6 +366,7 @@ It runs each harness in:
 ```text
 no_prefetch
 e2e_priority_hints
+pre_harness_priority_hints
 e2e_priority_hints_speculative_prefill
 ```
 

@@ -183,6 +183,11 @@ def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
             "agent_parent_request_id",
             "agent_expected_replay_request_id",
             "agent_warmup_prompt_tokens",
+            "agent_experiment_priority_intent",
+            "agent_harness_input_priority_signal",
+            "agent_harness_emit_priority_signal",
+            "agent_gateway_priority_translation",
+            "agent_gateway_priority_translation_source",
         )
         if context.get(key) not in (None, "", [], {})
     }
@@ -1369,6 +1374,21 @@ def _req_context(req: Any) -> dict[str, Any]:
                     agentic.get("expected_replay_request_id")
                 )
                 context["agent_warmup_prompt_tokens"] = _safe_summary(agentic.get("warmup_prompt_tokens"))
+                context["agent_experiment_priority_intent"] = _safe_summary(
+                    agentic.get("experiment_priority_intent")
+                )
+                context["agent_harness_input_priority_signal"] = _safe_summary(
+                    agentic.get("harness_input_priority_signal")
+                )
+                context["agent_harness_emit_priority_signal"] = _safe_summary(
+                    agentic.get("harness_emit_priority_signal")
+                )
+                context["agent_gateway_priority_translation"] = _safe_summary(
+                    agentic.get("gateway_priority_translation")
+                )
+                context["agent_gateway_priority_translation_source"] = _safe_summary(
+                    agentic.get("gateway_priority_translation_source")
+                )
                 if context.get("agent_request_id") and "request_id" not in context:
                     context["request_id"] = context["agent_request_id"]
             request_context = custom_params.get("request_context")
@@ -1401,6 +1421,21 @@ def _req_context(req: Any) -> dict[str, Any]:
                     )
                     context["dynamo_hint_speculative_prefill_strategy"] = _safe_summary(
                         agent_hints.get("speculative_prefill_strategy")
+                    )
+                    context["dynamo_hint_experiment_priority_intent"] = _safe_summary(
+                        agent_hints.get("experiment_priority_intent")
+                    )
+                    context["dynamo_hint_harness_input_priority_signal"] = _safe_summary(
+                        agent_hints.get("harness_input_priority_signal")
+                    )
+                    context["dynamo_hint_harness_emit_priority_signal"] = _safe_summary(
+                        agent_hints.get("harness_emit_priority_signal")
+                    )
+                    context["dynamo_hint_gateway_priority_translation"] = _safe_summary(
+                        agent_hints.get("gateway_priority_translation")
+                    )
+                    context["dynamo_hint_gateway_priority_translation_source"] = _safe_summary(
+                        agent_hints.get("gateway_priority_translation_source")
                     )
                     if context.get("dynamo_hint_request_id") and "request_id" not in context:
                         context["request_id"] = context["dynamo_hint_request_id"]
