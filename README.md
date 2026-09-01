@@ -147,6 +147,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness pressure experiment and writes the latest report. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/harness_sglang_gateway.py](sglang_direct_kv/scripts/harness_sglang_gateway.py) | Normalizes harness requests at the SGLang boundary and injects priority metadata. |
+| [sglang_direct_kv/scripts/run_real_client_wireability_probe.py](sglang_direct_kv/scripts/run_real_client_wireability_probe.py) | Launches real client CLIs against the inspection gateway and reports the live request shape observed at the boundary. |
 | [sglang_direct_kv/scripts/smoke_multi_harness_wireability.py](sglang_direct_kv/scripts/smoke_multi_harness_wireability.py) | Fast local smoke test for CLI harness wireability through the gateway. |
 | [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
@@ -162,6 +163,44 @@ source .venv/bin/activate
 python scripts/smoke_multi_harness_wireability.py \
   --harnesses pi_agent_harness openclaw hermes_agent
 ```
+
+Probe real client-generated traffic without running a full pressure sweep:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python scripts/run_real_client_wireability_probe.py \
+  --clients codex claude_code opencode qwen_code \
+  --out-dir artifacts/results/real_client_wireability/$(date +%Y%m%d_%H%M%S)
+```
+
+If `--target-base` is omitted, the probe uses a fake local SGLang-compatible
+backend. Pass `--target-base http://127.0.0.1:30000` to observe real clients
+through the gateway while forwarding to a running SGLang server.
+
+Recent EC2 wireability result:
+
+```text
+sglang_direct_kv/artifacts/results/real_client_wireability/real_client_probe_20260901_031658/real_client_wireability_report.html
+```
+
+That run launched the real Codex, Claude Code, OpenCode, and Qwen Code CLIs
+against the inspection gateway. All four reached the gateway, all four were
+tagged with `sglang_priority=100`, and the gateway recorded their live request
+shape without storing prompt bodies:
+
+| Client | API shape | Request body | Prompt chars |
+| --- | --- | ---: | ---: |
+| Codex | `/v1/responses` | `37.6 KB` | `4.3K` |
+| Claude Code | `/v1/messages?beta=true` | `5.2 KB` | `1.6K` |
+| OpenCode | `/v1/chat/completions` | `3.6 KB` | `3.2K` |
+| Qwen Code | `/v1/chat/completions` | `97.7 KB` | `36.6K` |
+
+This is a wireability probe, not a pressure result. Its purpose is to prove
+that real client-generated traffic can be inspected and priority-tagged at the
+SGLang boundary before we run the heavier deadline-pressure ladder through real
+client CLIs.
 
 For large all-harness runs, [run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh)
 automatically uses the lightweight summary report when the case count is large.

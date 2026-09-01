@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -70,6 +71,33 @@ def marker_from_payload(payload: Any) -> dict[str, Any]:
         return parse_b64_json(match.group(1))
     except Exception as exc:  # noqa: BLE001
         return {"marker_parse_error": str(exc)}
+
+
+def payload_text_chars(payload: Any) -> int:
+    return sum(len(part) for part in iter_text(payload))
+
+
+def payload_stream_requested(payload: Any) -> bool:
+    return bool(as_dict(payload).get("stream"))
+
+
+def payload_model(payload: Any) -> str:
+    model = as_dict(payload).get("model")
+    return str(model) if model is not None else ""
+
+
+def request_shape(body: bytes, payload: Any, api_kind: str) -> dict[str, Any]:
+    text_parts = iter_text(payload)
+    joined = "\n".join(text_parts)
+    return {
+        "api_kind": api_kind,
+        "body_size_bytes": len(body),
+        "text_part_count": len(text_parts),
+        "prompt_chars": payload_text_chars(payload),
+        "prompt_hash": hashlib.sha256(joined.encode("utf-8", "replace")).hexdigest()[:32] if joined else "",
+        "stream_requested": payload_stream_requested(payload),
+        "model_requested": payload_model(payload),
+    }
 
 
 def is_bookkeeping_payload(payload: Any) -> bool:
@@ -365,7 +393,16 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
 
         def do_GET(self) -> None:
             if self.path.startswith("/v1/models"):
-                body = json.dumps({"object": "list", "data": [{"id": model, "object": "model"}], "models": [model]}).encode()
+                models = [model]
+                if "sglang-qwen-coder" not in models:
+                    models.append("sglang-qwen-coder")
+                body = json.dumps(
+                    {
+                        "object": "list",
+                        "data": [{"id": model_id, "object": "model"} for model_id in models],
+                        "models": models,
+                    }
+                ).encode()
             else:
                 body = json.dumps({"ok": True, "gateway": "harness_sglang_gateway"}).encode()
             self._send_bytes(200, body, "application/json")
@@ -382,14 +419,17 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             except json.JSONDecodeError:
                 payload = {}
             api_kind = api_kind_from_path(self.path)
+            payload_dict = as_dict(payload)
+            shape = request_shape(body, payload, api_kind)
+            write_jsonl(log_path, {"event": "gateway.request_received", "path": self.path, **shape})
             meta = marker_from_payload(payload)
             if is_bookkeeping_payload(payload) or not meta or meta.get("marker_parse_error"):
-                write_jsonl(log_path, {"event": "gateway.unmarked_request", "path": self.path, "api_kind": api_kind})
+                write_jsonl(log_path, {"event": "gateway.unmarked_request", "path": self.path, **shape})
                 if api_kind == "anthropic":
-                    return self._send_bytes(200, anthropic_response("probe-ok", str(payload.get("model") or model)), "application/json")
+                    return self._send_bytes(200, anthropic_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
                 if api_kind == "responses":
-                    return self._send_bytes(200, responses_sse("probe-ok", str(payload.get("model") or model)), "text/event-stream")
-                return self._send_bytes(200, fake_chat_response("probe-ok", str(payload.get("model") or model)), "application/json")
+                    return self._send_bytes(200, responses_sse("probe-ok", str(payload_dict.get("model") or model)), "text/event-stream")
+                return self._send_bytes(200, fake_chat_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
 
             session_id = str(meta.get("session_id") or "")
             phase = str(meta.get("phase") or "")
@@ -410,10 +450,10 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                     },
                 )
                 if api_kind == "anthropic":
-                    return self._send_bytes(200, anthropic_response("probe-ok", str(payload.get("model") or model)), "application/json")
+                    return self._send_bytes(200, anthropic_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
                 if api_kind == "responses":
-                    return self._send_bytes(200, responses_sse("probe-ok", str(payload.get("model") or model)), "text/event-stream")
-                return self._send_bytes(200, fake_chat_response("probe-ok", str(payload.get("model") or model)), "application/json")
+                    return self._send_bytes(200, responses_sse("probe-ok", str(payload_dict.get("model") or model)), "text/event-stream")
+                return self._send_bytes(200, fake_chat_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
             seen_labels.add(label)
             setattr(self.server, "seen_request_labels", seen_labels)
             priority = sglang_priority(meta)
@@ -431,6 +471,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "dynamo_hint_priority": priority if priority is not None else "",
                 "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
                 "priority_policy": "harness_gateway_intercepted_sglang_priority" if priority is not None else "none",
+                **shape,
             }
             write_jsonl(trace_path, {"event": "m27.request.submitted", **common})
             write_jsonl(trace_path, {"event": "m27.request.start", **common})
@@ -442,6 +483,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             error = ""
             try:
                 sglang_payload = build_sglang_payload(as_dict(payload), meta, api_kind, model)
+                write_jsonl(log_path, {"event": "gateway.forward_start", "path": self.path, **common})
                 text, ttft_ms, latency_ms, chunks, status = call_sglang(target_base, sglang_payload)
             except Exception as exc:  # noqa: BLE001
                 error = f"{type(exc).__name__}: {exc}"
@@ -453,10 +495,10 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             if error:
                 return self._send_bytes(502, json.dumps({"error": error}).encode("utf-8"), "application/json")
             if api_kind == "anthropic":
-                return self._send_bytes(200, anthropic_response(text, str(payload.get("model") or model)), "application/json")
+                return self._send_bytes(200, anthropic_response(text, str(payload_dict.get("model") or model)), "application/json")
             if api_kind == "responses":
-                return self._send_bytes(200, responses_sse(text, str(payload.get("model") or model)), "text/event-stream")
-            return self._send_bytes(200, fake_chat_response(text, str(payload.get("model") or model)), "application/json")
+                return self._send_bytes(200, responses_sse(text, str(payload_dict.get("model") or model)), "text/event-stream")
+            return self._send_bytes(200, fake_chat_response(text, str(payload_dict.get("model") or model)), "application/json")
 
     return Handler
 

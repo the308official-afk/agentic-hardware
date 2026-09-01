@@ -185,8 +185,16 @@ def opencode_command(
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
     provider_base = f"{gateway_base.rstrip('/')}/v1"
-    config_dir = log_dir / "opencode_config" / str(meta["label"])
+    opencode_model_id = model
+    config_dir = (log_dir / "opencode_config" / str(meta["label"])).resolve()
+    data_dir = (log_dir / "opencode_data" / str(meta["label"])).resolve()
     config_dir.mkdir(parents=True, exist_ok=True)
+    auth_dir = data_dir / "opencode"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    (auth_dir / "auth.json").write_text(
+        json.dumps({"harness": {"type": "api", "key": "dummy"}}, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     config = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -198,8 +206,12 @@ def opencode_command(
                     "apiKey": "dummy",
                 },
                 "models": {
-                    model: {
+                    opencode_model_id: {
                         "name": model,
+                        "limit": {
+                            "context": 32768,
+                            "output": 4096,
+                        },
                     }
                 },
             }
@@ -209,8 +221,11 @@ def opencode_command(
     cmd = [
         *cli_or_npx("opencode", "opencode-ai@latest"),
         "run",
+        "--print-logs",
+        "--log-level",
+        "DEBUG",
         "--model",
-        f"harness/{model}",
+        f"harness/{opencode_model_id}",
         "--format",
         "json",
         "--dir",
@@ -219,6 +234,8 @@ def opencode_command(
     ]
     return cmd, {
         "OPENCODE_CONFIG_DIR": str(config_dir),
+        "OPENCODE_CONFIG": str(config_dir / "opencode.json"),
+        "XDG_DATA_HOME": str(data_dir),
         "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
         "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
         "OPENCODE_PERMISSION": json.dumps({"edit": "deny", "bash": "deny", "webfetch": "deny"}),
