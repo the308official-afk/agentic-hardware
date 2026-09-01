@@ -328,6 +328,14 @@ def svg_symbol(kind: str, x: float, y: float, color: str, title: str) -> str:
     return f'<g><title>{escaped_title}</title>{shape}</g>'
 
 
+def inline_symbol(kind: str, color: str) -> str:
+    return (
+        '<svg class="legend-symbol" viewBox="0 0 24 24" aria-hidden="true">'
+        f"{svg_symbol(kind, 12, 12, color, '')}"
+        "</svg>"
+    )
+
+
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     pressures = [pressure for pressure in PRESSURE_ORDER if any(row["pressure_level"] == pressure for row in rows)]
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
@@ -344,11 +352,11 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
     pressure_w = max(420, len(harnesses) * 44 + 110)
     width = max(1400, pressure_w * len(pressures) + 220)
-    height = 820
+    height = 680
     left = 120
     right = 40
     top = 60
-    bottom = 260
+    bottom = 120
     plot_w = width - left - right
     plot_h = height - top - bottom
     pressure_group_w = plot_w / len(pressures)
@@ -419,26 +427,6 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{top}" y2="{height-bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
     lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-40}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append(f'<text transform="translate(32 {top + plot_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">lateness vs replay deadline ms (symlog)</text>')
-    legend_y = height - 172
-    lines.append(f'<rect x="{left}" y="{legend_y-28}" width="{min(plot_w, 1180):.1f}" height="116" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>')
-    legend_x = left + 28
-    lines.append(f'<text x="{legend_x}" y="{legend_y-2}" font-size="13" font-weight="800" fill="#111827">Mode color</text>')
-    legend_x += 96
-    for mode in MODE_LABELS:
-        lines.append(f'<circle cx="{legend_x}" cy="{legend_y}" r="6" fill="{MODE_COLORS[mode]}"/>')
-        lines.append(f'<text x="{legend_x+14}" y="{legend_y+4}" font-size="13" fill="#111827">{html.escape(MODE_LABELS[mode])}</text>')
-        legend_x += 240
-    harness_y = legend_y + 48
-    harness_x = left + 28
-    lines.append(f'<text x="{harness_x}" y="{harness_y+4}" font-size="13" font-weight="800" fill="#111827">Harness symbol</text>')
-    harness_x += 126
-    for index, harness in enumerate(harnesses):
-        if index == 5:
-            harness_x = left + 154
-            harness_y += 34
-        lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), harness_x, harness_y, "#334155", HARNESS_LABELS.get(harness, harness)))
-        lines.append(f'<text x="{harness_x+14}" y="{harness_y+4}" font-size="12" fill="#111827">{html.escape(HARNESS_LABELS.get(harness, harness))}</text>')
-        harness_x += 190
     lines.append("</svg>")
     return "\n".join(lines)
 
@@ -468,9 +456,38 @@ def render_pressure_definition_table(rows: list[dict[str, Any]]) -> str:
     return render_table(definition_rows, ["level", "in_this_run", "what_it_means", "knobs"])
 
 
+def render_chart_legend(rows: list[dict[str, Any]]) -> str:
+    harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
+    mode_items = []
+    for mode, label in MODE_LABELS.items():
+        mode_items.append(
+            '<span class="legend-item">'
+            f'<span class="legend-dot" style="background:{MODE_COLORS[mode]}"></span>'
+            f"{html.escape(label)}"
+            "</span>"
+        )
+    harness_items = []
+    for harness in harnesses:
+        harness_items.append(
+            '<span class="legend-item">'
+            f'{inline_symbol(HARNESS_SYMBOLS.get(harness, "circle"), "#334155")}'
+            f"{html.escape(HARNESS_LABELS.get(harness, harness))}"
+            "</span>"
+        )
+    return (
+        '<div class="legend-card">'
+        '<div class="legend-row"><strong>Mode color</strong>'
+        f'<div class="legend-items">{"".join(mode_items)}</div></div>'
+        '<div class="legend-row"><strong>Harness symbol</strong>'
+        f'<div class="legend-items">{"".join(harness_items)}</div></div>'
+        "</div>"
+    )
+
+
 def render_html(rows: list[dict[str, Any]], summary: list[dict[str, Any]], report_label: str) -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     chart = render_pressure_chart(rows)
+    chart_legend = render_chart_legend(rows)
     pressure_definition_table = render_pressure_definition_table(rows)
     summary_table = render_table(
         summary,
@@ -510,6 +527,13 @@ h1 {{ margin: 0 0 8px; font-size: 30px; }}
 h2 {{ margin-top: 32px; font-size: 22px; }}
 p {{ line-height: 1.5; color: #334155; }}
 .card {{ background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-top: 18px; overflow-x: auto; }}
+.legend-card {{ background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; margin-top: 10px; }}
+.legend-row {{ display: flex; gap: 18px; align-items: flex-start; margin: 8px 0; }}
+.legend-row strong {{ flex: 0 0 130px; }}
+.legend-items {{ display: flex; flex-wrap: wrap; gap: 12px 24px; }}
+.legend-item {{ display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }}
+.legend-dot {{ width: 12px; height: 12px; border-radius: 999px; display: inline-block; }}
+.legend-symbol {{ width: 18px; height: 18px; flex: 0 0 auto; overflow: visible; }}
 .note {{ border-left: 4px solid #2563eb; background: #eff6ff; padding: 12px 16px; color: #1e3a8a; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 13px; background: white; }}
 th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }}
@@ -526,6 +550,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 <div class="card">{pressure_definition_table}</div>
 <div class="card">{chart}</div>
+{chart_legend}
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>
 <h2>Raw Replay Proof</h2>
