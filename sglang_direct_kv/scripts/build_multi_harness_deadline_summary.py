@@ -52,6 +52,29 @@ MODE_COLORS = {
 
 MODE_ORDER = tuple(MODE_LABELS)
 
+CHART_SIGNAL_BUCKETS = {
+    "baseline": {
+        "label": "Baseline",
+        "description": "No signal supplied or lowered",
+        "color": "#475569",
+        "modes": {"no_prefetch", "no_cache_signal"},
+    },
+    "harness_emitted": {
+        "label": "Harness Emitted",
+        "description": "Harness emitted cache or priority signal; gateway lowered it",
+        "color": "#16a34a",
+        "modes": {"harness_native_cache_lowered", "nat_inferred_priority_hints"},
+    },
+    "frontend_supplied": {
+        "label": "Front-End Supplied",
+        "description": "Front end supplied signal intent before the harness; gateway lowered what came through",
+        "color": "#7c3aed",
+        "modes": {"pre_harness_priority_hints", "e2e_priority_hints", "e2e_priority_hints_speculative_prefill"},
+    },
+}
+
+CHART_SIGNAL_ORDER = ("baseline", "harness_emitted", "frontend_supplied")
+
 HARNESS_SYMBOLS = {
     "hatcher": "circle",
     "codex": "square",
@@ -1128,10 +1151,29 @@ def inline_symbol(kind: str, color: str) -> str:
     )
 
 
+def chart_signal_bucket(mode: str) -> str:
+    for bucket, config in CHART_SIGNAL_BUCKETS.items():
+        if mode in config["modes"]:
+            return bucket
+    return "baseline"
+
+
+def chart_signal_label(bucket: str) -> str:
+    return str(CHART_SIGNAL_BUCKETS.get(bucket, CHART_SIGNAL_BUCKETS["baseline"])["label"])
+
+
+def chart_signal_color(bucket: str) -> str:
+    return str(CHART_SIGNAL_BUCKETS.get(bucket, CHART_SIGNAL_BUCKETS["baseline"])["color"])
+
+
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     pressures = [pressure for pressure in PRESSURE_ORDER if any(row["pressure_level"] == pressure for row in rows)]
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
-    modes = [mode for mode in MODE_ORDER if any(row["mode"] == mode for row in rows)]
+    signal_buckets = [
+        bucket
+        for bucket in CHART_SIGNAL_ORDER
+        if any(chart_signal_bucket(str(row["mode"])) == bucket for row in rows)
+    ]
     if not pressures or not harnesses:
         return "<p>No replay rows found.</p>"
 
@@ -1148,30 +1190,31 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     plot_w = width - left - right
     pressure_group_w = plot_w / len(pressures)
 
-    def mode_offset(mode: str) -> float:
-        if not modes:
+    def signal_offset(bucket: str) -> float:
+        if not signal_buckets:
             return 0.0
         try:
-            index = modes.index(mode)
+            index = signal_buckets.index(bucket)
         except ValueError:
             index = 0
-        return (index - (len(modes) - 1) / 2) * 13.0
+        return (index - (len(signal_buckets) - 1) / 2) * 16.0
 
-    def x_pos(pressure_index: int, harness_index: int, mode: str, sample_index: int, sample_count: int) -> float:
+    def x_pos(pressure_index: int, harness_index: int, bucket: str, sample_index: int, sample_count: int) -> float:
         pressure_left = left + pressure_index * pressure_group_w
         harness_step = pressure_group_w / max(1, len(harnesses))
         base = pressure_left + harness_step * (harness_index + 0.5)
         jitter = 0.0 if sample_count <= 1 else (sample_index - (sample_count - 1) / 2) * 3.2
-        return base + mode_offset(mode) + jitter
+        return base + signal_offset(bucket) + jitter
 
     lines = [
         f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Replay Deadline Pressure Chart">',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
     ]
 
-    rows_by_group_mode: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    rows_by_group_bucket: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        rows_by_group_mode[(str(row["pressure_level"]), str(row["harness"]), str(row["mode"]))].append(row)
+        bucket = chart_signal_bucket(str(row["mode"]))
+        rows_by_group_bucket[(str(row["pressure_level"]), str(row["harness"]), bucket)].append(row)
 
     def draw_panel(
         panel_top: float,
@@ -1213,32 +1256,35 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
             cx = x + pressure_group_w / 2
             lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+36:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
-            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; color = mode, shape = harness</text>')
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; color = signal path, shape = harness</text>')
             for harness_index, harness in enumerate(harnesses):
                 harness_x = left + pressure_index * pressure_group_w + (pressure_group_w / max(1, len(harnesses))) * (harness_index + 0.5)
                 lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#f1f5f9" stroke-width="1"/>')
-                for mode in modes:
-                    sample_rows = rows_by_group_mode.get((pressure, harness, mode), [])
+                for bucket in signal_buckets:
+                    sample_rows = rows_by_group_bucket.get((pressure, harness, bucket), [])
                     sample_rows = [row for row in sample_rows if optional_float(row.get(value_key)) is not None]
                     if not sample_rows:
                         continue
                     med = statistics.median(float(row[value_key]) for row in sample_rows)
-                    mx = x_pos(pressure_index, harness_index, mode, 0, 1)
+                    color = chart_signal_color(bucket)
+                    mx = x_pos(pressure_index, harness_index, bucket, 0, 1)
                     y = y_pos_panel(med)
-                    lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{MODE_COLORS[mode]}" stroke-width="3" stroke-linecap="round"/>')
-                    label_y = y - 10 if mode == "no_prefetch" else y + 16
+                    lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{color}" stroke-width="3" stroke-linecap="round"/>')
+                    label_y = y - 10 if bucket == "baseline" else y + 16
                     label_y = min(max(label_y, panel_top + 12), panel_bottom - 8)
-                    lines.append(svg_text_label(compact_ms(med), mx, label_y, MODE_COLORS[mode]))
+                    lines.append(svg_text_label(compact_ms(med), mx, label_y, color))
                     for sample_index, row in enumerate(sample_rows):
                         value = float(row[value_key])
-                        dot_x = x_pos(pressure_index, harness_index, mode, sample_index, len(sample_rows))
+                        dot_x = x_pos(pressure_index, harness_index, bucket, sample_index, len(sample_rows))
                         dot_y = y_pos_panel(value)
+                        raw_mode = str(row.get("mode") or "")
                         title = (
                             f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
                             f"{HARNESS_LABELS.get(harness, harness)} | "
-                            f"{MODE_LABELS[mode]} | {value:.1f} {unit_label}"
+                            f"{chart_signal_label(bucket)} | raw mode: {MODE_LABELS.get(raw_mode, raw_mode)} | "
+                            f"{value:.1f} {unit_label}"
                         )
-                        lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), dot_x, dot_y, MODE_COLORS[mode], title))
+                        lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), dot_x, dot_y, color, title))
         lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
         lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
 
@@ -1355,12 +1401,15 @@ def render_pressure_definition_table(rows: list[dict[str, Any]], run_config: dic
 
 def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
-    mode_items = []
-    for mode, label in MODE_LABELS.items():
-        mode_items.append(
+    signal_items = []
+    for bucket in CHART_SIGNAL_ORDER:
+        config = CHART_SIGNAL_BUCKETS[bucket]
+        if not any(chart_signal_bucket(str(row["mode"])) == bucket for row in rows):
+            continue
+        signal_items.append(
             '<span class="legend-item">'
-            f'<span class="legend-dot" style="background:{MODE_COLORS[mode]}"></span>'
-            f"{html.escape(label)}"
+            f'<span class="legend-dot" style="background:{config["color"]}"></span>'
+            f'{html.escape(str(config["label"]))} <span class="muted">= {html.escape(str(config["description"]))}</span>'
             "</span>"
         )
     harness_items = []
@@ -1373,8 +1422,8 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
         )
     return (
         '<div class="legend-card">'
-        '<div class="legend-row"><strong>Mode color</strong>'
-        f'<div class="legend-items">{"".join(mode_items)}</div></div>'
+        '<div class="legend-row"><strong>Signal color</strong>'
+        f'<div class="legend-items">{"".join(signal_items)}</div></div>'
         '<div class="legend-row"><strong>Harness symbol</strong>'
         f'<div class="legend-items">{"".join(harness_items)}</div></div>'
         "</div>"
@@ -1477,6 +1526,7 @@ p {{ line-height: 1.5; color: #334155; }}
 .legend-row strong {{ flex: 0 0 130px; }}
 .legend-items {{ display: flex; flex-wrap: wrap; gap: 12px 24px; }}
 .legend-item {{ display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }}
+.muted {{ color: #64748b; }}
 .legend-dot {{ width: 12px; height: 12px; border-radius: 999px; display: inline-block; }}
 .legend-symbol {{ width: 18px; height: 18px; flex: 0 0 auto; overflow: visible; }}
 .note {{ border-left: 4px solid #2563eb; background: #eff6ff; padding: 12px 16px; color: #1e3a8a; }}
@@ -1491,7 +1541,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel starts the clock when SGLang receives the replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; mode is encoded by color. Lower is better.</p>
+<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel starts the clock when SGLang receives the replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 <div class="card">{pressure_definition_table}</div>

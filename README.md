@@ -460,6 +460,17 @@ SGLang queueing, KV movement, and compute. P0/P3/P5 are the main x-axis
 sections, color separates `no_prefetch` from `e2e_priority_hints`, and symbol
 shape separates harnesses.
 
+For signal-design-space reports, the chart intentionally collapses lower-level
+implementation modes into three manager-facing colors:
+
+| Chart color bucket | Meaning |
+| --- | --- |
+| `Baseline` | No signal is supplied or lowered. |
+| `Harness Emitted` | The harness emitted cache or priority signal, and the gateway translated it for SGLang. |
+| `Front-End Supplied` | The experiment/front end supplied signal intent before the harness, and the gateway translated what came through. |
+
+The raw lower-level modes remain in the evidence tables and CSV artifacts.
+
 Primary scripts:
 
 | Script | Purpose |
@@ -653,6 +664,11 @@ expands to the proven lower-level modes:
 | `harness_emitted/cache` | `no_cache_signal harness_native_cache_lowered` |
 | `harness_emitted/priority` | `no_prefetch nat_inferred_priority_hints`, only for selected harnesses that support native priority inference today. |
 | `frontend_supplied` | `no_prefetch pre_harness_priority_hints` |
+
+In the Replay Deadline Pressure Chart, these lower-level modes are collapsed
+into three colors: `Baseline`, `Harness Emitted`, and `Front-End Supplied`.
+Use the evidence tables when you need the exact raw mode, emitted fields, and
+gateway translation source.
 
 Use `DRY_RUN=1` to preview the expansion without launching SGLang:
 
