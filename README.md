@@ -619,7 +619,52 @@ Chart; the raw proof fields are `harness_emit_priority_signal`,
 
 ## Harness-Native Cache Signal Experiment
 
-This experiment asks a different question from the priority runs:
+The compact entry point for the current signal design space is:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
+SIGNAL_FAMILIES="harness_emitted frontend_supplied" \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
+PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="signal_design_space_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_signal_design_space.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+The two public buckets are:
+
+| `SIGNAL_FAMILIES` value | Meaning |
+| --- | --- |
+| `harness_emitted` | The harness creates the signal. The gateway only translates what the harness emitted for SGLang. This includes harness-native cache control, and NAT native priority inference when NAT is selected. |
+| `frontend_supplied` | The experiment/front end gives signal intent to the harness first. The gateway translates whatever survives the harness path for SGLang. |
+| `all` | Alias for `harness_emitted frontend_supplied`. |
+
+The wrapper prints the detailed mode expansion before it starts. Today that
+expands to the proven lower-level modes:
+
+| Family piece | Lower-level modes |
+| --- | --- |
+| `harness_emitted/cache` | `no_cache_signal harness_native_cache_lowered` |
+| `harness_emitted/priority` | `no_prefetch nat_inferred_priority_hints`, only for selected harnesses that support native priority inference today. |
+| `frontend_supplied` | `no_prefetch pre_harness_priority_hints` |
+
+Use `DRY_RUN=1` to preview the expansion without launching SGLang:
+
+```bash
+DRY_RUN=1 \
+SIGNAL_FAMILIES="harness_emitted frontend_supplied" \
+HARNESSES="qwen_code pi_agent_harness nemo_agent_toolkit" \
+bash scripts/run_harness_signal_design_space.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+The detailed cache-signal experiment asks a narrower question:
 
 > Can the harness decide what cache signal to emit, while the gateway only
 > translates that harness-emitted signal for SGLang?
