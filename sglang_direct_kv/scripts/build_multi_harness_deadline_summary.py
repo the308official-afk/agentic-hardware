@@ -7,6 +7,7 @@ import html
 import json
 import math
 import os
+import re
 import statistics
 import time
 from collections import defaultdict
@@ -33,6 +34,7 @@ MODE_LABELS = {
     "no_prefetch": "NP = No prefetch",
     "e2e_priority_hints": "E2E = End-to-end priority hints",
     "pre_harness_priority_hints": "PH = Pre-harness priority hints",
+    "nat_inferred_priority_hints": "NI = NAT inferred priority hints",
     "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill",
 }
 
@@ -40,6 +42,7 @@ MODE_COLORS = {
     "no_prefetch": "#2563eb",
     "e2e_priority_hints": "#0f766e",
     "pre_harness_priority_hints": "#7c3aed",
+    "nat_inferred_priority_hints": "#be185d",
     "e2e_priority_hints_speculative_prefill": "#ea580c",
 }
 
@@ -492,6 +495,20 @@ def priority_class_from_intent(value: Any) -> str:
     return str(parsed.get("class") or "") if isinstance(parsed, dict) else ""
 
 
+def signal_field(signal: Any, name: str) -> str:
+    if not isinstance(signal, str) or not signal:
+        return ""
+    match = re.search(rf"(?:^|;\s*){re.escape(name)}=([^;]+)", signal)
+    return match.group(1).strip() if match else ""
+
+
+def numeric_strings_match(left: Any, right: Any) -> bool:
+    try:
+        return int(float(left)) == int(float(right))
+    except (TypeError, ValueError):
+        return False
+
+
 def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -555,8 +572,21 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
                 < (emit_rank if isinstance(emit_rank, int) else 10**9)
             ]
             native_signal = start.get("harness_emit_priority_signal", "")
+            emitted_priority = signal_field(native_signal, "nvext.agent_hints.priority")
+            emitted_latency = signal_field(native_signal, "nvext.agent_hints.latency_sensitivity")
+            expected_inferred_priority = submit.get("expected_inferred_priority", "")
+            frontend_priority_intent_present = "yes" if submit.get("priority_intent") else "no"
             if not start:
                 verdict = "NAT did not emit request to gateway"
+            elif probe_start.get("nat_provider") == "dynamo_inferred":
+                if frontend_priority_intent_present == "yes":
+                    verdict = "frontend priority intent present; inference proof is contaminated"
+                elif not emitted_priority:
+                    verdict = "NAT inferred-priority signal missing"
+                elif expected_inferred_priority and numeric_strings_match(emitted_priority, expected_inferred_priority):
+                    verdict = "NAT inferred priority from workflow profile and gateway translated it"
+                else:
+                    verdict = "NAT emitted inferred priority, but value did not match profile expectation"
             elif (
                 priority_class == "urgent"
                 and older_background_submitted
@@ -580,6 +610,11 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
                     "nat_dynamo_enable_nvext_hints": probe_start.get("nat_dynamo_enable_nvext_hints", ""),
                     "request_id": label,
                     "priority_class": priority_class,
+                    "workflow_node": submit.get("workflow_node", ""),
+                    "workflow_node_goal": submit.get("workflow_node_goal", ""),
+                    "inference_source": submit.get("inference_source", ""),
+                    "expected_inferred_priority": expected_inferred_priority,
+                    "frontend_priority_intent_present": frontend_priority_intent_present,
                     "submit_rank_into_nat": submit_order.get(label, ""),
                     "emit_rank_from_nat_to_gateway": emit_rank,
                     "older_background_submitted_before": len(older_background_submitted),
@@ -601,6 +636,8 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
                     "gateway_saw_marker_intent": "yes" if start.get("experiment_priority_intent") else "no",
                     "harness_output_signal": native_signal,
                     "harness_output_signal_source": start.get("harness_emit_priority_signal_source", ""),
+                    "emitted_nvext_priority": emitted_priority,
+                    "emitted_latency_sensitivity": emitted_latency,
                     "gateway_translated_priority": start.get("gateway_priority_translation", ""),
                     "gateway_translation_source": start.get("gateway_priority_translation_source", ""),
                     "sglang_priority_seen": start.get("sglang_priority", fake.get("sglang_priority", "")),
@@ -840,6 +877,11 @@ NAT_SERVICE_PRIORITY_COLUMNS = [
     "nat_dynamo_enable_nvext_hints",
     "request_id",
     "priority_class",
+    "workflow_node",
+    "workflow_node_goal",
+    "inference_source",
+    "expected_inferred_priority",
+    "frontend_priority_intent_present",
     "submit_rank_into_nat",
     "emit_rank_from_nat_to_gateway",
     "older_background_submitted_before",
@@ -853,6 +895,8 @@ NAT_SERVICE_PRIORITY_COLUMNS = [
     "gateway_saw_marker_intent",
     "harness_output_signal",
     "harness_output_signal_source",
+    "emitted_nvext_priority",
+    "emitted_latency_sensitivity",
     "gateway_translated_priority",
     "gateway_translation_source",
     "sglang_priority_seen",

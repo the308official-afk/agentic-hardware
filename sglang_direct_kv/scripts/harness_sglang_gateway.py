@@ -19,9 +19,11 @@ MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
 PRIORITY_ENABLED_MODES = {
     "e2e_priority_hints",
     "pre_harness_priority_hints",
+    "nat_inferred_priority_hints",
     "e2e_priority_hints_speculative_prefill",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
+NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 
 
 def write_jsonl(path: Path | None, row: dict[str, Any]) -> None:
@@ -196,9 +198,19 @@ def priority_enabled(mode: str) -> bool:
     return mode in PRIORITY_ENABLED_MODES
 
 
-def sglang_priority(meta: dict[str, Any]) -> int | None:
+def payload_nvext_priority(payload: dict[str, Any]) -> int | None:
+    nvext_priority = as_dict(as_dict(payload.get("nvext")).get("agent_hints")).get("priority")
+    try:
+        return int(float(nvext_priority))
+    except (TypeError, ValueError):
+        return None
+
+
+def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None) -> int | None:
     if not priority_enabled(str(meta.get("mode") or "")):
         return None
+    if str(meta.get("mode") or "") == NAT_INFERRED_PRIORITY_MODE:
+        return payload_nvext_priority(payload or {})
     phase = str(meta.get("phase") or "")
     if phase == "pressure_filler":
         return int(meta.get("low_priority") or -100)
@@ -297,10 +309,15 @@ def emitted_signal_is_urgent(payload: dict[str, Any]) -> bool:
 
 def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     emitted = emitted_priority_signal(payload)
-    priority = sglang_priority(meta)
+    priority = sglang_priority(meta, payload)
     mode = str(meta.get("mode") or "")
     if priority is None:
         source = "none"
+    elif mode == NAT_INFERRED_PRIORITY_MODE:
+        if emitted["harness_emit_priority_signal"]:
+            source = "harness_emitted_nvext_priority"
+        else:
+            source = "none"
     elif mode == PRE_HARNESS_PRIORITY_MODE:
         if emitted["harness_emit_priority_signal"] and emitted_signal_is_urgent(payload):
             source = "harness_emitted_signal"
@@ -331,7 +348,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         system, user = text_from_openai_chat(payload)
     prompt_text = "\n\n".join(part for part in [system, user] if part).strip() or "Continue."
     context = metadata_context(meta, prompt_hash=str(meta.get("prompt_hash") or "")[:32])
-    priority = sglang_priority(meta)
+    priority = sglang_priority(meta, payload)
     priority_chain = priority_translation_context(meta, payload)
     agent_hints = {
         "schema": "nvext.agent_hints",
@@ -651,7 +668,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 return self._send_bytes(200, fake_chat_response("probe-ok", str(payload_dict.get("model") or model)), "application/json")
             seen_labels.add(label)
             setattr(self.server, "seen_request_labels", seen_labels)
-            priority = sglang_priority(meta)
+            priority = sglang_priority(meta, payload_dict)
             priority_chain = priority_translation_context(meta, payload_dict)
             common = {
                 "session_id": session_id,

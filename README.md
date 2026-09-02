@@ -560,6 +560,34 @@ cache-control hints. A real end-to-end Dynamo scheduling result still requires
 the full NAT -> Dynamo -> SGLang stack, which is better suited for a larger
 machine such as GH200.
 
+To test NAT-only inferred priority, without putting `priority_intent` on the
+frontend request and without installing Dynamo, run:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+$HOME/agentic_hardware/.venvs/nat_py311/bin/python \
+  scripts/run_nemo_nat_service_priority_probe.py \
+  --report-label "nat_inferred_priority_probe_$(date +%Y%m%d_%H%M%S)" \
+  --nat-provider dynamo_inferred \
+  --prompt-tokens 1024 \
+  --fake-backend-delay-ms 100 \
+  --nvext-prefix-total-requests 10 \
+  --nvext-prefix-osl 512 \
+  --nvext-prefix-iat 50 \
+  --update-latest
+```
+
+This probe gives NAT a workflow prediction profile. The profile says some NAT
+workflow nodes are low sensitivity and some are high sensitivity. The request
+entering NAT does not say "urgent"; it only runs under a workflow path. NAT's
+Dynamo transport looks up that workflow path, emits `nvext.agent_hints.priority`,
+and our gateway translates that emitted value into the SGLang `priority` field.
+The proof lives in `nat_service_priority_probe.csv`; look for
+`frontend_priority_intent_present=no`, `expected_inferred_priority`,
+`emitted_nvext_priority`, `gateway_translated_priority`, and `verdict`.
+
 Latest EC2 wireability result:
 
 ```text

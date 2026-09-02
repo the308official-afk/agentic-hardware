@@ -272,6 +272,136 @@ async def send_dynamo_transport_request(
     return row
 
 
+def build_inferred_priority_nodes() -> list[dict[str, Any]]:
+    return [
+        {
+            "workflow_node": "research_context",
+            "workflow_node_goal": "background context gathering",
+            "expected_inferred_priority": 2,
+        },
+        {
+            "workflow_node": "classify_user_intent",
+            "workflow_node_goal": "early user-visible routing decision",
+            "expected_inferred_priority": 100,
+        },
+        {
+            "workflow_node": "expand_background_notes",
+            "workflow_node_goal": "non-urgent support work",
+            "expected_inferred_priority": 2,
+        },
+        {
+            "workflow_node": "review_final_answer",
+            "workflow_node_goal": "final user-visible response step",
+            "expected_inferred_priority": 100,
+        },
+    ]
+
+
+def build_prediction_lookup(nodes: list[dict[str, Any]]) -> Any:
+    from nat.profiler.prediction_trie.data_models import LLMCallPrediction
+    from nat.profiler.prediction_trie.data_models import PredictionTrieNode
+    from nat.profiler.prediction_trie.trie_lookup import PredictionTrieLookup
+
+    root = PredictionTrieNode(name="root")
+    for node in nodes:
+        root.children[str(node["workflow_node"])] = PredictionTrieNode(
+            name=str(node["workflow_node"]),
+            predictions_any_index=LLMCallPrediction(
+                latency_sensitivity=int(node["expected_inferred_priority"]),
+            ),
+        )
+    return PredictionTrieLookup(root)
+
+
+async def send_inferred_dynamo_transport_request(
+    gateway_base: str,
+    model: str,
+    prompt: str,
+    meta: dict[str, Any],
+    trace_path: Path,
+    total_requests: int,
+    osl: int,
+    iat: int,
+    prediction_lookup: Any,
+) -> dict[str, Any]:
+    from nat.builder.context import Context
+    from nat.llm.dynamo_llm import CacheControlMode
+    from nat.llm.dynamo_llm import CachePinType
+    from nat.llm.dynamo_llm import DynamoPrefixContext
+    from nat.llm.dynamo_llm import _DynamoTransport
+
+    request_id = str(meta["label"])
+    workflow_node = str(meta["workflow_node"])
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"{prompt}\n\n{marker(meta)}"}],
+        "max_tokens": 8,
+        "temperature": 0,
+        "stream": False,
+    }
+    submit_ns = time.time_ns()
+    write_jsonl(
+        trace_path,
+        {
+            "event": "m27.nat_service_probe.client_submit",
+            "request_id": request_id,
+            "label": request_id,
+            "session_id": meta.get("session_id", ""),
+            "phase": meta.get("phase", ""),
+            "harness": meta.get("harness", ""),
+            "mode": meta.get("mode", ""),
+            "workflow_node": workflow_node,
+            "workflow_node_goal": meta.get("workflow_node_goal", ""),
+            "inference_source": meta.get("inference_source", ""),
+            "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
+            "priority_intent": "",
+            "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
+            "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
+        },
+    )
+    transport = _DynamoTransport(
+        transport=httpx.AsyncHTTPTransport(),
+        total_requests=total_requests,
+        osl=osl,
+        iat=iat,
+        prediction_lookup=prediction_lookup,
+        cache_pin_type=CachePinType.EPHEMERAL,
+        cache_control_mode=CacheControlMode.ALWAYS,
+        max_sensitivity=1000,
+    )
+    status = 0
+    error = ""
+    try:
+        with DynamoPrefixContext.scope("nat-inferred-priority-probe"):
+            with Context.scope(
+                workflow_run_id=f"nat-inferred-{request_id}",
+                function_path_stack=[workflow_node],
+            ):
+                async with httpx.AsyncClient(transport=transport, timeout=None) as client:
+                    response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
+                    status = response.status_code
+                    response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        error = f"{type(exc).__name__}: {exc}"
+    done_ns = time.time_ns()
+    row = {
+        "event": "m27.nat_service_probe.client_done",
+        "request_id": request_id,
+        "label": request_id,
+        "session_id": meta.get("session_id", ""),
+        "phase": meta.get("phase", ""),
+        "harness": meta.get("harness", ""),
+        "mode": meta.get("mode", ""),
+        "workflow_node": workflow_node,
+        "status": status,
+        "error": error,
+        "client_latency_ms": round((done_ns - submit_ns) / 1_000_000.0, 3),
+        "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
+    }
+    write_jsonl(trace_path, row)
+    return row
+
+
 def wait_for_http(url: str, proc: subprocess.Popen[Any] | None, timeout_s: int, log_path: Path) -> None:
     deadline = time.monotonic() + timeout_s
     last_error = ""
@@ -575,7 +705,71 @@ async def run_dynamo_direct_transport_load(
     return await asyncio.gather(*tasks)
 
 
+def build_inferred_probe_metas(deadline_ms: int) -> list[dict[str, Any]]:
+    metas: list[dict[str, Any]] = []
+    for idx, node in enumerate(build_inferred_priority_nodes()):
+        expected = int(node["expected_inferred_priority"])
+        metas.append(
+            {
+                "harness": "nemo_agent_toolkit_service",
+                "mode": "nat_inferred_priority_hints",
+                "phase": "nat_inferred_workflow_step",
+                "session_id": f"nat_inferred_{idx:03d}",
+                "label": f"nat_inferred_{idx:03d}_{node['workflow_node']}",
+                "task_index": str(idx),
+                "tool_wait_ms": deadline_ms,
+                "deadline_offset_ms": deadline_ms,
+                "priority_label": "profile_high" if expected >= 100 else "profile_low",
+                "workflow_node": node["workflow_node"],
+                "workflow_node_goal": node["workflow_node_goal"],
+                "expected_inferred_priority": expected,
+                "inference_source": "nat_prediction_trie.workflow_path.latency_sensitivity",
+                "harness_input_priority_signal": (
+                    f"workflow_path={node['workflow_node']}; no frontend priority intent"
+                ),
+                "harness_input_priority_signal_source": "nat_workflow_profile_only",
+            }
+        )
+    return metas
+
+
+async def run_dynamo_inferred_transport_load(
+    gateway_base: str,
+    model: str,
+    trace_path: Path,
+    prompt_tokens: int,
+    deadline_ms: int,
+    total_requests: int,
+    osl: int,
+    iat: int,
+) -> list[dict[str, Any]]:
+    nodes = build_inferred_priority_nodes()
+    prediction_lookup = build_prediction_lookup(nodes)
+    metas = build_inferred_probe_metas(deadline_ms)
+    prompt = (
+        f"{make_shared_prefix('nat_dynamo_inferred_priority_probe', prompt_tokens)}\n\n"
+        "NAT inferred-priority probe: answer with one short sentence."
+    )
+    rows: list[dict[str, Any]] = []
+    for meta in metas:
+        rows.append(
+            await send_inferred_dynamo_transport_request(
+                gateway_base,
+                model,
+                prompt,
+                meta,
+                trace_path,
+                total_requests,
+                osl,
+                iat,
+                prediction_lookup,
+            )
+        )
+    return rows
+
+
 def write_run_config(path: Path, args: argparse.Namespace, report_label: str, run_root: Path, report_dir: Path) -> None:
+    mode = "nat_inferred_priority_hints" if args.nat_provider == "dynamo_inferred" else "pre_harness_priority_hints"
     path.write_text(
         "\n".join(
             [
@@ -585,7 +779,7 @@ def write_run_config(path: Path, args: argparse.Namespace, report_label: str, ru
                 f"RUN_ROOT={run_root}",
                 f"REPORT_DIR={report_dir}",
                 "HARNESSES=nemo_agent_toolkit_service",
-                "MODES=pre_harness_priority_hints",
+                f"MODES={mode}",
                 "PRESSURE_LEVELS=nat_service_probe",
                 f"NAT_SERVICE_LOW_COUNT={args.low_count}",
                 f"NAT_SERVICE_URGENT_COUNT={args.urgent_count}",
@@ -594,7 +788,7 @@ def write_run_config(path: Path, args: argparse.Namespace, report_label: str, ru
                 f"NAT_SERVICE_FAKE_BACKEND_DELAY_MS={args.fake_backend_delay_ms}",
                 f"NAT_SERVICE_WORKERS={args.nat_workers}",
                 f"NAT_PROVIDER={args.nat_provider}",
-                f"NAT_DYNAMO_ENABLE_NVEXT_HINTS={1 if args.nat_provider in {'dynamo', 'dynamo_direct'} else 0}",
+                f"NAT_DYNAMO_ENABLE_NVEXT_HINTS={1 if args.nat_provider in {'dynamo', 'dynamo_direct', 'dynamo_inferred'} else 0}",
                 f"NAT_DYNAMO_PREFIX_TOTAL_REQUESTS={args.nvext_prefix_total_requests}",
                 f"NAT_DYNAMO_PREFIX_OSL={args.nvext_prefix_osl}",
                 f"NAT_DYNAMO_PREFIX_IAT={args.nvext_prefix_iat}",
@@ -619,7 +813,7 @@ def main() -> None:
     parser.add_argument("--prompt-tokens", type=int, default=1024)
     parser.add_argument("--fake-backend-delay-ms", type=int, default=1200)
     parser.add_argument("--nat-workers", type=int, default=1)
-    parser.add_argument("--nat-provider", choices=("openai", "dynamo", "dynamo_direct"), default="openai")
+    parser.add_argument("--nat-provider", choices=("openai", "dynamo", "dynamo_direct", "dynamo_inferred"), default="openai")
     parser.add_argument("--nvext-prefix-total-requests", type=int, default=10)
     parser.add_argument("--nvext-prefix-osl", type=int, default=512)
     parser.add_argument("--nvext-prefix-iat", type=int, default=50)
@@ -630,7 +824,8 @@ def main() -> None:
     results_root = args.results_root.resolve()
     run_root = results_root / "runs" / "controlled" / args.report_label
     report_dir = results_root / "reports" / args.report_label
-    case_dir = run_root / "nemo_agent_toolkit_service_nat_service_probe_pre_harness_priority_hints"
+    mode = "nat_inferred_priority_hints" if args.nat_provider == "dynamo_inferred" else "pre_harness_priority_hints"
+    case_dir = run_root / f"nemo_agent_toolkit_service_nat_service_probe_{mode}"
     log_dir = case_dir / "harness_logs"
     trace_path = case_dir / "m27_trace.jsonl"
     gateway_events = case_dir / "harness_gateway_events.jsonl"
@@ -650,7 +845,7 @@ def main() -> None:
         {
             "event": "m27.nat_service_probe.start",
             "harness": "nemo_agent_toolkit_service",
-            "mode": "pre_harness_priority_hints",
+            "mode": mode,
             "low_count": args.low_count,
             "urgent_count": args.urgent_count,
             "low_lead_ms": args.low_lead_ms,
@@ -658,7 +853,12 @@ def main() -> None:
             "fake_backend_delay_ms": args.fake_backend_delay_ms,
             "nat_workers": args.nat_workers,
             "nat_provider": args.nat_provider,
-            "nat_dynamo_enable_nvext_hints": args.nat_provider in {"dynamo", "dynamo_direct"},
+            "nat_dynamo_enable_nvext_hints": args.nat_provider in {"dynamo", "dynamo_direct", "dynamo_inferred"},
+            "nat_inference_source": (
+                "prediction_trie.workflow_path.latency_sensitivity"
+                if args.nat_provider == "dynamo_inferred"
+                else ""
+            ),
             "nat_dynamo_prefix_total_requests": args.nvext_prefix_total_requests,
             "nat_dynamo_prefix_osl": args.nvext_prefix_osl,
             "nat_dynamo_prefix_iat": args.nvext_prefix_iat,
@@ -673,7 +873,31 @@ def main() -> None:
         write_jsonl(trace_path, {"event": "m27.nat_service_probe.fake_sglang_ready", "base_url": fake_base})
         gateway_proc, gateway_base = start_gateway(script_dir, trace_path, gateway_events, fake_base, args.model)
         write_jsonl(trace_path, {"event": "m27.nat_service_probe.gateway_ready", "base_url": gateway_base})
-        if args.nat_provider == "dynamo_direct":
+        if args.nat_provider == "dynamo_inferred":
+            write_jsonl(
+                trace_path,
+                {
+                    "event": "m27.nat_service_probe.dynamo_inferred_transport_ready",
+                    "gateway_base": gateway_base,
+                    "nat_provider": args.nat_provider,
+                    "nat_dynamo_enable_nvext_hints": True,
+                    "nat_inference_source": "prediction_trie.workflow_path.latency_sensitivity",
+                    "frontend_priority_intent_present": "no",
+                },
+            )
+            done_rows = asyncio.run(
+                run_dynamo_inferred_transport_load(
+                    gateway_base,
+                    args.model,
+                    trace_path,
+                    args.prompt_tokens,
+                    args.deadline_ms,
+                    args.nvext_prefix_total_requests,
+                    args.nvext_prefix_osl,
+                    args.nvext_prefix_iat,
+                )
+            )
+        elif args.nat_provider == "dynamo_direct":
             write_jsonl(
                 trace_path,
                 {
