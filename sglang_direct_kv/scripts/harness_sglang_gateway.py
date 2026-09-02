@@ -51,6 +51,21 @@ CACHE_IDENTITY_KEYS = {
     "conversation_id",
     "conversationId",
 }
+CACHE_SIGNAL_HEADERS = {
+    "prompt-cache-key",
+    "prompt_cache_key",
+    "x-prompt-cache-key",
+    "prompt-cache-retention",
+    "prompt_cache_retention",
+    "x-prompt-cache-retention",
+}
+CACHE_IDENTITY_HEADERS = {
+    "session_id",
+    "session-id",
+    "x-session-id",
+    "x-session-affinity",
+    "x-client-request-id",
+}
 
 
 def write_jsonl(path: Path | None, row: dict[str, Any]) -> None:
@@ -334,8 +349,20 @@ def iter_structured_signals(value: Any, path: str = "$") -> list[tuple[str, str,
     return signals
 
 
-def emitted_cache_signal(payload: dict[str, Any]) -> dict[str, str]:
+def header_signal_items(headers: dict[str, str]) -> list[tuple[str, str, Any]]:
+    signals: list[tuple[str, str, Any]] = []
+    for key, value in headers.items():
+        normalized = key.lower()
+        if normalized in CACHE_SIGNAL_HEADERS and is_present(value):
+            signals.append(("cache", f"@headers.{normalized}", value))
+        elif normalized in CACHE_IDENTITY_HEADERS and is_present(value):
+            signals.append(("identity", f"@headers.{normalized}", value))
+    return signals
+
+
+def emitted_cache_signal(payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, str]:
     structured = iter_structured_signals(payload)
+    structured.extend(header_signal_items(headers or {}))
     cache_items = [(path, value) for kind, path, value in structured if kind == "cache"]
     identity_items = [(path, value) for kind, path, value in structured if kind == "identity"]
     signals = [f"{path}={compact_json(value)}" for path, value in cache_items]
@@ -365,17 +392,36 @@ def first_signal_value(payload: dict[str, Any], keys: set[str]) -> Any:
     return None
 
 
-def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    emitted = emitted_cache_signal(payload)
+def first_header_signal_value(headers: dict[str, str], keys: set[str]) -> Any:
+    wanted = {key.lower() for key in keys}
+    for key, value in headers.items():
+        if key.lower() in wanted and is_present(value):
+            return value
+    return None
+
+
+def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+    request_headers = headers or {}
+    emitted = emitted_cache_signal(payload, request_headers)
     mode = str(meta.get("mode") or "")
     should_lower = mode == CACHE_LOWER_MODE and emitted["harness_native_cache_signal_seen"] == "yes"
     lowered: dict[str, Any] = {}
     if should_lower:
         cache_key = first_signal_value(payload, {"prompt_cache_key", "promptCacheKey", "cache_key", "cacheKey"})
+        if not is_present(cache_key):
+            cache_key = first_header_signal_value(
+                request_headers,
+                {"prompt-cache-key", "prompt_cache_key", "x-prompt-cache-key"},
+            )
         retention = first_signal_value(
             payload,
             {"prompt_cache_retention", "promptCacheRetention", "cache_retention", "cacheRetention"},
         )
+        if not is_present(retention):
+            retention = first_header_signal_value(
+                request_headers,
+                {"prompt-cache-retention", "prompt_cache_retention", "x-prompt-cache-retention"},
+            )
         control = first_signal_value(payload, {"cache_control", "cacheControl"})
         lowered = {
             "schema": "harness_native_cache_lowering.v1",
@@ -747,6 +793,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 payload = {}
             api_kind = api_kind_from_path(self.path)
             payload_dict = as_dict(payload)
+            request_headers = {key: value for key, value in self.headers.items()}
             shape = request_shape(body, payload, api_kind)
             write_jsonl(log_path, {"event": "gateway.request_received", "path": self.path, **shape})
             meta = marker_from_payload(payload)
@@ -789,7 +836,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             setattr(self.server, "seen_request_labels", seen_labels)
             priority = sglang_priority(meta, payload_dict)
             priority_chain = priority_translation_context(meta, payload_dict)
-            cache_chain = cache_translation_context(meta, payload_dict)
+            cache_chain = cache_translation_context(meta, payload_dict, request_headers)
             common = {
                 "session_id": session_id,
                 "phase": phase,

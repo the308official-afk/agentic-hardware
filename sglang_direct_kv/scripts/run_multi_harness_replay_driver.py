@@ -444,6 +444,9 @@ def qwen_command(
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
     provider_base = f"{gateway_base.rstrip('/')}/v1"
+    cache_signal_mode = str(meta.get("mode") or "") in {"no_cache_signal", HARNESS_NATIVE_CACHE_MODE}
+    qwen_auth_type = "anthropic" if harness_native_cache_enabled(meta) else "openai"
+    cache_enabled = harness_native_cache_enabled(meta)
     workspace = qwen_workspace_path(log_dir, meta)
     settings_dir = workspace / ".qwen"
     settings_dir.mkdir(parents=True, exist_ok=True)
@@ -454,43 +457,35 @@ def qwen_command(
         "model": {
             "name": model,
             "maxSessionTurns": -1,
-            **({"enableTokenCaching": True} if harness_native_cache_enabled(meta) else {}),
+            **(
+                {
+                    "generationConfig": {
+                        "enableCacheControl": cache_enabled,
+                        "forceGlobalCacheScope": cache_enabled,
+                        "cacheRetention": "1h" if cache_enabled else "ephemeral",
+                    }
+                }
+                if cache_signal_mode
+                else {}
+            ),
         },
         "modelProviders": {
-            "openai": [
+            qwen_auth_type: [
                 {
                     "id": model,
                     "name": model,
                     "baseUrl": provider_base,
-                    "envKey": "OPENAI_API_KEY",
-                    **(
-                        {
-                            "cacheControl": True,
-                            "promptCacheKey": native_cache_label(meta),
-                        }
-                        if harness_native_cache_enabled(meta)
-                        else {}
-                    ),
+                    "envKey": "ANTHROPIC_API_KEY" if qwen_auth_type == "anthropic" else "OPENAI_API_KEY",
                 }
             ]
         },
         "security": {
             "auth": {
-                "selectedType": "openai",
+                "selectedType": qwen_auth_type,
                 "apiKey": "dummy",
                 "baseUrl": provider_base,
             }
         },
-        **(
-            {
-                "tokenCaching": {
-                    "enabled": True,
-                    "promptCacheKey": native_cache_label(meta),
-                }
-            }
-            if harness_native_cache_enabled(meta)
-            else {}
-        ),
         "tools": {
             "approvalMode": "yolo",
             "exclude": ["shell", "write_file", "edit"],
@@ -506,12 +501,16 @@ def qwen_command(
         "--prompt",
         f"{prompt}\n\n{marker(meta)}",
     ]
-    return cmd, {
+    env = {
         "OPENAI_API_KEY": "dummy",
         "OPENAI_BASE_URL": provider_base,
         "OPENAI_MODEL": model,
+        "ANTHROPIC_API_KEY": "dummy",
+        "ANTHROPIC_BASE_URL": provider_base,
+        "ANTHROPIC_MODEL": model,
         "QWEN_MODEL": model,
     }
+    return cmd, env
 
 
 def openai_chat_probe_command(
@@ -654,9 +653,12 @@ def pi_agent_harness_command(
                 "      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },",
                 "      contextWindow: 32768,",
                 "      maxTokens: 4096,",
-                f"      cacheControlFormat: {json.dumps('openai' if harness_native_cache_enabled(meta) else 'none')},",
-                f"      cacheRetention: {json.dumps('long' if harness_native_cache_enabled(meta) else 'none')},",
-                f"      promptCacheKey: {json.dumps(native_cache_label(meta))}",
+                "      compat: {",
+                f"        cacheControlFormat: {json.dumps('anthropic') if harness_native_cache_enabled(meta) else 'undefined'},",
+                f"        supportsLongCacheRetention: {str(bool(harness_native_cache_enabled(meta))).lower()},",
+                f"        sendSessionAffinityHeaders: {str(bool(harness_native_cache_enabled(meta))).lower()},",
+                "        sessionAffinityFormat: 'openai'",
+                "      }",
                 "    }]",
                 "  });",
                 "}",
@@ -679,7 +681,7 @@ def pi_agent_harness_command(
         "json",
         "--print",
         "--no-tools",
-        "--no-session",
+        *(["--session-id", str(meta.get("session_id") or native_cache_label(meta))] if harness_native_cache_enabled(meta) else ["--no-session"]),
         "--session-dir",
         str(session_dir),
         "--no-context-files",
@@ -700,6 +702,7 @@ def pi_agent_harness_command(
         "PI_CODING_AGENT_SESSION_DIR": str(session_dir),
         "PI_OFFLINE": "1",
         "PI_TELEMETRY": "0",
+        **({"PI_CACHE_RETENTION": "long"} if harness_native_cache_enabled(meta) else {}),
     }
 
 

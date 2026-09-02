@@ -639,6 +639,15 @@ level, or prompt size.
 | `no_cache_signal` | Baseline. The gateway observes traffic and records whether a harness emitted cache fields, but it does not lower cache signals to SGLang. |
 | `harness_native_cache_lowered` | The gateway translates only cache fields that the harness emitted, such as `cache_control`, `prompt_cache_key`, `promptCacheKey`, `cacheRetention`, or `prompt_cache_retention`. |
 
+Harness-specific notes:
+
+| Harness | Native cache signal path used by this testbed |
+| --- | --- |
+| `qwen_code` | Uses the OpenAI-compatible wire path for `no_cache_signal`, because that path does not emit explicit cache-control fields. Uses the Anthropic-compatible wire path for `harness_native_cache_lowered`, where Qwen emits `cache_control` markers on stable prompt sections. |
+| `pi_agent_harness` | Uses Pi session persistence plus `PI_CACHE_RETENTION=long`. In native-cache mode Pi emits Anthropic-style `cache_control`, OpenAI-style `prompt_cache_key` / `prompt_cache_retention`, and session-affinity headers. |
+| `openclaw` | Uses OpenClaw cache-retention environment toggles and provider compat flags. |
+| `opencode` | Uses OpenCode's own emitted prompt-cache key when available. |
+
 Recommended first run on EC2:
 
 ```bash
@@ -662,11 +671,11 @@ cd ~/agentic_hardware/sglang_direct_kv
 source .venv/bin/activate
 
 HARDWARE_PROFILE=ec2_a10g \
-HARNESSES="qwen_code openclaw" \
+HARNESSES="qwen_code pi_agent_harness" \
 PRESSURE_LEVELS="p0_control" \
 MODES="no_cache_signal harness_native_cache_lowered" \
 REPORT_BUILDER_MODE=lightweight \
-REPORT_LABEL="harness_native_cache_smoke_$(date +%Y%m%d_%H%M%S)" \
+REPORT_LABEL="qwen_pi_native_cache_fix_smoke_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_deadline_pressure.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
