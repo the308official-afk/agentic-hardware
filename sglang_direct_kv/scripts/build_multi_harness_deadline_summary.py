@@ -663,10 +663,11 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
 
 
 def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    priority_modes = {"pre_harness_priority_hints", "nat_inferred_priority_hints"}
     replay_by_label = {
         (str(row.get("case_dir") or ""), str(row.get("request_id") or "")): row
         for row in replay_rows
-        if row.get("mode") == "pre_harness_priority_hints"
+        if row.get("mode") in priority_modes
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -682,7 +683,8 @@ def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]
         for row in trace_rows:
             if row.get("event") != "m27.harness.request_input":
                 continue
-            if row.get("phase") != "replay" or row.get("mode") != "pre_harness_priority_hints":
+            mode = str(row.get("mode") or "")
+            if row.get("phase") != "replay" or mode not in priority_modes:
                 continue
             label = str(row.get("label") or row.get("request_id") or "")
             replay_row = replay_by_label.get((str(case_dir), label), {})
@@ -703,7 +705,18 @@ def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]
             gateway_saw_intent = "yes" if gateway_start.get("experiment_priority_intent") else "no"
             native_signal = gateway_start.get("harness_emit_priority_signal", "")
             nat_wrapper_seen = "yes" if nat_config or nat_process_start or nat_process_exit else "no"
-            if driver_intent_seen != "yes":
+            if mode == "nat_inferred_priority_hints":
+                if not gateway_start:
+                    verdict = "harness did not emit inferred-priority request"
+                elif not native_signal:
+                    verdict = "harness inferred-priority signal missing"
+                elif not priority_value_is_urgent(translated):
+                    verdict = "gateway did not translate inferred urgent priority"
+                elif not priority_value_is_urgent(sglang_priority):
+                    verdict = "translated inferred priority missing from SGLang payload"
+                else:
+                    verdict = "harness inferred priority and gateway translated it"
+            elif driver_intent_seen != "yes":
                 verdict = "driver intent missing"
             elif not gateway_start:
                 verdict = "harness did not emit marked request"
@@ -1485,8 +1498,8 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <div class="card">{chart}</div>
 {chart_legend}
 <h2>Harness Priority Preservation Proof</h2>
-<p>This table appears when the run includes <code>pre_harness_priority_hints</code>. It proves whether the driver supplied an urgent intent before the harness, whether the gateway saw that intent or a native emitted signal, and whether it translated to SGLang priority.</p>
-<div class="card">{harness_priority_table if harness_priority_rows else "<p>No pre-harness priority proof rows found in this run.</p>"}</div>
+<p>This table appears when the run includes <code>pre_harness_priority_hints</code> or <code>nat_inferred_priority_hints</code>. It proves whether the harness carried or inferred priority, and whether the gateway translated that signal to SGLang priority.</p>
+<div class="card">{harness_priority_table if harness_priority_rows else "<p>No harness priority proof rows found in this run.</p>"}</div>
 <h2>NAT Inferred Priority Profile</h2>
 <div class="card">{nat_inferred_priority_profile_table if nat_inferred_priority_profile_table else "<p>No standalone NAT inferred-priority profile found in this run.</p>"}</div>
 <h2>NAT Shared-Service Priority Probe</h2>
