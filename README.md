@@ -584,7 +584,9 @@ workflow nodes are low sensitivity and some are high sensitivity. The request
 entering NAT does not say "urgent"; it only runs under a workflow path. NAT's
 Dynamo transport looks up that workflow path, emits `nvext.agent_hints.priority`,
 and our gateway translates that emitted value into the SGLang `priority` field.
-The proof lives in `nat_service_priority_probe.csv`; look for
+The profile is saved beside the report as
+`nat_inferred_priority_profile.json`, and it is also rendered as a table in the
+HTML report. The proof lives in `nat_service_priority_probe.csv`; look for
 `frontend_priority_intent_present=no`, `expected_inferred_priority`,
 `emitted_nvext_priority`, `gateway_translated_priority`, and `verdict`.
 

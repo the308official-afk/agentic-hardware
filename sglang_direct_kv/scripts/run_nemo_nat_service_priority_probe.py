@@ -297,6 +297,54 @@ def build_inferred_priority_nodes() -> list[dict[str, Any]]:
     ]
 
 
+def build_inferred_priority_profile(
+    args: argparse.Namespace,
+    report_label: str,
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "schema": "nat_inferred_priority_profile.v1",
+        "report_label": report_label,
+        "created_unix_s": int(time.time()),
+        "nat_provider": "dynamo_inferred",
+        "frontend_priority_intent": "absent",
+        "inference_source": "nat_prediction_trie.workflow_path.latency_sensitivity",
+        "priority_semantics": {
+            "2": "background or low sensitivity workflow step",
+            "100": "urgent or user-visible workflow step",
+        },
+        "dynamo_transport_hints": {
+            "prefix_total_requests": args.nvext_prefix_total_requests,
+            "osl": args.nvext_prefix_osl,
+            "iat": args.nvext_prefix_iat,
+            "cache_pin_type": "ephemeral",
+            "cache_control_mode": "always",
+        },
+        "workflow_nodes": [
+            {
+                "workflow_node": str(node["workflow_node"]),
+                "workflow_path": [str(node["workflow_node"])],
+                "workflow_node_goal": str(node["workflow_node_goal"]),
+                "latency_sensitivity": int(node["expected_inferred_priority"]),
+                "expected_emitted_nvext_priority": int(node["expected_inferred_priority"]),
+            }
+            for node in nodes
+        ],
+    }
+
+
+def write_inferred_priority_profile(
+    profile_path: Path,
+    args: argparse.Namespace,
+    report_label: str,
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    profile = build_inferred_priority_profile(args, report_label, nodes)
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return profile
+
+
 def build_prediction_lookup(nodes: list[dict[str, Any]]) -> Any:
     from nat.profiler.prediction_trie.data_models import LLMCallPrediction
     from nat.profiler.prediction_trie.data_models import PredictionTrieNode
@@ -705,9 +753,9 @@ async def run_dynamo_direct_transport_load(
     return await asyncio.gather(*tasks)
 
 
-def build_inferred_probe_metas(deadline_ms: int) -> list[dict[str, Any]]:
+def build_inferred_probe_metas(deadline_ms: int, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     metas: list[dict[str, Any]] = []
-    for idx, node in enumerate(build_inferred_priority_nodes()):
+    for idx, node in enumerate(nodes):
         expected = int(node["expected_inferred_priority"])
         metas.append(
             {
@@ -742,10 +790,10 @@ async def run_dynamo_inferred_transport_load(
     total_requests: int,
     osl: int,
     iat: int,
+    nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    nodes = build_inferred_priority_nodes()
     prediction_lookup = build_prediction_lookup(nodes)
-    metas = build_inferred_probe_metas(deadline_ms)
+    metas = build_inferred_probe_metas(deadline_ms, nodes)
     prompt = (
         f"{make_shared_prefix('nat_dynamo_inferred_priority_probe', prompt_tokens)}\n\n"
         "NAT inferred-priority probe: answer with one short sentence."
@@ -834,11 +882,20 @@ def main() -> None:
     nat_config_path = nat_home / "workflow.json"
     nat_log_path = nat_home / "nat_serve.log"
     run_config_path = report_dir / "run_config.env"
+    inferred_priority_profile_path = report_dir / "nat_inferred_priority_profile.json"
     case_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
     nat_home.mkdir(parents=True, exist_ok=True)
     for path in (trace_path, gateway_events, gateway_log, nat_log_path):
         path.unlink(missing_ok=True)
+    inferred_priority_nodes = build_inferred_priority_nodes() if args.nat_provider == "dynamo_inferred" else []
+    if args.nat_provider == "dynamo_inferred":
+        write_inferred_priority_profile(
+            inferred_priority_profile_path,
+            args,
+            args.report_label,
+            inferred_priority_nodes,
+        )
 
     write_jsonl(
         trace_path,
@@ -858,6 +915,9 @@ def main() -> None:
                 "prediction_trie.workflow_path.latency_sensitivity"
                 if args.nat_provider == "dynamo_inferred"
                 else ""
+            ),
+            "nat_inferred_priority_profile_path": (
+                str(inferred_priority_profile_path) if args.nat_provider == "dynamo_inferred" else ""
             ),
             "nat_dynamo_prefix_total_requests": args.nvext_prefix_total_requests,
             "nat_dynamo_prefix_osl": args.nvext_prefix_osl,
@@ -882,6 +942,7 @@ def main() -> None:
                     "nat_provider": args.nat_provider,
                     "nat_dynamo_enable_nvext_hints": True,
                     "nat_inference_source": "prediction_trie.workflow_path.latency_sensitivity",
+                    "nat_inferred_priority_profile_path": str(inferred_priority_profile_path),
                     "frontend_priority_intent_present": "no",
                 },
             )
@@ -895,6 +956,7 @@ def main() -> None:
                     args.nvext_prefix_total_requests,
                     args.nvext_prefix_osl,
                     args.nvext_prefix_iat,
+                    inferred_priority_nodes,
                 )
             )
         elif args.nat_provider == "dynamo_direct":

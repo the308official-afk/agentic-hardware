@@ -1175,6 +1175,55 @@ def render_table(rows: list[dict[str, Any]], columns: list[str]) -> str:
     return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_lines)}</tbody></table>"
 
 
+def read_nat_inferred_priority_profile(report_dir: Path) -> dict[str, Any]:
+    profile_path = report_dir / "nat_inferred_priority_profile.json"
+    if not profile_path.exists():
+        return {}
+    try:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def render_nat_inferred_priority_profile(profile: dict[str, Any]) -> str:
+    nodes = profile.get("workflow_nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return ""
+    rows: list[dict[str, Any]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        rows.append(
+            {
+                "workflow_node": node.get("workflow_node", ""),
+                "workflow_path": " / ".join(str(part) for part in node.get("workflow_path", []))
+                if isinstance(node.get("workflow_path"), list)
+                else node.get("workflow_path", ""),
+                "workflow_node_goal": node.get("workflow_node_goal", ""),
+                "latency_sensitivity": node.get("latency_sensitivity", ""),
+                "expected_emitted_nvext_priority": node.get("expected_emitted_nvext_priority", ""),
+            }
+        )
+    if not rows:
+        return ""
+    artifact_name = "nat_inferred_priority_profile.json"
+    return (
+        f"<p>Standalone profile artifact: <code>{artifact_name}</code>. "
+        "These workflow-path entries are the source of the inferred priorities used by this NAT probe.</p>"
+        + render_table(
+            rows,
+            [
+                "workflow_node",
+                "workflow_path",
+                "workflow_node_goal",
+                "latency_sensitivity",
+                "expected_emitted_nvext_priority",
+            ],
+        )
+    )
+
+
 RUN_CONFIG_PRESSURE_KEYS = {
     "p0_control": "P0_CONTROL",
     "p1_mild": "P1_MILD",
@@ -1236,6 +1285,7 @@ def render_html(
     speculative_prefill_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
+    nat_inferred_priority_profile: dict[str, Any],
     report_label: str,
     run_config: dict[str, str],
 ) -> str:
@@ -1275,6 +1325,7 @@ def render_html(
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
+    nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
     raw_table = render_table(
         rows,
         [
@@ -1338,6 +1389,8 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Harness Priority Preservation Proof</h2>
 <p>This table appears when the run includes <code>pre_harness_priority_hints</code>. It proves whether the driver supplied an urgent intent before the harness, whether the gateway saw that intent or a native emitted signal, and whether it translated to SGLang priority.</p>
 <div class="card">{harness_priority_table if harness_priority_rows else "<p>No pre-harness priority proof rows found in this run.</p>"}</div>
+<h2>NAT Inferred Priority Profile</h2>
+<div class="card">{nat_inferred_priority_profile_table if nat_inferred_priority_profile_table else "<p>No standalone NAT inferred-priority profile found in this run.</p>"}</div>
 <h2>NAT Shared-Service Priority Probe</h2>
 <p>This table appears when NAT is run as a shared <code>nat serve</code> service. It compares the order requests entered NAT with the order NAT emitted model calls to the gateway. If urgent work jumps ahead of older background work here, that is NAT-side priority evidence.</p>
 <div class="card">{nat_service_priority_table if nat_service_priority_rows else "<p>No NAT shared-service priority probe rows found in this run.</p>"}</div>
@@ -1365,6 +1418,7 @@ def write_manifest(
     speculative_prefill_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
+    nat_inferred_priority_profile: dict[str, Any],
     run_config: dict[str, str],
 ) -> None:
     manifest = {
@@ -1379,6 +1433,10 @@ def write_manifest(
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
+        "nat_inferred_priority_profile": bool(nat_inferred_priority_profile),
+        "nat_inferred_priority_profile_path": (
+            str(args.out_dir / "nat_inferred_priority_profile.json") if nat_inferred_priority_profile else ""
+        ),
         "hardware_profile": os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE", ""),
         "hardware_profile_path": os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH", ""),
         "harnesses": sorted({row["harness"] for row in rows}),
@@ -1405,19 +1463,49 @@ def main() -> None:
     speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
     harness_priority_rows = collect_harness_priority_proof(args.root, rows)
     nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
+    nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
-    html_text = render_html(rows, summary, speculative_prefill_rows, harness_priority_rows, nat_service_priority_rows, args.report_label, run_config)
+    html_text = render_html(
+        rows,
+        summary,
+        speculative_prefill_rows,
+        harness_priority_rows,
+        nat_service_priority_rows,
+        nat_inferred_priority_profile,
+        args.report_label,
+        run_config,
+    )
     report_path = args.out_dir / "master_report.html"
     report_path.write_text(html_text, encoding="utf-8")
-    write_manifest(args.out_dir / "manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, nat_service_priority_rows, run_config)
+    write_manifest(
+        args.out_dir / "manifest.json",
+        args,
+        rows,
+        summary,
+        speculative_prefill_rows,
+        harness_priority_rows,
+        nat_service_priority_rows,
+        nat_inferred_priority_profile,
+        run_config,
+    )
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
-        write_manifest(args.latest_root / "latest_manifest.json", args, rows, summary, speculative_prefill_rows, harness_priority_rows, nat_service_priority_rows, run_config)
+        write_manifest(
+            args.latest_root / "latest_manifest.json",
+            args,
+            rows,
+            summary,
+            speculative_prefill_rows,
+            harness_priority_rows,
+            nat_service_priority_rows,
+            nat_inferred_priority_profile,
+            run_config,
+        )
     print(f"wrote {report_path}")
     print(f"rows={len(rows)} summary_rows={len(summary)}")
 
