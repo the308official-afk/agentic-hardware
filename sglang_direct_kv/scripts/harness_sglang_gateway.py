@@ -24,6 +24,33 @@ PRIORITY_ENABLED_MODES = {
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
+CACHE_LOWER_MODE = "harness_native_cache_lowered"
+CACHE_SIGNAL_MODES = {
+    "no_cache_signal",
+    CACHE_LOWER_MODE,
+}
+CACHE_SIGNAL_KEYS = {
+    "cache_control",
+    "cacheControl",
+    "cache_control_format",
+    "cacheControlFormat",
+    "cache_retention",
+    "cacheRetention",
+    "prompt_cache_key",
+    "promptCacheKey",
+    "prompt_cache_retention",
+    "promptCacheRetention",
+    "cache_key",
+    "cacheKey",
+}
+CACHE_IDENTITY_KEYS = {
+    "session_id",
+    "sessionId",
+    "thread_id",
+    "threadId",
+    "conversation_id",
+    "conversationId",
+}
 
 
 def write_jsonl(path: Path | None, row: dict[str, Any]) -> None:
@@ -49,6 +76,10 @@ def compact_json(value: Any) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
     except TypeError:
         return str(value)
+
+
+def is_present(value: Any) -> bool:
+    return value not in (None, "", [], {})
 
 
 def parse_b64_json(value: str) -> dict[str, Any]:
@@ -287,6 +318,82 @@ def emitted_priority_signal(payload: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def iter_structured_signals(value: Any, path: str = "$") -> list[tuple[str, str, Any]]:
+    signals: list[tuple[str, str, Any]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if key in CACHE_SIGNAL_KEYS and is_present(child):
+                signals.append(("cache", child_path, child))
+            elif key in CACHE_IDENTITY_KEYS and is_present(child):
+                signals.append(("identity", child_path, child))
+            signals.extend(iter_structured_signals(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            signals.extend(iter_structured_signals(child, f"{path}[{index}]"))
+    return signals
+
+
+def emitted_cache_signal(payload: dict[str, Any]) -> dict[str, str]:
+    structured = iter_structured_signals(payload)
+    cache_items = [(path, value) for kind, path, value in structured if kind == "cache"]
+    identity_items = [(path, value) for kind, path, value in structured if kind == "identity"]
+    signals = [f"{path}={compact_json(value)}" for path, value in cache_items]
+    identity_signals = [f"{path}={compact_json(value)}" for path, value in identity_items]
+    return {
+        "harness_native_cache_signal_seen": "yes" if cache_items else "no",
+        "harness_native_cache_signal": "; ".join(signals),
+        "harness_native_cache_signal_source": ", ".join(path for path, _ in cache_items),
+        "harness_native_cache_identity_signal": "; ".join(identity_signals),
+        "harness_native_cache_identity_source": ", ".join(path for path, _ in identity_items),
+    }
+
+
+def first_signal_value(payload: dict[str, Any], keys: set[str]) -> Any:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in keys and is_present(value):
+                return value
+            found = first_signal_value(value, keys) if isinstance(value, (dict, list)) else None
+            if is_present(found):
+                return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = first_signal_value(item, keys) if isinstance(item, (dict, list)) else None
+            if is_present(found):
+                return found
+    return None
+
+
+def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    emitted = emitted_cache_signal(payload)
+    mode = str(meta.get("mode") or "")
+    should_lower = mode == CACHE_LOWER_MODE and emitted["harness_native_cache_signal_seen"] == "yes"
+    lowered: dict[str, Any] = {}
+    if should_lower:
+        cache_key = first_signal_value(payload, {"prompt_cache_key", "promptCacheKey", "cache_key", "cacheKey"})
+        retention = first_signal_value(
+            payload,
+            {"prompt_cache_retention", "promptCacheRetention", "cache_retention", "cacheRetention"},
+        )
+        control = first_signal_value(payload, {"cache_control", "cacheControl"})
+        lowered = {
+            "schema": "harness_native_cache_lowering.v1",
+            "source": "harness_emitted_cache_signal",
+            "mode": mode,
+            "cache_key": cache_key if is_present(cache_key) else "",
+            "cache_retention": retention if is_present(retention) else "",
+            "cache_control": control if is_present(control) else "",
+        }
+    return {
+        **emitted,
+        "gateway_cache_translation": compact_json(lowered),
+        "gateway_cache_translation_source": "harness_emitted_cache_signal" if should_lower else "none",
+        "gateway_cache_lowered": "yes" if should_lower else "no",
+        "gateway_cache_invented_signal": "false",
+    }
+
+
 def emitted_signal_is_urgent(payload: dict[str, Any]) -> bool:
     service_tier = str(payload.get("service_tier") or "").lower()
     if service_tier in {"priority", "scale"}:
@@ -350,6 +457,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
     context = metadata_context(meta, prompt_hash=str(meta.get("prompt_hash") or "")[:32])
     priority = sglang_priority(meta, payload)
     priority_chain = priority_translation_context(meta, payload)
+    cache_chain = cache_translation_context(meta, payload)
     agent_hints = {
         "schema": "nvext.agent_hints",
         "session_id": context["parent_run_id"],
@@ -372,6 +480,12 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "harness_emit_priority_signal": priority_chain["harness_emit_priority_signal"],
         "gateway_priority_translation": priority_chain["gateway_priority_translation"],
         "gateway_priority_translation_source": priority_chain["gateway_priority_translation_source"],
+        "harness_native_cache_signal_seen": cache_chain["harness_native_cache_signal_seen"],
+        "harness_native_cache_signal": cache_chain["harness_native_cache_signal"],
+        "gateway_cache_translation": cache_chain["gateway_cache_translation"],
+        "gateway_cache_translation_source": cache_chain["gateway_cache_translation_source"],
+        "gateway_cache_lowered": cache_chain["gateway_cache_lowered"],
+        "gateway_cache_invented_signal": cache_chain["gateway_cache_invented_signal"],
     }
     if context["phase"] == "speculative_prefill":
         agent_hints["expected_action"] = "warm_next_turn_prefix"
@@ -402,6 +516,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
             **priority_chain,
+            **cache_chain,
         },
         "request_context": context,
         "nvext": {"agent_hints": agent_hints, "request_context": context},
@@ -414,6 +529,10 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
         },
     }
+    if cache_chain["gateway_cache_lowered"] == "yes":
+        lowered_cache = as_dict(json.loads(str(cache_chain["gateway_cache_translation"] or "{}")))
+        custom_params["native_cache_bridge"] = lowered_cache
+        custom_params["nvext"]["cache_control"] = lowered_cache
     out: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt_text}],
@@ -670,6 +789,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             setattr(self.server, "seen_request_labels", seen_labels)
             priority = sglang_priority(meta, payload_dict)
             priority_chain = priority_translation_context(meta, payload_dict)
+            cache_chain = cache_translation_context(meta, payload_dict)
             common = {
                 "session_id": session_id,
                 "phase": phase,
@@ -691,6 +811,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
                 "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
                 **priority_chain,
+                **cache_chain,
                 **shape,
             }
             write_jsonl(trace_path, {"event": "m27.request.submitted", **common})

@@ -38,9 +38,12 @@ SUPPORTED_MODES = (
     "pre_harness_priority_hints",
     "nat_inferred_priority_hints",
     "e2e_priority_hints_speculative_prefill",
+    "no_cache_signal",
+    "harness_native_cache_lowered",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
+HARNESS_NATIVE_CACHE_MODE = "harness_native_cache_lowered"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -192,6 +195,15 @@ def attach_pre_harness_priority_intent(meta: dict[str, Any]) -> dict[str, Any]:
 def attach_harness_priority_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     meta = attach_pre_harness_priority_intent(meta)
     return attach_nat_inferred_priority_profile(meta)
+
+
+def harness_native_cache_enabled(meta: dict[str, Any]) -> bool:
+    return str(meta.get("mode") or "") == HARNESS_NATIVE_CACHE_MODE
+
+
+def native_cache_label(meta: dict[str, Any]) -> str:
+    raw = f"{meta.get('harness', 'harness')}:{meta.get('pressure_level', 'pressure')}:{meta.get('session_id', 'session')}"
+    return hashlib.sha256(str(raw).encode("utf-8")).hexdigest()[:24]
 
 
 def outbound_priority_fields(meta: dict[str, Any], api_kind: str) -> dict[str, Any]:
@@ -374,6 +386,7 @@ def opencode_command(
                 "options": {
                     "baseURL": provider_base,
                     "apiKey": "dummy",
+                    **({"setCacheKey": True} if harness_native_cache_enabled(meta) else {}),
                 },
                 "models": {
                     opencode_model_id: {
@@ -382,6 +395,16 @@ def opencode_command(
                             "context": 32768,
                             "output": 4096,
                         },
+                        **(
+                            {
+                                "options": {
+                                    "setCacheKey": True,
+                                    "promptCacheKey": native_cache_label(meta),
+                                }
+                            }
+                            if harness_native_cache_enabled(meta)
+                            else {}
+                        ),
                     }
                 },
             }
@@ -431,6 +454,7 @@ def qwen_command(
         "model": {
             "name": model,
             "maxSessionTurns": -1,
+            **({"enableTokenCaching": True} if harness_native_cache_enabled(meta) else {}),
         },
         "modelProviders": {
             "openai": [
@@ -439,6 +463,14 @@ def qwen_command(
                     "name": model,
                     "baseUrl": provider_base,
                     "envKey": "OPENAI_API_KEY",
+                    **(
+                        {
+                            "cacheControl": True,
+                            "promptCacheKey": native_cache_label(meta),
+                        }
+                        if harness_native_cache_enabled(meta)
+                        else {}
+                    ),
                 }
             ]
         },
@@ -449,6 +481,16 @@ def qwen_command(
                 "baseUrl": provider_base,
             }
         },
+        **(
+            {
+                "tokenCaching": {
+                    "enabled": True,
+                    "promptCacheKey": native_cache_label(meta),
+                }
+            }
+            if harness_native_cache_enabled(meta)
+            else {}
+        ),
         "tools": {
             "approvalMode": "yolo",
             "exclude": ["shell", "write_file", "edit"],
@@ -611,7 +653,10 @@ def pi_agent_harness_command(
                 "      input: ['text'],",
                 "      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },",
                 "      contextWindow: 32768,",
-                "      maxTokens: 4096",
+                "      maxTokens: 4096,",
+                f"      cacheControlFormat: {json.dumps('openai' if harness_native_cache_enabled(meta) else 'none')},",
+                f"      cacheRetention: {json.dumps('long' if harness_native_cache_enabled(meta) else 'none')},",
+                f"      promptCacheKey: {json.dumps(native_cache_label(meta))}",
                 "    }]",
                 "  });",
                 "}",
@@ -691,6 +736,16 @@ def openclaw_command(
                             "input": ["text"],
                             "contextWindow": 32768,
                             "maxTokens": 4096,
+                            **(
+                                {
+                                    "compat": {
+                                        "supportsPromptCacheKey": True,
+                                        "supportsLongCacheRetention": True,
+                                    },
+                                }
+                                if harness_native_cache_enabled(meta)
+                                else {}
+                            ),
                         }
                     ],
                 }
@@ -721,6 +776,14 @@ def openclaw_command(
         "HARNESS_GATEWAY_API_KEY": "dummy",
         "OPENCLAW_STATE_DIR": str(state_dir),
         "OPENCLAW_CONFIG_PATH": str(config_path),
+        **(
+            {
+                "OPENCLAW_CACHE_RETENTION": "long",
+                "OPENCLAW_CACHE_TRACE": "1",
+            }
+            if harness_native_cache_enabled(meta)
+            else {}
+        ),
     }
 
 
@@ -1053,6 +1116,11 @@ async def main_async() -> None:
             "nat_inferred_prefix_total_requests": 10,
             "nat_inferred_prefix_osl": 512,
             "nat_inferred_prefix_iat": 50,
+            "native_cache_profile": {
+                "enabled": args.mode == HARNESS_NATIVE_CACHE_MODE,
+                "policy": "harness_decides_gateway_translates_only",
+                "cache_key_seed": f"{args.harness}:{args.pressure_level}",
+            },
         }
         initial_meta = {
             **base_meta,

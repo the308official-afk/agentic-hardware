@@ -70,6 +70,8 @@ The current manager-facing comparisons use these modes:
 | `no_prefetch` | Baseline. The replay request receives no end-to-end priority treatment. |
 | `e2e_priority_hints` | Current priority path. The driver marks replay urgency and the SGLang boundary carries that priority into scheduling. |
 | `pre_harness_priority_hints` | Harness-preservation path. The driver marks replay urgency before the harness sees the request, then the gateway proves whether that intent or a native harness signal survived and was translated into SGLang priority. |
+| `no_cache_signal` | Cache-signal baseline. The gateway is present and records native harness cache fields, but it does not lower them to SGLang. |
+| `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
 | `e2e_priority_hints_speculative_prefill` | Dynamo-like proactive path. The replay still gets E2E priority, and the gateway sends a background `max_tokens=1` warmup for the known next-turn prefix during the tool wait. |
 
 For NeMo Agent Toolkit / NAT, `pre_harness_priority_hints` uses NAT's OpenAI
@@ -614,6 +616,68 @@ the workflow profile, and the gateway only translates that emitted value into
 SGLang's `priority` field. The chart to inspect is the Replay Deadline Pressure
 Chart; the raw proof fields are `harness_emit_priority_signal`,
 `gateway_priority_translation_source`, and `sglang_priority`.
+
+## Harness-Native Cache Signal Experiment
+
+This experiment asks a different question from the priority runs:
+
+> Can the harness decide what cache signal to emit, while the gateway only
+> translates that harness-emitted signal for SGLang?
+
+The rule is:
+
+```text
+harness decides -> gateway translates -> SGLang executes
+```
+
+The gateway stays in the path for both modes, but it is not allowed to invent a
+cache hint from hidden experiment knowledge such as replay phase, pressure
+level, or prompt size.
+
+| Mode | Meaning |
+| --- | --- |
+| `no_cache_signal` | Baseline. The gateway observes traffic and records whether a harness emitted cache fields, but it does not lower cache signals to SGLang. |
+| `harness_native_cache_lowered` | The gateway translates only cache fields that the harness emitted, such as `cache_control`, `prompt_cache_key`, `promptCacheKey`, `cacheRetention`, or `prompt_cache_retention`. |
+
+Recommended first run on EC2:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES="opencode qwen_code pi_agent_harness openclaw" \
+PRESSURE_LEVELS="p0_control p2_medium p3_high p5_boss_queue" \
+MODES="no_cache_signal harness_native_cache_lowered" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="harness_native_cache_signals_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+For a faster smoke test:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES="qwen_code openclaw" \
+PRESSURE_LEVELS="p0_control" \
+MODES="no_cache_signal harness_native_cache_lowered" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="harness_native_cache_smoke_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Read `harness_native_cache_signal_proof.csv` in the report directory. The key
+columns are `native_cache_signal_seen`, `native_cache_signal_source`,
+`gateway_cache_lowered`, `gateway_cache_translation_source`, and
+`gateway_invented_signal`. A clean positive result has
+`native_cache_signal_seen=yes`, `gateway_cache_lowered=yes`,
+`gateway_cache_translation_source=harness_emitted_cache_signal`, and
+`gateway_invented_signal=false`.
 
 Latest EC2 wireability result:
 

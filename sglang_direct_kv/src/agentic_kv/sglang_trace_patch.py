@@ -1389,6 +1389,20 @@ def _req_context(req: Any) -> dict[str, Any]:
                 context["agent_gateway_priority_translation_source"] = _safe_summary(
                     agentic.get("gateway_priority_translation_source")
                 )
+                context["agent_harness_native_cache_signal_seen"] = _safe_summary(
+                    agentic.get("harness_native_cache_signal_seen")
+                )
+                context["agent_harness_native_cache_signal"] = _safe_summary(
+                    agentic.get("harness_native_cache_signal")
+                )
+                context["agent_gateway_cache_translation"] = _safe_summary(agentic.get("gateway_cache_translation"))
+                context["agent_gateway_cache_translation_source"] = _safe_summary(
+                    agentic.get("gateway_cache_translation_source")
+                )
+                context["agent_gateway_cache_lowered"] = _safe_summary(agentic.get("gateway_cache_lowered"))
+                context["agent_gateway_cache_invented_signal"] = _safe_summary(
+                    agentic.get("gateway_cache_invented_signal")
+                )
                 if context.get("agent_request_id") and "request_id" not in context:
                     context["request_id"] = context["agent_request_id"]
             request_context = custom_params.get("request_context")
@@ -1436,6 +1450,24 @@ def _req_context(req: Any) -> dict[str, Any]:
                     )
                     context["dynamo_hint_gateway_priority_translation_source"] = _safe_summary(
                         agent_hints.get("gateway_priority_translation_source")
+                    )
+                    context["dynamo_hint_harness_native_cache_signal_seen"] = _safe_summary(
+                        agent_hints.get("harness_native_cache_signal_seen")
+                    )
+                    context["dynamo_hint_harness_native_cache_signal"] = _safe_summary(
+                        agent_hints.get("harness_native_cache_signal")
+                    )
+                    context["dynamo_hint_gateway_cache_translation"] = _safe_summary(
+                        agent_hints.get("gateway_cache_translation")
+                    )
+                    context["dynamo_hint_gateway_cache_translation_source"] = _safe_summary(
+                        agent_hints.get("gateway_cache_translation_source")
+                    )
+                    context["dynamo_hint_gateway_cache_lowered"] = _safe_summary(
+                        agent_hints.get("gateway_cache_lowered")
+                    )
+                    context["dynamo_hint_gateway_cache_invented_signal"] = _safe_summary(
+                        agent_hints.get("gateway_cache_invented_signal")
                     )
                     if context.get("dynamo_hint_request_id") and "request_id" not in context:
                         context["request_id"] = context["dynamo_hint_request_id"]

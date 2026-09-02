@@ -36,6 +36,8 @@ MODE_LABELS = {
     "pre_harness_priority_hints": "PH = Pre-harness priority hints",
     "nat_inferred_priority_hints": "NI = NAT inferred priority hints",
     "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill",
+    "no_cache_signal": "NC = No native cache signal",
+    "harness_native_cache_lowered": "HC = Harness native cache lowered",
 }
 
 MODE_COLORS = {
@@ -44,6 +46,8 @@ MODE_COLORS = {
     "pre_harness_priority_hints": "#7c3aed",
     "nat_inferred_priority_hints": "#be185d",
     "e2e_priority_hints_speculative_prefill": "#ea580c",
+    "no_cache_signal": "#64748b",
+    "harness_native_cache_lowered": "#16a34a",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -281,6 +285,15 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                     "harness_emit_priority_signal_source": source_row.get("harness_emit_priority_signal_source", ""),
                     "gateway_priority_translation": source_row.get("gateway_priority_translation", ""),
                     "gateway_priority_translation_source": source_row.get("gateway_priority_translation_source", ""),
+                    "harness_native_cache_signal_seen": source_row.get("harness_native_cache_signal_seen", ""),
+                    "harness_native_cache_signal": source_row.get("harness_native_cache_signal", ""),
+                    "harness_native_cache_signal_source": source_row.get("harness_native_cache_signal_source", ""),
+                    "harness_native_cache_identity_signal": source_row.get("harness_native_cache_identity_signal", ""),
+                    "harness_native_cache_identity_source": source_row.get("harness_native_cache_identity_source", ""),
+                    "gateway_cache_translation": source_row.get("gateway_cache_translation", ""),
+                    "gateway_cache_translation_source": source_row.get("gateway_cache_translation_source", ""),
+                    "gateway_cache_lowered": source_row.get("gateway_cache_lowered", ""),
+                    "gateway_cache_invented_signal": source_row.get("gateway_cache_invented_signal", ""),
                     "status": status,
                     "error": error,
                 }
@@ -765,6 +778,51 @@ def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]
     return proof_rows
 
 
+def collect_harness_native_cache_signal_proof(replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    proof_rows: list[dict[str, Any]] = []
+    for row in replay_rows:
+        mode = str(row.get("mode") or "")
+        if mode not in {"no_cache_signal", "harness_native_cache_lowered"}:
+            continue
+        signal_seen = str(row.get("harness_native_cache_signal_seen") or "no")
+        lowered = str(row.get("gateway_cache_lowered") or "no")
+        invented = str(row.get("gateway_cache_invented_signal") or "false")
+        if mode == "harness_native_cache_lowered" and signal_seen == "yes" and lowered == "yes" and invented == "false":
+            verdict = "harness emitted cache signal and gateway translated it"
+        elif mode == "harness_native_cache_lowered" and signal_seen == "yes":
+            verdict = "harness emitted cache signal but gateway did not lower it"
+        elif mode == "harness_native_cache_lowered":
+            verdict = "no native harness cache signal observed to lower"
+        elif signal_seen == "yes":
+            verdict = "native cache signal observed in baseline; gateway did not lower it"
+        else:
+            verdict = "no native harness cache signal observed"
+        proof_rows.append(
+            {
+                "harness_label": row.get("harness_label", ""),
+                "pressure_level_label": row.get("pressure_level_label", ""),
+                "mode_label": row.get("mode_label", ""),
+                "session_id": row.get("session_id", ""),
+                "request_id": row.get("request_id", ""),
+                "native_cache_signal_seen": signal_seen,
+                "native_cache_signal": row.get("harness_native_cache_signal", ""),
+                "native_cache_signal_source": row.get("harness_native_cache_signal_source", ""),
+                "native_cache_identity_signal": row.get("harness_native_cache_identity_signal", ""),
+                "native_cache_identity_source": row.get("harness_native_cache_identity_source", ""),
+                "gateway_cache_lowered": lowered,
+                "gateway_cache_translation": row.get("gateway_cache_translation", ""),
+                "gateway_cache_translation_source": row.get("gateway_cache_translation_source", ""),
+                "gateway_invented_signal": invented,
+                "first_token_lateness_ms": row.get("first_token_lateness_ms", ""),
+                "sglang_receive_to_first_token_ms": row.get("sglang_receive_to_first_token_ms", ""),
+                "verdict": verdict,
+                "case_id": row.get("case_id", ""),
+                "case_dir": row.get("case_dir", ""),
+            }
+        )
+    return proof_rows
+
+
 RAW_COLUMNS = [
     "harness",
     "harness_label",
@@ -787,6 +845,15 @@ RAW_COLUMNS = [
     "harness_emit_priority_signal_source",
     "gateway_priority_translation",
     "gateway_priority_translation_source",
+    "harness_native_cache_signal_seen",
+    "harness_native_cache_signal",
+    "harness_native_cache_signal_source",
+    "harness_native_cache_identity_signal",
+    "harness_native_cache_identity_source",
+    "gateway_cache_translation",
+    "gateway_cache_translation_source",
+    "gateway_cache_lowered",
+    "gateway_cache_invented_signal",
     "first_token_source",
     "status",
     "error",
@@ -902,6 +969,28 @@ NAT_SERVICE_PRIORITY_COLUMNS = [
     "sglang_priority_seen",
     "client_status",
     "client_error",
+    "verdict",
+    "case_id",
+    "case_dir",
+]
+
+CACHE_SIGNAL_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "session_id",
+    "request_id",
+    "native_cache_signal_seen",
+    "native_cache_signal",
+    "native_cache_signal_source",
+    "native_cache_identity_signal",
+    "native_cache_identity_source",
+    "gateway_cache_lowered",
+    "gateway_cache_translation",
+    "gateway_cache_translation_source",
+    "gateway_invented_signal",
+    "first_token_lateness_ms",
+    "sglang_receive_to_first_token_ms",
     "verdict",
     "case_id",
     "case_dir",
@@ -1285,6 +1374,7 @@ def render_html(
     speculative_prefill_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
+    cache_signal_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     report_label: str,
     run_config: dict[str, str],
@@ -1325,6 +1415,7 @@ def render_html(
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
+    cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
     nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
     raw_table = render_table(
         rows,
@@ -1343,6 +1434,13 @@ def render_html(
             "harness_emit_priority_signal",
             "gateway_priority_translation",
             "gateway_priority_translation_source",
+            "harness_native_cache_signal_seen",
+            "harness_native_cache_signal",
+            "harness_native_cache_signal_source",
+            "gateway_cache_lowered",
+            "gateway_cache_translation",
+            "gateway_cache_translation_source",
+            "gateway_cache_invented_signal",
             "backend_receive_source",
             "first_token_source",
             "status",
@@ -1394,6 +1492,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>NAT Shared-Service Priority Probe</h2>
 <p>This table appears when NAT is run as a shared <code>nat serve</code> service. It compares the order requests entered NAT with the order NAT emitted model calls to the gateway. If urgent work jumps ahead of older background work here, that is NAT-side priority evidence.</p>
 <div class="card">{nat_service_priority_table if nat_service_priority_rows else "<p>No NAT shared-service priority probe rows found in this run.</p>"}</div>
+<h2>Harness Native Cache Signal Proof</h2>
+<p>This table appears when the run includes <code>no_cache_signal</code> or <code>harness_native_cache_lowered</code>. The gateway is always present, but it only translates cache fields that the harness emitted. <code>gateway_invented_signal</code> should remain <code>false</code>.</p>
+<div class="card">{cache_signal_table if cache_signal_rows else "<p>No harness native cache signal proof rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -1418,6 +1519,7 @@ def write_manifest(
     speculative_prefill_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
+    cache_signal_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     run_config: dict[str, str],
 ) -> None:
@@ -1433,6 +1535,7 @@ def write_manifest(
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
+        "cache_signal_row_count": len(cache_signal_rows),
         "nat_inferred_priority_profile": bool(nat_inferred_priority_profile),
         "nat_inferred_priority_profile_path": (
             str(args.out_dir / "nat_inferred_priority_profile.json") if nat_inferred_priority_profile else ""
@@ -1463,18 +1566,21 @@ def main() -> None:
     speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
     harness_priority_rows = collect_harness_priority_proof(args.root, rows)
     nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
+    cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
     nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
+    write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
     html_text = render_html(
         rows,
         summary,
         speculative_prefill_rows,
         harness_priority_rows,
         nat_service_priority_rows,
+        cache_signal_rows,
         nat_inferred_priority_profile,
         args.report_label,
         run_config,
@@ -1489,6 +1595,7 @@ def main() -> None:
         speculative_prefill_rows,
         harness_priority_rows,
         nat_service_priority_rows,
+        cache_signal_rows,
         nat_inferred_priority_profile,
         run_config,
     )
@@ -1503,6 +1610,7 @@ def main() -> None:
             speculative_prefill_rows,
             harness_priority_rows,
             nat_service_priority_rows,
+            cache_signal_rows,
             nat_inferred_priority_profile,
             run_config,
         )
