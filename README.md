@@ -590,6 +590,31 @@ HTML report. The proof lives in `nat_service_priority_probe.csv`; look for
 `frontend_priority_intent_present=no`, `expected_inferred_priority`,
 `emitted_nvext_priority`, `gateway_translated_priority`, and `verdict`.
 
+To run the main replay-deadline pressure experiment for NAT only, compare the
+baseline against NAT-inferred priority across all P0-P5 pressure levels:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES="nemo_agent_toolkit" \
+PRESSURE_LEVELS="p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue" \
+MODES="no_prefetch nat_inferred_priority_hints" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="nat_inferred_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_deadline_pressure.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+In this run, the gateway does not attach priority from the experiment marker.
+For `nat_inferred_priority_hints`, NAT emits `nvext.agent_hints.priority` from
+the workflow profile, and the gateway only translates that emitted value into
+SGLang's `priority` field. The chart to inspect is the Replay Deadline Pressure
+Chart; the raw proof fields are `harness_emit_priority_signal`,
+`gateway_priority_translation_source`, and `sglang_priority`.
+
 Latest EC2 wireability result:
 
 ```text

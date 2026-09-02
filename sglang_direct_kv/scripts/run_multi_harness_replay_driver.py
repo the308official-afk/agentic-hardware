@@ -36,7 +36,27 @@ SUPPORTED_MODES = (
     "no_prefetch",
     "e2e_priority_hints",
     "pre_harness_priority_hints",
+    "nat_inferred_priority_hints",
     "e2e_priority_hints_speculative_prefill",
+)
+
+NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
+NAT_INFERRED_PRIORITY_NODES = (
+    {
+        "workflow_node": "initial_turn",
+        "workflow_node_goal": "normal first model turn before the tool wait",
+        "expected_inferred_priority": 2,
+    },
+    {
+        "workflow_node": "pressure_filler_background",
+        "workflow_node_goal": "background pressure work used to occupy the backend",
+        "expected_inferred_priority": 2,
+    },
+    {
+        "workflow_node": "replay_after_tool_wait",
+        "workflow_node_goal": "deadline-sensitive replay after a tool wait",
+        "expected_inferred_priority": 100,
+    },
 )
 
 
@@ -84,6 +104,58 @@ def pre_harness_priority_enabled(mode: str) -> bool:
     return mode == "pre_harness_priority_hints"
 
 
+def nat_inferred_priority_enabled(mode: str) -> bool:
+    return mode == NAT_INFERRED_PRIORITY_MODE
+
+
+def nat_inferred_node_for_phase(phase: str) -> dict[str, Any]:
+    if phase == "replay":
+        name = "replay_after_tool_wait"
+    elif phase == "pressure_filler":
+        name = "pressure_filler_background"
+    else:
+        name = "initial_turn"
+    return next(node for node in NAT_INFERRED_PRIORITY_NODES if node["workflow_node"] == name)
+
+
+def nat_inferred_priority_profile() -> dict[str, Any]:
+    return {
+        "schema": "nat_inferred_priority_profile.v1",
+        "frontend_priority_intent": "absent",
+        "inference_source": "nat_prediction_trie.workflow_path.latency_sensitivity",
+        "priority_semantics": {
+            "2": "background or low sensitivity workflow step",
+            "100": "urgent or user-visible workflow step",
+        },
+        "workflow_nodes": [
+            {
+                "workflow_node": str(node["workflow_node"]),
+                "workflow_path": [str(node["workflow_node"])],
+                "workflow_node_goal": str(node["workflow_node_goal"]),
+                "latency_sensitivity": int(node["expected_inferred_priority"]),
+                "expected_emitted_nvext_priority": int(node["expected_inferred_priority"]),
+            }
+            for node in NAT_INFERRED_PRIORITY_NODES
+        ],
+    }
+
+
+def attach_nat_inferred_priority_profile(meta: dict[str, Any]) -> dict[str, Any]:
+    if not nat_inferred_priority_enabled(str(meta.get("mode") or "")):
+        return meta
+    node = nat_inferred_node_for_phase(str(meta.get("phase") or ""))
+    out = dict(meta)
+    out.pop("priority_intent", None)
+    out["workflow_node"] = node["workflow_node"]
+    out["workflow_node_goal"] = node["workflow_node_goal"]
+    out["expected_inferred_priority"] = node["expected_inferred_priority"]
+    out["inference_source"] = "nat_prediction_trie.workflow_path.latency_sensitivity"
+    out["nat_inferred_priority_profile"] = nat_inferred_priority_profile()
+    out["harness_input_priority_signal"] = f"workflow_path={node['workflow_node']}; no frontend priority intent"
+    out["harness_input_priority_signal_source"] = "nat_workflow_profile_only"
+    return out
+
+
 def harness_priority_signal(harness: str, priority_class: str) -> tuple[str, str]:
     if priority_class == "background":
         return "adapter_metadata.priority_class=background", "adapter_metadata"
@@ -115,6 +187,11 @@ def attach_pre_harness_priority_intent(meta: dict[str, Any]) -> dict[str, Any]:
     out["harness_input_priority_signal"] = signal
     out["harness_input_priority_signal_source"] = source
     return out
+
+
+def attach_harness_priority_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    meta = attach_pre_harness_priority_intent(meta)
+    return attach_nat_inferred_priority_profile(meta)
 
 
 def outbound_priority_fields(meta: dict[str, Any], api_kind: str) -> dict[str, Any]:
@@ -458,6 +535,15 @@ def nemo_agent_toolkit_command(
     nat = os.environ.get("HARNESS_NAT_BIN") or shutil.which("nat")
     if not nat:
         raise FileNotFoundError("nat CLI not found; set HARNESS_NAT_BIN or install nvidia-nat.")
+    wrapper_python = sys.executable
+    if nat_inferred_priority_enabled(str(meta.get("mode") or "")):
+        nat_python = os.environ.get("HARNESS_NAT_PYTHON")
+        if nat_python:
+            wrapper_python = nat_python
+        else:
+            sibling_python = Path(nat).resolve().parent / "python"
+            if sibling_python.exists():
+                wrapper_python = str(sibling_python)
     wrapper_path = Path(__file__).with_name("nemo_agent_toolkit_wrapper.py")
     request_path = nat_home / "wrapper_request.json"
     nat_log_path = nat_home / "nat_run.log"
@@ -477,7 +563,7 @@ def nemo_agent_toolkit_command(
         },
     }
     request_path.write_text(json.dumps(request, indent=2, sort_keys=True), encoding="utf-8")
-    cmd = [sys.executable, str(wrapper_path), "--request-json", str(request_path)]
+    cmd = [wrapper_python, str(wrapper_path), "--request-json", str(request_path)]
     return cmd, {
         "OPENAI_API_KEY": "dummy",
         "NAT_CONFIG_FILE": str(config_path),
@@ -842,6 +928,7 @@ async def main_async() -> None:
     parser.add_argument("--session-count", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--arrival-gap-ms", type=int, default=40)
+    parser.add_argument("--nat-inferred-profile-out", type=Path)
     args = parser.parse_args()
 
     if args.harness in {"codex", "claude_code", "opencode", "qwen_code"} and shutil.which("npx") is None:
@@ -860,6 +947,21 @@ async def main_async() -> None:
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     workload_start = time.perf_counter()
+    if args.mode == NAT_INFERRED_PRIORITY_MODE:
+        if args.harness != "nemo_agent_toolkit":
+            raise SystemExit("nat_inferred_priority_hints is currently supported only for nemo_agent_toolkit.")
+        if args.nat_inferred_profile_out is not None:
+            args.nat_inferred_profile_out.parent.mkdir(parents=True, exist_ok=True)
+            profile = {
+                **nat_inferred_priority_profile(),
+                "report_label": os.environ.get("REPORT_LABEL", ""),
+                "created_unix_s": int(time.time()),
+                "nat_provider": "dynamo_inferred",
+            }
+            args.nat_inferred_profile_out.write_text(
+                json.dumps(profile, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
 
     def offset_ms() -> float:
         return (time.perf_counter() - workload_start) * 1000.0
@@ -900,6 +1002,10 @@ async def main_async() -> None:
                     "prompt_hash": meta.get("prompt_hash", ""),
                     "offset_ms": round(offset_ms(), 3),
                     "priority_intent": meta.get("priority_intent", ""),
+                    "workflow_node": meta.get("workflow_node", ""),
+                    "workflow_node_goal": meta.get("workflow_node_goal", ""),
+                    "inference_source": meta.get("inference_source", ""),
+                    "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
                     "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
                     "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
                 },
@@ -944,6 +1050,9 @@ async def main_async() -> None:
             "low_priority": -100,
             "tool_wait_ms": args.tool_wait_ms,
             "_trace_path": str(args.trace),
+            "nat_inferred_prefix_total_requests": 10,
+            "nat_inferred_prefix_osl": 512,
+            "nat_inferred_prefix_iat": 50,
         }
         initial_meta = {
             **base_meta,
@@ -956,7 +1065,7 @@ async def main_async() -> None:
             "max_tokens": 8,
             "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
         }
-        initial_meta = attach_pre_harness_priority_intent(initial_meta)
+        initial_meta = attach_harness_priority_metadata(initial_meta)
         await bounded_request(pair.prompt, initial_meta)
         tool_start_ms = offset_ms()
         replay_due_ms = tool_start_ms + args.tool_wait_ms
@@ -994,7 +1103,7 @@ async def main_async() -> None:
                 "expected_replay_request_id": replay_label,
                 "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
             }
-            warmup_meta = attach_pre_harness_priority_intent(warmup_meta)
+            warmup_meta = attach_harness_priority_metadata(warmup_meta)
             write_trace(
                 args.trace,
                 {
@@ -1108,7 +1217,7 @@ async def main_async() -> None:
             "deadline_offset_ms": round(replay_due_ms, 3),
             "max_tokens": 8,
         }
-        replay_meta = attach_pre_harness_priority_intent(replay_meta)
+        replay_meta = attach_harness_priority_metadata(replay_meta)
         await bounded_request(pair.replay_prompt, replay_meta)
         write_trace(
             args.trace,
