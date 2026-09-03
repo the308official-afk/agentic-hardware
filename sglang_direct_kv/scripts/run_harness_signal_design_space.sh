@@ -6,9 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${DIRECT_ROOT}"
 
-SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-harness_emitted frontend_supplied gateway_injected}"
+SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="harness_emitted frontend_supplied gateway_injected"
+  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -24,12 +24,10 @@ HARDWARE_PROFILE="${HARDWARE_PROFILE:-ec2_a10g}"
 HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
-HARNESS_EMITTED_CACHE_MODES="${HARNESS_EMITTED_CACHE_MODES:-no_cache_signal harness_native_cache_lowered}"
-HARNESS_EMITTED_PRIORITY_MODES="${HARNESS_EMITTED_PRIORITY_MODES:-no_prefetch nat_inferred_priority_hints}"
-HARNESS_EMITTED_PRIORITY_HARNESSES="${HARNESS_EMITTED_PRIORITY_HARNESSES:-nemo_agent_toolkit}"
-FRONTEND_SUPPLIED_MODES="${FRONTEND_SUPPLIED_MODES:-no_prefetch pre_harness_priority_hints}"
-GATEWAY_INJECTED_MODES="${GATEWAY_INJECTED_MODES:-no_prefetch e2e_priority_hints}"
-INCLUDE_HARNESS_EMITTED_PRIORITY="${INCLUDE_HARNESS_EMITTED_PRIORITY:-1}"
+BASELINE_MODES="${BASELINE_MODES:-no_prefetch}"
+HARNESS_EMITTED_MODES="${HARNESS_EMITTED_MODES:-harness_emitted_signals}"
+FRONTEND_SUPPLIED_MODES="${FRONTEND_SUPPLIED_MODES:-pre_harness_priority_hints}"
+GATEWAY_INJECTED_MODES="${GATEWAY_INJECTED_MODES:-e2e_priority_hints}"
 DRY_RUN="${DRY_RUN:-0}"
 
 if [[ "${REPORT_BUILDER_MODE}" != "lightweight" ]]; then
@@ -81,10 +79,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      harness_emitted|frontend_supplied|gateway_injected) ;;
+      baseline|harness_emitted|frontend_supplied|gateway_injected) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: harness_emitted frontend_supplied gateway_injected all" >&2
+        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected all" >&2
         exit 2
         ;;
     esac
@@ -160,8 +158,8 @@ write_combined_run_config() {
     echo "HARDWARE_PROFILE_PATH=${HARDWARE_PROFILE_PATH}"
     echo "HARNESSES=${HARNESSES}"
     echo "MODES=${EXPANDED_MODES}"
-    echo "HARNESS_EMITTED_CACHE_MODES=${HARNESS_EMITTED_CACHE_MODES}"
-    echo "HARNESS_EMITTED_PRIORITY_MODES=${HARNESS_EMITTED_PRIORITY_MODES}"
+    echo "BASELINE_MODES=${BASELINE_MODES}"
+    echo "HARNESS_EMITTED_MODES=${HARNESS_EMITTED_MODES}"
     echo "FRONTEND_SUPPLIED_MODES=${FRONTEND_SUPPLIED_MODES}"
     echo "GATEWAY_INJECTED_MODES=${GATEWAY_INJECTED_MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
@@ -221,20 +219,16 @@ REPORT_DIR="$(mkdir -p "${REPORT_DIR}" && cd "${REPORT_DIR}" && pwd)"
 EXPANDED_MODES=""
 FAMILY_EXPANSION=""
 for family in ${SIGNAL_FAMILIES}; do
-  if [[ "${family}" == "harness_emitted" ]]; then
-    for mode in ${HARNESS_EMITTED_CACHE_MODES}; do
+  if [[ "${family}" == "baseline" ]]; then
+    for mode in ${BASELINE_MODES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
-    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "harness_emitted:cache")"
-    if [[ "${INCLUDE_HARNESS_EMITTED_PRIORITY}" == "1" ]]; then
-      native_priority_harnesses="$(intersect_words "${HARNESSES}" "${HARNESS_EMITTED_PRIORITY_HARNESSES}")"
-      if [[ -n "${native_priority_harnesses}" ]]; then
-        for mode in ${HARNESS_EMITTED_PRIORITY_MODES}; do
-          EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
-        done
-        FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "harness_emitted:priority")"
-      fi
-    fi
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "baseline")"
+  elif [[ "${family}" == "harness_emitted" ]]; then
+    for mode in ${HARNESS_EMITTED_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "harness_emitted")"
   elif [[ "${family}" == "frontend_supplied" ]]; then
     for mode in ${FRONTEND_SUPPLIED_MODES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
@@ -258,14 +252,11 @@ echo "HARNESSES=${HARNESSES}"
 echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
 echo
 echo "Expanded family pieces:"
+if word_in_list "baseline" "${SIGNAL_FAMILIES}"; then
+  echo "- baseline -> ${BASELINE_MODES}"
+fi
 if word_in_list "harness_emitted" "${SIGNAL_FAMILIES}"; then
-  echo "- harness_emitted/cache -> ${HARNESS_EMITTED_CACHE_MODES}"
-  if [[ "${INCLUDE_HARNESS_EMITTED_PRIORITY}" == "1" ]]; then
-    native_priority_harnesses="$(intersect_words "${HARNESSES}" "${HARNESS_EMITTED_PRIORITY_HARNESSES}")"
-    if [[ -n "${native_priority_harnesses}" ]]; then
-      echo "- harness_emitted/priority -> ${HARNESS_EMITTED_PRIORITY_MODES} for ${native_priority_harnesses}"
-    fi
-  fi
+  echo "- harness_emitted -> ${HARNESS_EMITTED_MODES}"
 fi
 if word_in_list "frontend_supplied" "${SIGNAL_FAMILIES}"; then
   echo "- frontend_supplied -> ${FRONTEND_SUPPLIED_MODES}"
@@ -275,12 +266,12 @@ if word_in_list "gateway_injected" "${SIGNAL_FAMILIES}"; then
 fi
 echo "Combined mode set for final report: ${EXPANDED_MODES}"
 
+if word_in_list "baseline" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "baseline" "none" "${BASELINE_MODES}" "${HARNESSES}"
+fi
+
 if word_in_list "harness_emitted" "${SIGNAL_FAMILIES}"; then
-  run_family_piece "harness_emitted" "cache" "${HARNESS_EMITTED_CACHE_MODES}" "${HARNESSES}"
-  if [[ "${INCLUDE_HARNESS_EMITTED_PRIORITY}" == "1" ]]; then
-    native_priority_harnesses="$(intersect_words "${HARNESSES}" "${HARNESS_EMITTED_PRIORITY_HARNESSES}")"
-    run_family_piece "harness_emitted" "priority" "${HARNESS_EMITTED_PRIORITY_MODES}" "${native_priority_harnesses}"
-  fi
+  run_family_piece "harness_emitted" "signals" "${HARNESS_EMITTED_MODES}" "${HARNESSES}"
 fi
 
 if word_in_list "frontend_supplied" "${SIGNAL_FAMILIES}"; then

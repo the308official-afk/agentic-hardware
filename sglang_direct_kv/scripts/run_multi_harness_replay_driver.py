@@ -40,10 +40,12 @@ SUPPORTED_MODES = (
     "e2e_priority_hints_speculative_prefill",
     "no_cache_signal",
     "harness_native_cache_lowered",
+    "harness_emitted_signals",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 HARNESS_NATIVE_CACHE_MODE = "harness_native_cache_lowered"
+HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -98,6 +100,23 @@ def trace_has_event(path: Path, label: str, event: str) -> bool:
     return False
 
 
+def trace_event_row(path: Path, label: str, event: str) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("event") == event and row.get("label") == label:
+                    return row
+    except OSError:
+        return {}
+    return {}
+
+
 def marker(meta: dict[str, Any]) -> str:
     raw = json.dumps(meta, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return MARKER + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -109,6 +128,10 @@ def pre_harness_priority_enabled(mode: str) -> bool:
 
 def nat_inferred_priority_enabled(mode: str) -> bool:
     return mode == NAT_INFERRED_PRIORITY_MODE
+
+
+def harness_emitted_signal_mode(mode: str) -> bool:
+    return mode == HARNESS_EMITTED_SIGNAL_MODE
 
 
 def nat_inferred_node_for_phase(phase: str) -> dict[str, Any]:
@@ -144,7 +167,9 @@ def nat_inferred_priority_profile() -> dict[str, Any]:
 
 
 def attach_nat_inferred_priority_profile(meta: dict[str, Any]) -> dict[str, Any]:
-    if not nat_inferred_priority_enabled(str(meta.get("mode") or "")):
+    mode = str(meta.get("mode") or "")
+    harness = str(meta.get("harness") or "")
+    if not (nat_inferred_priority_enabled(mode) or (harness_emitted_signal_mode(mode) and harness == "nemo_agent_toolkit")):
         return meta
     node = nat_inferred_node_for_phase(str(meta.get("phase") or ""))
     out = dict(meta)
@@ -198,7 +223,7 @@ def attach_harness_priority_metadata(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def harness_native_cache_enabled(meta: dict[str, Any]) -> bool:
-    return str(meta.get("mode") or "") == HARNESS_NATIVE_CACHE_MODE
+    return str(meta.get("mode") or "") in {HARNESS_NATIVE_CACHE_MODE, HARNESS_EMITTED_SIGNAL_MODE}
 
 
 def native_cache_label(meta: dict[str, Any]) -> str:
@@ -444,7 +469,11 @@ def qwen_command(
     log_dir: Path,
 ) -> tuple[list[str], dict[str, str]]:
     provider_base = f"{gateway_base.rstrip('/')}/v1"
-    cache_signal_mode = str(meta.get("mode") or "") in {"no_cache_signal", HARNESS_NATIVE_CACHE_MODE}
+    cache_signal_mode = str(meta.get("mode") or "") in {
+        "no_cache_signal",
+        HARNESS_NATIVE_CACHE_MODE,
+        HARNESS_EMITTED_SIGNAL_MODE,
+    }
     qwen_auth_type = "anthropic" if harness_native_cache_enabled(meta) else "openai"
     cache_enabled = harness_native_cache_enabled(meta)
     workspace = qwen_workspace_path(log_dir, meta)
@@ -1013,7 +1042,9 @@ async def main_async() -> None:
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     workload_start = time.perf_counter()
-    if args.mode == NAT_INFERRED_PRIORITY_MODE:
+    if args.mode == NAT_INFERRED_PRIORITY_MODE or (
+        args.mode == HARNESS_EMITTED_SIGNAL_MODE and args.harness == "nemo_agent_toolkit"
+    ):
         if args.harness != "nemo_agent_toolkit":
             raise SystemExit("nat_inferred_priority_hints is currently supported only for nemo_agent_toolkit.")
         if args.nat_inferred_profile_out is not None:
@@ -1120,7 +1151,7 @@ async def main_async() -> None:
             "nat_inferred_prefix_osl": 512,
             "nat_inferred_prefix_iat": 50,
             "native_cache_profile": {
-                "enabled": args.mode == HARNESS_NATIVE_CACHE_MODE,
+                "enabled": harness_native_cache_enabled({"mode": args.mode}),
                 "policy": "harness_decides_gateway_translates_only",
                 "cache_key_seed": f"{args.harness}:{args.pressure_level}",
             },
@@ -1154,9 +1185,26 @@ async def main_async() -> None:
             },
         )
         warmup_task: asyncio.Task[None] | None = None
-        if args.mode == "e2e_priority_hints_speculative_prefill":
+        initial_gateway_row = trace_event_row(args.trace, str(initial_meta["label"]), "m27.request.start")
+        cache_signal_driven_preload = (
+            args.mode == HARNESS_EMITTED_SIGNAL_MODE
+            and str(initial_gateway_row.get("harness_native_cache_signal_seen") or "").lower() == "yes"
+        )
+        direct_gateway_speculative_prefill = args.mode == "e2e_priority_hints_speculative_prefill"
+        if direct_gateway_speculative_prefill or cache_signal_driven_preload:
             warmup_label = f"{pair.session_id}_speculative_prefill"
             replay_label = f"{pair.session_id}_replay"
+            warmup_role = (
+                "gateway_speculative_kv_preload"
+                if cache_signal_driven_preload
+                else "dynamo_like_background_warmup"
+            )
+            warmup_strategy = (
+                "harness_cache_signal_gateway_speculative_kv_preload"
+                if cache_signal_driven_preload
+                else "known_next_turn_prefix"
+            )
+            warmup_trigger = "harness_cache_signal" if cache_signal_driven_preload else "gateway_injected_speculative_prefill"
             warmup_meta = {
                 **base_meta,
                 "session_id": pair.session_id,
@@ -1168,11 +1216,13 @@ async def main_async() -> None:
                 "deadline_offset_ms": round(replay_due_ms, 3),
                 "max_tokens": 1,
                 "speculative_prefill": True,
-                "speculative_prefill_role": "dynamo_like_background_warmup",
-                "speculative_prefill_strategy": "known_next_turn_prefix",
+                "speculative_prefill_role": warmup_role,
+                "speculative_prefill_strategy": warmup_strategy,
                 "parent_request_id": str(initial_meta["label"]),
                 "expected_replay_request_id": replay_label,
                 "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
+                "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
+                "harness_cache_signal": initial_gateway_row.get("harness_native_cache_signal", ""),
             }
             warmup_meta = attach_harness_priority_metadata(warmup_meta)
             write_trace(
@@ -1185,7 +1235,10 @@ async def main_async() -> None:
                     "request_id": initial_meta["label"],
                     "warmup_request_id": warmup_label,
                     "expected_replay_request_id": replay_label,
-                    "strategy": "known_next_turn_prefix",
+                    "strategy": warmup_strategy,
+                    "role": warmup_role,
+                    "trigger": warmup_trigger,
+                    "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
                     "warmup_prompt_hash": warmup_meta["prompt_hash"],
                     "warmup_prompt_tokens": warmup_meta["warmup_prompt_tokens"],
                     "tool_start_offset_ms": round(tool_start_ms, 3),
@@ -1203,7 +1256,9 @@ async def main_async() -> None:
                         "harness": args.harness,
                         "request_id": warmup_label,
                         "expected_replay_request_id": replay_label,
-                        "strategy": "known_next_turn_prefix",
+                        "strategy": warmup_strategy,
+                        "role": warmup_role,
+                        "trigger": warmup_trigger,
                         "offset_ms": round(offset_ms(), 3),
                     },
                 )
@@ -1218,7 +1273,9 @@ async def main_async() -> None:
                             "harness": args.harness,
                             "request_id": warmup_label,
                             "expected_replay_request_id": replay_label,
-                            "strategy": "known_next_turn_prefix",
+                            "strategy": warmup_strategy,
+                            "role": warmup_role,
+                            "trigger": warmup_trigger,
                             "offset_ms": round(offset_ms(), 3),
                             "status": "ok",
                         },
@@ -1233,7 +1290,9 @@ async def main_async() -> None:
                             "harness": args.harness,
                             "request_id": warmup_label,
                             "expected_replay_request_id": replay_label,
-                            "strategy": "known_next_turn_prefix",
+                            "strategy": warmup_strategy,
+                            "role": warmup_role,
+                            "trigger": warmup_trigger,
                             "offset_ms": round(offset_ms(), 3),
                             "status": "error",
                             "error": f"{type(exc).__name__}: {exc}",
@@ -1255,6 +1314,9 @@ async def main_async() -> None:
                 "harness": args.harness,
                 "replay_due_offset_ms": round(replay_due_ms, 3),
                 "expected_reuse": (
+                    "gateway_speculative_kv_preload"
+                    if cache_signal_driven_preload
+                    else
                     "dynamo_like_speculative_prefill"
                     if args.mode == "e2e_priority_hints_speculative_prefill"
                     else "intercepted_priority"

@@ -33,7 +33,7 @@ def pre_harness_priority_enabled(meta: dict[str, Any]) -> bool:
 
 
 def nat_inferred_priority_enabled(meta: dict[str, Any]) -> bool:
-    return str(meta.get("mode") or "") == "nat_inferred_priority_hints"
+    return str(meta.get("mode") or "") in {"nat_inferred_priority_hints", "harness_emitted_signals"}
 
 
 def nat_priority_config_fields(meta: dict[str, Any]) -> dict[str, Any]:

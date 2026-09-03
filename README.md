@@ -70,6 +70,7 @@ The current manager-facing comparisons use these modes:
 | `no_prefetch` | Baseline. The replay request receives no end-to-end priority treatment. |
 | `e2e_priority_hints` | Current priority path. The driver marks replay urgency and the SGLang boundary carries that priority into scheduling. |
 | `pre_harness_priority_hints` | Harness-preservation path. The driver marks replay urgency before the harness sees the request, then the gateway proves whether that intent or a native harness signal survived and was translated into SGLang priority. |
+| `harness_emitted_signals` | Unified harness-originated path. If the harness emits priority, the gateway lowers it to SGLang priority. If the harness emits cache intent, the gateway lowers it to gateway speculative KV preload. |
 | `no_cache_signal` | Cache-signal baseline. The gateway is present and records native harness cache fields, but it does not lower them to SGLang. |
 | `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
 | `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
@@ -642,7 +643,7 @@ source .venv/bin/activate
 HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
-SIGNAL_FAMILIES="harness_emitted frontend_supplied gateway_injected" \
+SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected" \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 REPORT_BUILDER_MODE=lightweight \
@@ -651,47 +652,52 @@ bash scripts/run_harness_signal_design_space.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-The compact signal-family selector has three signal-origin families plus the
-baseline modes that are included for comparison:
+The compact signal-family selector is the preferred interface for current
+experiments. Keep the experiment surface to these three public knobs:
+`HARNESSES`, `PRESSURE_LEVELS`, and `SIGNAL_FAMILIES`.
 
 | `SIGNAL_FAMILIES` value | Meaning |
 | --- | --- |
-| `harness_emitted` | The harness creates the signal. The gateway only translates what the harness emitted for SGLang. This includes harness-native cache control, and NAT native priority inference when NAT is selected. |
+| `baseline` | No signal is supplied or lowered. |
+| `harness_emitted` | The harness creates the signal. If it emits cache intent, the gateway lowers that to gateway speculative KV preload. If it emits priority, the gateway lowers that to SGLang priority. If it emits both, the gateway lowers both. |
 | `frontend_supplied` | The experiment/front end gives signal intent to the harness first. The gateway translates whatever survives the harness path for SGLang. |
 | `gateway_injected` | The request leaves the harness normally. The gateway then attaches only SGLang priority before forwarding to SGLang. |
-| `all` | Alias for `harness_emitted frontend_supplied gateway_injected`. |
+| `all` | Alias for `baseline harness_emitted frontend_supplied gateway_injected`. |
 
 The wrapper prints the detailed mode expansion before it starts. Today that
-expands to the proven lower-level modes:
+expands each family to one lower-level mode:
 
 | Family piece | Lower-level modes |
 | --- | --- |
-| `harness_emitted/cache` | `no_cache_signal harness_native_cache_lowered` |
-| `harness_emitted/priority` | `no_prefetch nat_inferred_priority_hints`, only for selected harnesses that support native priority inference today. |
-| `frontend_supplied` | `no_prefetch pre_harness_priority_hints` |
-| `gateway_injected` | `no_prefetch e2e_priority_hints` |
+| `baseline` | `no_prefetch` |
+| `harness_emitted` | `harness_emitted_signals` |
+| `frontend_supplied` | `pre_harness_priority_hints` |
+| `gateway_injected` | `e2e_priority_hints` |
 
 In the Replay Deadline Pressure Chart, these lower-level modes are collapsed
-into proof-outcome colors: `Baseline`, `Harness Cache Emitted`,
-`Harness Priority Emitted`, `Front-End Supplied`, and `Gateway Priority Injected`.
-A row only appears as
-`Harness Cache Emitted` or `Harness Priority Emitted` when the target replay
-request actually carried that harness-emitted signal type and the gateway
-lowered it. Gateway-injected rows mean the priority hint was added after the
-harness, at the SGLang boundary. Use the evidence tables when you need the
-exact raw mode, emitted fields, and gateway translation source.
+into signal-family colors: `Baseline`, `Harness Emitted`,
+`Front-End Supplied`, and `Gateway Priority Injected`. A row appears as
+`Harness Emitted` only when the target replay request actually carried a
+harness-emitted cache or priority signal and the gateway lowered it. Use the
+evidence tables when you need to know which exact signal was emitted and which
+backend action was applied.
 
 Use `DRY_RUN=1` to preview the expansion without launching SGLang:
 
 ```bash
 DRY_RUN=1 \
-SIGNAL_FAMILIES="harness_emitted frontend_supplied gateway_injected" \
+SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected" \
 HARNESSES="qwen_code pi_agent_harness nemo_agent_toolkit" \
 bash scripts/run_harness_signal_design_space.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-The detailed cache-signal experiment asks a narrower question:
+Legacy detailed cache-salt runs are still available for reproducing earlier
+experiments, but they are no longer the recommended manager-facing path. The
+current path is the unified `harness_emitted` family above, where cache signals
+lower to gateway speculative KV preload.
+
+The legacy detailed cache-signal experiment asks a narrower question:
 
 > Can the harness decide what cache signal to emit, while the gateway only
 > translates that harness-emitted signal for SGLang?
@@ -772,9 +778,10 @@ columns. Without namespace evidence this is transport-plus-action proof, not
 full causality proof. For causality, compare against `no_cache_signal` or run a
 follow-up cache-disabled/random-cache-key A/B.
 
-For a short cache-benefit probe, use P1/P2 and cache modes only. This run asks
-whether harness-emitted cache signals improve backend TTFT after SGLang receives
-the replay, without P3 queue delay hiding the cache effect:
+For a short current cache/preload probe, use P1/P2 and the unified
+`harness_emitted` family. This run asks whether harness-emitted cache signals
+trigger gateway speculative KV preload and improve backend TTFT, without P3
+queue delay hiding the preload effect:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -782,28 +789,24 @@ source .venv/bin/activate
 
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
-SIGNAL_FAMILIES="harness_emitted" \
-INCLUDE_HARNESS_EMITTED_PRIORITY=0 \
-HARNESS_EMITTED_CACHE_MODES="no_cache_signal harness_native_cache_lowered" \
+SIGNAL_FAMILIES="baseline harness_emitted" \
 HARNESSES="opencode qwen_code pi_agent_harness openclaw hermes_agent" \
 PRESSURE_LEVELS="p1_mild p2_medium" \
 REPORT_BUILDER_MODE=lightweight \
-REPORT_LABEL="cache_benefit_probe_$(date +%Y%m%d_%H%M%S)" \
+REPORT_LABEL="harness_emitted_preload_probe_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_signal_design_space.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-The main output for this question is `cache_benefit_summary.csv`. Negative
-`ttft_delta_ms_hc_minus_nc` means harness-native cache lowering was faster than
-the no-cache-signal baseline from replay request start to first token. Negative
-`backend_ttft_delta_ms_hc_minus_nc` means it was faster after SGLang received
-the replay. Positive `cached_prefix_delta_tokens` means SGLang reused more
-prompt tokens. Use `cache_action_proof.csv` beside it to check whether the
-target replay also showed cache-path work and whether an explicit `cache_salt`
-was present.
+The main outputs for this question are the Replay Deadline Pressure Chart, the
+TTFT panel, `harness_native_cache_signal_proof.csv`,
+`speculative_prefill_proof.csv`, and `cache_action_proof.csv`. Use these
+together to check whether the target replay emitted a cache signal, whether the
+gateway started speculative KV preload, whether the preload finished before the
+replay, and whether TTFT moved versus baseline.
 
-For harness-native cache runs, the gateway now lowers explicit harness cache
-keys such as `prompt_cache_key`, `promptCacheKey`, or `cache_key` into SGLang's
+Legacy harness-native cache runs can still lower explicit harness cache keys
+such as `prompt_cache_key`, `promptCacheKey`, or `cache_key` into SGLang's
 native top-level `cache_salt` field. This keeps the gateway in translator mode:
 it uses a key the harness emitted and does not invent a cache namespace from the
 pressure level, prompt size, or replay phase.

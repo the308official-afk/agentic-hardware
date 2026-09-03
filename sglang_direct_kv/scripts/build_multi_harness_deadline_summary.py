@@ -38,6 +38,7 @@ MODE_LABELS = {
     "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill/preload",
     "no_cache_signal": "NC = No native cache signal",
     "harness_native_cache_lowered": "HC = Harness native cache lowered",
+    "harness_emitted_signals": "HE = Harness emitted signals",
 }
 
 MODE_COLORS = {
@@ -48,6 +49,7 @@ MODE_COLORS = {
     "e2e_priority_hints_speculative_prefill": "#ea580c",
     "no_cache_signal": "#64748b",
     "harness_native_cache_lowered": "#f97316",
+    "harness_emitted_signals": "#16a34a",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -64,6 +66,12 @@ CHART_SIGNAL_BUCKETS = {
         "description": "Harness emitted a cache/prompt-cache signal for this replay; gateway lowered cache metadata",
         "color": "#f97316",
         "modes": {"harness_native_cache_lowered"},
+    },
+    "harness_emitted": {
+        "label": "Harness Emitted",
+        "description": "Harness emitted cache and/or priority signal; gateway lowered whatever the harness produced",
+        "color": "#16a34a",
+        "modes": {"harness_emitted_signals"},
     },
     "harness_priority_emitted": {
         "label": "Harness Priority Emitted",
@@ -93,6 +101,7 @@ CHART_SIGNAL_BUCKETS = {
 
 CHART_SIGNAL_ORDER = (
     "baseline",
+    "harness_emitted",
     "harness_cache_emitted",
     "harness_priority_emitted",
     "frontend_supplied",
@@ -163,13 +172,13 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "family": "Baseline",
         "where_signal_is_added": "Nowhere",
         "what_it_means": "No priority or cache signal is supplied for the studied replay request.",
-        "raw_modes": "no_prefetch, no_cache_signal",
+        "raw_modes": "no_prefetch",
     },
     {
         "family": "Harness-originated",
         "where_signal_is_added": "Inside or by the harness",
-        "what_it_means": "The harness emits cache or priority intent; the gateway only translates what the harness produced.",
-        "raw_modes": "harness_native_cache_lowered, nat_inferred_priority_hints",
+        "what_it_means": "The harness emits cache or priority intent; the gateway lowers cache signals to gateway speculative KV preload and priority signals to SGLang priority.",
+        "raw_modes": "harness_emitted_signals",
     },
     {
         "family": "Front-end supplied",
@@ -482,7 +491,7 @@ def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, An
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") == "e2e_priority_hints_speculative_prefill"
+        if row.get("mode") in {"e2e_priority_hints_speculative_prefill", "harness_emitted_signals"}
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -547,7 +556,7 @@ def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, An
                     ),
                     "pressure_level": replay_row.get("pressure_level", ""),
                     "pressure_level_label": replay_row.get("pressure_level_label", ""),
-                    "mode": "e2e_priority_hints_speculative_prefill",
+                    "mode": warmup_start.get("mode", ""),
                     "session_id": session_id,
                     "warmup_request_id": warmup_label,
                     "expected_replay_request_id": expected_replay,
@@ -756,7 +765,7 @@ def collect_nat_service_priority_probe(root: Path) -> list[dict[str, Any]]:
 
 
 def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    priority_modes = {"pre_harness_priority_hints", "nat_inferred_priority_hints"}
+    priority_modes = {"pre_harness_priority_hints", "nat_inferred_priority_hints", "harness_emitted_signals"}
     replay_by_label = {
         (str(row.get("case_dir") or ""), str(row.get("request_id") or "")): row
         for row in replay_rows
@@ -809,6 +818,17 @@ def collect_harness_priority_proof(root: Path, replay_rows: list[dict[str, Any]]
                     verdict = "translated inferred priority missing from SGLang payload"
                 else:
                     verdict = "harness inferred priority and gateway translated it"
+            elif mode == "harness_emitted_signals":
+                if not gateway_start:
+                    verdict = "harness did not emit request"
+                elif not native_signal:
+                    verdict = "no harness priority signal observed for this replay"
+                elif not priority_value_is_urgent(translated):
+                    verdict = "harness priority signal observed but not translated as urgent"
+                elif not priority_value_is_urgent(sglang_priority):
+                    verdict = "translated harness priority missing from SGLang payload"
+                else:
+                    verdict = "harness emitted priority and gateway translated it"
             elif driver_intent_seen != "yes":
                 verdict = "driver intent missing"
             elif not gateway_start:
@@ -888,12 +908,18 @@ def collect_harness_native_cache_signal_proof(replay_rows: list[dict[str, Any]])
     proof_rows: list[dict[str, Any]] = []
     for row in replay_rows:
         mode = str(row.get("mode") or "")
-        if mode not in {"no_cache_signal", "harness_native_cache_lowered"}:
+        if mode not in {"no_cache_signal", "harness_native_cache_lowered", "harness_emitted_signals"}:
             continue
         signal_seen = str(row.get("harness_native_cache_signal_seen") or "no")
         lowered = str(row.get("gateway_cache_lowered") or "no")
         invented = str(row.get("gateway_cache_invented_signal") or "false")
-        if mode == "harness_native_cache_lowered" and signal_seen == "yes" and lowered == "yes" and invented == "false":
+        if mode == "harness_emitted_signals" and signal_seen == "yes" and lowered == "yes" and invented == "false":
+            verdict = "harness emitted cache signal and gateway translated it to speculative KV preload"
+        elif mode == "harness_emitted_signals" and signal_seen == "yes":
+            verdict = "harness emitted cache signal but gateway did not lower it"
+        elif mode == "harness_emitted_signals":
+            verdict = "no native harness cache signal observed to lower"
+        elif mode == "harness_native_cache_lowered" and signal_seen == "yes" and lowered == "yes" and invented == "false":
             verdict = "harness emitted cache signal and gateway translated it"
         elif mode == "harness_native_cache_lowered" and signal_seen == "yes":
             verdict = "harness emitted cache signal but gateway did not lower it"
@@ -959,7 +985,7 @@ def matching_request_attributions(row: dict[str, Any], request_id: str) -> list[
 
 def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     proof_rows: list[dict[str, Any]] = []
-    cache_modes = {"no_cache_signal", "harness_native_cache_lowered"}
+    cache_modes = {"no_cache_signal", "harness_native_cache_lowered", "harness_emitted_signals"}
     for replay_row in replay_rows:
         mode = str(replay_row.get("mode") or "")
         if mode not in cache_modes:
@@ -1679,6 +1705,16 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         ):
             return "harness_cache_emitted"
         return "baseline"
+    if mode == "harness_emitted_signals":
+        priority_lowered = has_value(row.get("harness_emit_priority_signal")) and has_value(row.get("sglang_priority"))
+        cache_lowered = (
+            is_truthy_text(row.get("harness_native_cache_signal_seen"))
+            and is_truthy_text(row.get("gateway_cache_lowered"))
+            and str(row.get("gateway_cache_invented_signal") or "").strip().lower() != "true"
+        )
+        if priority_lowered or cache_lowered:
+            return "harness_emitted"
+        return "baseline"
     if mode == "nat_inferred_priority_hints":
         if has_value(row.get("harness_emit_priority_signal")) and has_value(row.get("sglang_priority")):
             return "harness_priority_emitted"
@@ -2111,7 +2147,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <div class="card">{chart}</div>
 {chart_legend}
 <h2>Harness Priority Preservation Proof</h2>
-<p>This table appears when the run includes <code>pre_harness_priority_hints</code> or <code>nat_inferred_priority_hints</code>. It proves whether the harness carried or inferred priority, and whether the gateway translated that signal to SGLang priority.</p>
+<p>This table appears when the run includes <code>pre_harness_priority_hints</code>, <code>nat_inferred_priority_hints</code>, or <code>harness_emitted_signals</code>. It proves whether the harness carried or inferred priority, and whether the gateway translated that signal to SGLang priority.</p>
 <div class="card">{harness_priority_table if harness_priority_rows else "<p>No harness priority proof rows found in this run.</p>"}</div>
 <h2>NAT Inferred Priority Profile</h2>
 <div class="card">{nat_inferred_priority_profile_table if nat_inferred_priority_profile_table else "<p>No standalone NAT inferred-priority profile found in this run.</p>"}</div>
@@ -2119,10 +2155,10 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>This table appears when NAT is run as a shared <code>nat serve</code> service. It compares the order requests entered NAT with the order NAT emitted model calls to the gateway. If urgent work jumps ahead of older background work here, that is NAT-side priority evidence.</p>
 <div class="card">{nat_service_priority_table if nat_service_priority_rows else "<p>No NAT shared-service priority probe rows found in this run.</p>"}</div>
 <h2>Harness Native Cache Signal Proof</h2>
-<p>This table appears when the run includes <code>no_cache_signal</code> or <code>harness_native_cache_lowered</code>. The gateway is always present, but it only translates cache fields that the harness emitted. <code>gateway_invented_signal</code> should remain <code>false</code>.</p>
+<p>This table appears when the run includes <code>no_cache_signal</code>, <code>harness_native_cache_lowered</code>, or <code>harness_emitted_signals</code>. The gateway is always present, but it only translates cache fields that the harness emitted. In the unified harness-emitted mode, cache signals are lowered to gateway speculative KV preload. <code>gateway_invented_signal</code> should remain <code>false</code>.</p>
 <div class="card">{cache_signal_table if cache_signal_rows else "<p>No harness native cache signal proof rows found in this run.</p>"}</div>
 <h2>Cache Action Proof</h2>
-<p>This target-scoped table checks whether the same replay request that carried a harness cache signal also sent cache metadata in the SGLang request payload, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
+<p>This target-scoped table checks whether the same replay request that carried a harness cache signal also caused a gateway cache/preload lowering action, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
 <div class="card">{cache_action_table if cache_action_rows else "<p>No cache action proof rows found in this run.</p>"}</div>
 <h2>Cache Benefit Summary</h2>
 <p>This table compares <code>harness_native_cache_lowered</code> against <code>no_cache_signal</code> for the same harness and pressure level. Negative TTFT delta means the cache-lowered run reached the first token faster after the replay request started. Negative backend TTFT delta means it was faster after SGLang received the replay. Positive cached-prefix delta means more prompt tokens were reused. This is the main table for asking whether harness cache signals helped TTFT.</p>
@@ -2131,7 +2167,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>This static source audit is collected from the installed SGLang package on the experiment machine. It checks whether SGLang appears to have native code paths for fields such as <code>prompt_cache_key</code>, <code>cache_salt</code>, <code>extra_key</code>, <code>cache_control</code>, and request <code>priority</code>. Runtime proof still comes from the target-scoped trace rows above.</p>
 <div class="card">{sglang_cache_path_audit_table if sglang_cache_path_audit_rows else "<p>No SGLang cache signal path audit rows found. Re-run with an environment collector on the experiment machine.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
-<p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
+<p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code> or <code>harness_emitted_signals</code>. It proves whether a background <code>max_tokens=1</code> warmup was sent before replay, whether it was triggered by gateway speculative KV preload, and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>

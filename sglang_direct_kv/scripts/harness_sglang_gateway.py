@@ -21,13 +21,16 @@ PRIORITY_ENABLED_MODES = {
     "pre_harness_priority_hints",
     "nat_inferred_priority_hints",
     "e2e_priority_hints_speculative_prefill",
+    "harness_emitted_signals",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 CACHE_LOWER_MODE = "harness_native_cache_lowered"
+HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CACHE_SIGNAL_MODES = {
     "no_cache_signal",
     CACHE_LOWER_MODE,
+    HARNESS_EMITTED_SIGNAL_MODE,
 }
 CACHE_SIGNAL_KEYS = {
     "cache_control",
@@ -255,13 +258,20 @@ def payload_nvext_priority(payload: dict[str, Any]) -> int | None:
 def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None) -> int | None:
     if not priority_enabled(str(meta.get("mode") or "")):
         return None
-    if str(meta.get("mode") or "") == NAT_INFERRED_PRIORITY_MODE:
-        return payload_nvext_priority(payload or {})
     phase = str(meta.get("phase") or "")
-    if phase == "pressure_filler":
-        return int(meta.get("low_priority") or -100)
     if phase == "speculative_prefill":
         return int(meta.get("speculative_prefill_priority") or 50)
+    if str(meta.get("mode") or "") == HARNESS_EMITTED_SIGNAL_MODE:
+        nvext_priority = payload_nvext_priority(payload or {})
+        if nvext_priority is not None:
+            return nvext_priority
+        if emitted_signal_is_urgent(payload or {}):
+            return int(meta.get("high_priority") or 100)
+        return None
+    if str(meta.get("mode") or "") == NAT_INFERRED_PRIORITY_MODE:
+        return payload_nvext_priority(payload or {})
+    if phase == "pressure_filler":
+        return int(meta.get("low_priority") or -100)
     if str(meta.get("mode") or "") == PRE_HARNESS_PRIORITY_MODE:
         intent = as_dict(meta.get("priority_intent"))
         priority_class = str(intent.get("class") or "")
@@ -404,7 +414,8 @@ def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any], hea
     request_headers = headers or {}
     emitted = emitted_cache_signal(payload, request_headers)
     mode = str(meta.get("mode") or "")
-    should_lower = mode == CACHE_LOWER_MODE and emitted["harness_native_cache_signal_seen"] == "yes"
+    should_lower = mode in {CACHE_LOWER_MODE, HARNESS_EMITTED_SIGNAL_MODE} and emitted["harness_native_cache_signal_seen"] == "yes"
+    lower_to_preload = mode == HARNESS_EMITTED_SIGNAL_MODE
     lowered: dict[str, Any] = {}
     if should_lower:
         cache_key = first_signal_value(payload, {"prompt_cache_key", "promptCacheKey", "cache_key", "cacheKey"})
@@ -427,8 +438,9 @@ def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any], hea
             "schema": "harness_native_cache_lowering.v1",
             "source": "harness_emitted_cache_signal",
             "mode": mode,
+            "backend_action": "gateway_speculative_kv_preload" if lower_to_preload else "sglang_cache_salt",
             "cache_key": cache_key if is_present(cache_key) else "",
-            "sglang_cache_salt": str(cache_key) if is_present(cache_key) else "",
+            "sglang_cache_salt": "" if lower_to_preload else str(cache_key) if is_present(cache_key) else "",
             "cache_retention": retention if is_present(retention) else "",
             "cache_control": control if is_present(control) else "",
         }
@@ -482,6 +494,11 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
             source = "none"
     elif str(meta.get("phase") or "") == "speculative_prefill":
         source = "speculative_prefill_background_priority"
+    elif mode == HARNESS_EMITTED_SIGNAL_MODE:
+        if emitted["harness_emit_priority_signal"]:
+            source = "harness_emitted_signal"
+        else:
+            source = "none"
     else:
         source = "gateway_boundary_priority_mode"
     return {

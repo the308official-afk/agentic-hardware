@@ -261,7 +261,7 @@ run_case() {
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
   elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"
@@ -282,7 +282,7 @@ run_case() {
   wait_for_gateway
 
   local driver_extra_args=()
-  if [[ "${mode}" == "nat_inferred_priority_hints" ]]; then
+  if [[ "${mode}" == "nat_inferred_priority_hints" || ( "${mode}" == "harness_emitted_signals" && "${harness}" == "nemo_agent_toolkit" ) ]]; then
     driver_extra_args=(--nat-inferred-profile-out "${REPORT_DIR}/nat_inferred_priority_profile.json")
   fi
 
