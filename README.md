@@ -461,12 +461,13 @@ sections, color separates `no_prefetch` from `e2e_priority_hints`, and symbol
 shape separates harnesses.
 
 For signal-design-space reports, the chart intentionally collapses lower-level
-implementation modes into three manager-facing colors:
+implementation modes into three manager-facing colors based on the actual proof
+fields for each target replay request, not just the mode that was attempted:
 
 | Chart color bucket | Meaning |
 | --- | --- |
-| `Baseline` | No signal is supplied or lowered. |
-| `Harness Emitted` | The harness emitted cache or priority signal, and the gateway translated it for SGLang. |
+| `Baseline` | No signal was actually supplied or lowered for this replay request. Failed harness-emitted attempts fall back here. |
+| `Harness Emitted` | The target replay request carried a harness-emitted cache or priority signal, and the gateway translated it for SGLang. |
 | `Front-End Supplied` | The experiment/front end supplied signal intent before the harness, and the gateway translated what came through. |
 
 The raw lower-level modes remain in the evidence tables and CSV artifacts.
@@ -666,9 +667,11 @@ expands to the proven lower-level modes:
 | `frontend_supplied` | `no_prefetch pre_harness_priority_hints` |
 
 In the Replay Deadline Pressure Chart, these lower-level modes are collapsed
-into three colors: `Baseline`, `Harness Emitted`, and `Front-End Supplied`.
-Use the evidence tables when you need the exact raw mode, emitted fields, and
-gateway translation source.
+into three proof-outcome colors: `Baseline`, `Harness Emitted`, and
+`Front-End Supplied`. A row only appears as `Harness Emitted` when the target
+replay request actually carried a harness-emitted signal and the gateway
+lowered it. Use the evidence tables when you need the exact raw mode, emitted
+fields, and gateway translation source.
 
 Use `DRY_RUN=1` to preview the expansion without launching SGLang:
 

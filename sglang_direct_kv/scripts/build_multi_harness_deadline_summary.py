@@ -55,13 +55,13 @@ MODE_ORDER = tuple(MODE_LABELS)
 CHART_SIGNAL_BUCKETS = {
     "baseline": {
         "label": "Baseline",
-        "description": "No signal supplied or lowered",
+        "description": "No signal was actually supplied or lowered for this replay",
         "color": "#475569",
         "modes": {"no_prefetch", "no_cache_signal"},
     },
     "harness_emitted": {
         "label": "Harness Emitted",
-        "description": "Harness emitted cache or priority signal; gateway lowered it",
+        "description": "Harness emitted a cache or priority signal for this replay; gateway lowered it",
         "color": "#16a34a",
         "modes": {"harness_native_cache_lowered", "nat_inferred_priority_hints"},
     },
@@ -197,6 +197,14 @@ def optional_float(value: Any) -> float | None:
     if not math.isfinite(parsed):
         return None
     return parsed
+
+
+def is_truthy_text(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def has_value(value: Any) -> bool:
+    return str(value or "").strip().lower() not in {"", "0", "none", "null", "false", "no"}
 
 
 def row_agent_label(row: dict[str, Any]) -> str:
@@ -1151,7 +1159,27 @@ def inline_symbol(kind: str, color: str) -> str:
     )
 
 
-def chart_signal_bucket(mode: str) -> str:
+def chart_signal_bucket(row: dict[str, Any]) -> str:
+    mode = str(row.get("mode") or "")
+    if mode in {"no_prefetch", "no_cache_signal"}:
+        return "baseline"
+    if mode == "harness_native_cache_lowered":
+        if (
+            is_truthy_text(row.get("harness_native_cache_signal_seen"))
+            and is_truthy_text(row.get("gateway_cache_lowered"))
+            and str(row.get("gateway_cache_invented_signal") or "").strip().lower() != "true"
+        ):
+            return "harness_emitted"
+        return "baseline"
+    if mode == "nat_inferred_priority_hints":
+        if has_value(row.get("harness_emit_priority_signal")) and has_value(row.get("sglang_priority")):
+            return "harness_emitted"
+        return "baseline"
+    if mode in {"pre_harness_priority_hints", "e2e_priority_hints", "e2e_priority_hints_speculative_prefill"}:
+        if has_value(row.get("experiment_priority_intent")) or has_value(row.get("harness_input_priority_signal")):
+            if has_value(row.get("gateway_priority_translation_source")) and has_value(row.get("sglang_priority")):
+                return "frontend_supplied"
+        return "baseline"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket
@@ -1172,7 +1200,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     signal_buckets = [
         bucket
         for bucket in CHART_SIGNAL_ORDER
-        if any(chart_signal_bucket(str(row["mode"])) == bucket for row in rows)
+        if any(chart_signal_bucket(row) == bucket for row in rows)
     ]
     if not pressures or not harnesses:
         return "<p>No replay rows found.</p>"
@@ -1213,7 +1241,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
     rows_by_group_bucket: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        bucket = chart_signal_bucket(str(row["mode"]))
+        bucket = chart_signal_bucket(row)
         rows_by_group_bucket[(str(row["pressure_level"]), str(row["harness"]), bucket)].append(row)
 
     def draw_panel(
@@ -1404,7 +1432,7 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     signal_items = []
     for bucket in CHART_SIGNAL_ORDER:
         config = CHART_SIGNAL_BUCKETS[bucket]
-        if not any(chart_signal_bucket(str(row["mode"])) == bucket for row in rows):
+        if not any(chart_signal_bucket(row) == bucket for row in rows):
             continue
         signal_items.append(
             '<span class="legend-item">'
