@@ -1781,8 +1781,8 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     draw_panel(
         top_a,
         "first_token_lateness_ms",
-        "A. Due -> First Token",
-        "Full path: harness/client, gateway, SGLang queueing, KV movement, compute, and first token.",
+        "A. Replay Deadline Pressure",
+        "Delay view: every dot is one replay first token. Above zero missed the replay deadline; below zero was early.",
         "lateness vs replay deadline ms (symlog)",
         "0 ms deadline",
         "ms vs deadline",
@@ -1791,7 +1791,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     draw_panel(
         top_b,
         "ttft_ms",
-        "B. Replay TTFT",
+        "B. Replay TTFT Impact",
         "Time from replay request start at the gateway/client boundary to first token. This is the clearest view for cache-control TTFT impact.",
         "replay TTFT ms (symlog)",
         "0 ms TTFT",
@@ -2039,7 +2039,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel shows replay TTFT from request start to first token. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
+<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view: how late or early the first replay token was versus the replay deadline. Panel B is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 <div class="card">{pressure_definition_table}</div>
