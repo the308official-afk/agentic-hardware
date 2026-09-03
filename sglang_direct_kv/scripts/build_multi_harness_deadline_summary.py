@@ -44,10 +44,10 @@ MODE_COLORS = {
     "no_prefetch": "#2563eb",
     "e2e_priority_hints": "#0f766e",
     "pre_harness_priority_hints": "#7c3aed",
-    "nat_inferred_priority_hints": "#be185d",
+    "nat_inferred_priority_hints": "#0891b2",
     "e2e_priority_hints_speculative_prefill": "#ea580c",
     "no_cache_signal": "#64748b",
-    "harness_native_cache_lowered": "#16a34a",
+    "harness_native_cache_lowered": "#f97316",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -62,13 +62,13 @@ CHART_SIGNAL_BUCKETS = {
     "harness_cache_emitted": {
         "label": "Harness Cache Emitted",
         "description": "Harness emitted a cache/prompt-cache signal for this replay; gateway lowered cache metadata",
-        "color": "#16a34a",
+        "color": "#f97316",
         "modes": {"harness_native_cache_lowered"},
     },
     "harness_priority_emitted": {
         "label": "Harness Priority Emitted",
         "description": "Harness emitted priority/latency signal for this replay; gateway lowered SGLang priority",
-        "color": "#0f766e",
+        "color": "#0891b2",
         "modes": {"nat_inferred_priority_hints"},
     },
     "frontend_supplied": {
