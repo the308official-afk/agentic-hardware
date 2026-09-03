@@ -59,11 +59,17 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#475569",
         "modes": {"no_prefetch", "no_cache_signal"},
     },
-    "harness_emitted": {
-        "label": "Harness Emitted",
-        "description": "Harness emitted a cache or priority signal for this replay; gateway lowered it",
+    "harness_cache_emitted": {
+        "label": "Harness Cache Emitted",
+        "description": "Harness emitted a cache/prompt-cache signal for this replay; gateway lowered cache metadata",
         "color": "#16a34a",
-        "modes": {"harness_native_cache_lowered", "nat_inferred_priority_hints"},
+        "modes": {"harness_native_cache_lowered"},
+    },
+    "harness_priority_emitted": {
+        "label": "Harness Priority Emitted",
+        "description": "Harness emitted priority/latency signal for this replay; gateway lowered SGLang priority",
+        "color": "#0f766e",
+        "modes": {"nat_inferred_priority_hints"},
     },
     "frontend_supplied": {
         "label": "Front-End Supplied",
@@ -73,7 +79,7 @@ CHART_SIGNAL_BUCKETS = {
     },
 }
 
-CHART_SIGNAL_ORDER = ("baseline", "harness_emitted", "frontend_supplied")
+CHART_SIGNAL_ORDER = ("baseline", "harness_cache_emitted", "harness_priority_emitted", "frontend_supplied")
 
 HARNESS_SYMBOLS = {
     "hatcher": "circle",
@@ -1169,11 +1175,11 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
             and is_truthy_text(row.get("gateway_cache_lowered"))
             and str(row.get("gateway_cache_invented_signal") or "").strip().lower() != "true"
         ):
-            return "harness_emitted"
+            return "harness_cache_emitted"
         return "baseline"
     if mode == "nat_inferred_priority_hints":
         if has_value(row.get("harness_emit_priority_signal")) and has_value(row.get("sglang_priority")):
-            return "harness_emitted"
+            return "harness_priority_emitted"
         return "baseline"
     if mode in {"pre_harness_priority_hints", "e2e_priority_hints", "e2e_priority_hints_speculative_prefill"}:
         if has_value(row.get("experiment_priority_intent")) or has_value(row.get("harness_input_priority_signal")):
