@@ -193,6 +193,7 @@ def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
             "agent_gateway_cache_translation",
             "agent_gateway_cache_translation_source",
             "agent_gateway_cache_lowered",
+            "agent_gateway_cache_salt",
             "agent_gateway_cache_invented_signal",
         )
         if context.get(key) not in (None, "", [], {})
@@ -1473,6 +1474,7 @@ def _req_context(req: Any) -> dict[str, Any]:
                     agentic.get("gateway_cache_translation_source")
                 )
                 context["agent_gateway_cache_lowered"] = _safe_summary(agentic.get("gateway_cache_lowered"))
+                context["agent_gateway_cache_salt"] = _safe_summary(agentic.get("gateway_cache_salt"))
                 context["agent_gateway_cache_invented_signal"] = _safe_summary(
                     agentic.get("gateway_cache_invented_signal")
                 )

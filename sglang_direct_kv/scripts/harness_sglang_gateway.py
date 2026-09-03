@@ -428,6 +428,7 @@ def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any], hea
             "source": "harness_emitted_cache_signal",
             "mode": mode,
             "cache_key": cache_key if is_present(cache_key) else "",
+            "sglang_cache_salt": str(cache_key) if is_present(cache_key) else "",
             "cache_retention": retention if is_present(retention) else "",
             "cache_control": control if is_present(control) else "",
         }
@@ -436,6 +437,7 @@ def cache_translation_context(meta: dict[str, Any], payload: dict[str, Any], hea
         "gateway_cache_translation": compact_json(lowered),
         "gateway_cache_translation_source": "harness_emitted_cache_signal" if should_lower else "none",
         "gateway_cache_lowered": "yes" if should_lower else "no",
+        "gateway_cache_salt": lowered.get("sglang_cache_salt", "") if should_lower else "",
         "gateway_cache_invented_signal": "false",
     }
 
@@ -531,6 +533,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "gateway_cache_translation": cache_chain["gateway_cache_translation"],
         "gateway_cache_translation_source": cache_chain["gateway_cache_translation_source"],
         "gateway_cache_lowered": cache_chain["gateway_cache_lowered"],
+        "gateway_cache_salt": cache_chain["gateway_cache_salt"],
         "gateway_cache_invented_signal": cache_chain["gateway_cache_invented_signal"],
     }
     if context["phase"] == "speculative_prefill":
@@ -590,6 +593,8 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
     if priority is not None:
         out["priority"] = priority
         out["nvext"] = {"agent_hints": agent_hints, "request_context": context}
+    if is_present(cache_chain.get("gateway_cache_salt")):
+        out["cache_salt"] = str(cache_chain["gateway_cache_salt"])
     return out
 
 

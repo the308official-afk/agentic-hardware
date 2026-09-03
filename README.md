@@ -767,6 +767,12 @@ columns. Without namespace evidence this is transport-plus-action proof, not
 full causality proof. For causality, compare against `no_cache_signal` or run a
 follow-up cache-disabled/random-cache-key A/B.
 
+For harness-native cache runs, the gateway now lowers explicit harness cache
+keys such as `prompt_cache_key`, `promptCacheKey`, or `cache_key` into SGLang's
+native top-level `cache_salt` field. This keeps the gateway in translator mode:
+it uses a key the harness emitted and does not invent a cache namespace from the
+pressure level, prompt size, or replay phase.
+
 The same report writes `sglang_cache_signal_path_audit.csv` when
 `run_environment.json` is available. This static audit inspects the installed
 SGLang package on the experiment machine and checks whether fields such as
