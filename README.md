@@ -642,7 +642,7 @@ source .venv/bin/activate
 HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
 HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
 HARDWARE_PROFILE=ec2_a10g \
-SIGNAL_FAMILIES="harness_emitted frontend_supplied" \
+SIGNAL_FAMILIES="harness_emitted frontend_supplied gateway_injected" \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
 REPORT_BUILDER_MODE=lightweight \
@@ -651,13 +651,15 @@ bash scripts/run_harness_signal_design_space.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-The two public buckets are:
+The compact signal-family selector has three signal-origin families plus the
+baseline modes that are included for comparison:
 
 | `SIGNAL_FAMILIES` value | Meaning |
 | --- | --- |
 | `harness_emitted` | The harness creates the signal. The gateway only translates what the harness emitted for SGLang. This includes harness-native cache control, and NAT native priority inference when NAT is selected. |
 | `frontend_supplied` | The experiment/front end gives signal intent to the harness first. The gateway translates whatever survives the harness path for SGLang. |
-| `all` | Alias for `harness_emitted frontend_supplied`. |
+| `gateway_injected` | The request leaves the harness normally. The gateway then attaches priority or speculative prefill/preload hints before forwarding to SGLang. |
+| `all` | Alias for `harness_emitted frontend_supplied gateway_injected`. |
 
 The wrapper prints the detailed mode expansion before it starts. Today that
 expands to the proven lower-level modes:
@@ -667,20 +669,23 @@ expands to the proven lower-level modes:
 | `harness_emitted/cache` | `no_cache_signal harness_native_cache_lowered` |
 | `harness_emitted/priority` | `no_prefetch nat_inferred_priority_hints`, only for selected harnesses that support native priority inference today. |
 | `frontend_supplied` | `no_prefetch pre_harness_priority_hints` |
+| `gateway_injected` | `no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill` |
 
 In the Replay Deadline Pressure Chart, these lower-level modes are collapsed
-into four proof-outcome colors: `Baseline`, `Harness Cache Emitted`,
-`Harness Priority Emitted`, and `Front-End Supplied`. A row only appears as
+into proof-outcome colors: `Baseline`, `Harness Cache Emitted`,
+`Harness Priority Emitted`, `Front-End Supplied`, `Gateway Priority Injected`,
+and `Gateway Priority + Speculative Prefill`. A row only appears as
 `Harness Cache Emitted` or `Harness Priority Emitted` when the target replay
 request actually carried that harness-emitted signal type and the gateway
-lowered it. Use the evidence tables when you need the exact raw mode, emitted
-fields, and gateway translation source.
+lowered it. Gateway-injected rows mean the hint was added after the harness,
+at the SGLang boundary. Use the evidence tables when you need the exact raw
+mode, emitted fields, gateway translation source, and speculative prefill proof.
 
 Use `DRY_RUN=1` to preview the expansion without launching SGLang:
 
 ```bash
 DRY_RUN=1 \
-SIGNAL_FAMILIES="harness_emitted frontend_supplied" \
+SIGNAL_FAMILIES="harness_emitted frontend_supplied gateway_injected" \
 HARNESSES="qwen_code pi_agent_harness nemo_agent_toolkit" \
 bash scripts/run_harness_signal_design_space.sh \
   Qwen/Qwen2.5-Coder-7B-Instruct

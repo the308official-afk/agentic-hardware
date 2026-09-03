@@ -35,7 +35,7 @@ MODE_LABELS = {
     "e2e_priority_hints": "E2E = End-to-end priority hints",
     "pre_harness_priority_hints": "PH = Pre-harness priority hints",
     "nat_inferred_priority_hints": "NI = NAT inferred priority hints",
-    "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill",
+    "e2e_priority_hints_speculative_prefill": "SP = E2E priority + speculative prefill/preload",
     "no_cache_signal": "NC = No native cache signal",
     "harness_native_cache_lowered": "HC = Harness native cache lowered",
 }
@@ -75,11 +75,30 @@ CHART_SIGNAL_BUCKETS = {
         "label": "Front-End Supplied",
         "description": "Front end supplied signal intent before the harness; gateway lowered what came through",
         "color": "#7c3aed",
-        "modes": {"pre_harness_priority_hints", "e2e_priority_hints", "e2e_priority_hints_speculative_prefill"},
+        "modes": {"pre_harness_priority_hints"},
+    },
+    "gateway_priority_injected": {
+        "label": "Gateway Priority Injected",
+        "description": "Gateway added SGLang priority after the harness, before SGLang received the replay",
+        "color": "#2563eb",
+        "modes": {"e2e_priority_hints"},
+    },
+    "gateway_speculative_prefill": {
+        "label": "Gateway Priority + Speculative Prefill",
+        "description": "Gateway added priority and launched the Dynamo-like background prefill/preload warmup",
+        "color": "#dc2626",
+        "modes": {"e2e_priority_hints_speculative_prefill"},
     },
 }
 
-CHART_SIGNAL_ORDER = ("baseline", "harness_cache_emitted", "harness_priority_emitted", "frontend_supplied")
+CHART_SIGNAL_ORDER = (
+    "baseline",
+    "harness_cache_emitted",
+    "harness_priority_emitted",
+    "frontend_supplied",
+    "gateway_priority_injected",
+    "gateway_speculative_prefill",
+)
 
 HARNESS_SYMBOLS = {
     "hatcher": "circle",
@@ -138,6 +157,33 @@ PRESSURE_ORDER = (
     "p4_cliff",
     "p5_boss_queue",
 )
+
+SIGNAL_FAMILY_DEFINITIONS = [
+    {
+        "family": "Baseline",
+        "where_signal_is_added": "Nowhere",
+        "what_it_means": "No priority or cache signal is supplied for the studied replay request.",
+        "raw_modes": "no_prefetch, no_cache_signal",
+    },
+    {
+        "family": "Harness-originated",
+        "where_signal_is_added": "Inside or by the harness",
+        "what_it_means": "The harness emits cache or priority intent; the gateway only translates what the harness produced.",
+        "raw_modes": "harness_native_cache_lowered, nat_inferred_priority_hints",
+    },
+    {
+        "family": "Front-end supplied",
+        "where_signal_is_added": "Before the request enters the harness",
+        "what_it_means": "The experiment/front end marks the request before the harness sees it; the gateway translates what survives.",
+        "raw_modes": "pre_harness_priority_hints",
+    },
+    {
+        "family": "Gateway-injected",
+        "where_signal_is_added": "After the harness, before SGLang",
+        "what_it_means": "The harness output is normal; the gateway attaches priority or speculative prefill/preload hints at the SGLang boundary.",
+        "raw_modes": "e2e_priority_hints, e2e_priority_hints_speculative_prefill",
+    },
+]
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -1637,10 +1683,18 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("harness_emit_priority_signal")) and has_value(row.get("sglang_priority")):
             return "harness_priority_emitted"
         return "baseline"
-    if mode in {"pre_harness_priority_hints", "e2e_priority_hints", "e2e_priority_hints_speculative_prefill"}:
+    if mode == "pre_harness_priority_hints":
         if has_value(row.get("experiment_priority_intent")) or has_value(row.get("harness_input_priority_signal")):
             if has_value(row.get("gateway_priority_translation_source")) and has_value(row.get("sglang_priority")):
                 return "frontend_supplied"
+        return "baseline"
+    if mode == "e2e_priority_hints":
+        if has_value(row.get("sglang_priority")):
+            return "gateway_priority_injected"
+        return "baseline"
+    if mode == "e2e_priority_hints_speculative_prefill":
+        if has_value(row.get("sglang_priority")):
+            return "gateway_speculative_prefill"
         return "baseline"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
@@ -1889,6 +1943,13 @@ def render_pressure_definition_table(rows: list[dict[str, Any]], run_config: dic
     return render_table(definition_rows, ["level", "in_this_run", "what_it_means", "knobs"])
 
 
+def render_signal_family_definition_table() -> str:
+    return render_table(
+        SIGNAL_FAMILY_DEFINITIONS,
+        ["family", "where_signal_is_added", "what_it_means", "raw_modes"],
+    )
+
+
 def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
     signal_items = []
@@ -1939,6 +2000,7 @@ def render_html(
     hardware_profile_path = os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH") or "not recorded"
     chart = render_pressure_chart(rows)
     chart_legend = render_chart_legend(rows)
+    signal_family_definition_table = render_signal_family_definition_table()
     pressure_definition_table = render_pressure_definition_table(rows, run_config)
     summary_table = render_table(
         summary,
@@ -2040,6 +2102,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
 <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view: how late or early the first replay token was versus the replay deadline. Panel B is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
+<h2>Signal Family Definitions</h2>
+<p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
+<div class="card">{signal_family_definition_table}</div>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 <div class="card">{pressure_definition_table}</div>

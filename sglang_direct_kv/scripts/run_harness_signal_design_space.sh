@@ -6,9 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${DIRECT_ROOT}"
 
-SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-harness_emitted frontend_supplied}"
+SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="harness_emitted frontend_supplied"
+  SIGNAL_FAMILIES="harness_emitted frontend_supplied gateway_injected"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -28,6 +28,7 @@ HARNESS_EMITTED_CACHE_MODES="${HARNESS_EMITTED_CACHE_MODES:-no_cache_signal harn
 HARNESS_EMITTED_PRIORITY_MODES="${HARNESS_EMITTED_PRIORITY_MODES:-no_prefetch nat_inferred_priority_hints}"
 HARNESS_EMITTED_PRIORITY_HARNESSES="${HARNESS_EMITTED_PRIORITY_HARNESSES:-nemo_agent_toolkit}"
 FRONTEND_SUPPLIED_MODES="${FRONTEND_SUPPLIED_MODES:-no_prefetch pre_harness_priority_hints}"
+GATEWAY_INJECTED_MODES="${GATEWAY_INJECTED_MODES:-no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill}"
 INCLUDE_HARNESS_EMITTED_PRIORITY="${INCLUDE_HARNESS_EMITTED_PRIORITY:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -80,10 +81,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      harness_emitted|frontend_supplied) ;;
+      harness_emitted|frontend_supplied|gateway_injected) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: harness_emitted frontend_supplied all" >&2
+        echo "Supported: harness_emitted frontend_supplied gateway_injected all" >&2
         exit 2
         ;;
     esac
@@ -159,6 +160,10 @@ write_combined_run_config() {
     echo "HARDWARE_PROFILE_PATH=${HARDWARE_PROFILE_PATH}"
     echo "HARNESSES=${HARNESSES}"
     echo "MODES=${EXPANDED_MODES}"
+    echo "HARNESS_EMITTED_CACHE_MODES=${HARNESS_EMITTED_CACHE_MODES}"
+    echo "HARNESS_EMITTED_PRIORITY_MODES=${HARNESS_EMITTED_PRIORITY_MODES}"
+    echo "FRONTEND_SUPPLIED_MODES=${FRONTEND_SUPPLIED_MODES}"
+    echo "GATEWAY_INJECTED_MODES=${GATEWAY_INJECTED_MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
@@ -235,6 +240,11 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "frontend_supplied:priority")"
+  elif [[ "${family}" == "gateway_injected" ]]; then
+    for mode in ${GATEWAY_INJECTED_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "gateway_injected:priority_and_speculative_prefill")"
   fi
 done
 
@@ -260,6 +270,9 @@ fi
 if word_in_list "frontend_supplied" "${SIGNAL_FAMILIES}"; then
   echo "- frontend_supplied -> ${FRONTEND_SUPPLIED_MODES}"
 fi
+if word_in_list "gateway_injected" "${SIGNAL_FAMILIES}"; then
+  echo "- gateway_injected -> ${GATEWAY_INJECTED_MODES}"
+fi
 echo "Combined mode set for final report: ${EXPANDED_MODES}"
 
 if word_in_list "harness_emitted" "${SIGNAL_FAMILIES}"; then
@@ -272,6 +285,10 @@ fi
 
 if word_in_list "frontend_supplied" "${SIGNAL_FAMILIES}"; then
   run_family_piece "frontend_supplied" "priority" "${FRONTEND_SUPPLIED_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "gateway_injected" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "gateway_injected" "priority_and_speculative_prefill" "${GATEWAY_INJECTED_MODES}" "${HARNESSES}"
 fi
 
 write_combined_run_config
