@@ -170,6 +170,15 @@ def read_run_config(path: Path | None) -> dict[str, str]:
     return config
 
 
+def read_json_file(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def case_key_from_name(name: str) -> tuple[str, str, str]:
     for harness in sorted(HARNESS_LABELS, key=len, reverse=True):
         prefix = f"{harness}_"
@@ -921,6 +930,9 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
         h2d_copy_events = 0
         cache_finished_events = 0
         prefill_events = 0
+        runtime_cache_namespace_seen = False
+        effective_extra_key = ""
+        radix_key_extra_key = ""
         first_cache_action_ts_ns = 0
         sglang_receive_ts_ns = int(float_value(replay_row.get("sglang_receive_ts_ns")))
         max_values: dict[str, float] = defaultdict(float)
@@ -961,6 +973,21 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 key in trace_row for key in ("prefill_full_input_tokens", "batch_request_prefill_attribution")
             ):
                 prefill_events += 1
+            if has_value(trace_row.get("effective_extra_key")):
+                effective_extra_key = effective_extra_key or str(trace_row.get("effective_extra_key"))
+                runtime_cache_namespace_seen = True
+            if has_value(trace_row.get("radix_key_extra_key")):
+                radix_key_extra_key = radix_key_extra_key or str(trace_row.get("radix_key_extra_key"))
+                runtime_cache_namespace_seen = True
+            namespace = trace_row.get("cache_namespace")
+            if isinstance(namespace, dict):
+                if has_value(namespace.get("effective_extra_key")):
+                    effective_extra_key = effective_extra_key or str(namespace.get("effective_extra_key"))
+                    runtime_cache_namespace_seen = True
+                radix_key = namespace.get("radix_key")
+                if isinstance(radix_key, dict) and has_value(radix_key.get("extra_key")):
+                    radix_key_extra_key = radix_key_extra_key or str(radix_key.get("extra_key"))
+                    runtime_cache_namespace_seen = True
 
             if any(
                 (
@@ -1004,10 +1031,16 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
         )
         if native_cache_signal_seen and sglang_payload_cache_metadata_sent and backend_cache_activity_seen:
             verdict = "cache metadata sent to SGLang and cache path acted"
-            causality_note = (
-                "Strong transport plus action proof for this target replay. The current SGLang cache telemetry does not echo cache-control metadata, "
-                "so this still does not prove the signal caused the cache hit; normal prefix reuse can also use the same cache path."
-            )
+            if runtime_cache_namespace_seen:
+                causality_note = (
+                    "Strong transport plus action proof for this target replay. Runtime telemetry also saw a cache namespace/extra_key "
+                    "at the cache path, which is the strongest non-A/B proof that SGLang consumed a cache-routing field."
+                )
+            else:
+                causality_note = (
+                    "Strong transport plus action proof for this target replay. The current SGLang cache telemetry does not echo cache-control metadata, "
+                    "so this still does not prove the signal caused the cache hit; normal prefix reuse can also use the same cache path."
+                )
         elif native_cache_signal_seen and sglang_payload_cache_metadata_sent:
             verdict = "cache metadata sent to SGLang, but no cache action was observed"
             causality_note = "Gateway transport is proven for this target replay; backend cache work was not observed in the trace rows."
@@ -1036,6 +1069,9 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 "native_cache_signal_seen": "yes" if native_cache_signal_seen else "no",
                 "gateway_cache_lowered": "yes" if gateway_cache_lowered else "no",
                 "sglang_payload_cache_metadata_sent": "yes" if sglang_payload_cache_metadata_sent else "no",
+                "runtime_cache_namespace_seen": "yes" if runtime_cache_namespace_seen else "no",
+                "effective_extra_key": effective_extra_key,
+                "radix_key_extra_key": radix_key_extra_key,
                 "cache_match_prefix_events": cache_match_events,
                 "load_back_events": load_back_events,
                 "h2d_copy_events": h2d_copy_events,
@@ -1242,6 +1278,9 @@ CACHE_ACTION_COLUMNS = [
     "native_cache_signal_seen",
     "gateway_cache_lowered",
     "sglang_payload_cache_metadata_sent",
+    "runtime_cache_namespace_seen",
+    "effective_extra_key",
+    "radix_key_extra_key",
     "cache_match_prefix_events",
     "load_back_events",
     "h2d_copy_events",
@@ -1261,6 +1300,18 @@ CACHE_ACTION_COLUMNS = [
     "causality_note",
     "case_id",
     "case_dir",
+]
+
+
+SGLANG_CACHE_PATH_AUDIT_COLUMNS = [
+    "signal",
+    "expected_native_path",
+    "parser_seen",
+    "generate_req_input_seen",
+    "req_field_seen",
+    "radix_namespace_seen",
+    "verdict",
+    "source_evidence",
 ]
 
 
@@ -1303,6 +1354,15 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def collect_sglang_cache_path_audit(run_environment: dict[str, Any]) -> list[dict[str, Any]]:
+    capabilities = run_environment.get("sglang_capabilities") if isinstance(run_environment, dict) else {}
+    audit = capabilities.get("cache_signal_path_audit") if isinstance(capabilities, dict) else {}
+    checks = audit.get("checks") if isinstance(audit, dict) else []
+    if not isinstance(checks, list):
+        return []
+    return [row for row in checks if isinstance(row, dict)]
 
 
 def symlog(value: float, linear_threshold: float = 50.0) -> float:
@@ -1689,6 +1749,7 @@ def render_html(
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
     cache_action_rows: list[dict[str, Any]],
+    sglang_cache_path_audit_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     report_label: str,
     run_config: dict[str, str],
@@ -1731,6 +1792,7 @@ def render_html(
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
     cache_action_table = render_table(cache_action_rows, CACHE_ACTION_COLUMNS)
+    sglang_cache_path_audit_table = render_table(sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
     nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
     raw_table = render_table(
         rows,
@@ -1814,6 +1876,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Cache Action Proof</h2>
 <p>This target-scoped table checks whether the same replay request that carried a harness cache signal also sent cache metadata in the SGLang request payload, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
 <div class="card">{cache_action_table if cache_action_rows else "<p>No cache action proof rows found in this run.</p>"}</div>
+<h2>SGLang Cache Signal Path Audit</h2>
+<p>This static source audit is collected from the installed SGLang package on the experiment machine. It checks whether SGLang appears to have native code paths for fields such as <code>prompt_cache_key</code>, <code>cache_salt</code>, <code>extra_key</code>, <code>cache_control</code>, and request <code>priority</code>. Runtime proof still comes from the target-scoped trace rows above.</p>
+<div class="card">{sglang_cache_path_audit_table if sglang_cache_path_audit_rows else "<p>No SGLang cache signal path audit rows found. Re-run with an environment collector on the experiment machine.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -1840,6 +1905,7 @@ def write_manifest(
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
     cache_action_rows: list[dict[str, Any]],
+    sglang_cache_path_audit_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     run_config: dict[str, str],
 ) -> None:
@@ -1857,6 +1923,7 @@ def write_manifest(
         "nat_service_priority_row_count": len(nat_service_priority_rows),
         "cache_signal_row_count": len(cache_signal_rows),
         "cache_action_row_count": len(cache_action_rows),
+        "sglang_cache_path_audit_row_count": len(sglang_cache_path_audit_rows),
         "nat_inferred_priority_profile": bool(nat_inferred_priority_profile),
         "nat_inferred_priority_profile_path": (
             str(args.out_dir / "nat_inferred_priority_profile.json") if nat_inferred_priority_profile else ""
@@ -1877,6 +1944,7 @@ def main() -> None:
     parser.add_argument("--latest-root", type=Path)
     parser.add_argument("--report-label", default=os.environ.get("REPORT_LABEL") or f"multi_harness_deadline_summary_{int(time.time())}")
     parser.add_argument("--run-config", type=Path)
+    parser.add_argument("--run-environment-json", type=Path)
     parser.add_argument("--update-latest", action="store_true")
     args = parser.parse_args()
 
@@ -1889,6 +1957,8 @@ def main() -> None:
     nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
     cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
     cache_action_rows = collect_cache_action_proof(args.root, rows)
+    run_environment = read_json_file(args.run_environment_json or args.out_dir / "run_environment.json")
+    sglang_cache_path_audit_rows = collect_sglang_cache_path_audit(run_environment)
     nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
@@ -1897,6 +1967,7 @@ def main() -> None:
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
     write_csv(args.out_dir / "cache_action_proof.csv", cache_action_rows, CACHE_ACTION_COLUMNS)
+    write_csv(args.out_dir / "sglang_cache_signal_path_audit.csv", sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
     html_text = render_html(
         rows,
         summary,
@@ -1905,6 +1976,7 @@ def main() -> None:
         nat_service_priority_rows,
         cache_signal_rows,
         cache_action_rows,
+        sglang_cache_path_audit_rows,
         nat_inferred_priority_profile,
         args.report_label,
         run_config,
@@ -1921,6 +1993,7 @@ def main() -> None:
         nat_service_priority_rows,
         cache_signal_rows,
         cache_action_rows,
+        sglang_cache_path_audit_rows,
         nat_inferred_priority_profile,
         run_config,
     )
@@ -1937,6 +2010,7 @@ def main() -> None:
             nat_service_priority_rows,
             cache_signal_rows,
             cache_action_rows,
+            sglang_cache_path_audit_rows,
             nat_inferred_priority_profile,
             run_config,
         )

@@ -334,6 +334,7 @@ build_final_report() {
       --latest-root "${RESULTS_ROOT}" \
       --report-label "${REPORT_LABEL}" \
       --run-config "${RUN_CONFIG_ENV}" \
+      --run-environment-json "${RUN_ENV_JSON}" \
       "${latest_args[@]}"
     return
   fi

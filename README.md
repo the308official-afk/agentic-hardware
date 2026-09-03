@@ -489,6 +489,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/run_sglang_hicache_server.sh](sglang_direct_kv/scripts/run_sglang_hicache_server.sh) | Launches SGLang with HiCache, priority scheduling, and runtime telemetry flags. |
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
 | [sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py](sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py) | Lightweight all-harness report builder used when the rich timeline report would be too large. |
+| [sglang_direct_kv/src/agentic_kv/sglang_adapters/capabilities.py](sglang_direct_kv/src/agentic_kv/sglang_adapters/capabilities.py) | Probes the installed SGLang version, hook surface, priority support, and static cache-signal source paths. |
 
 Smoke-test native CLI wireability without starting the real GPU server:
 
@@ -760,10 +761,30 @@ checks whether the target replay showed SGLang cache-path evidence such as
 prefix match, load-back, host-to-device copy, prefill attribution, or cache
 commit events. A positive row means the cache signal reached the backend and
 SGLang cache machinery ran for that replay. The low-level SGLang cache events
-currently prove the cache action but do not echo the cache-control metadata
-back, so this is transport-plus-action proof, not full causality proof. For
-causality, compare against `no_cache_signal` or run a follow-up
-cache-disabled/random-cache-key A/B.
+now also try to expose runtime namespace fields such as `extra_key`,
+`cache_salt`, and `RadixKey.extra_key`; older traces may not contain these
+columns. Without namespace evidence this is transport-plus-action proof, not
+full causality proof. For causality, compare against `no_cache_signal` or run a
+follow-up cache-disabled/random-cache-key A/B.
+
+The same report writes `sglang_cache_signal_path_audit.csv` when
+`run_environment.json` is available. This static audit inspects the installed
+SGLang package on the experiment machine and checks whether fields such as
+`prompt_cache_key`, `cache_salt`, `custom_params.nvext.cache_control`,
+`native_cache_bridge`, and `priority` appear to reach real SGLang code paths
+such as `GenerateReqInput`, `Req.extra_key`, `RadixKey.extra_key`,
+`match_prefix`, cache insertion, or priority-aware eviction.
+
+Run the source-path audit directly on EC2 or GH200 with:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+python -m agentic_kv.sglang_adapters.capabilities \
+  --out artifacts/results/sglang_capabilities.json \
+  --out-md artifacts/results/sglang_capabilities.md
+```
 
 Latest EC2 wireability result:
 

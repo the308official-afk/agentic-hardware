@@ -188,6 +188,12 @@ def _copy_agent_context(context: dict[str, Any]) -> dict[str, Any]:
             "agent_harness_emit_priority_signal",
             "agent_gateway_priority_translation",
             "agent_gateway_priority_translation_source",
+            "agent_harness_native_cache_signal_seen",
+            "agent_harness_native_cache_signal",
+            "agent_gateway_cache_translation",
+            "agent_gateway_cache_translation_source",
+            "agent_gateway_cache_lowered",
+            "agent_gateway_cache_invented_signal",
         )
         if context.get(key) not in (None, "", [], {})
     }
@@ -512,7 +518,7 @@ def _apply_known_agent_context(context: dict[str, Any]) -> dict[str, Any]:
 
 def _cache_operation_summary(operation: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"type": type(operation).__name__, "object_id": hex(id(operation))}
-    for attr in ("node_id", "node_ids", "priority", "request_id", "last_hash"):
+    for attr in ("node_id", "node_ids", "priority", "request_id", "last_hash", "extra_key", "cache_salt"):
         if hasattr(operation, attr):
             try:
                 out[attr] = _safe_summary(getattr(operation, attr))
@@ -551,6 +557,8 @@ def _request_like_context(req: Any) -> dict[str, Any]:
         "sglang_priority",
         "priority_translation",
         "deadline_offset_ms",
+        "extra_key",
+        "cache_salt",
     ):
         if hasattr(req, attr) and attr not in context:
             try:
@@ -1316,6 +1324,59 @@ def _req_from_params(params: Any) -> Any:
     return None
 
 
+def _radix_key_context(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    out: dict[str, Any] = {"type": type(value).__name__}
+    for attr in ("extra_key", "is_bigram"):
+        if hasattr(value, attr):
+            try:
+                out[attr] = _safe_summary(getattr(value, attr))
+            except Exception:
+                pass
+    for attr in ("token_ids", "key"):
+        if hasattr(value, attr):
+            try:
+                item = getattr(value, attr)
+                out[attr] = _index_context(item) if hasattr(item, "numel") else _int_list_signature(item)
+            except Exception:
+                pass
+    return {key: value for key, value in out.items() if value not in (None, "", [], {})}
+
+
+def _cache_namespace_context(req: Any = None, params: Any = None, key: Any = None) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for source_name, source in (("req", req), ("params", params), ("key", key)):
+        if source is None:
+            continue
+        for attr in ("extra_key", "cache_salt", "priority"):
+            if not hasattr(source, attr):
+                continue
+            try:
+                value = getattr(source, attr)
+            except Exception:
+                continue
+            if value not in (None, "", [], {}):
+                out[f"{source_name}_{attr}"] = _safe_summary(value)
+    if key is not None:
+        radix_key = _radix_key_context(key)
+        if radix_key:
+            out["radix_key"] = radix_key
+            if radix_key.get("extra_key") not in (None, "", [], {}):
+                out.setdefault("effective_extra_key", radix_key.get("extra_key"))
+    for candidate in (out.get("req_extra_key"), out.get("req_cache_salt"), out.get("params_extra_key")):
+        if candidate not in (None, "", [], {}):
+            out.setdefault("effective_extra_key", candidate)
+            break
+    if out.get("effective_extra_key") not in (None, "", [], {}):
+        out["cache_namespace_used"] = "yes"
+    elif any(value not in (None, "", [], {}) for key, value in out.items() if key.endswith("_priority")):
+        out["cache_namespace_used"] = "priority_only"
+    else:
+        out["cache_namespace_used"] = "no"
+    return out
+
+
 def _int_list_signature(values: Any) -> dict[str, Any]:
     if not isinstance(values, list):
         return {}
@@ -1341,12 +1402,24 @@ def _req_context(req: Any) -> dict[str, Any]:
     if req is None:
         return {}
     context: dict[str, Any] = {"type": type(req).__name__}
-    for attr in ("rid", "req_pool_idx", "priority", "host_hit_length", "cache_protected_len", "kv_committed_len"):
+    for attr in (
+        "rid",
+        "req_pool_idx",
+        "priority",
+        "host_hit_length",
+        "cache_protected_len",
+        "kv_committed_len",
+        "extra_key",
+        "cache_salt",
+    ):
         if hasattr(req, attr):
             try:
                 context[attr] = _safe_summary(getattr(req, attr))
             except Exception:
                 pass
+    namespace = _cache_namespace_context(req=req)
+    if namespace:
+        context["cache_namespace"] = namespace
     try:
         sampling_params = getattr(req, "sampling_params", None)
         custom_params = getattr(sampling_params, "custom_params", None)
@@ -1581,7 +1654,15 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
         context["io_backend"] = _safe_summary(_arg_value(args, kwargs, 3, "io_backend"))
     elif method_name in {"match_prefix", "init_load_back"}:
         params = _arg_value(args, kwargs, 0, "params")
-        context["request"] = _req_context(_req_from_params(params))
+        req = _req_from_params(params)
+        context["request"] = _req_context(req)
+        try:
+            key = getattr(params, "key", None)
+        except Exception:
+            key = None
+        namespace = _cache_namespace_context(req=req, params=params, key=key)
+        if namespace:
+            context["cache_namespace"] = namespace
         if method_name == "init_load_back":
             context["direction"] = "host_to_device"
             try:
@@ -1604,7 +1685,11 @@ def _kv_context(event_name: str, method_name: str, self_obj: Any, args: tuple[An
             pass
     elif method_name in {"cache_finished_req", "cache_unfinished_req"}:
         context["direction"] = "cache_request"
-        context["request"] = _req_context(_arg_value(args, kwargs, 0, "req"))
+        req = _arg_value(args, kwargs, 0, "req")
+        context["request"] = _req_context(req)
+        namespace = _cache_namespace_context(req=req)
+        if namespace:
+            context["cache_namespace"] = namespace
     elif method_name in {
         "handle_generate_request",
         "_add_request_to_queue",
@@ -1899,9 +1984,16 @@ def _runtime_payload_from_context(
             "host_hit_length",
             "ingest_input_tokens",
             "scheduler_trimmed_tokens",
+            "extra_key",
+            "cache_salt",
+            "cache_namespace",
         ):
             if request.get(key) not in (None, "", [], {}):
                 payload[key] = request[key]
+
+    namespace = context.get("cache_namespace")
+    if isinstance(namespace, dict):
+        payload["cache_namespace"] = namespace
 
     pool_state = context.get("kv_pool_state")
     if isinstance(pool_state, dict):
@@ -2234,9 +2326,19 @@ def _cache_path_telemetry_event(
         "device_load_tokens": device_load_tokens,
         "cache_protected_tokens": req.get("cache_protected_len", ""),
         "kv_committed_tokens": req.get("kv_committed_len", ""),
+        "cache_extra_key": req.get("extra_key", ""),
+        "cache_salt": req.get("cache_salt", ""),
         "request_id": req.get("rid", ""),
         "node_id": context.get("node_id", ""),
     }
+    namespace = context.get("cache_namespace")
+    if isinstance(namespace, dict):
+        event["cache_namespace"] = namespace
+        event["cache_namespace_used"] = namespace.get("cache_namespace_used", "")
+        event["effective_extra_key"] = namespace.get("effective_extra_key", "")
+        radix_key = namespace.get("radix_key")
+        if isinstance(radix_key, dict):
+            event["radix_key_extra_key"] = radix_key.get("extra_key", "")
     event.update(_copy_agent_context(context))
     event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
@@ -2428,6 +2530,11 @@ def _request_stage_event(
         "request_id": _first_request_id(context),
         "exact_sglang_hook": 1,
     }
+    namespace = context.get("cache_namespace")
+    if isinstance(namespace, dict):
+        event["cache_namespace"] = namespace
+        event["cache_namespace_used"] = namespace.get("cache_namespace_used", "")
+        event["effective_extra_key"] = namespace.get("effective_extra_key", "")
     event.update(_copy_agent_context(context))
     event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
@@ -2508,6 +2615,9 @@ def _request_stage_event(
                             "prefill_uncached_token_end",
                             "prefill_uncached_token_count",
                             "prefill_token_range",
+                            "extra_key",
+                            "cache_salt",
+                            "cache_namespace",
                         )
                         if request.get(key) not in (None, "", [], {})
                     }
@@ -2560,6 +2670,11 @@ def _prefill_telemetry_event(
         "batch_requests_with_uncached_tokens": batch.get("requests_with_uncached_tokens", ""),
         "batch_uncached_token_ranges_sample": batch.get("uncached_token_ranges_sample", ""),
     }
+    namespace = context.get("cache_namespace")
+    if isinstance(namespace, dict):
+        event["cache_namespace"] = namespace
+        event["cache_namespace_used"] = namespace.get("cache_namespace_used", "")
+        event["effective_extra_key"] = namespace.get("effective_extra_key", "")
     event.update(_copy_agent_context(context))
     event.update(_kv_pool_event_fields(context))
     sessions = context.get("agent_sessions")
@@ -2589,6 +2704,9 @@ def _prefill_telemetry_event(
                         "prefill_uncached_token_end",
                         "prefill_uncached_token_count",
                         "prefill_token_range",
+                        "extra_key",
+                        "cache_salt",
+                        "cache_namespace",
                     )
                     if request.get(key) not in (None, "", [], {})
                 }
