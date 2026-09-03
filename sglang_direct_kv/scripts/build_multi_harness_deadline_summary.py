@@ -1155,6 +1155,7 @@ SUMMARY_COLUMNS = [
     "median_first_token_lateness_ms",
     "median_due_to_request_start_ms",
     "median_due_to_sglang_receive_ms",
+    "median_ttft_ms",
     "median_sglang_receive_to_first_token_ms",
     "min_first_token_lateness_ms",
     "max_first_token_lateness_ms",
@@ -1321,6 +1322,10 @@ CACHE_BENEFIT_COLUMNS = [
     "median_hc_backend_ttft_ms",
     "backend_ttft_delta_ms_hc_minus_nc",
     "backend_ttft_improvement_pct",
+    "median_nc_ttft_ms",
+    "median_hc_ttft_ms",
+    "ttft_delta_ms_hc_minus_nc",
+    "ttft_improvement_pct",
     "median_nc_first_token_lateness_ms",
     "median_hc_first_token_lateness_ms",
     "first_token_lateness_delta_ms_hc_minus_nc",
@@ -1372,6 +1377,7 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         values = [float(row["first_token_lateness_ms"]) for row in group_rows if row.get("first_token_lateness_ms") != ""]
         due_to_request_start = [value for row in group_rows if (value := optional_float(row.get("due_to_request_start_ms"))) is not None]
         due_to_sglang_receive = [value for row in group_rows if (value := optional_float(row.get("due_to_sglang_receive_ms"))) is not None]
+        ttft_values = [value for row in group_rows if (value := optional_float(row.get("ttft_ms"))) is not None]
         backend_values = [value for row in group_rows if (value := optional_float(row.get("sglang_receive_to_first_token_ms"))) is not None]
         out.append(
             {
@@ -1385,6 +1391,7 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "median_first_token_lateness_ms": round(statistics.median(values), 3),
                 "median_due_to_request_start_ms": round(statistics.median(due_to_request_start), 3) if due_to_request_start else "",
                 "median_due_to_sglang_receive_ms": round(statistics.median(due_to_sglang_receive), 3) if due_to_sglang_receive else "",
+                "median_ttft_ms": round(statistics.median(ttft_values), 3) if ttft_values else "",
                 "median_sglang_receive_to_first_token_ms": round(statistics.median(backend_values), 3) if backend_values else "",
                 "min_first_token_lateness_ms": round(min(values), 3),
                 "max_first_token_lateness_ms": round(max(values), 3),
@@ -1454,6 +1461,8 @@ def collect_cache_benefit_summary(
         hc_actions = actions_by_key.get((harness, pressure, "harness_native_cache_lowered"), [])
         nc_backend = optional_float(nc_summary.get("median_sglang_receive_to_first_token_ms"))
         hc_backend = optional_float(hc_summary.get("median_sglang_receive_to_first_token_ms"))
+        nc_ttft = optional_float(nc_summary.get("median_ttft_ms"))
+        hc_ttft = optional_float(hc_summary.get("median_ttft_ms"))
         nc_lateness = optional_float(nc_summary.get("median_first_token_lateness_ms"))
         hc_lateness = optional_float(hc_summary.get("median_first_token_lateness_ms"))
         nc_cached = median_optional(nc_actions, "max_cached_prefix_tokens")
@@ -1501,6 +1510,10 @@ def collect_cache_benefit_summary(
                 "median_hc_backend_ttft_ms": median_text([hc_summary], "median_sglang_receive_to_first_token_ms"),
                 "backend_ttft_delta_ms_hc_minus_nc": delta_text(hc_backend, nc_backend),
                 "backend_ttft_improvement_pct": pct_improvement(nc_backend, hc_backend),
+                "median_nc_ttft_ms": median_text([nc_summary], "median_ttft_ms"),
+                "median_hc_ttft_ms": median_text([hc_summary], "median_ttft_ms"),
+                "ttft_delta_ms_hc_minus_nc": delta_text(hc_ttft, nc_ttft),
+                "ttft_improvement_pct": pct_improvement(nc_ttft, hc_ttft),
                 "median_nc_first_token_lateness_ms": median_text([nc_summary], "median_first_token_lateness_ms"),
                 "median_hc_first_token_lateness_ms": median_text([hc_summary], "median_first_token_lateness_ms"),
                 "first_token_lateness_delta_ms_hc_minus_nc": delta_text(hc_lateness, nc_lateness),
@@ -1777,12 +1790,12 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     )
     draw_panel(
         top_b,
-        "sglang_receive_to_first_token_ms",
-        "B. SGLang Receive -> First Token",
-        "Backend-only path after SGLang sees the replay request. This removes most harness/client overhead.",
-        "backend time after SGLang receive ms (symlog)",
-        "0 ms receive",
-        "ms after SGLang receive",
+        "ttft_ms",
+        "B. Replay TTFT",
+        "Time from replay request start at the gateway/client boundary to first token. This is the clearest view for cache-control TTFT impact.",
+        "replay TTFT ms (symlog)",
+        "0 ms TTFT",
+        "ms TTFT",
         [0, 50, 500, 1000, 5000, 10000, 60000],
     )
 
@@ -1935,6 +1948,7 @@ def render_html(
             "mode_label",
             "samples",
             "median_first_token_lateness_ms",
+            "median_ttft_ms",
             "median_sglang_receive_to_first_token_ms",
             "median_due_to_sglang_receive_ms",
             "min_first_token_lateness_ms",
@@ -1950,6 +1964,7 @@ def render_html(
             "samples",
             "median_due_to_request_start_ms",
             "median_due_to_sglang_receive_ms",
+            "median_ttft_ms",
             "median_sglang_receive_to_first_token_ms",
             "median_first_token_lateness_ms",
         ],
@@ -2024,7 +2039,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel starts the clock when SGLang receives the replay request. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
+<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. The first panel shows full replay-deadline lateness; the second panel shows replay TTFT from request start to first token. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 <div class="card">{pressure_definition_table}</div>
@@ -2045,7 +2060,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>This target-scoped table checks whether the same replay request that carried a harness cache signal also sent cache metadata in the SGLang request payload, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
 <div class="card">{cache_action_table if cache_action_rows else "<p>No cache action proof rows found in this run.</p>"}</div>
 <h2>Cache Benefit Summary</h2>
-<p>This table compares <code>harness_native_cache_lowered</code> against <code>no_cache_signal</code> for the same harness and pressure level. Negative backend TTFT delta means the cache-lowered run reached the first token faster after SGLang received the replay. Positive cached-prefix delta means more prompt tokens were reused. This is the main table for asking whether harness cache signals helped TTFT.</p>
+<p>This table compares <code>harness_native_cache_lowered</code> against <code>no_cache_signal</code> for the same harness and pressure level. Negative TTFT delta means the cache-lowered run reached the first token faster after the replay request started. Negative backend TTFT delta means it was faster after SGLang received the replay. Positive cached-prefix delta means more prompt tokens were reused. This is the main table for asking whether harness cache signals helped TTFT.</p>
 <div class="card">{cache_benefit_table if cache_benefit_rows else "<p>No paired cache-benefit rows found. Run both no_cache_signal and harness_native_cache_lowered for the same harness and pressure level.</p>"}</div>
 <h2>SGLang Cache Signal Path Audit</h2>
 <p>This static source audit is collected from the installed SGLang package on the experiment machine. It checks whether SGLang appears to have native code paths for fields such as <code>prompt_cache_key</code>, <code>cache_salt</code>, <code>extra_key</code>, <code>cache_control</code>, and request <code>priority</code>. Runtime proof still comes from the target-scoped trace rows above.</p>
@@ -2056,7 +2071,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>
 <h2>Delay Breakdown</h2>
-<p>This table separates client/gateway arrival time from backend service time. <code>median_sglang_receive_to_first_token_ms</code> is the backend-only number used in panel B.</p>
+<p>This table separates replay request TTFT from backend service time. <code>median_ttft_ms</code> is the number used in panel B; <code>median_sglang_receive_to_first_token_ms</code> remains the backend-only view.</p>
 <div class="card">{breakdown_table}</div>
 <h2>Raw Replay Proof</h2>
 <div class="card">{raw_table}</div>

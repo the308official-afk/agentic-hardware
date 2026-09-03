@@ -789,11 +789,13 @@ bash scripts/run_harness_signal_design_space.sh \
 ```
 
 The main output for this question is `cache_benefit_summary.csv`. Negative
-`backend_ttft_delta_ms_hc_minus_nc` means harness-native cache lowering was
-faster than the no-cache-signal baseline after SGLang received the replay.
-Positive `cached_prefix_delta_tokens` means SGLang reused more prompt tokens.
-Use `cache_action_proof.csv` beside it to check whether the target replay also
-showed cache-path work and whether an explicit `cache_salt` was present.
+`ttft_delta_ms_hc_minus_nc` means harness-native cache lowering was faster than
+the no-cache-signal baseline from replay request start to first token. Negative
+`backend_ttft_delta_ms_hc_minus_nc` means it was faster after SGLang received
+the replay. Positive `cached_prefix_delta_tokens` means SGLang reused more
+prompt tokens. Use `cache_action_proof.csv` beside it to check whether the
+target replay also showed cache-path work and whether an explicit `cache_salt`
+was present.
 
 For harness-native cache runs, the gateway now lowers explicit harness cache
 keys such as `prompt_cache_key`, `promptCacheKey`, or `cache_key` into SGLang's
