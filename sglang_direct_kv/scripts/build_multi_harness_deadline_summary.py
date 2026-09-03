@@ -180,8 +180,8 @@ SIGNAL_FAMILY_DEFINITIONS = [
     {
         "family": "Gateway-injected",
         "where_signal_is_added": "After the harness, before SGLang",
-        "what_it_means": "The harness output is normal; the gateway attaches priority or speculative prefill/preload hints at the SGLang boundary.",
-        "raw_modes": "e2e_priority_hints, e2e_priority_hints_speculative_prefill",
+        "what_it_means": "The harness output is normal; the gateway attaches SGLang priority at the backend boundary.",
+        "raw_modes": "e2e_priority_hints",
     },
 ]
 

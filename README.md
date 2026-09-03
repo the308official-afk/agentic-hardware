@@ -72,7 +72,7 @@ The current manager-facing comparisons use these modes:
 | `pre_harness_priority_hints` | Harness-preservation path. The driver marks replay urgency before the harness sees the request, then the gateway proves whether that intent or a native harness signal survived and was translated into SGLang priority. |
 | `no_cache_signal` | Cache-signal baseline. The gateway is present and records native harness cache fields, but it does not lower them to SGLang. |
 | `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
-| `e2e_priority_hints_speculative_prefill` | Dynamo-like proactive path. The replay still gets E2E priority, and the gateway sends a background `max_tokens=1` warmup for the known next-turn prefix during the tool wait. |
+| `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
 
 For NeMo Agent Toolkit / NAT, `pre_harness_priority_hints` uses NAT's OpenAI
 provider pass-through path. The generated NAT workflow includes
@@ -658,7 +658,7 @@ baseline modes that are included for comparison:
 | --- | --- |
 | `harness_emitted` | The harness creates the signal. The gateway only translates what the harness emitted for SGLang. This includes harness-native cache control, and NAT native priority inference when NAT is selected. |
 | `frontend_supplied` | The experiment/front end gives signal intent to the harness first. The gateway translates whatever survives the harness path for SGLang. |
-| `gateway_injected` | The request leaves the harness normally. The gateway then attaches priority or speculative prefill/preload hints before forwarding to SGLang. |
+| `gateway_injected` | The request leaves the harness normally. The gateway then attaches only SGLang priority before forwarding to SGLang. |
 | `all` | Alias for `harness_emitted frontend_supplied gateway_injected`. |
 
 The wrapper prints the detailed mode expansion before it starts. Today that
@@ -669,17 +669,17 @@ expands to the proven lower-level modes:
 | `harness_emitted/cache` | `no_cache_signal harness_native_cache_lowered` |
 | `harness_emitted/priority` | `no_prefetch nat_inferred_priority_hints`, only for selected harnesses that support native priority inference today. |
 | `frontend_supplied` | `no_prefetch pre_harness_priority_hints` |
-| `gateway_injected` | `no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill` |
+| `gateway_injected` | `no_prefetch e2e_priority_hints` |
 
 In the Replay Deadline Pressure Chart, these lower-level modes are collapsed
 into proof-outcome colors: `Baseline`, `Harness Cache Emitted`,
-`Harness Priority Emitted`, `Front-End Supplied`, `Gateway Priority Injected`,
-and `Gateway Priority + Speculative Prefill`. A row only appears as
+`Harness Priority Emitted`, `Front-End Supplied`, and `Gateway Priority Injected`.
+A row only appears as
 `Harness Cache Emitted` or `Harness Priority Emitted` when the target replay
 request actually carried that harness-emitted signal type and the gateway
-lowered it. Gateway-injected rows mean the hint was added after the harness,
-at the SGLang boundary. Use the evidence tables when you need the exact raw
-mode, emitted fields, gateway translation source, and speculative prefill proof.
+lowered it. Gateway-injected rows mean the priority hint was added after the
+harness, at the SGLang boundary. Use the evidence tables when you need the
+exact raw mode, emitted fields, and gateway translation source.
 
 Use `DRY_RUN=1` to preview the expansion without launching SGLang:
 

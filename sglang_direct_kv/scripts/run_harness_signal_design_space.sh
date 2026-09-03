@@ -28,7 +28,7 @@ HARNESS_EMITTED_CACHE_MODES="${HARNESS_EMITTED_CACHE_MODES:-no_cache_signal harn
 HARNESS_EMITTED_PRIORITY_MODES="${HARNESS_EMITTED_PRIORITY_MODES:-no_prefetch nat_inferred_priority_hints}"
 HARNESS_EMITTED_PRIORITY_HARNESSES="${HARNESS_EMITTED_PRIORITY_HARNESSES:-nemo_agent_toolkit}"
 FRONTEND_SUPPLIED_MODES="${FRONTEND_SUPPLIED_MODES:-no_prefetch pre_harness_priority_hints}"
-GATEWAY_INJECTED_MODES="${GATEWAY_INJECTED_MODES:-no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill}"
+GATEWAY_INJECTED_MODES="${GATEWAY_INJECTED_MODES:-no_prefetch e2e_priority_hints}"
 INCLUDE_HARNESS_EMITTED_PRIORITY="${INCLUDE_HARNESS_EMITTED_PRIORITY:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -244,7 +244,7 @@ for family in ${SIGNAL_FAMILIES}; do
     for mode in ${GATEWAY_INJECTED_MODES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
-    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "gateway_injected:priority_and_speculative_prefill")"
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "gateway_injected:priority")"
   fi
 done
 
@@ -288,7 +288,7 @@ if word_in_list "frontend_supplied" "${SIGNAL_FAMILIES}"; then
 fi
 
 if word_in_list "gateway_injected" "${SIGNAL_FAMILIES}"; then
-  run_family_piece "gateway_injected" "priority_and_speculative_prefill" "${GATEWAY_INJECTED_MODES}" "${HARNESSES}"
+  run_family_piece "gateway_injected" "priority" "${GATEWAY_INJECTED_MODES}" "${HARNESSES}"
 fi
 
 write_combined_run_config
