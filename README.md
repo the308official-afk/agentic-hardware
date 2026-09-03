@@ -754,6 +754,17 @@ columns are `native_cache_signal_seen`, `native_cache_signal_source`,
 `gateway_cache_translation_source=harness_emitted_cache_signal`, and
 `gateway_invented_signal=false`.
 
+The lightweight report also writes `cache_action_proof.csv`. This table stays
+focused on the target replay requests in the chart, not filler traffic. It
+checks whether the target replay showed SGLang cache-path evidence such as
+prefix match, load-back, host-to-device copy, prefill attribution, or cache
+commit events. A positive row means the cache signal reached the backend and
+SGLang cache machinery ran for that replay. The low-level SGLang cache events
+currently prove the cache action but do not echo the cache-control metadata
+back, so this is transport-plus-action proof, not full causality proof. For
+causality, compare against `no_cache_signal` or run a follow-up
+cache-disabled/random-cache-key A/B.
+
 Latest EC2 wireability result:
 
 ```text

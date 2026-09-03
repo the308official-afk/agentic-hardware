@@ -873,6 +873,193 @@ def collect_harness_native_cache_signal_proof(replay_rows: list[dict[str, Any]])
     return proof_rows
 
 
+def row_matches_request(row: dict[str, Any], request_id: str) -> bool:
+    if row_agent_label(row) == request_id:
+        return True
+    for key in ("request_prefill_attribution", "batch_request_prefill_attribution"):
+        attribution = row.get(key)
+        if not isinstance(attribution, list):
+            continue
+        for request in attribution:
+            if isinstance(request, dict) and row_agent_label(request) == request_id:
+                return True
+    return False
+
+
+def matching_request_attributions(row: dict[str, Any], request_id: str) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    if row_agent_label(row) == request_id:
+        matches.append(row)
+    for key in ("request_prefill_attribution", "batch_request_prefill_attribution"):
+        attribution = row.get(key)
+        if not isinstance(attribution, list):
+            continue
+        for request in attribution:
+            if isinstance(request, dict) and row_agent_label(request) == request_id:
+                matches.append(request)
+    return matches
+
+
+def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    proof_rows: list[dict[str, Any]] = []
+    cache_modes = {"no_cache_signal", "harness_native_cache_lowered"}
+    for replay_row in replay_rows:
+        mode = str(replay_row.get("mode") or "")
+        if mode not in cache_modes:
+            continue
+        case_dir = Path(str(replay_row.get("case_dir") or ""))
+        if not case_dir.exists():
+            case_dir = root / str(replay_row.get("case_id") or "")
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        request_id = str(replay_row.get("request_id") or "")
+        if not trace_rows or not request_id:
+            continue
+
+        token_stats = prefill_token_stats_by_label(trace_rows).get(request_id, {})
+        cache_match_events = 0
+        load_back_events = 0
+        h2d_copy_events = 0
+        cache_finished_events = 0
+        prefill_events = 0
+        first_cache_action_ts_ns = 0
+        sglang_receive_ts_ns = int(float_value(replay_row.get("sglang_receive_ts_ns")))
+        max_values: dict[str, float] = defaultdict(float)
+
+        def update_max(output_key: str, value: Any) -> None:
+            parsed = optional_float(value)
+            if parsed is not None and parsed > max_values[output_key]:
+                max_values[output_key] = parsed
+
+        for key, output_key in (
+            ("prefill_cached_prefix_tokens", "cached_prefix_tokens"),
+            ("prefill_uncached_token_count", "uncached_tokens"),
+            ("prefill_host_hit_tokens", "host_hit_tokens"),
+        ):
+            update_max(output_key, token_stats.get(key))
+
+        for trace_row in trace_rows:
+            if not row_matches_request(trace_row, request_id):
+                continue
+            event = str(trace_row.get("event") or "")
+            category = str(trace_row.get("category") or "")
+            method = str(trace_row.get("method") or "")
+            source_event = str(trace_row.get("source_event") or "")
+            action_text = " ".join((event, category, method, source_event)).lower()
+            if "match_prefix" in action_text:
+                cache_match_events += 1
+            if category in {"init_load_back", "load_back", "hicache_load"} or method in {
+                "init_load_back",
+                "load_back",
+                "hicache_load",
+            }:
+                load_back_events += 1
+            if category == "host_to_device_copy" or method == "load_to_device_per_layer":
+                h2d_copy_events += 1
+            if category == "cache_finished_req" or "cache_finished_req" in action_text:
+                cache_finished_events += 1
+            if event.startswith("kv_telemetry.prefill") or any(
+                key in trace_row for key in ("prefill_full_input_tokens", "batch_request_prefill_attribution")
+            ):
+                prefill_events += 1
+
+            if any(
+                (
+                    "match_prefix" in action_text,
+                    category in {"init_load_back", "load_back", "hicache_load", "host_to_device_copy", "cache_finished_req"},
+                    event.startswith("kv_telemetry.prefill"),
+                )
+            ):
+                ts_ns = int(float_value(trace_row.get("ts_ns")))
+                if ts_ns and sglang_receive_ts_ns and ts_ns >= sglang_receive_ts_ns:
+                    if not first_cache_action_ts_ns or ts_ns < first_cache_action_ts_ns:
+                        first_cache_action_ts_ns = ts_ns
+
+            for attribution in matching_request_attributions(trace_row, request_id):
+                update_max("cached_prefix_tokens", attribution.get("cached_prefix_tokens"))
+                update_max("cached_prefix_tokens", attribution.get("prefill_cached_prefix_tokens"))
+                update_max("cached_prefix_tokens", attribution.get("batch_request_cached_prefix_token_sum"))
+                update_max("uncached_tokens", attribution.get("new_prefill_tokens_est"))
+                update_max("uncached_tokens", attribution.get("prefill_uncached_token_count"))
+                update_max("uncached_tokens", attribution.get("batch_request_uncached_token_sum"))
+                update_max("host_hit_tokens", attribution.get("host_hit_tokens"))
+                update_max("host_hit_tokens", attribution.get("prefill_host_hit_tokens"))
+                update_max("host_load_tokens", attribution.get("host_load_tokens"))
+                update_max("device_load_tokens", attribution.get("device_load_tokens"))
+                update_max("cache_protected_tokens", attribution.get("cache_protected_tokens"))
+                update_max("kv_committed_tokens", attribution.get("kv_committed_tokens"))
+
+        native_cache_signal_seen = is_truthy_text(replay_row.get("harness_native_cache_signal_seen"))
+        gateway_cache_lowered = is_truthy_text(replay_row.get("gateway_cache_lowered"))
+        sglang_payload_cache_metadata_sent = gateway_cache_lowered and has_value(replay_row.get("gateway_cache_translation"))
+        backend_cache_activity_seen = any(
+            (
+                cache_match_events,
+                load_back_events,
+                h2d_copy_events,
+                cache_finished_events,
+                prefill_events,
+                max_values.get("cached_prefix_tokens", 0) > 0,
+                max_values.get("host_hit_tokens", 0) > 0,
+            )
+        )
+        if native_cache_signal_seen and sglang_payload_cache_metadata_sent and backend_cache_activity_seen:
+            verdict = "cache metadata sent to SGLang and cache path acted"
+            causality_note = (
+                "Strong transport plus action proof for this target replay. The current SGLang cache telemetry does not echo cache-control metadata, "
+                "so this still does not prove the signal caused the cache hit; normal prefix reuse can also use the same cache path."
+            )
+        elif native_cache_signal_seen and sglang_payload_cache_metadata_sent:
+            verdict = "cache metadata sent to SGLang, but no cache action was observed"
+            causality_note = "Gateway transport is proven for this target replay; backend cache work was not observed in the trace rows."
+        elif native_cache_signal_seen:
+            verdict = "harness cache signal seen, but gateway did not lower it"
+            causality_note = "The harness emitted something cache-like, but it was not translated into backend cache metadata."
+        elif backend_cache_activity_seen:
+            verdict = "backend cache activity without harness cache signal"
+            causality_note = "This is useful baseline evidence: SGLang can do normal prefix/cache work even without a harness cache signal."
+        else:
+            verdict = "no cache signal and no backend cache action observed"
+            causality_note = "No target-scoped cache signal or cache-path work was visible in this trace."
+
+        first_cache_action_after_receive_ms = (
+            round(ns_to_ms_delta(sglang_receive_ts_ns, first_cache_action_ts_ns), 3)
+            if ns_to_ms_delta(sglang_receive_ts_ns, first_cache_action_ts_ns) is not None
+            else ""
+        )
+        proof_rows.append(
+            {
+                "harness_label": replay_row.get("harness_label", ""),
+                "pressure_level_label": replay_row.get("pressure_level_label", ""),
+                "mode_label": replay_row.get("mode_label", ""),
+                "session_id": replay_row.get("session_id", ""),
+                "request_id": request_id,
+                "native_cache_signal_seen": "yes" if native_cache_signal_seen else "no",
+                "gateway_cache_lowered": "yes" if gateway_cache_lowered else "no",
+                "sglang_payload_cache_metadata_sent": "yes" if sglang_payload_cache_metadata_sent else "no",
+                "cache_match_prefix_events": cache_match_events,
+                "load_back_events": load_back_events,
+                "h2d_copy_events": h2d_copy_events,
+                "cache_finished_events": cache_finished_events,
+                "prefill_attribution_events": prefill_events,
+                "max_cached_prefix_tokens": int(max_values["cached_prefix_tokens"]) if max_values["cached_prefix_tokens"] else "",
+                "max_uncached_tokens": int(max_values["uncached_tokens"]) if max_values["uncached_tokens"] else "",
+                "max_host_hit_tokens": int(max_values["host_hit_tokens"]) if max_values["host_hit_tokens"] else "",
+                "max_host_load_tokens": int(max_values["host_load_tokens"]) if max_values["host_load_tokens"] else "",
+                "max_device_load_tokens": int(max_values["device_load_tokens"]) if max_values["device_load_tokens"] else "",
+                "max_cache_protected_tokens": int(max_values["cache_protected_tokens"]) if max_values["cache_protected_tokens"] else "",
+                "max_kv_committed_tokens": int(max_values["kv_committed_tokens"]) if max_values["kv_committed_tokens"] else "",
+                "first_cache_action_after_sglang_receive_ms": first_cache_action_after_receive_ms,
+                "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
+                "sglang_receive_to_first_token_ms": replay_row.get("sglang_receive_to_first_token_ms", ""),
+                "verdict": verdict,
+                "causality_note": causality_note,
+                "case_id": replay_row.get("case_id", ""),
+                "case_dir": replay_row.get("case_dir", ""),
+            }
+        )
+    return proof_rows
+
+
 RAW_COLUMNS = [
     "harness",
     "harness_label",
@@ -1042,6 +1229,36 @@ CACHE_SIGNAL_COLUMNS = [
     "first_token_lateness_ms",
     "sglang_receive_to_first_token_ms",
     "verdict",
+    "case_id",
+    "case_dir",
+]
+
+CACHE_ACTION_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "session_id",
+    "request_id",
+    "native_cache_signal_seen",
+    "gateway_cache_lowered",
+    "sglang_payload_cache_metadata_sent",
+    "cache_match_prefix_events",
+    "load_back_events",
+    "h2d_copy_events",
+    "cache_finished_events",
+    "prefill_attribution_events",
+    "max_cached_prefix_tokens",
+    "max_uncached_tokens",
+    "max_host_hit_tokens",
+    "max_host_load_tokens",
+    "max_device_load_tokens",
+    "max_cache_protected_tokens",
+    "max_kv_committed_tokens",
+    "first_cache_action_after_sglang_receive_ms",
+    "first_token_lateness_ms",
+    "sglang_receive_to_first_token_ms",
+    "verdict",
+    "causality_note",
     "case_id",
     "case_dir",
 ]
@@ -1471,6 +1688,7 @@ def render_html(
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
+    cache_action_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     report_label: str,
     run_config: dict[str, str],
@@ -1512,6 +1730,7 @@ def render_html(
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
+    cache_action_table = render_table(cache_action_rows, CACHE_ACTION_COLUMNS)
     nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
     raw_table = render_table(
         rows,
@@ -1592,6 +1811,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Harness Native Cache Signal Proof</h2>
 <p>This table appears when the run includes <code>no_cache_signal</code> or <code>harness_native_cache_lowered</code>. The gateway is always present, but it only translates cache fields that the harness emitted. <code>gateway_invented_signal</code> should remain <code>false</code>.</p>
 <div class="card">{cache_signal_table if cache_signal_rows else "<p>No harness native cache signal proof rows found in this run.</p>"}</div>
+<h2>Cache Action Proof</h2>
+<p>This target-scoped table checks whether the same replay request that carried a harness cache signal also sent cache metadata in the SGLang request payload, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
+<div class="card">{cache_action_table if cache_action_rows else "<p>No cache action proof rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code>. It proves whether the Dynamo-like background <code>max_tokens=1</code> warmup was sent before replay and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -1617,6 +1839,7 @@ def write_manifest(
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
+    cache_action_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     run_config: dict[str, str],
 ) -> None:
@@ -1633,6 +1856,7 @@ def write_manifest(
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
         "cache_signal_row_count": len(cache_signal_rows),
+        "cache_action_row_count": len(cache_action_rows),
         "nat_inferred_priority_profile": bool(nat_inferred_priority_profile),
         "nat_inferred_priority_profile_path": (
             str(args.out_dir / "nat_inferred_priority_profile.json") if nat_inferred_priority_profile else ""
@@ -1664,6 +1888,7 @@ def main() -> None:
     harness_priority_rows = collect_harness_priority_proof(args.root, rows)
     nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
     cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
+    cache_action_rows = collect_cache_action_proof(args.root, rows)
     nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
@@ -1671,6 +1896,7 @@ def main() -> None:
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
+    write_csv(args.out_dir / "cache_action_proof.csv", cache_action_rows, CACHE_ACTION_COLUMNS)
     html_text = render_html(
         rows,
         summary,
@@ -1678,6 +1904,7 @@ def main() -> None:
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
+        cache_action_rows,
         nat_inferred_priority_profile,
         args.report_label,
         run_config,
@@ -1693,6 +1920,7 @@ def main() -> None:
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
+        cache_action_rows,
         nat_inferred_priority_profile,
         run_config,
     )
@@ -1708,6 +1936,7 @@ def main() -> None:
             harness_priority_rows,
             nat_service_priority_rows,
             cache_signal_rows,
+            cache_action_rows,
             nat_inferred_priority_profile,
             run_config,
         )
