@@ -767,6 +767,34 @@ columns. Without namespace evidence this is transport-plus-action proof, not
 full causality proof. For causality, compare against `no_cache_signal` or run a
 follow-up cache-disabled/random-cache-key A/B.
 
+For a short cache-benefit probe, use P1/P2 and cache modes only. This run asks
+whether harness-emitted cache signals improve backend TTFT after SGLang receives
+the replay, without P3 queue delay hiding the cache effect:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
+HARDWARE_PROFILE=ec2_a10g \
+SIGNAL_FAMILIES="harness_emitted" \
+INCLUDE_HARNESS_EMITTED_PRIORITY=0 \
+HARNESS_EMITTED_CACHE_MODES="no_cache_signal harness_native_cache_lowered" \
+HARNESSES="opencode qwen_code pi_agent_harness openclaw hermes_agent" \
+PRESSURE_LEVELS="p1_mild p2_medium" \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="cache_benefit_probe_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_signal_design_space.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+The main output for this question is `cache_benefit_summary.csv`. Negative
+`backend_ttft_delta_ms_hc_minus_nc` means harness-native cache lowering was
+faster than the no-cache-signal baseline after SGLang received the replay.
+Positive `cached_prefix_delta_tokens` means SGLang reused more prompt tokens.
+Use `cache_action_proof.csv` beside it to check whether the target replay also
+showed cache-path work and whether an explicit `cache_salt` was present.
+
 For harness-native cache runs, the gateway now lowers explicit harness cache
 keys such as `prompt_cache_key`, `promptCacheKey`, or `cache_key` into SGLang's
 native top-level `cache_salt` field. This keeps the gateway in translator mode:

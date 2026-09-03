@@ -1308,6 +1308,37 @@ CACHE_ACTION_COLUMNS = [
     "case_dir",
 ]
 
+CACHE_BENEFIT_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "samples_no_cache_signal",
+    "samples_harness_native_cache_lowered",
+    "native_cache_signal_seen",
+    "gateway_cache_lowered",
+    "gateway_cache_salt_seen",
+    "runtime_cache_namespace_seen",
+    "median_nc_backend_ttft_ms",
+    "median_hc_backend_ttft_ms",
+    "backend_ttft_delta_ms_hc_minus_nc",
+    "backend_ttft_improvement_pct",
+    "median_nc_first_token_lateness_ms",
+    "median_hc_first_token_lateness_ms",
+    "first_token_lateness_delta_ms_hc_minus_nc",
+    "median_nc_cached_prefix_tokens",
+    "median_hc_cached_prefix_tokens",
+    "cached_prefix_delta_tokens",
+    "median_nc_uncached_tokens",
+    "median_hc_uncached_tokens",
+    "uncached_delta_tokens_hc_minus_nc",
+    "median_nc_cache_match_events",
+    "median_hc_cache_match_events",
+    "cache_match_delta_events",
+    "median_nc_prefill_attribution_events",
+    "median_hc_prefill_attribution_events",
+    "prefill_attribution_delta_events",
+    "verdict",
+]
+
 
 SGLANG_CACHE_PATH_AUDIT_COLUMNS = [
     "signal",
@@ -1357,6 +1388,135 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "median_sglang_receive_to_first_token_ms": round(statistics.median(backend_values), 3) if backend_values else "",
                 "min_first_token_lateness_ms": round(min(values), 3),
                 "max_first_token_lateness_ms": round(max(values), 3),
+            }
+        )
+    return out
+
+
+def median_optional(rows: list[dict[str, Any]], key: str) -> float | None:
+    values = [value for row in rows if (value := optional_float(row.get(key))) is not None]
+    if not values:
+        return None
+    return statistics.median(values)
+
+
+def median_text(rows: list[dict[str, Any]], key: str) -> str:
+    value = median_optional(rows, key)
+    return f"{round(value, 3):g}" if value is not None else ""
+
+
+def pct_improvement(baseline: float | None, candidate: float | None) -> str:
+    if baseline is None or candidate is None or baseline <= 0:
+        return ""
+    return f"{round(((baseline - candidate) / baseline) * 100.0, 2):g}"
+
+
+def delta_text(candidate: float | None, baseline: float | None) -> str:
+    if candidate is None or baseline is None:
+        return ""
+    return f"{round(candidate - baseline, 3):g}"
+
+
+def collect_cache_benefit_summary(
+    summary_rows: list[dict[str, Any]],
+    cache_action_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    summary_by_key = {
+        (str(row.get("harness") or ""), str(row.get("pressure_level") or ""), str(row.get("mode") or "")): row
+        for row in summary_rows
+    }
+    actions_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in cache_action_rows:
+        case_id = str(row.get("case_id") or "")
+        harness, pressure, mode = case_key_from_name(case_id)
+        if not harness or not pressure or not mode:
+            continue
+        actions_by_key[(harness, pressure, mode)].append(row)
+
+    out: list[dict[str, Any]] = []
+    pairs = sorted(
+        {
+            (harness, pressure)
+            for harness, pressure, mode in summary_by_key
+            if mode in {"no_cache_signal", "harness_native_cache_lowered"}
+        },
+        key=lambda item: (
+            HARNESS_LABELS.get(item[0], item[0]),
+            PRESSURE_ORDER.index(item[1]) if item[1] in PRESSURE_ORDER else 999,
+        ),
+    )
+    for harness, pressure in pairs:
+        nc_summary = summary_by_key.get((harness, pressure, "no_cache_signal"), {})
+        hc_summary = summary_by_key.get((harness, pressure, "harness_native_cache_lowered"), {})
+        if not nc_summary or not hc_summary:
+            continue
+        nc_actions = actions_by_key.get((harness, pressure, "no_cache_signal"), [])
+        hc_actions = actions_by_key.get((harness, pressure, "harness_native_cache_lowered"), [])
+        nc_backend = optional_float(nc_summary.get("median_sglang_receive_to_first_token_ms"))
+        hc_backend = optional_float(hc_summary.get("median_sglang_receive_to_first_token_ms"))
+        nc_lateness = optional_float(nc_summary.get("median_first_token_lateness_ms"))
+        hc_lateness = optional_float(hc_summary.get("median_first_token_lateness_ms"))
+        nc_cached = median_optional(nc_actions, "max_cached_prefix_tokens")
+        hc_cached = median_optional(hc_actions, "max_cached_prefix_tokens")
+        nc_uncached = median_optional(nc_actions, "max_uncached_tokens")
+        hc_uncached = median_optional(hc_actions, "max_uncached_tokens")
+        nc_match = median_optional(nc_actions, "cache_match_prefix_events")
+        hc_match = median_optional(hc_actions, "cache_match_prefix_events")
+        nc_prefill = median_optional(nc_actions, "prefill_attribution_events")
+        hc_prefill = median_optional(hc_actions, "prefill_attribution_events")
+        native_seen = any(is_truthy_text(row.get("native_cache_signal_seen")) for row in hc_actions)
+        lowered = any(is_truthy_text(row.get("gateway_cache_lowered")) for row in hc_actions)
+        salt_seen = any(has_value(row.get("gateway_cache_salt")) for row in hc_actions)
+        namespace_seen = any(is_truthy_text(row.get("runtime_cache_namespace_seen")) for row in hc_actions)
+        backend_delta = hc_backend - nc_backend if hc_backend is not None and nc_backend is not None else None
+        cached_delta = hc_cached - nc_cached if hc_cached is not None and nc_cached is not None else None
+        match_delta = hc_match - nc_match if hc_match is not None and nc_match is not None else None
+        if backend_delta is not None and backend_delta < -50 and lowered:
+            verdict = "HC improved backend TTFT; cache signal transport present"
+            if namespace_seen:
+                verdict += "; runtime namespace proof present"
+            elif not salt_seen:
+                verdict += "; no explicit cache_salt observed"
+            else:
+                verdict += "; direct namespace proof still missing"
+        elif backend_delta is not None and backend_delta > 50 and lowered:
+            verdict = "HC was slower on backend TTFT despite cache signal transport"
+        elif lowered:
+            verdict = "HC transport present, but backend TTFT change was small/noisy"
+        elif native_seen:
+            verdict = "Harness emitted cache signal, but gateway lowering was not proven"
+        else:
+            verdict = "No target native cache signal observed for HC"
+        out.append(
+            {
+                "harness_label": HARNESS_LABELS.get(harness, harness),
+                "pressure_level_label": PRESSURE_LABELS.get(pressure, pressure),
+                "samples_no_cache_signal": nc_summary.get("samples", ""),
+                "samples_harness_native_cache_lowered": hc_summary.get("samples", ""),
+                "native_cache_signal_seen": "yes" if native_seen else "no",
+                "gateway_cache_lowered": "yes" if lowered else "no",
+                "gateway_cache_salt_seen": "yes" if salt_seen else "no",
+                "runtime_cache_namespace_seen": "yes" if namespace_seen else "no",
+                "median_nc_backend_ttft_ms": median_text([nc_summary], "median_sglang_receive_to_first_token_ms"),
+                "median_hc_backend_ttft_ms": median_text([hc_summary], "median_sglang_receive_to_first_token_ms"),
+                "backend_ttft_delta_ms_hc_minus_nc": delta_text(hc_backend, nc_backend),
+                "backend_ttft_improvement_pct": pct_improvement(nc_backend, hc_backend),
+                "median_nc_first_token_lateness_ms": median_text([nc_summary], "median_first_token_lateness_ms"),
+                "median_hc_first_token_lateness_ms": median_text([hc_summary], "median_first_token_lateness_ms"),
+                "first_token_lateness_delta_ms_hc_minus_nc": delta_text(hc_lateness, nc_lateness),
+                "median_nc_cached_prefix_tokens": median_text(nc_actions, "max_cached_prefix_tokens"),
+                "median_hc_cached_prefix_tokens": median_text(hc_actions, "max_cached_prefix_tokens"),
+                "cached_prefix_delta_tokens": delta_text(hc_cached, nc_cached),
+                "median_nc_uncached_tokens": median_text(nc_actions, "max_uncached_tokens"),
+                "median_hc_uncached_tokens": median_text(hc_actions, "max_uncached_tokens"),
+                "uncached_delta_tokens_hc_minus_nc": delta_text(hc_uncached, nc_uncached),
+                "median_nc_cache_match_events": median_text(nc_actions, "cache_match_prefix_events"),
+                "median_hc_cache_match_events": median_text(hc_actions, "cache_match_prefix_events"),
+                "cache_match_delta_events": delta_text(hc_match, nc_match),
+                "median_nc_prefill_attribution_events": median_text(nc_actions, "prefill_attribution_events"),
+                "median_hc_prefill_attribution_events": median_text(hc_actions, "prefill_attribution_events"),
+                "prefill_attribution_delta_events": delta_text(hc_prefill, nc_prefill),
+                "verdict": verdict,
             }
         )
     return out
@@ -1755,6 +1915,7 @@ def render_html(
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
     cache_action_rows: list[dict[str, Any]],
+    cache_benefit_rows: list[dict[str, Any]],
     sglang_cache_path_audit_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     report_label: str,
@@ -1798,6 +1959,7 @@ def render_html(
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
     cache_action_table = render_table(cache_action_rows, CACHE_ACTION_COLUMNS)
+    cache_benefit_table = render_table(cache_benefit_rows, CACHE_BENEFIT_COLUMNS)
     sglang_cache_path_audit_table = render_table(sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
     nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
     raw_table = render_table(
@@ -1882,6 +2044,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Cache Action Proof</h2>
 <p>This target-scoped table checks whether the same replay request that carried a harness cache signal also sent cache metadata in the SGLang request payload, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
 <div class="card">{cache_action_table if cache_action_rows else "<p>No cache action proof rows found in this run.</p>"}</div>
+<h2>Cache Benefit Summary</h2>
+<p>This table compares <code>harness_native_cache_lowered</code> against <code>no_cache_signal</code> for the same harness and pressure level. Negative backend TTFT delta means the cache-lowered run reached the first token faster after SGLang received the replay. Positive cached-prefix delta means more prompt tokens were reused. This is the main table for asking whether harness cache signals helped TTFT.</p>
+<div class="card">{cache_benefit_table if cache_benefit_rows else "<p>No paired cache-benefit rows found. Run both no_cache_signal and harness_native_cache_lowered for the same harness and pressure level.</p>"}</div>
 <h2>SGLang Cache Signal Path Audit</h2>
 <p>This static source audit is collected from the installed SGLang package on the experiment machine. It checks whether SGLang appears to have native code paths for fields such as <code>prompt_cache_key</code>, <code>cache_salt</code>, <code>extra_key</code>, <code>cache_control</code>, and request <code>priority</code>. Runtime proof still comes from the target-scoped trace rows above.</p>
 <div class="card">{sglang_cache_path_audit_table if sglang_cache_path_audit_rows else "<p>No SGLang cache signal path audit rows found. Re-run with an environment collector on the experiment machine.</p>"}</div>
@@ -1911,6 +2076,7 @@ def write_manifest(
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
     cache_action_rows: list[dict[str, Any]],
+    cache_benefit_rows: list[dict[str, Any]],
     sglang_cache_path_audit_rows: list[dict[str, Any]],
     nat_inferred_priority_profile: dict[str, Any],
     run_config: dict[str, str],
@@ -1929,6 +2095,7 @@ def write_manifest(
         "nat_service_priority_row_count": len(nat_service_priority_rows),
         "cache_signal_row_count": len(cache_signal_rows),
         "cache_action_row_count": len(cache_action_rows),
+        "cache_benefit_row_count": len(cache_benefit_rows),
         "sglang_cache_path_audit_row_count": len(sglang_cache_path_audit_rows),
         "nat_inferred_priority_profile": bool(nat_inferred_priority_profile),
         "nat_inferred_priority_profile_path": (
@@ -1963,6 +2130,7 @@ def main() -> None:
     nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
     cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
     cache_action_rows = collect_cache_action_proof(args.root, rows)
+    cache_benefit_rows = collect_cache_benefit_summary(summary, cache_action_rows)
     run_environment = read_json_file(args.run_environment_json or args.out_dir / "run_environment.json")
     sglang_cache_path_audit_rows = collect_sglang_cache_path_audit(run_environment)
     nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
@@ -1973,6 +2141,7 @@ def main() -> None:
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
     write_csv(args.out_dir / "cache_action_proof.csv", cache_action_rows, CACHE_ACTION_COLUMNS)
+    write_csv(args.out_dir / "cache_benefit_summary.csv", cache_benefit_rows, CACHE_BENEFIT_COLUMNS)
     write_csv(args.out_dir / "sglang_cache_signal_path_audit.csv", sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
     html_text = render_html(
         rows,
@@ -1982,6 +2151,7 @@ def main() -> None:
         nat_service_priority_rows,
         cache_signal_rows,
         cache_action_rows,
+        cache_benefit_rows,
         sglang_cache_path_audit_rows,
         nat_inferred_priority_profile,
         args.report_label,
@@ -1999,6 +2169,7 @@ def main() -> None:
         nat_service_priority_rows,
         cache_signal_rows,
         cache_action_rows,
+        cache_benefit_rows,
         sglang_cache_path_audit_rows,
         nat_inferred_priority_profile,
         run_config,
@@ -2016,6 +2187,7 @@ def main() -> None:
             nat_service_priority_rows,
             cache_signal_rows,
             cache_action_rows,
+            cache_benefit_rows,
             sglang_cache_path_audit_rows,
             nat_inferred_priority_profile,
             run_config,
