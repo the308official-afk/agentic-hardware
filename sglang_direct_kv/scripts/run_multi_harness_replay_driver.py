@@ -606,7 +606,8 @@ def nemo_agent_toolkit_command(
     if not nat:
         raise FileNotFoundError("nat CLI not found; set HARNESS_NAT_BIN or install nvidia-nat.")
     wrapper_python = sys.executable
-    if nat_inferred_priority_enabled(str(meta.get("mode") or "")):
+    mode = str(meta.get("mode") or "")
+    if nat_inferred_priority_enabled(mode) or harness_emitted_signal_mode(mode):
         nat_python = os.environ.get("HARNESS_NAT_PYTHON")
         if nat_python:
             wrapper_python = nat_python
