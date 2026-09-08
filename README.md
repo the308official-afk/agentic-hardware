@@ -22,7 +22,7 @@ pressure levels, and multiple coding-agent harness shapes.
 | [sglang_direct_kv/README.md](sglang_direct_kv/README.md) | Long-form milestone notebook with historical detail. |
 | [sglang_direct_kv/scripts/](sglang_direct_kv/scripts/) | Experiment runners, workload drivers, report builders, and SGLang launch helpers. |
 | [aws/README.md](aws/README.md) | EC2 sync and connection workflow. |
-| [gh200/](gh200/) | GH200 sync, SSH, Docker run, smoke-test, and download helpers. |
+| [gh200/README.md](gh200/README.md) | Short GH200 setup and experiment run guide. |
 | [HARDWARE_EMULATION_ENVIRONMENT.md](HARDWARE_EMULATION_ENVIRONMENT.md) | Original hardware-emulation environment notes. |
 | [REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md](REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md) | Replay-path instrumentation design notes. |
 
