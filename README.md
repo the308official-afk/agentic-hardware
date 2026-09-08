@@ -253,6 +253,32 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+## Agent-Aware Controller Roadmap
+
+Use this as the phase checklist for integrating the one-worker agentic
+controller from the proposal. Each phase should land as a portable wrapper,
+adapter, or policy layer first; SGLang-specific code should stay in the
+smallest possible boundary adapter.
+
+| Phase | Status | Goal | Proof Before Moving On |
+| --- | --- | --- | --- |
+| Phase 0: Capability and integration map | Started | Detect which SGLang/harness/backend features are available on the current machine and version. | Capability report records priority, cache, prefill, KV movement, and live trace support for EC2 and GH200. |
+| Phase 1: Passive lifecycle controller | Implemented foundation | Observe agent lifecycle events without changing scheduling or KV behavior. | `controller_observe_only` emits controller decisions in traces and passes smoke/unit tests. |
+| Phase 2: Scheduler-only controller | Planned | Convert controller decisions into scheduler priority only, with no speculative KV work yet. | Under P3/P5, urgent replay requests move earlier in queue than baseline, with trace proof at the SGLang boundary. |
+| Phase 3: Gateway speculative KV preload | Planned | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | Report shows preload submitted before replay, matched to the same target request, with TTFT impact measured separately from queue delay. |
+| Phase 4: Targeted KV prefetch hook | Planned | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | Timestamp evidence shows requested KV blocks moved or became resident before replay compute starts. |
+| Phase 5: Demote and restore | Planned | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | Filler work is demoted during replay-critical windows and restored after, with no lost or starved requests. |
+| Phase 6: Admission and overload control | Planned | Decide when the system is too busy to accept more speculative work or urgent bursts. | P4/P5 runs show bounded speculative work, clear skip reasons, and no runaway queue growth. |
+| Phase 7: GH200 profile and scale-up | Planned | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | GH200 report uses the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
+
+Phase gate for each implementation slice:
+
+1. Add or update a portable policy/wrapper first.
+2. Add a smoke test or unit test that runs without a GPU.
+3. Run a small P0/P3 validation before a full ladder.
+4. Update the lightweight master report so the result is visible.
+5. Update this README and push to `main`.
+
 For NeMo Agent Toolkit / NAT, `pre_harness_priority_hints` uses NAT's OpenAI
 provider pass-through path. The generated NAT workflow includes
 `service_tier: priority` and `extra_body.agentic_hints.priority_class: urgent`;
