@@ -1670,19 +1670,12 @@ def svg_text_label(text: str, x: float, y: float, color: str, anchor: str = "mid
 
 
 def signal_marker_style(bucket: str) -> str:
-    if bucket == "harness_cache_emitted":
-        return "cache"
-    if bucket == "harness_cache_priority_emitted":
-        return "both"
     return "solid"
 
 
 def svg_symbol(kind: str, x: float, y: float, color: str, title: str, signal_style: str = "solid") -> str:
     escaped_title = html.escape(title)
-    fill = "#ffffff" if signal_style == "cache" else color
-    stroke_width = "2.6" if signal_style == "cache" else "2"
-    dash = ' stroke-dasharray="3 2"' if signal_style == "cache" else ""
-    common = f'fill="{fill}" stroke="{color}" stroke-width="{stroke_width}" opacity="0.9"{dash}'
+    common = f'fill="{color}" stroke="{color}" stroke-width="2" opacity="0.9"'
     if kind == "square":
         shape = f'<rect x="{x-5.5:.1f}" y="{y-5.5:.1f}" width="11" height="11" rx="2" {common}/>'
     elif kind == "triangle":
@@ -1721,19 +1714,7 @@ def svg_symbol(kind: str, x: float, y: float, color: str, title: str, signal_sty
         shape = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.2" fill="#ffffff" stroke="{color}" stroke-width="2.4" opacity="0.95"/>'
     else:
         shape = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.8" {common}/>'
-    decoration = ""
-    if signal_style == "cache":
-        dots = []
-        for i in range(8):
-            angle = i * math.pi / 4
-            dots.append(
-                f'<circle cx="{x + math.cos(angle) * 10.5:.1f}" cy="{y + math.sin(angle) * 10.5:.1f}" '
-                f'r="1.4" fill="{color}" opacity="0.9"/>'
-            )
-        decoration = "".join(dots)
-    elif signal_style == "both":
-        decoration = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.6" fill="#ffffff" stroke="{color}" stroke-width="1"/>'
-    return f'<g><title>{escaped_title}</title>{decoration}{shape}</g>'
+    return f'<g><title>{escaped_title}</title>{shape}</g>'
 
 
 def inline_symbol(kind: str, color: str) -> str:
@@ -1864,12 +1845,11 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
             index = 0
         return (index - (len(signal_buckets) - 1) / 2) * 18.0
 
-    def x_pos(pressure_index: int, harness_index: int, bucket: str, sample_index: int, sample_count: int) -> float:
+    def x_pos(pressure_index: int, harness_index: int, bucket: str) -> float:
         pressure_left = left + pressure_index * pressure_group_w
         harness_step = pressure_group_w / max(1, len(harnesses))
         base = pressure_left + harness_step * (harness_index + 0.5)
-        jitter = 0.0 if sample_count <= 1 else (sample_index - (sample_count - 1) / 2) * 3.2
-        return base + signal_offset(bucket) + jitter
+        return base + signal_offset(bucket)
 
     lines = [
         f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Replay Deadline Pressure Chart">',
@@ -1899,13 +1879,11 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
             )
             cursor += max(104, len(label) * 6.1 + 42)
         style_y = legend_y + 24
-        lines.append(f'<text x="{legend_x:.1f}" y="{style_y:.1f}" font-size="10" font-weight="700" fill="#334155">Style:</text>')
-        lines.append(svg_symbol("circle", legend_x + 68, style_y - 4, "#f97316", "cache/preload", "cache"))
-        lines.append(f'<text x="{legend_x + 86:.1f}" y="{style_y:.1f}" font-size="10" fill="#475569">dotted hollow = cache/preload</text>')
-        lines.append(svg_symbol("circle", legend_x + 270, style_y - 4, "#0891b2", "priority", "solid"))
-        lines.append(f'<text x="{legend_x + 288:.1f}" y="{style_y:.1f}" font-size="10" fill="#475569">solid = priority</text>')
-        lines.append(svg_symbol("circle", legend_x + 410, style_y - 4, "#16a34a", "cache + priority", "both"))
-        lines.append(f'<text x="{legend_x + 428:.1f}" y="{style_y:.1f}" font-size="10" fill="#475569">inner dot = cache + priority</text>')
+        lines.append(
+            f'<text x="{legend_x:.1f}" y="{style_y:.1f}" font-size="10" fill="#64748b">'
+            'Each dot is the median replay for that harness and signal path. Labels show n= when multiple replay requests were summarized.'
+            '</text>'
+        )
         lines.append(f'<text x="{legend_x:.1f}" y="{style_y + 21:.1f}" font-size="10" fill="#64748b">Harness identity is the sub-window label on the x-axis.</text>')
 
     def draw_panel(
@@ -1920,7 +1898,11 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         scale: str = "symlog",
     ) -> None:
         panel_bottom = panel_top + panel_h
-        panel_values = [value for row in rows if (value := optional_float(row.get(value_key))) is not None]
+        panel_values = []
+        for grouped_rows in rows_by_group_bucket.values():
+            values = [value for row in grouped_rows if (value := optional_float(row.get(value_key))) is not None]
+            if values:
+                panel_values.append(statistics.median(values))
         if not panel_values:
             panel_values = [0.0]
 
@@ -1955,7 +1937,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
             cx = x + pressure_group_w / 2
             lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
-            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+75:.1f}" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color/style = signal path</text>')
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+75:.1f}" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color = signal path</text>')
             harness_step = pressure_group_w / max(1, len(harnesses))
             for harness_index, harness in enumerate(harnesses):
                 harness_left = left + pressure_index * pressure_group_w + harness_step * harness_index
@@ -1985,35 +1967,25 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                     sample_rows = [row for row in sample_rows if optional_float(row.get(value_key)) is not None]
                     if not sample_rows:
                         continue
-                    med = statistics.median(float(row[value_key]) for row in sample_rows)
+                    values = [float(row[value_key]) for row in sample_rows]
+                    med = statistics.median(values)
                     color = chart_signal_color(bucket)
-                    mx = x_pos(pressure_index, harness_index, bucket, 0, 1)
+                    mx = x_pos(pressure_index, harness_index, bucket)
                     y = y_pos_panel(med)
-                    lines.append(f'<line x1="{mx-9:.1f}" x2="{mx+9:.1f}" y1="{y:.1f}" y2="{y:.1f}" stroke="{color}" stroke-width="3" stroke-linecap="round"/>')
                     label_y = y - 10 if bucket == "baseline" else y + 16
                     label_y = min(max(label_y, panel_top + 12), panel_bottom - 8)
-                    lines.append(svg_text_label(compact_ms(med), mx, label_y, color))
-                    for sample_index, row in enumerate(sample_rows):
-                        value = float(row[value_key])
-                        dot_x = x_pos(pressure_index, harness_index, bucket, sample_index, len(sample_rows))
-                        dot_y = y_pos_panel(value)
-                        raw_mode = str(row.get("mode") or "")
-                        title = (
-                            f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
-                            f"{HARNESS_LABELS.get(harness, harness)} | "
-                            f"{chart_signal_label(bucket)} | raw mode: {MODE_LABELS.get(raw_mode, raw_mode)} | "
-                            f"{value:.1f} {unit_label}"
-                        )
-                        lines.append(
-                            svg_symbol(
-                                "circle",
-                                dot_x,
-                                dot_y,
-                                color,
-                                title,
-                                signal_marker_style(bucket),
-                            )
-                        )
+                    label = compact_ms(med)
+                    if len(sample_rows) > 1:
+                        label = f"{label} n={len(sample_rows)}"
+                    lines.append(svg_text_label(label, mx, label_y, color))
+                    raw_modes = sorted({str(row.get("mode") or "") for row in sample_rows})
+                    title = (
+                        f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
+                        f"{HARNESS_LABELS.get(harness, harness)} | "
+                        f"{chart_signal_label(bucket)} | raw modes: {', '.join(MODE_LABELS.get(raw_mode, raw_mode) for raw_mode in raw_modes)} | "
+                        f"median {med:.1f} {unit_label} | n={len(sample_rows)}"
+                    )
+                    lines.append(svg_symbol("circle", mx, y, color, title, "solid"))
             lines.append(
                 f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" '
                 f'stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>'
@@ -2169,12 +2141,8 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
         '<div class="legend-card">'
         '<div class="legend-row"><strong>Signal color</strong>'
         f'<div class="legend-items">{"".join(signal_items)}</div></div>'
-        '<div class="legend-row"><strong>Harness emitted style</strong>'
-        '<div class="legend-items">'
-        '<span class="legend-item">dotted hollow = cache/preload signal</span>'
-        '<span class="legend-item">solid = priority signal</span>'
-        '<span class="legend-item">solid with inner dot = cache + priority</span>'
-        '</div></div>'
+        '<div class="legend-row"><strong>Dot meaning</strong>'
+        '<div class="legend-items"><span class="legend-item">Each dot is the median replay for one harness and signal path; n= means multiple replay requests were summarized.</span></div></div>'
         '<div class="legend-row"><strong>Harness</strong>'
         '<div class="legend-items"><span class="legend-item">Harness identity is shown by the x-axis sub-window label; marker shape is no longer used for harness identity.</span></div></div>'
         "</div>"
@@ -2300,7 +2268,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view with a compressed y-axis. Panel B shows the same deadline-pressure data on a normal linear y-axis. Panel C is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis, each harness has its own labeled sub-window, and signal path is encoded by color/style. Lower is better. Exact lower-level modes remain in the evidence file.</p>
+    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Panel A is the original deadline-pressure view with a compressed y-axis. Panel B shows the same deadline-pressure data on a normal linear y-axis. Panel C is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis, each harness has its own labeled sub-window, and signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence file.</p>
 <h2>Signal Family Definitions</h2>
 <p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
 <div class="card">{signal_family_definition_table}</div>
