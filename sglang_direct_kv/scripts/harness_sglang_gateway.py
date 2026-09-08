@@ -22,11 +22,13 @@ PRIORITY_ENABLED_MODES = {
     "nat_inferred_priority_hints",
     "e2e_priority_hints_speculative_prefill",
     "harness_emitted_signals",
+    "controller_scheduler_priority",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 CACHE_LOWER_MODE = "harness_native_cache_lowered"
 HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
+CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CACHE_SIGNAL_MODES = {
     "no_cache_signal",
     CACHE_LOWER_MODE,
@@ -259,6 +261,13 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     if not priority_enabled(str(meta.get("mode") or "")):
         return None
     phase = str(meta.get("phase") or "")
+    if str(meta.get("mode") or "") == CONTROLLER_SCHEDULER_PRIORITY_MODE:
+        if phase != "replay":
+            return None
+        try:
+            return int(float(meta.get("controller_sglang_priority")))
+        except (TypeError, ValueError):
+            return None
     if phase == "speculative_prefill":
         return int(meta.get("speculative_prefill_priority") or 50)
     if str(meta.get("mode") or "") == HARNESS_EMITTED_SIGNAL_MODE:
@@ -492,6 +501,11 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
             source = "experiment_marker_priority_intent"
         else:
             source = "none"
+    elif mode == CONTROLLER_SCHEDULER_PRIORITY_MODE:
+        if priority is not None:
+            source = "controller_ready_decision"
+        else:
+            source = "none"
     elif str(meta.get("phase") or "") == "speculative_prefill":
         source = "speculative_prefill_background_priority"
     elif mode == HARNESS_EMITTED_SIGNAL_MODE:
@@ -545,6 +559,9 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "harness_emit_priority_signal": priority_chain["harness_emit_priority_signal"],
         "gateway_priority_translation": priority_chain["gateway_priority_translation"],
         "gateway_priority_translation_source": priority_chain["gateway_priority_translation_source"],
+        "controller_decision_id": meta.get("controller_decision_id", ""),
+        "controller_command_id": meta.get("controller_command_id", ""),
+        "controller_priority_translation": meta.get("controller_priority_translation", ""),
         "harness_native_cache_signal_seen": cache_chain["harness_native_cache_signal_seen"],
         "harness_native_cache_signal": cache_chain["harness_native_cache_signal"],
         "gateway_cache_translation": cache_chain["gateway_cache_translation"],
@@ -578,6 +595,9 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "speculative_prefill": bool(meta.get("speculative_prefill")),
             "speculative_prefill_role": meta.get("speculative_prefill_role", ""),
             "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
+            "controller_decision_id": meta.get("controller_decision_id", ""),
+            "controller_command_id": meta.get("controller_command_id", ""),
+            "controller_priority_translation": meta.get("controller_priority_translation", ""),
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
@@ -876,6 +896,9 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "speculative_prefill": bool(meta.get("speculative_prefill")),
                 "speculative_prefill_role": meta.get("speculative_prefill_role", ""),
                 "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
+                "controller_decision_id": meta.get("controller_decision_id", ""),
+                "controller_command_id": meta.get("controller_command_id", ""),
+                "controller_priority_translation": meta.get("controller_priority_translation", ""),
                 "parent_request_id": meta.get("parent_request_id", ""),
                 "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
                 "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),

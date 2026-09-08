@@ -8,6 +8,7 @@ from agentic_kv.controller import (
     ControllerPolicy,
     ControllerStateStore,
     EventType,
+    GatewayPriorityBackendAdapter,
     KVAction,
     PolicyConfig,
     SchedulerAction,
@@ -94,6 +95,39 @@ class AgenticControllerTests(unittest.TestCase):
         self.assertFalse(decision.observed_only)
         self.assertIs(decision.commands[0].scheduler_action, SchedulerAction.SET_PRIORITY)
         self.assertEqual(decision.commands[0].priority, 100)
+
+    def test_gateway_priority_adapter_acts_only_on_set_priority(self) -> None:
+        store = ControllerStateStore()
+        ready_state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-ready",
+                event=EventType.TOOL_COMPLETED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=120,
+                execution_priority=100,
+            )
+        )
+        wait_state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s2",
+                prefix_id="p2",
+                monotonic_ms=0,
+                expected_completion_ms=1000,
+            )
+        )
+        policy = ControllerPolicy(PolicyConfig(observe_only=False))
+        backend = GatewayPriorityBackendAdapter()
+
+        ready_decision = policy.plan(ready_state, backend.capabilities(), now_ms=120)
+        ready_result = backend.apply(ready_decision.commands[0])
+        self.assertTrue(ready_result.acted)
+
+        wait_decision = policy.plan(wait_state, backend.capabilities(), now_ms=0)
+        wait_result = backend.apply(wait_decision.commands[0])
+        self.assertFalse(wait_result.acted)
 
 
 if __name__ == "__main__":

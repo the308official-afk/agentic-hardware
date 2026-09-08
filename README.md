@@ -218,6 +218,7 @@ The current manager-facing comparisons use these modes:
 | `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
 | `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
 | `controller_observe_only` | Portable controller phase 1. The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang. |
+| `controller_scheduler_priority` | Portable controller phase 2. The controller observes replay readiness and lowers only its ready-phase priority decision to SGLang scheduler priority. |
 
 ## Portable Agent-Aware Controller Foundation
 
@@ -253,6 +254,17 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Small scheduler-priority controller run:
+
+```bash
+cd sglang_direct_kv
+SIGNAL_FAMILIES=controller_scheduler \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p0_control p3_high" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 ## Agent-Aware Controller Roadmap
 
 Use this as the phase checklist for integrating the one-worker agentic
@@ -264,7 +276,7 @@ smallest possible boundary adapter.
 | --- | --- | --- | --- |
 | Phase 0: Capability and integration map | Started | Detect which SGLang/harness/backend features are available on the current machine and version. | Capability report records priority, cache, prefill, KV movement, and live trace support for EC2 and GH200. |
 | Phase 1: Passive lifecycle controller | Validated on EC2 | Observe agent lifecycle events without changing scheduling or KV behavior. | `controller_observe_only` emitted tool-start, prepare-checkpoint, tool-complete, and session-finish decisions for Hatcher/DeepAgents and NAT at P0/P3; all backend results were observe-only. |
-| Phase 2: Scheduler-only controller | Planned | Convert controller decisions into scheduler priority only, with no speculative KV work yet. | Under P3/P5, urgent replay requests move earlier in queue than baseline, with trace proof at the SGLang boundary. |
+| Phase 2: Scheduler-only controller | Started; Hatcher/DeepAgents P0/P3 validated on EC2 | Convert controller decisions into scheduler priority only, with no speculative KV work yet. | Initial proof shows `tool_completed` produces `set_priority=100`, gateway source is `controller_ready_decision`, and SGLang scheduler receives the replay with priority `100`. Full proof still needs P3/P5 baseline comparison. |
 | Phase 3: Gateway speculative KV preload | Planned | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | Report shows preload submitted before replay, matched to the same target request, with TTFT impact measured separately from queue delay. |
 | Phase 4: Targeted KV prefetch hook | Planned | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | Timestamp evidence shows requested KV blocks moved or became resident before replay compute starts. |
 | Phase 5: Demote and restore | Planned | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | Filler work is demoted during replay-critical windows and restored after, with no lost or starved requests. |

@@ -23,6 +23,7 @@ from agentic_kv.controller import (
     ControllerPolicy,
     ControllerStateStore,
     EventType,
+    GatewayPriorityBackendAdapter,
     ObserveOnlyBackendAdapter,
     PolicyConfig,
 )
@@ -51,12 +52,14 @@ SUPPORTED_MODES = (
     "harness_native_cache_lowered",
     "harness_emitted_signals",
     "controller_observe_only",
+    "controller_scheduler_priority",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 HARNESS_NATIVE_CACHE_MODE = "harness_native_cache_lowered"
 HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
+CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -147,6 +150,14 @@ def harness_emitted_signal_mode(mode: str) -> bool:
 
 def controller_observe_only_mode(mode: str) -> bool:
     return mode == CONTROLLER_OBSERVE_ONLY_MODE
+
+
+def controller_scheduler_priority_mode(mode: str) -> bool:
+    return mode == CONTROLLER_SCHEDULER_PRIORITY_MODE
+
+
+def controller_mode(mode: str) -> bool:
+    return controller_observe_only_mode(mode) or controller_scheduler_priority_mode(mode)
 
 
 def nat_inferred_node_for_phase(phase: str) -> dict[str, Any]:
@@ -1091,27 +1102,42 @@ async def main_async() -> None:
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     workload_start = time.perf_counter()
-    controller_enabled = controller_observe_only_mode(args.mode)
+    controller_enabled = controller_mode(args.mode)
+    controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
-            observe_only=True,
+            observe_only=not controller_active_priority,
             prepare_window_ms=max(25, args.tool_wait_ms),
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
     )
-    controller_backend = ObserveOnlyBackendAdapter(
-        BackendCapabilities(
-            priority_queue=True,
-            background_prefill_budget=True,
-            kv_demote=True,
-            kv_prefetch=True,
-            kv_release=True,
-            live_metrics=True,
-            observe_only=True,
-            backend_name="controller_observe_only",
+    if controller_active_priority:
+        controller_backend = GatewayPriorityBackendAdapter(
+            BackendCapabilities(
+                priority_queue=True,
+                background_prefill_budget=False,
+                kv_demote=False,
+                kv_prefetch=False,
+                kv_release=False,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=CONTROLLER_SCHEDULER_PRIORITY_MODE,
+            )
         )
-    )
+    else:
+        controller_backend = ObserveOnlyBackendAdapter(
+            BackendCapabilities(
+                priority_queue=True,
+                background_prefill_budget=True,
+                kv_demote=True,
+                kv_prefetch=True,
+                kv_release=True,
+                live_metrics=True,
+                observe_only=True,
+                backend_name="controller_observe_only",
+            )
+        )
     if args.mode == NAT_INFERRED_PRIORITY_MODE or (
         args.mode == HARNESS_EMITTED_SIGNAL_MODE and args.harness == "nemo_agent_toolkit"
     ):
@@ -1147,9 +1173,9 @@ async def main_async() -> None:
         expected_completion_ms: int | None = None,
         deadline_after_completion_ms: int | None = None,
         eta_uncertainty_ms: int | None = None,
-    ) -> None:
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         if not controller_enabled:
-            return
+            return None
         event = controller_event_from_meta(
             event_id,
             event_type,
@@ -1162,6 +1188,7 @@ async def main_async() -> None:
         state, accepted = controller_store.apply_event(event)
         decision = controller_policy.plan(state, controller_backend.capabilities(), now_ms=monotonic_ms)
         results = [controller_backend.apply(command).to_dict() for command in decision.commands]
+        decision_row = decision.to_dict()
         write_trace(
             args.trace,
             {
@@ -1171,7 +1198,7 @@ async def main_async() -> None:
                 "controller_event_id": event.event_id,
                 "controller_event_accepted": accepted,
                 "controller_phase": state.phase.value,
-                "controller_decision": decision.to_dict(),
+                "controller_decision": decision_row,
                 "controller_backend_results": results,
                 "session_id": event.session_id,
                 "prefix_id": event.prefix_id,
@@ -1181,6 +1208,7 @@ async def main_async() -> None:
                 "offset_ms": round(offset_ms(), 3),
             },
         )
+        return decision_row, results
 
     write_trace(
         args.trace,
@@ -1473,7 +1501,7 @@ async def main_async() -> None:
                 "replay_due_offset_ms": round(replay_due_ms, 3),
             },
         )
-        record_controller_event(
+        controller_ready_result = record_controller_event(
             f"{pair.session_id}:tool_completed",
             EventType.TOOL_COMPLETED,
             {**base_meta, "session_id": pair.session_id, "phase": "replay", "label": f"{pair.session_id}_replay"},
@@ -1482,6 +1510,30 @@ async def main_async() -> None:
             deadline_after_completion_ms=args.tool_wait_ms,
             eta_uncertainty_ms=0,
         )
+        controller_replay_priority: int | None = None
+        controller_decision_id = ""
+        controller_command_id = ""
+        if controller_ready_result is not None:
+            decision_row, backend_results = controller_ready_result
+            controller_decision_id = str(decision_row.get("decision_id") or "")
+            acted_command_ids = {
+                str(result.get("command_id"))
+                for result in backend_results
+                if result.get("acted")
+            }
+            for command in decision_row.get("commands") or []:
+                if not isinstance(command, dict):
+                    continue
+                if command.get("scheduler_action") != "set_priority":
+                    continue
+                if str(command.get("command_id") or "") not in acted_command_ids:
+                    continue
+                try:
+                    controller_replay_priority = int(command.get("priority"))
+                    controller_command_id = str(command.get("command_id") or "")
+                    break
+                except (TypeError, ValueError):
+                    continue
         replay_meta = {
             **base_meta,
             "session_id": pair.session_id,
@@ -1493,6 +1545,15 @@ async def main_async() -> None:
             "deadline_offset_ms": round(replay_due_ms, 3),
             "max_tokens": 8,
         }
+        if controller_replay_priority is not None:
+            replay_meta.update(
+                {
+                    "controller_sglang_priority": controller_replay_priority,
+                    "controller_decision_id": controller_decision_id,
+                    "controller_command_id": controller_command_id,
+                    "controller_priority_translation": f"controller.set_priority={controller_replay_priority}",
+                }
+            )
         replay_meta = attach_harness_priority_metadata(replay_meta)
         await bounded_request(pair.replay_prompt, replay_meta)
         record_controller_event(

@@ -4,7 +4,7 @@ The controller package owns backend-neutral lifecycle state and policy. Backend
 packages adapt its versioned commands to a specific SGLang release.
 """
 
-from .backend import BackendAdapter, BackendActionResult, ObserveOnlyBackendAdapter
+from .backend import BackendAdapter, BackendActionResult, GatewayPriorityBackendAdapter, ObserveOnlyBackendAdapter
 from .models import (
     BackendCapabilities,
     ControllerCommand,
@@ -29,6 +29,7 @@ __all__ = [
     "ControllerPolicy",
     "ControllerStateStore",
     "EventType",
+    "GatewayPriorityBackendAdapter",
     "KVAction",
     "ObserveOnlyBackendAdapter",
     "PolicyConfig",

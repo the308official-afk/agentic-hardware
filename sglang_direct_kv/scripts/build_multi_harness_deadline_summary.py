@@ -54,6 +54,7 @@ MODE_LABELS = {
     "harness_native_cache_lowered": "HC = Harness native cache lowered",
     "harness_emitted_signals": "HE = Harness emitted signals",
     "controller_observe_only": "CO = Controller observe-only",
+    "controller_scheduler_priority": "CP = Controller scheduler priority",
 }
 
 MODE_COLORS = {
@@ -66,6 +67,7 @@ MODE_COLORS = {
     "harness_native_cache_lowered": "#f97316",
     "harness_emitted_signals": "#16a34a",
     "controller_observe_only": "#0f172a",
+    "controller_scheduler_priority": "#be123c",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -125,6 +127,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#0f172a",
         "modes": {"controller_observe_only"},
     },
+    "controller_scheduler": {
+        "label": "Controller Scheduler Priority",
+        "description": "Portable controller observed replay readiness and lowered its ready decision to SGLang priority",
+        "color": "#be123c",
+        "modes": {"controller_scheduler_priority"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -137,6 +145,7 @@ CHART_SIGNAL_ORDER = (
     "gateway_priority_injected",
     "gateway_speculative_prefill",
     "controller_observe",
+    "controller_scheduler",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -240,6 +249,12 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "Portable controller sidecar",
         "what_it_means": "The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang.",
         "raw_modes": "controller_observe_only",
+    },
+    {
+        "family": "Controller scheduler priority",
+        "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
+        "what_it_means": "The controller consumes lifecycle state and, when replay is ready, authorizes SGLang scheduler priority. No speculative KV work is enabled in this phase.",
+        "raw_modes": "controller_scheduler_priority",
     },
 ]
 
@@ -1807,6 +1822,10 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         return "baseline"
     if mode == "controller_observe_only":
         return "controller_observe"
+    if mode == "controller_scheduler_priority":
+        if has_value(row.get("sglang_priority")) and row.get("gateway_priority_translation_source") == "controller_ready_decision":
+            return "controller_scheduler"
+        return "baseline"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket
