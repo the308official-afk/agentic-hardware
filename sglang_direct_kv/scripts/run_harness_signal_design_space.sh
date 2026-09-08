@@ -8,7 +8,7 @@ cd "${DIRECT_ROOT}"
 
 SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch"
+  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -32,6 +32,7 @@ CONTROLLER_OBSERVE_MODES="${CONTROLLER_OBSERVE_MODES:-controller_observe_only}"
 CONTROLLER_SCHEDULER_MODES="${CONTROLLER_SCHEDULER_MODES:-controller_scheduler_priority}"
 CONTROLLER_PRELOAD_MODES="${CONTROLLER_PRELOAD_MODES:-controller_speculative_preload}"
 CONTROLLER_TARGETED_PREFETCH_MODES="${CONTROLLER_TARGETED_PREFETCH_MODES:-controller_targeted_kv_prefetch}"
+CONTROLLER_DEMOTE_RESTORE_MODES="${CONTROLLER_DEMOTE_RESTORE_MODES:-controller_demote_restore}"
 DRY_RUN="${DRY_RUN:-0}"
 
 if [[ "${REPORT_BUILDER_MODE}" != "lightweight" ]]; then
@@ -83,10 +84,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch) ;;
+      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch all" >&2
+        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore all" >&2
         exit 2
         ;;
     esac
@@ -170,6 +171,7 @@ write_combined_run_config() {
     echo "CONTROLLER_SCHEDULER_MODES=${CONTROLLER_SCHEDULER_MODES}"
     echo "CONTROLLER_PRELOAD_MODES=${CONTROLLER_PRELOAD_MODES}"
     echo "CONTROLLER_TARGETED_PREFETCH_MODES=${CONTROLLER_TARGETED_PREFETCH_MODES}"
+    echo "CONTROLLER_DEMOTE_RESTORE_MODES=${CONTROLLER_DEMOTE_RESTORE_MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
@@ -267,6 +269,11 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_targeted_prefetch:direct_kv")"
+  elif [[ "${family}" == "controller_demote_restore" ]]; then
+    for mode in ${CONTROLLER_DEMOTE_RESTORE_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_demote_restore:background_priority_window")"
   fi
 done
 
@@ -304,6 +311,9 @@ fi
 if word_in_list "controller_targeted_prefetch" "${SIGNAL_FAMILIES}"; then
   echo "- controller_targeted_prefetch -> ${CONTROLLER_TARGETED_PREFETCH_MODES}"
 fi
+if word_in_list "controller_demote_restore" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_demote_restore -> ${CONTROLLER_DEMOTE_RESTORE_MODES}"
+fi
 echo "Combined mode set for final report: ${EXPANDED_MODES}"
 
 if word_in_list "baseline" "${SIGNAL_FAMILIES}"; then
@@ -336,6 +346,10 @@ fi
 
 if word_in_list "controller_targeted_prefetch" "${SIGNAL_FAMILIES}"; then
   run_family_piece "controller_targeted_prefetch" "direct_kv" "${CONTROLLER_TARGETED_PREFETCH_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "controller_demote_restore" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_demote_restore" "background_priority_window" "${CONTROLLER_DEMOTE_RESTORE_MODES}" "${HARNESSES}"
 fi
 
 write_combined_run_config

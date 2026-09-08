@@ -289,6 +289,17 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Small demote/restore controller run:
+
+```bash
+cd sglang_direct_kv
+SIGNAL_FAMILIES=controller_demote_restore \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p1_mild p3_high" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 ## Agent-Aware Controller Roadmap
 
 Use this as the phase checklist for integrating the one-worker agentic
@@ -303,7 +314,7 @@ smallest possible boundary adapter.
 | Phase 2: Scheduler-only controller | Mechanically validated on EC2; outcome mixed | Convert controller decisions into scheduler priority only, with no speculative KV work yet. | Proof shows `tool_completed` produces `set_priority=100`, gateway source is `controller_ready_decision`, and SGLang scheduler receives the replay with priority `100`. A Hatcher/DeepAgents P3/P5 comparison showed P3 worse in one run and P5 median slightly better, so repeated samples are needed before claiming a performance win. |
 | Phase 3: Gateway speculative KV preload | Mechanically validated on EC2; timing mixed | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | `controller_speculative_preload` accepts a controller `kv_action=prefetch` decision and lowers it to a gateway background warmup request. A Hatcher/DeepAgents P1/P2 validation showed controller warmup launch from the driver, warmup completion before SGLang received replay, and cached-prefix evidence on replay. P2 still missed the stricter warmup-before-deadline proof, so the next phase needs earlier prediction or admission control. |
 | Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, and any matching SGLang load-back or host-to-device copy before replay compute. If no stable direct hook exists, the evidence table says so explicitly. |
-| Phase 5: Demote and restore | Planned | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | Filler work is demoted during replay-critical windows and restored after, with no lost or starved requests. |
+| Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
 | Phase 6: Admission and overload control | Planned | Decide when the system is too busy to accept more speculative work or urgent bursts. | P4/P5 runs show bounded speculative work, clear skip reasons, and no runaway queue growth. |
 | Phase 7: GH200 profile and scale-up | Planned | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | GH200 report uses the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 

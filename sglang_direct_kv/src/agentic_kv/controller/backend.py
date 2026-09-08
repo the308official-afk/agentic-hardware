@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import os
 from typing import Protocol
 
-from .models import BackendCapabilities, ControllerCommand, SchedulerAction
+from .models import BackendCapabilities, ControllerCommand, KVAction, SchedulerAction
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,63 @@ class GatewayPriorityBackendAdapter:
             accepted=True,
             acted=False,
             reason="controller command recorded but not active in scheduler-only mode",
+            backend_name=self._capabilities.backend_name,
+        )
+
+
+class GatewayDemoteRestoreBackendAdapter:
+    """Adapter for portable demote/restore experiments.
+
+    Demotion and restoration are lowered at the gateway request boundary. This
+    adapter records that the controller command is accepted, without depending
+    on a private SGLang API for in-place queue manipulation.
+    """
+
+    def __init__(self, capabilities: BackendCapabilities | None = None) -> None:
+        self._capabilities = capabilities or BackendCapabilities(
+            priority_queue=True,
+            kv_demote=True,
+            kv_release=True,
+            live_metrics=True,
+            observe_only=False,
+            backend_name="controller_demote_restore",
+        )
+        self.commands: list[ControllerCommand] = []
+
+    def capabilities(self) -> BackendCapabilities:
+        return self._capabilities
+
+    def apply(self, command: ControllerCommand) -> BackendActionResult:
+        self.commands.append(command)
+        if command.kv_action is KVAction.DEMOTE:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller demote accepted for gateway lowering of background traffic",
+                backend_name=self._capabilities.backend_name,
+            )
+        if command.scheduler_action is SchedulerAction.SET_PRIORITY and command.priority is not None:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller replay priority accepted during demote/restore window",
+                backend_name=self._capabilities.backend_name,
+            )
+        if command.kv_action is KVAction.RELEASE:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller restore/release accepted after replay",
+                backend_name=self._capabilities.backend_name,
+            )
+        return BackendActionResult(
+            command_id=command.command_id,
+            accepted=True,
+            acted=False,
+            reason="controller command recorded but not active in demote/restore mode",
             backend_name=self._capabilities.backend_name,
         )
 

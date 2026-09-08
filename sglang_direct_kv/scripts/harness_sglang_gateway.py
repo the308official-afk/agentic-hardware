@@ -23,12 +23,18 @@ PRIORITY_ENABLED_MODES = {
     "e2e_priority_hints_speculative_prefill",
     "harness_emitted_signals",
     "controller_scheduler_priority",
+    "controller_demote_restore",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 CACHE_LOWER_MODE = "harness_native_cache_lowered"
 HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
+CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
+CONTROLLER_PRIORITY_MODES = {
+    CONTROLLER_SCHEDULER_PRIORITY_MODE,
+    CONTROLLER_DEMOTE_RESTORE_MODE,
+}
 CACHE_SIGNAL_MODES = {
     "no_cache_signal",
     CACHE_LOWER_MODE,
@@ -261,7 +267,10 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     if not priority_enabled(str(meta.get("mode") or "")):
         return None
     phase = str(meta.get("phase") or "")
-    if str(meta.get("mode") or "") == CONTROLLER_SCHEDULER_PRIORITY_MODE:
+    mode = str(meta.get("mode") or "")
+    if mode in CONTROLLER_PRIORITY_MODES:
+        if mode == CONTROLLER_DEMOTE_RESTORE_MODE and phase == "pressure_filler":
+            return int(meta.get("controller_demote_priority") or meta.get("low_priority") or -100)
         if phase != "replay":
             return None
         try:
@@ -501,9 +510,13 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
             source = "experiment_marker_priority_intent"
         else:
             source = "none"
-    elif mode == CONTROLLER_SCHEDULER_PRIORITY_MODE:
+    elif mode in CONTROLLER_PRIORITY_MODES:
         if priority is not None:
-            source = "controller_ready_decision"
+            source = (
+                "controller_demote_window"
+                if mode == CONTROLLER_DEMOTE_RESTORE_MODE and str(meta.get("phase") or "") == "pressure_filler"
+                else "controller_ready_decision"
+            )
         else:
             source = "none"
     elif str(meta.get("phase") or "") == "speculative_prefill":
@@ -562,6 +575,10 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "controller_decision_id": meta.get("controller_decision_id", ""),
         "controller_command_id": meta.get("controller_command_id", ""),
         "controller_priority_translation": meta.get("controller_priority_translation", ""),
+        "controller_demote_restore_active": meta.get("controller_demote_restore_active", ""),
+        "controller_demote_decision_id": meta.get("controller_demote_decision_id", ""),
+        "controller_demote_command_id": meta.get("controller_demote_command_id", ""),
+        "controller_demote_translation": meta.get("controller_demote_translation", ""),
         "harness_native_cache_signal_seen": cache_chain["harness_native_cache_signal_seen"],
         "harness_native_cache_signal": cache_chain["harness_native_cache_signal"],
         "gateway_cache_translation": cache_chain["gateway_cache_translation"],
@@ -598,6 +615,10 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "controller_decision_id": meta.get("controller_decision_id", ""),
             "controller_command_id": meta.get("controller_command_id", ""),
             "controller_priority_translation": meta.get("controller_priority_translation", ""),
+            "controller_demote_restore_active": meta.get("controller_demote_restore_active", ""),
+            "controller_demote_decision_id": meta.get("controller_demote_decision_id", ""),
+            "controller_demote_command_id": meta.get("controller_demote_command_id", ""),
+            "controller_demote_translation": meta.get("controller_demote_translation", ""),
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),

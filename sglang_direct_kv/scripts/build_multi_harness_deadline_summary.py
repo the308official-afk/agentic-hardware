@@ -17,7 +17,7 @@ from typing import Any
 
 
 HARNESS_LABELS = {
-    "hatcher": "Hatcher",
+    "hatcher": "DeepAgents",
     "codex": "Codex",
     "claude_code": "Claude Code",
     "opencode": "OpenCode",
@@ -31,7 +31,7 @@ HARNESS_LABELS = {
 }
 
 HARNESS_SHORT_LABELS = {
-    "hatcher": "Hatcher",
+    "hatcher": "DeepAgents",
     "codex": "Codex",
     "claude_code": "Claude",
     "opencode": "OpenCode",
@@ -57,6 +57,7 @@ MODE_LABELS = {
     "controller_scheduler_priority": "CP = Controller scheduler priority",
     "controller_speculative_preload": "CL = Controller speculative KV preload",
     "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
+    "controller_demote_restore": "CD = Controller demote/restore",
 }
 
 MODE_COLORS = {
@@ -72,6 +73,7 @@ MODE_COLORS = {
     "controller_scheduler_priority": "#be123c",
     "controller_speculative_preload": "#9333ea",
     "controller_targeted_kv_prefetch": "#f59e0b",
+    "controller_demote_restore": "#0d9488",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -149,6 +151,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#f59e0b",
         "modes": {"controller_targeted_kv_prefetch"},
     },
+    "controller_demote_restore": {
+        "label": "Controller Demote/Restore",
+        "description": "Portable controller lowers background/filler traffic during the replay-critical window, raises replay, then restores normal background behavior",
+        "color": "#0d9488",
+        "modes": {"controller_demote_restore"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -164,6 +172,7 @@ CHART_SIGNAL_ORDER = (
     "controller_scheduler",
     "controller_preload",
     "controller_targeted_prefetch",
+    "controller_demote_restore",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -822,6 +831,119 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
                     "first_movement_before_sglang_receive": "yes" if movement_before_receive else "no",
                     "first_movement_before_replay_compute": "yes" if movement_before_compute else "no",
                     "backend_reason": requested.get("backend_reason", outcome.get("backend_reason", "")),
+                    "verdict": verdict,
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                }
+            )
+    return proof_rows
+
+
+def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_by_session = {
+        (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
+        for row in replay_rows
+        if row.get("mode") == "controller_demote_restore"
+    }
+    proof_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        demote_events = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_demote_restore.demote_start"
+        ]
+        if not demote_events:
+            continue
+        request_starts = [row for row in trace_rows if row.get("event") == "m27.request.start"]
+        restore_events = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_demote_restore.restored"
+        ]
+        for demote in demote_events:
+            session_id = str(demote.get("session_id") or "")
+            replay_row = replay_by_session.get((str(case_dir), session_id), {})
+            demote_ts_ns = int(float_value(demote.get("ts_ns")))
+            replay_start_ts_ns = int(float_value(replay_row.get("request_start_ts_ns")))
+            replay_due_ts_ns = int(float_value(replay_row.get("replay_due_ts_ns")))
+            restore = next((row for row in restore_events if str(row.get("session_id") or "") == session_id), {})
+            restore_ts_ns = int(float_value(restore.get("ts_ns")))
+            filler_prefix = f"{session_id}_pressure_"
+            filler_rows = [
+                row
+                for row in request_starts
+                if str(row.get("phase") or "") == "pressure_filler"
+                and str(row.get("session_id") or "").startswith(filler_prefix)
+            ]
+            filler_demoted = [
+                row for row in filler_rows if optional_float(row.get("sglang_priority")) is not None and float_value(row.get("sglang_priority")) < 0
+            ]
+            filler_not_demoted = [
+                row
+                for row in filler_rows
+                if not (optional_float(row.get("sglang_priority")) is not None and float_value(row.get("sglang_priority")) < 0)
+            ]
+            filler_before_replay = [
+                row
+                for row in filler_rows
+                if demote_ts_ns
+                and int(float_value(row.get("ts_ns")))
+                and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                and (not replay_start_ts_ns or int(float_value(row.get("ts_ns"))) <= replay_start_ts_ns)
+            ]
+            replay_priority = optional_float(replay_row.get("sglang_priority"))
+            demote_acted = is_truthy_text(demote.get("backend_acted"))
+            restore_acted = is_truthy_text(restore.get("backend_acted"))
+            replay_raised = replay_priority is not None and replay_priority >= 100
+            if demote_acted and filler_rows and not filler_not_demoted and replay_raised and restore_acted:
+                verdict = "filler traffic was demoted, replay was raised, and restore was recorded"
+            elif demote_acted and not filler_rows and replay_raised and restore_acted:
+                verdict = "demote/restore acted, but this pressure level had no filler requests"
+            elif demote_acted and filler_demoted and replay_raised:
+                verdict = "demotion and replay raise were seen; restore proof is incomplete"
+            elif demote_acted:
+                verdict = "demote command acted, but request-level proof is incomplete"
+            else:
+                verdict = "demote command did not act"
+            proof_rows.append(
+                {
+                    "harness_label": replay_row.get(
+                        "harness_label",
+                        HARNESS_LABELS.get(str(demote.get("harness") or ""), str(demote.get("harness") or "")),
+                    ),
+                    "pressure_level_label": replay_row.get(
+                        "pressure_level_label",
+                        PRESSURE_LABELS.get(str(demote.get("pressure_level") or ""), str(demote.get("pressure_level") or "")),
+                    ),
+                    "mode_label": MODE_LABELS.get("controller_demote_restore", "controller_demote_restore"),
+                    "session_id": session_id,
+                    "demote_command_id": demote.get("controller_command_id", ""),
+                    "demote_backend_acted": "yes" if demote_acted else "no",
+                    "demoted_priority": demote.get("demoted_priority", ""),
+                    "filler_requests_seen": len(filler_rows),
+                    "filler_requests_between_demote_and_replay": len(filler_before_replay),
+                    "filler_demoted_count": len(filler_demoted),
+                    "filler_not_demoted_count": len(filler_not_demoted),
+                    "replay_request_id": replay_row.get("request_id", ""),
+                    "replay_sglang_priority": replay_row.get("sglang_priority", ""),
+                    "replay_priority_raised": "yes" if replay_raised else "no",
+                    "restore_command_id": restore.get("controller_command_id", ""),
+                    "restore_backend_acted": "yes" if restore_acted else "no",
+                    "demote_to_replay_due_ms": (
+                        round(ns_to_ms_delta(demote_ts_ns, replay_due_ts_ns), 3)
+                        if ns_to_ms_delta(demote_ts_ns, replay_due_ts_ns) is not None
+                        else ""
+                    ),
+                    "demote_to_replay_start_ms": (
+                        round(ns_to_ms_delta(demote_ts_ns, replay_start_ts_ns), 3)
+                        if ns_to_ms_delta(demote_ts_ns, replay_start_ts_ns) is not None
+                        else ""
+                    ),
+                    "replay_to_restore_ms": (
+                        round(ns_to_ms_delta(replay_start_ts_ns, restore_ts_ns), 3)
+                        if ns_to_ms_delta(replay_start_ts_ns, restore_ts_ns) is not None
+                        else ""
+                    ),
+                    "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
                     "verdict": verdict,
                     "case_id": case_dir.name,
                     "case_dir": str(case_dir),
@@ -1678,6 +1800,33 @@ TARGETED_KV_PREFETCH_COLUMNS = [
     "first_movement_before_sglang_receive",
     "first_movement_before_replay_compute",
     "backend_reason",
+    "verdict",
+    "case_id",
+    "case_dir",
+]
+
+
+CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "session_id",
+    "demote_command_id",
+    "demote_backend_acted",
+    "demoted_priority",
+    "filler_requests_seen",
+    "filler_requests_between_demote_and_replay",
+    "filler_demoted_count",
+    "filler_not_demoted_count",
+    "replay_request_id",
+    "replay_sglang_priority",
+    "replay_priority_raised",
+    "restore_command_id",
+    "restore_backend_acted",
+    "demote_to_replay_due_ms",
+    "demote_to_replay_start_ms",
+    "replay_to_restore_ms",
+    "first_token_lateness_ms",
     "verdict",
     "case_id",
     "case_dir",
@@ -2743,6 +2892,7 @@ def render_html(
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
+    controller_demote_restore_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -2899,6 +3049,7 @@ def render_evidence_html(
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
+    controller_demote_restore_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -2940,6 +3091,10 @@ def render_evidence_html(
     )
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     targeted_kv_prefetch_table = render_table(targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
+    controller_demote_restore_table = render_table(
+        controller_demote_restore_rows,
+        CONTROLLER_DEMOTE_RESTORE_COLUMNS,
+    )
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -3026,6 +3181,9 @@ a {{ color: #2563eb; }}
 <h2>Targeted KV Prefetch Proof</h2>
 <p>This table appears when the run includes <code>controller_targeted_kv_prefetch</code>. It proves whether the controller requested explicit target-prefix KV movement, whether the active SGLang adapter exposed a direct hook, and whether load-back or host-to-device movement was observed before replay compute.</p>
 <div class="card">{targeted_kv_prefetch_table if targeted_kv_prefetch_rows else "<p>No targeted KV prefetch rows found in this run.</p>"}</div>
+<h2>Controller Demote/Restore Proof</h2>
+<p>This table appears when the run includes <code>controller_demote_restore</code>. It proves whether background/filler traffic was lowered during the target replay window, whether the replay itself was raised to SGLang priority, and whether normal behavior was restored afterward.</p>
+<div class="card">{controller_demote_restore_table if controller_demote_restore_rows else "<p>No controller demote/restore rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code> or <code>harness_emitted_signals</code>. It proves whether a background <code>max_tokens=1</code> warmup was sent before replay, whether it was triggered by gateway speculative KV preload, and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -3049,6 +3207,7 @@ def write_manifest(
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
+    controller_demote_restore_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -3069,6 +3228,7 @@ def write_manifest(
         "summary_row_count": len(summary),
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "targeted_kv_prefetch_row_count": len(targeted_kv_prefetch_rows),
+        "controller_demote_restore_row_count": len(controller_demote_restore_rows),
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
         "cache_signal_row_count": len(cache_signal_rows),
@@ -3107,6 +3267,7 @@ def main() -> None:
         summary = read_csv_table(args.out_dir / "global_kv_readiness_by_mode_summary.csv") or summarize(rows)
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
         targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
+        controller_demote_restore_rows = read_csv_table(args.out_dir / "controller_demote_restore_proof.csv")
         harness_priority_rows = read_csv_table(args.out_dir / "harness_priority_preservation_proof.csv")
         nat_service_priority_rows = read_csv_table(args.out_dir / "nat_service_priority_probe.csv")
         cache_signal_rows = read_csv_table(args.out_dir / "harness_native_cache_signal_proof.csv")
@@ -3117,6 +3278,7 @@ def main() -> None:
         summary = summarize(rows)
         speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
         targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, rows)
+        controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, rows)
         harness_priority_rows = collect_harness_priority_proof(args.root, rows)
         nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
         cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
@@ -3133,6 +3295,11 @@ def main() -> None:
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     write_csv(args.out_dir / "targeted_kv_prefetch_proof.csv", targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
+    write_csv(
+        args.out_dir / "controller_demote_restore_proof.csv",
+        controller_demote_restore_rows,
+        CONTROLLER_DEMOTE_RESTORE_COLUMNS,
+    )
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -3144,6 +3311,7 @@ def main() -> None:
         summary,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
+        controller_demote_restore_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3159,6 +3327,7 @@ def main() -> None:
         summary,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
+        controller_demote_restore_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3179,6 +3348,7 @@ def main() -> None:
         summary,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
+        controller_demote_restore_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3200,6 +3370,7 @@ def main() -> None:
             summary,
             speculative_prefill_rows,
             targeted_kv_prefetch_rows,
+            controller_demote_restore_rows,
             harness_priority_rows,
             nat_service_priority_rows,
             cache_signal_rows,

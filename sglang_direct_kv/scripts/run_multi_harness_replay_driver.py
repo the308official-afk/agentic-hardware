@@ -23,6 +23,7 @@ from agentic_kv.controller import (
     ControllerPolicy,
     ControllerStateStore,
     EventType,
+    GatewayDemoteRestoreBackendAdapter,
     GatewayPriorityBackendAdapter,
     GatewaySpeculativePreloadBackendAdapter,
     ObserveOnlyBackendAdapter,
@@ -57,6 +58,7 @@ SUPPORTED_MODES = (
     "controller_scheduler_priority",
     "controller_speculative_preload",
     "controller_targeted_kv_prefetch",
+    "controller_demote_restore",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -66,6 +68,7 @@ CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
+CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -170,12 +173,17 @@ def controller_targeted_kv_prefetch_mode(mode: str) -> bool:
     return mode == CONTROLLER_TARGETED_KV_PREFETCH_MODE
 
 
+def controller_demote_restore_mode(mode: str) -> bool:
+    return mode == CONTROLLER_DEMOTE_RESTORE_MODE
+
+
 def controller_mode(mode: str) -> bool:
     return (
         controller_observe_only_mode(mode)
         or controller_scheduler_priority_mode(mode)
         or controller_speculative_preload_mode(mode)
         or controller_targeted_kv_prefetch_mode(mode)
+        or controller_demote_restore_mode(mode)
     )
 
 
@@ -1125,11 +1133,19 @@ async def main_async() -> None:
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_active_preload = controller_speculative_preload_mode(args.mode)
     controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
+    controller_active_demote_restore = controller_demote_restore_mode(args.mode)
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
-            observe_only=not (controller_active_priority or controller_active_preload or controller_active_targeted_prefetch),
-            prepare_window_ms=max(25, args.tool_wait_ms),
+            observe_only=not (
+                controller_active_priority
+                or controller_active_preload
+                or controller_active_targeted_prefetch
+                or controller_active_demote_restore
+            ),
+            prepare_window_ms=0 if controller_active_demote_restore else max(25, args.tool_wait_ms),
+            min_demote_idle_ms=0 if controller_active_demote_restore else 250,
+            safety_margin_ms=0 if controller_active_demote_restore else 6,
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
     )
@@ -1175,6 +1191,19 @@ async def main_async() -> None:
                     if os.environ.get("AGENTIC_KV_TARGETED_PREFETCH_HOOK", "").lower() in {"1", "true", "yes"}
                     else "direct_hook_available=0"
                 ),
+            )
+        )
+    elif controller_active_demote_restore:
+        controller_backend = GatewayDemoteRestoreBackendAdapter(
+            BackendCapabilities(
+                priority_queue=True,
+                background_prefill_budget=False,
+                kv_demote=True,
+                kv_prefetch=False,
+                kv_release=True,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=CONTROLLER_DEMOTE_RESTORE_MODE,
             )
         )
     else:
@@ -1453,6 +1482,41 @@ async def main_async() -> None:
             if controller_active_targeted_prefetch
             else None
         )
+        controller_demote_command = acted_controller_command(controller_tool_start_result, kv_action="demote")
+        demote_restore_active = controller_active_demote_restore and controller_demote_command is not None
+        filler_base_meta = base_meta
+        if demote_restore_active:
+            filler_base_meta = {
+                **base_meta,
+                "controller_demote_restore_active": "yes",
+                "controller_demote_priority": -100,
+                "controller_demote_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                "controller_demote_command_id": controller_demote_command.get("command_id", ""),
+                "controller_demote_translation": "controller.demote=pressure_filler.priority:-100",
+            }
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.controller_demote_restore.demote_start",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                    "controller_command_id": controller_demote_command.get("command_id", ""),
+                    "controller_command_reason": controller_demote_command.get("reason", ""),
+                    "backend_name": controller_demote_command.get("backend_name", ""),
+                    "backend_accepted": controller_demote_command.get("backend_accepted", ""),
+                    "backend_acted": controller_demote_command.get("backend_acted", ""),
+                    "backend_reason": controller_demote_command.get("backend_reason", ""),
+                    "demoted_phase": "pressure_filler",
+                    "demoted_priority": -100,
+                    "tool_start_offset_ms": round(tool_start_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
         controller_speculative_preload = controller_active_preload and controller_preload_command is not None
         if targeted_prefetch_command is not None:
             direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
@@ -1624,7 +1688,7 @@ async def main_async() -> None:
             warmup_launch_grace_ms = max(0.0, float(os.environ.get("WARMUP_LAUNCH_GRACE_MS", "5")))
             await asyncio.sleep(warmup_launch_grace_ms / 1000.0)
         filler_tasks = [
-            asyncio.create_task(run_filler(args.gateway_base, args.model, pair, idx, base_meta, args.filler_prompt_tokens))
+            asyncio.create_task(run_filler(args.gateway_base, args.model, pair, idx, filler_base_meta, args.filler_prompt_tokens))
             for idx in range(args.filler_sessions)
         ]
         await sleep_until(replay_due_ms)
@@ -1732,12 +1796,37 @@ async def main_async() -> None:
             )
         replay_meta = attach_harness_priority_metadata(replay_meta)
         await bounded_request(pair.replay_prompt, replay_meta)
-        record_controller_event(
+        controller_finish_result = record_controller_event(
             f"{pair.session_id}:session_finished",
             EventType.SESSION_FINISHED,
             {**base_meta, "session_id": pair.session_id, "phase": "finished", "label": f"{pair.session_id}_finished"},
             monotonic_ms=int(offset_ms()),
         )
+        controller_restore_command = acted_controller_command(controller_finish_result, kv_action="release")
+        if demote_restore_active:
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.controller_demote_restore.restored",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "controller_decision_id": (
+                        controller_restore_command.get("controller_decision_id", "") if controller_restore_command else ""
+                    ),
+                    "controller_command_id": controller_restore_command.get("command_id", "") if controller_restore_command else "",
+                    "controller_command_reason": controller_restore_command.get("reason", "") if controller_restore_command else "",
+                    "backend_name": controller_restore_command.get("backend_name", "") if controller_restore_command else "",
+                    "backend_accepted": controller_restore_command.get("backend_accepted", "") if controller_restore_command else "",
+                    "backend_acted": controller_restore_command.get("backend_acted", "") if controller_restore_command else "",
+                    "backend_reason": controller_restore_command.get("backend_reason", "") if controller_restore_command else "",
+                    "restored_phase": "pressure_filler",
+                    "restored_priority": 0,
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
         write_trace(
             args.trace,
             {
