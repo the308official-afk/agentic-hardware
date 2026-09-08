@@ -1864,7 +1864,13 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         return base + signal_offset(bucket)
 
     lines = [
-        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Replay Deadline Pressure Chart">',
+        (
+            f'<svg class="replay-pressure-chart" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+            f'data-full-width="{width}" data-chart-height="{height}" data-left="{left}" data-right="{right}" '
+            f'data-pressure-width="{pressure_group_w:.6f}" '
+            f'data-pressure-order="{html.escape(json.dumps(pressures))}" '
+            'role="img" aria-label="Replay Deadline Pressure Chart">'
+        ),
         '<rect width="100%" height="100%" fill="#ffffff"/>',
     ]
 
@@ -1949,13 +1955,16 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
             y = y_pos_panel(float(tick))
             stroke = "#111827" if tick == 0 else "#e5e7eb"
             width_attr = "1.5" if tick == 0 else "1"
-            lines.append(f'<line x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="{stroke}" stroke-width="{width_attr}"/>')
+            lines.append(f'<line class="chart-horizontal-span" x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="{stroke}" stroke-width="{width_attr}"/>')
             lines.append(f'<text x="{left-12}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#374151">{tick} ms</text>')
-        lines.append(f'<text x="{width-right-4}" y="{y_pos_panel(0)-8:.1f}" text-anchor="end" font-size="13" font-weight="700">{html.escape(zero_label)}</text>')
+        lines.append(f'<text class="chart-zero-label" x="{width-right-4}" y="{y_pos_panel(0)-8:.1f}" text-anchor="end" font-size="13" font-weight="700">{html.escape(zero_label)}</text>')
 
         for pressure_index, pressure in enumerate(pressures):
             x = left + pressure_index * pressure_group_w
-            lines.append(f'<g class="pressure-level" data-pressure-level="{html.escape(pressure)}">')
+            lines.append(
+                f'<g class="pressure-level" data-pressure-level="{html.escape(pressure)}" '
+                f'data-pressure-index="{pressure_index}">'
+            )
             lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
             if pressure_index % 2 == 1:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
@@ -2017,7 +2026,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                 f'stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>'
             )
             lines.append("</g>")
-        lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
+        lines.append(f'<line class="chart-right-boundary" x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
         lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
         append_panel_legend(panel_bottom)
         if attributes:
@@ -2061,7 +2070,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         "symlog",
     )
 
-    lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-bottom_margin+34}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
+    lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-bottom_margin+34}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)
 
@@ -2290,10 +2299,52 @@ def render_chart_interaction_script() -> str:
   }}
 
   function applyPressureFilters() {{
-    const selected = selectedPressures();
-    document.querySelectorAll('[data-pressure-level]').forEach((node) => {{
-      const pressure = node.getAttribute('data-pressure-level');
-      node.style.display = selected.has(pressure) ? 'inline' : 'none';
+    let selected = selectedPressures();
+    if (selected.size === 0) {{
+      pressureInputs.forEach((input) => {{ input.checked = true; }});
+      selected = selectedPressures();
+    }}
+    document.querySelectorAll('.replay-pressure-chart').forEach((svg) => {{
+      const pressureOrder = JSON.parse(svg.getAttribute('data-pressure-order') || '[]');
+      const visiblePressures = pressureOrder.filter((pressure) => selected.has(pressure));
+      const pressureWidth = Number(svg.getAttribute('data-pressure-width') || 0);
+      const left = Number(svg.getAttribute('data-left') || 0);
+      const right = Number(svg.getAttribute('data-right') || 0);
+      const height = Number(svg.getAttribute('data-chart-height') || svg.getAttribute('height') || 0);
+      const activeCount = Math.max(1, visiblePressures.length);
+      const activeRight = left + pressureWidth * activeCount;
+      const activeWidth = activeRight + right;
+
+      svg.setAttribute('viewBox', `0 0 ${{activeWidth}} ${{height}}`);
+      svg.setAttribute('width', String(activeWidth));
+
+      svg.querySelectorAll('[data-pressure-level]').forEach((node) => {{
+        const pressure = node.getAttribute('data-pressure-level');
+        const originalIndex = Number(node.getAttribute('data-pressure-index') || 0);
+        const visibleIndex = visiblePressures.indexOf(pressure);
+        if (visibleIndex === -1) {{
+          node.style.display = 'none';
+          node.removeAttribute('transform');
+          return;
+        }}
+        node.style.display = 'inline';
+        const dx = (visibleIndex - originalIndex) * pressureWidth;
+        node.setAttribute('transform', `translate(${{dx}} 0)`);
+      }});
+
+      svg.querySelectorAll('.chart-horizontal-span').forEach((node) => {{
+        node.setAttribute('x2', String(activeRight));
+      }});
+      svg.querySelectorAll('.chart-right-boundary').forEach((node) => {{
+        node.setAttribute('x1', String(activeRight));
+        node.setAttribute('x2', String(activeRight));
+      }});
+      svg.querySelectorAll('.chart-zero-label').forEach((node) => {{
+        node.setAttribute('x', String(activeRight - 4));
+      }});
+      svg.querySelectorAll('.chart-x-axis-label').forEach((node) => {{
+        node.setAttribute('x', String(left + (pressureWidth * activeCount) / 2));
+      }});
     }});
   }}
 
