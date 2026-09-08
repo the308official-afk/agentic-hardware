@@ -137,6 +137,12 @@ MANAGER_SIGNAL_BUCKETS = (
     "frontend_supplied",
 )
 
+CORE_PRESSURE_LEVELS = (
+    "p0_control",
+    "p3_high",
+    "p5_boss_queue",
+)
+
 HARNESS_SYMBOLS = {
     "hatcher": "circle",
     "codex": "square",
@@ -1949,6 +1955,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
         for pressure_index, pressure in enumerate(pressures):
             x = left + pressure_index * pressure_group_w
+            lines.append(f'<g class="pressure-level" data-pressure-level="{html.escape(pressure)}">')
             lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
             if pressure_index % 2 == 1:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
@@ -2009,6 +2016,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                 f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" '
                 f'stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>'
             )
+            lines.append("</g>")
         lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
         lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
         append_panel_legend(panel_bottom)
@@ -2182,8 +2190,17 @@ def present_signal_buckets(rows: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def present_pressure_levels(rows: list[dict[str, Any]]) -> list[str]:
+    return [
+        pressure
+        for pressure in PRESSURE_ORDER
+        if any(str(row.get("pressure_level") or "") == pressure for row in rows)
+    ]
+
+
 def render_chart_controls(rows: list[dict[str, Any]]) -> str:
     signal_buckets = present_signal_buckets(rows)
+    pressure_levels = present_pressure_levels(rows)
     default_visible = {bucket for bucket in signal_buckets if bucket in MANAGER_SIGNAL_BUCKETS}
     if not default_visible:
         default_visible = set(signal_buckets)
@@ -2204,6 +2221,18 @@ def render_chart_controls(rows: list[dict[str, Any]]) -> str:
                 description=html.escape(str(config["description"])),
             )
         )
+    pressure_controls = []
+    for pressure in pressure_levels:
+        pressure_controls.append(
+            '<label class="chart-chip" title="{description}">'
+            '<input type="checkbox" data-pressure-filter value="{pressure}" checked>'
+            '<span>{label}</span>'
+            "</label>".format(
+                pressure=html.escape(pressure),
+                label=html.escape(PRESSURE_LABELS.get(pressure, pressure)),
+                description=html.escape(PRESSURE_DEFINITIONS.get(pressure, {}).get("goal", "")),
+            )
+        )
     return (
         '<div class="chart-controls" aria-label="Replay chart controls">'
         '<div class="control-row">'
@@ -2222,17 +2251,26 @@ def render_chart_controls(rows: list[dict[str, Any]]) -> str:
         '<strong>Signals</strong>'
         f'<div class="chip-list">{"".join(signal_controls)}</div>'
         "</div>"
+        '<div class="control-row">'
+        '<strong>Pressure levels</strong>'
+        '<button type="button" class="control-button" data-pressure-preset="core">Core P0/P3/P5</button>'
+        '<button type="button" class="control-button" data-pressure-preset="all">All Pressures</button>'
+        f'<div class="chip-list">{"".join(pressure_controls)}</div>'
+        "</div>"
         "</div>"
     )
 
 
 def render_chart_interaction_script() -> str:
     manager_buckets = json.dumps(list(MANAGER_SIGNAL_BUCKETS))
+    core_pressures = json.dumps(list(CORE_PRESSURE_LEVELS))
     return f"""
 <script>
 (function () {{
   const managerBuckets = new Set({manager_buckets});
+  const corePressures = new Set({core_pressures});
   const filterInputs = Array.from(document.querySelectorAll('[data-signal-filter]'));
+  const pressureInputs = Array.from(document.querySelectorAll('[data-pressure-filter]'));
   const axisInputs = Array.from(document.querySelectorAll('input[name="deadline-axis"]'));
 
   function selectedSignals() {{
@@ -2244,6 +2282,18 @@ def render_chart_interaction_script() -> str:
     document.querySelectorAll('[data-signal-bucket]').forEach((node) => {{
       const bucket = node.getAttribute('data-signal-bucket');
       node.style.display = selected.has(bucket) ? '' : 'none';
+    }});
+  }}
+
+  function selectedPressures() {{
+    return new Set(pressureInputs.filter((input) => input.checked).map((input) => input.value));
+  }}
+
+  function applyPressureFilters() {{
+    const selected = selectedPressures();
+    document.querySelectorAll('[data-pressure-level]').forEach((node) => {{
+      const pressure = node.getAttribute('data-pressure-level');
+      node.style.display = selected.has(pressure) ? 'inline' : 'none';
     }});
   }}
 
@@ -2264,13 +2314,28 @@ def render_chart_interaction_script() -> str:
     applySignalFilters();
   }}
 
+  function setPressurePreset(name) {{
+    const available = pressureInputs.map((input) => input.value);
+    let desired = name === 'core'
+      ? new Set(available.filter((pressure) => corePressures.has(pressure)))
+      : new Set(available);
+    if (desired.size === 0) desired = new Set(available);
+    pressureInputs.forEach((input) => {{ input.checked = desired.has(input.value); }});
+    applyPressureFilters();
+  }}
+
   filterInputs.forEach((input) => input.addEventListener('change', applySignalFilters));
+  pressureInputs.forEach((input) => input.addEventListener('change', applyPressureFilters));
   axisInputs.forEach((input) => input.addEventListener('change', applyAxis));
   document.querySelectorAll('[data-chart-preset]').forEach((button) => {{
     button.addEventListener('click', () => setPreset(button.getAttribute('data-chart-preset')));
   }});
+  document.querySelectorAll('[data-pressure-preset]').forEach((button) => {{
+    button.addEventListener('click', () => setPressurePreset(button.getAttribute('data-pressure-preset')));
+  }});
 
   applySignalFilters();
+  applyPressureFilters();
   applyAxis();
 }}());
 </script>
@@ -2409,7 +2474,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Use the controls to switch the deadline-pressure axis between linear and symlog, or to hide signal paths such as Gateway Priority Injected. The TTFT-impact view shows how long each replay request took to reach first token after it started. Lower is better. Exact lower-level modes remain in the evidence file.</p>
+    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Use the controls to choose signal paths, switch the deadline-pressure axis between linear and symlog, and focus on selected pressure levels such as P0/P3/P5. The TTFT-impact view shows how long each replay request took to reach first token after it started. Lower is better. Exact lower-level modes remain in the evidence file.</p>
 <h2>Signal Family Definitions</h2>
 <p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
 <div class="card">{signal_family_definition_table}</div>
