@@ -193,6 +193,22 @@ Then run the GH200-scaled pressure ladder:
 ./gh200/run_scaled_pressure.sh
 ```
 
+### Full Signal Design Space Experiment
+
+Use this when you want the full manager-facing comparison across all wired
+harnesses, all pressure levels, and all consolidated signal families. It uses
+the lightweight report builder so the final report stays compact.
+
+```bash
+cd ~/agentic_hardware
+
+SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected" \
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
+PRESSURE_LEVELS="p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue" \
+REPORT_BUILDER_MODE=lightweight \
+./gh200/run_scaled_pressure.sh
+```
+
 Default GPU-run harnesses:
 
 ```text
