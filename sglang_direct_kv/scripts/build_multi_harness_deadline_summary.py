@@ -30,6 +30,20 @@ HARNESS_LABELS = {
     "hermes_agent": "Hermes Agent",
 }
 
+HARNESS_SHORT_LABELS = {
+    "hatcher": "Hatcher",
+    "codex": "Codex",
+    "claude_code": "Claude",
+    "opencode": "OpenCode",
+    "qwen_code": "Qwen",
+    "nemo_agent_toolkit": "NAT",
+    "nemo_agent_toolkit_service": "NAT Service",
+    "deepseek_harness": "DeepSeek",
+    "pi_agent_harness": "Pi",
+    "openclaw": "OpenClaw",
+    "hermes_agent": "Hermes",
+}
+
 MODE_LABELS = {
     "no_prefetch": "NP = No prefetch",
     "e2e_priority_hints": "E2E = End-to-end priority hints",
@@ -1827,7 +1841,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     if not pressures or not harnesses:
         return "<p>No replay rows found.</p>"
 
-    pressure_w = max(420, len(harnesses) * 44 + 110)
+    pressure_w = max(760, len(harnesses) * 118 + 150)
     width = max(1400, pressure_w * len(pressures) + 220)
     height = 1320
     left = 120
@@ -1848,7 +1862,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
             index = signal_buckets.index(bucket)
         except ValueError:
             index = 0
-        return (index - (len(signal_buckets) - 1) / 2) * 16.0
+        return (index - (len(signal_buckets) - 1) / 2) * 18.0
 
     def x_pos(pressure_index: int, harness_index: int, bucket: str, sample_index: int, sample_count: int) -> float:
         pressure_left = left + pressure_index * pressure_group_w
@@ -1913,11 +1927,20 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
             if pressure_index % 2 == 1:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
             cx = x + pressure_group_w / 2
-            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+36:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
-            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="11" fill="#64748b">all harnesses overlaid; color = signal path, shape = harness</text>')
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
+            lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+75:.1f}" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color/style = signal path</text>')
             for harness_index, harness in enumerate(harnesses):
-                harness_x = left + pressure_index * pressure_group_w + (pressure_group_w / max(1, len(harnesses))) * (harness_index + 0.5)
+                harness_step = pressure_group_w / max(1, len(harnesses))
+                harness_left = left + pressure_index * pressure_group_w + harness_step * harness_index
+                harness_x = harness_left + harness_step / 2
+                if harness_index > 0:
+                    lines.append(f'<line x1="{harness_left:.1f}" x2="{harness_left:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#dbeafe" stroke-width="1" stroke-dasharray="2 5"/>')
                 lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#f1f5f9" stroke-width="1"/>')
+                lines.append(
+                    f'<text x="{harness_x:.1f}" y="{panel_bottom+24:.1f}" text-anchor="middle" '
+                    f'font-size="10" font-weight="700" fill="#334155">'
+                    f'{html.escape(HARNESS_SHORT_LABELS.get(harness, HARNESS_LABELS.get(harness, harness)))}</text>'
+                )
                 for bucket in signal_buckets:
                     sample_rows = rows_by_group_bucket.get((pressure, harness, bucket), [])
                     sample_rows = [row for row in sample_rows if optional_float(row.get(value_key)) is not None]
@@ -1944,7 +1967,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                         )
                         lines.append(
                             svg_symbol(
-                                HARNESS_SYMBOLS.get(harness, "circle"),
+                                "circle",
                                 dot_x,
                                 dot_y,
                                 color,
@@ -2087,7 +2110,6 @@ def render_signal_family_definition_table() -> str:
 
 
 def render_chart_legend(rows: list[dict[str, Any]]) -> str:
-    harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
     signal_items = []
     for bucket in CHART_SIGNAL_ORDER:
         config = CHART_SIGNAL_BUCKETS[bucket]
@@ -2097,14 +2119,6 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
             '<span class="legend-item">'
             f'{inline_signal_symbol(bucket)}'
             f'{html.escape(str(config["label"]))} <span class="muted">= {html.escape(str(config["description"]))}</span>'
-            "</span>"
-        )
-    harness_items = []
-    for harness in harnesses:
-        harness_items.append(
-            '<span class="legend-item">'
-            f'{inline_symbol(HARNESS_SYMBOLS.get(harness, "circle"), "#334155")}'
-            f"{html.escape(HARNESS_LABELS.get(harness, harness))}"
             "</span>"
         )
     return (
@@ -2117,8 +2131,8 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
         '<span class="legend-item">solid = priority signal</span>'
         '<span class="legend-item">solid with inner dot = cache + priority</span>'
         '</div></div>'
-        '<div class="legend-row"><strong>Harness symbol</strong>'
-        f'<div class="legend-items">{"".join(harness_items)}</div></div>'
+        '<div class="legend-row"><strong>Harness</strong>'
+        '<div class="legend-items"><span class="legend-item">Harness identity is shown by the x-axis sub-window label; marker shape is no longer used for harness identity.</span></div></div>'
         "</div>"
     )
 
