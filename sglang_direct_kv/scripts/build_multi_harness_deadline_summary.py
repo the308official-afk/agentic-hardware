@@ -130,6 +130,13 @@ CHART_SIGNAL_ORDER = (
     "gateway_speculative_prefill",
 )
 
+MANAGER_SIGNAL_BUCKETS = (
+    "baseline",
+    "harness_cache_emitted",
+    "harness_cache_priority_emitted",
+    "frontend_supplied",
+)
+
 HARNESS_SYMBOLS = {
     "hatcher": "circle",
     "codex": "square",
@@ -1828,10 +1835,9 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     right = 40
     panel_h = 310
     panel_gap = 250
-    top_a = 82
-    top_b = top_a + panel_h + panel_gap
-    top_c = top_b + panel_h + panel_gap
-    height = int(top_c + panel_h + 165)
+    top_deadline = 82
+    top_ttft = top_deadline + panel_h + panel_gap
+    height = int(top_ttft + panel_h + 165)
     bottom_margin = 95
     plot_w = width - left - right
     pressure_group_w = plot_w / len(pressures)
@@ -1871,12 +1877,14 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
             label = chart_signal_label(bucket)
             marker_x = cursor + 8
             marker_y = legend_y - 4
+            lines.append(f'<g class="signal-bucket legend-signal-item" data-signal-bucket="{html.escape(bucket)}">')
             lines.append(svg_symbol("circle", marker_x, marker_y, color, label, signal_marker_style(bucket)))
             text_x = cursor + 24
             lines.append(
                 f'<text x="{text_x:.1f}" y="{legend_y:.1f}" font-size="10" font-weight="650" '
                 f'fill="#334155">{html.escape(label)}</text>'
             )
+            lines.append("</g>")
             cursor += max(104, len(label) * 6.1 + 42)
         style_y = legend_y + 24
         lines.append(
@@ -1896,7 +1904,16 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         unit_label: str,
         tick_values: list[int],
         scale: str = "symlog",
+        group_class: str = "",
+        data_axis: str = "",
     ) -> None:
+        attributes = []
+        if group_class:
+            attributes.append(f'class="{html.escape(group_class)}"')
+        if data_axis:
+            attributes.append(f'data-axis="{html.escape(data_axis)}"')
+        if attributes:
+            lines.append(f'<g {" ".join(attributes)}>')
         panel_bottom = panel_top + panel_h
         panel_values = []
         for grouped_rows in rows_by_group_bucket.values():
@@ -1977,6 +1994,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                     label = compact_ms(med)
                     if len(sample_rows) > 1:
                         label = f"{label} n={len(sample_rows)}"
+                    lines.append(f'<g class="signal-bucket" data-signal-bucket="{html.escape(bucket)}">')
                     lines.append(svg_text_label(label, mx, label_y, color))
                     raw_modes = sorted({str(row.get("mode") or "") for row in sample_rows})
                     title = (
@@ -1986,6 +2004,7 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                         f"median {med:.1f} {unit_label} | n={len(sample_rows)}"
                     )
                     lines.append(svg_symbol("circle", mx, y, color, title, "solid"))
+                    lines.append("</g>")
             lines.append(
                 f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" '
                 f'stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>'
@@ -1993,33 +2012,39 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
         lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
         append_panel_legend(panel_bottom)
+        if attributes:
+            lines.append("</g>")
 
     draw_panel(
-        top_a,
+        top_deadline,
         "first_token_lateness_ms",
-        "A. Replay Deadline Pressure",
+        "A. Replay Deadline Pressure (Symlog Axis)",
         "Delay view: every dot is one replay first token. Above zero missed the replay deadline; below zero was early.",
         "lateness vs replay deadline ms (symlog)",
         "0 ms deadline",
         "ms vs deadline",
         [-1000, -500, -100, 0, 50, 500, 1000, 5000, 10000, 60000],
         "symlog",
+        "deadline-panel deadline-panel-symlog",
+        "symlog",
     )
     draw_panel(
-        top_b,
+        top_deadline,
         "first_token_lateness_ms",
-        "B. Replay Deadline Pressure, Linear Axis",
-        "Same replay-deadline data as panel A, but with a normal y-axis. This preserves true distance, though small values may bunch near the bottom.",
+        "A. Replay Deadline Pressure (Linear Axis)",
+        "Same replay-deadline data, but with a normal y-axis. This preserves true distance, though small values may bunch near the bottom.",
         "lateness vs replay deadline ms (linear)",
         "0 ms deadline",
         "ms vs deadline",
         linear_tick_values([value for row in rows if (value := optional_float(row.get("first_token_lateness_ms"))) is not None]),
         "linear",
+        "deadline-panel deadline-panel-linear",
+        "linear",
     )
     draw_panel(
-        top_c,
+        top_ttft,
         "ttft_ms",
-        "C. Replay TTFT Impact",
+        "B. Replay TTFT Impact",
         "Time from replay request start at the gateway/client boundary to first token. This is the clearest view for cache-control TTFT impact.",
         "replay TTFT ms (symlog)",
         "0 ms TTFT",
@@ -2149,6 +2174,109 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def present_signal_buckets(rows: list[dict[str, Any]]) -> list[str]:
+    return [
+        bucket
+        for bucket in CHART_SIGNAL_ORDER
+        if any(chart_signal_bucket(row) == bucket for row in rows)
+    ]
+
+
+def render_chart_controls(rows: list[dict[str, Any]]) -> str:
+    signal_buckets = present_signal_buckets(rows)
+    default_visible = {bucket for bucket in signal_buckets if bucket in MANAGER_SIGNAL_BUCKETS}
+    if not default_visible:
+        default_visible = set(signal_buckets)
+    signal_controls = []
+    for bucket in signal_buckets:
+        config = CHART_SIGNAL_BUCKETS[bucket]
+        checked = " checked" if bucket in default_visible else ""
+        signal_controls.append(
+            '<label class="chart-chip" title="{description}">'
+            '<input type="checkbox" data-signal-filter value="{bucket}"{checked}>'
+            '<span class="chip-dot" style="background:{color}"></span>'
+            '<span>{label}</span>'
+            "</label>".format(
+                bucket=html.escape(bucket),
+                checked=checked,
+                color=html.escape(str(config["color"])),
+                label=html.escape(str(config["label"])),
+                description=html.escape(str(config["description"])),
+            )
+        )
+    return (
+        '<div class="chart-controls" aria-label="Replay chart controls">'
+        '<div class="control-row">'
+        '<strong>View</strong>'
+        '<button type="button" class="control-button" data-chart-preset="manager">Manager View</button>'
+        '<button type="button" class="control-button" data-chart-preset="all">Show All</button>'
+        '<span class="control-hint">Manager View keeps baseline, harness cache, harness cache + priority, and front-end supplied signals visible.</span>'
+        "</div>"
+        '<div class="control-row">'
+        '<strong>Deadline axis</strong>'
+        '<label class="chart-chip"><input type="radio" name="deadline-axis" value="linear" checked> Linear</label>'
+        '<label class="chart-chip"><input type="radio" name="deadline-axis" value="symlog"> Symlog</label>'
+        '<span class="control-hint">Linear shows true distance; symlog compresses very large misses so small misses stay visible.</span>'
+        "</div>"
+        '<div class="control-row">'
+        '<strong>Signals</strong>'
+        f'<div class="chip-list">{"".join(signal_controls)}</div>'
+        "</div>"
+        "</div>"
+    )
+
+
+def render_chart_interaction_script() -> str:
+    manager_buckets = json.dumps(list(MANAGER_SIGNAL_BUCKETS))
+    return f"""
+<script>
+(function () {{
+  const managerBuckets = new Set({manager_buckets});
+  const filterInputs = Array.from(document.querySelectorAll('[data-signal-filter]'));
+  const axisInputs = Array.from(document.querySelectorAll('input[name="deadline-axis"]'));
+
+  function selectedSignals() {{
+    return new Set(filterInputs.filter((input) => input.checked).map((input) => input.value));
+  }}
+
+  function applySignalFilters() {{
+    const selected = selectedSignals();
+    document.querySelectorAll('[data-signal-bucket]').forEach((node) => {{
+      const bucket = node.getAttribute('data-signal-bucket');
+      node.style.display = selected.has(bucket) ? '' : 'none';
+    }});
+  }}
+
+  function applyAxis() {{
+    const selected = (axisInputs.find((input) => input.checked) || {{ value: 'linear' }}).value;
+    document.querySelectorAll('.deadline-panel').forEach((node) => {{
+      node.style.display = node.getAttribute('data-axis') === selected ? 'inline' : 'none';
+    }});
+  }}
+
+  function setPreset(name) {{
+    const available = filterInputs.map((input) => input.value);
+    let desired = name === 'manager'
+      ? new Set(available.filter((bucket) => managerBuckets.has(bucket)))
+      : new Set(available);
+    if (desired.size === 0) desired = new Set(available);
+    filterInputs.forEach((input) => {{ input.checked = desired.has(input.value); }});
+    applySignalFilters();
+  }}
+
+  filterInputs.forEach((input) => input.addEventListener('change', applySignalFilters));
+  axisInputs.forEach((input) => input.addEventListener('change', applyAxis));
+  document.querySelectorAll('[data-chart-preset]').forEach((button) => {{
+    button.addEventListener('click', () => setPreset(button.getAttribute('data-chart-preset')));
+  }});
+
+  applySignalFilters();
+  applyAxis();
+}}());
+</script>
+"""
+
+
 def render_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
@@ -2167,6 +2295,8 @@ def render_html(
     hardware_profile = os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE") or "not recorded"
     hardware_profile_path = os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH") or "not recorded"
     chart = render_pressure_chart(rows)
+    chart_controls = render_chart_controls(rows)
+    chart_interaction_script = render_chart_interaction_script()
     signal_family_definition_table = render_signal_family_definition_table()
     pressure_definition_table = render_pressure_definition_table(rows, run_config)
     summary_table = render_table(
@@ -2256,6 +2386,17 @@ p {{ line-height: 1.5; color: #334155; }}
 .muted {{ color: #64748b; }}
 .legend-dot {{ width: 12px; height: 12px; border-radius: 999px; display: inline-block; }}
 .legend-symbol {{ width: 18px; height: 18px; flex: 0 0 auto; overflow: visible; }}
+.chart-controls {{ display: grid; gap: 10px; margin-bottom: 14px; padding: 14px 16px; border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff; }}
+.control-row {{ display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }}
+.control-row strong {{ flex: 0 0 112px; }}
+.control-button {{ appearance: none; border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #111827; font-weight: 700; padding: 6px 10px; cursor: pointer; }}
+.control-button:hover {{ border-color: #64748b; background: #f8fafc; }}
+.control-hint {{ color: #64748b; font-size: 12px; }}
+.chip-list {{ display: flex; flex-wrap: wrap; gap: 8px 10px; }}
+.chart-chip {{ display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e2e8f0; border-radius: 999px; background: white; padding: 5px 9px; font-size: 12px; font-weight: 650; color: #334155; }}
+.chip-dot {{ width: 10px; height: 10px; border-radius: 999px; display: inline-block; }}
+.deadline-panel-symlog {{ display: none; }}
+.deadline-panel-linear {{ display: inline; }}
 .note {{ border-left: 4px solid #2563eb; background: #eff6ff; padding: 12px 16px; color: #1e3a8a; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 13px; background: white; }}
 th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }}
@@ -2268,18 +2409,19 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Panel A is the original deadline-pressure view with a compressed y-axis. Panel B shows the same deadline-pressure data on a normal linear y-axis. Panel C is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis, each harness has its own labeled sub-window, and signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence file.</p>
+    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Use the controls to switch the deadline-pressure axis between linear and symlog, or to hide signal paths such as Gateway Priority Injected. The TTFT-impact view shows how long each replay request took to reach first token after it started. Lower is better. Exact lower-level modes remain in the evidence file.</p>
 <h2>Signal Family Definitions</h2>
 <p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
 <div class="card">{signal_family_definition_table}</div>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
  	<div class="card">{pressure_definition_table}</div>
- 	<div class="card">{chart}</div>
+<div class="card">{chart_controls}{chart}</div>
  	<h2>Evidence Tables</h2>
  	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
  	<p><a href="evidence_tables.html">Open the evidence tables / raw proof file</a>.</p>
  	</main>
+{chart_interaction_script}
  	</body>
  	</html>
  	"""
