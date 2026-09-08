@@ -12,4 +12,4 @@ export HARNESSES="${HARNESSES:-hatcher}"
 export PRESSURE_LEVELS="${PRESSURE_LEVELS:-p0_control p3_high p5_boss_queue}"
 export REPORT_LABEL="${REPORT_LABEL:-gh200_sentinel_$(date +%Y%m%d_%H%M%S)}"
 
-exec "${SCRIPT_DIR}/run_signal_design_space_docker.sh"
+exec "${SCRIPT_DIR}/run_host_signal_design_space.sh"

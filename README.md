@@ -164,20 +164,27 @@ tail -f ~/agentic_hardware/sglang_direct_kv/artifacts/results/run_logs/<REPORT_L
 ```
 
 All three wrappers call
-[`gh200/run_signal_design_space_docker.sh`](gh200/run_signal_design_space_docker.sh),
-which mounts the checked-out repo into `lmsysorg/sglang:latest`. Because the
-repo is mounted live, source changes synced to GH200 are immediately visible
-inside Docker; no Docker rebuild is needed.
+[`gh200/run_host_signal_design_space.sh`](gh200/run_host_signal_design_space.sh).
+That script runs the experiment driver, gateway, and harness clients on the
+GH200 host, but launches the SGLang GPU backend inside
+`lmsysorg/sglang:latest`. Because the repo is mounted into the SGLang backend
+container, source changes synced to GH200 are immediately visible inside
+Docker; no Docker rebuild is needed.
 
-Docker GPU runs currently default to these Docker-compatible harnesses:
+The host-harness GH200 GPU runs default to:
 
 ```text
-hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw
+hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent
 ```
 
-`nemo_agent_toolkit` and `hermes_agent` are still smoke-tested on the host, but
-are excluded from Docker GPU runs because their Python 3.11 compiled
-dependencies do not load inside the SGLang image's Python 3.12 environment.
+This split is what allows NAT and Hermes to participate in GH200 GPU runs:
+their Python 3.11 venvs stay on the host, while only SGLang uses the Docker
+CUDA/runtime environment.
+
+The older
+[`gh200/run_signal_design_space_docker.sh`](gh200/run_signal_design_space_docker.sh)
+helper still exists for Docker-only debugging with Docker-compatible harnesses,
+but the recommended GH200 path is the host-harness split above.
 
 ### 5. Download GH200 Reports
 
@@ -608,6 +615,8 @@ Primary scripts:
 | [sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py](sglang_direct_kv/scripts/build_milestone27_controlled_replay_report.py) | Builds the master HTML report, evidence tables, and Replay Deadline Pressure Chart. |
 | [sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py](sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py) | Lightweight all-harness report builder used when the rich timeline report would be too large. |
 | [sglang_direct_kv/src/agentic_kv/sglang_adapters/capabilities.py](sglang_direct_kv/src/agentic_kv/sglang_adapters/capabilities.py) | Probes the installed SGLang version, hook surface, priority support, and static cache-signal source paths. |
+| [gh200/run_host_signal_design_space.sh](gh200/run_host_signal_design_space.sh) | Recommended GH200 runner: host-side harnesses and gateway, Dockerized SGLang backend. |
+| [gh200/run_signal_design_space_docker.sh](gh200/run_signal_design_space_docker.sh) | Docker-only fallback runner for debugging Docker-compatible harnesses. |
 
 Smoke-test native CLI wireability without starting the real GPU server:
 
