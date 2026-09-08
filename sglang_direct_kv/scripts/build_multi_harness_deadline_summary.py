@@ -1843,14 +1843,14 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
     pressure_w = max(760, len(harnesses) * 118 + 150)
     width = max(1400, pressure_w * len(pressures) + 220)
-    height = 1320
     left = 120
     right = 40
     panel_h = 310
-    panel_gap = 145
+    panel_gap = 250
     top_a = 82
     top_b = top_a + panel_h + panel_gap
     top_c = top_b + panel_h + panel_gap
+    height = int(top_c + panel_h + 165)
     bottom_margin = 95
     plot_w = width - left - right
     pressure_group_w = plot_w / len(pressures)
@@ -1880,6 +1880,33 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     for row in rows:
         bucket = chart_signal_bucket(row)
         rows_by_group_bucket[(str(row["pressure_level"]), str(row["harness"]), bucket)].append(row)
+
+    def append_panel_legend(panel_bottom: float) -> None:
+        legend_y = panel_bottom + 88
+        legend_x = left
+        cursor = legend_x + 78
+        lines.append(f'<text x="{legend_x:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Legend</text>')
+        for bucket in signal_buckets:
+            color = chart_signal_color(bucket)
+            label = chart_signal_label(bucket)
+            marker_x = cursor + 8
+            marker_y = legend_y - 4
+            lines.append(svg_symbol("circle", marker_x, marker_y, color, label, signal_marker_style(bucket)))
+            text_x = cursor + 24
+            lines.append(
+                f'<text x="{text_x:.1f}" y="{legend_y:.1f}" font-size="10" font-weight="650" '
+                f'fill="#334155">{html.escape(label)}</text>'
+            )
+            cursor += max(104, len(label) * 6.1 + 42)
+        style_y = legend_y + 24
+        lines.append(f'<text x="{legend_x:.1f}" y="{style_y:.1f}" font-size="10" font-weight="700" fill="#334155">Style:</text>')
+        lines.append(svg_symbol("circle", legend_x + 68, style_y - 4, "#f97316", "cache/preload", "cache"))
+        lines.append(f'<text x="{legend_x + 86:.1f}" y="{style_y:.1f}" font-size="10" fill="#475569">dotted hollow = cache/preload</text>')
+        lines.append(svg_symbol("circle", legend_x + 270, style_y - 4, "#0891b2", "priority", "solid"))
+        lines.append(f'<text x="{legend_x + 288:.1f}" y="{style_y:.1f}" font-size="10" fill="#475569">solid = priority</text>')
+        lines.append(svg_symbol("circle", legend_x + 410, style_y - 4, "#16a34a", "cache + priority", "both"))
+        lines.append(f'<text x="{legend_x + 428:.1f}" y="{style_y:.1f}" font-size="10" fill="#475569">inner dot = cache + priority</text>')
+        lines.append(f'<text x="{legend_x:.1f}" y="{style_y + 21:.1f}" font-size="10" fill="#64748b">Harness identity is the sub-window label on the x-axis.</text>')
 
     def draw_panel(
         panel_top: float,
@@ -1923,19 +1950,31 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
         for pressure_index, pressure in enumerate(pressures):
             x = left + pressure_index * pressure_group_w
-            lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
+            lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
             if pressure_index % 2 == 1:
                 lines.append(f'<rect x="{x:.1f}" y="{panel_top}" width="{pressure_group_w:.1f}" height="{panel_h}" fill="#f8fafc" opacity="0.62"/>')
             cx = x + pressure_group_w / 2
             lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
             lines.append(f'<text x="{cx:.1f}" y="{panel_bottom+75:.1f}" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color/style = signal path</text>')
+            harness_step = pressure_group_w / max(1, len(harnesses))
             for harness_index, harness in enumerate(harnesses):
-                harness_step = pressure_group_w / max(1, len(harnesses))
                 harness_left = left + pressure_index * pressure_group_w + harness_step * harness_index
+                harness_right = harness_left + harness_step
                 harness_x = harness_left + harness_step / 2
-                if harness_index > 0:
-                    lines.append(f'<line x1="{harness_left:.1f}" x2="{harness_left:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#dbeafe" stroke-width="1" stroke-dasharray="2 5"/>')
-                lines.append(f'<line x1="{harness_x:.1f}" x2="{harness_x:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#f1f5f9" stroke-width="1"/>')
+                if harness_index % 2 == 1:
+                    lines.append(
+                        f'<rect x="{harness_left:.1f}" y="{panel_top}" width="{harness_step:.1f}" '
+                        f'height="{panel_h + 34:.1f}" fill="#f8fafc" opacity="0.45"/>'
+                    )
+                lines.append(
+                    f'<line x1="{harness_left:.1f}" x2="{harness_left:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" '
+                    f'stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>'
+                )
+                if harness_index == len(harnesses) - 1:
+                    lines.append(
+                        f'<line x1="{harness_right:.1f}" x2="{harness_right:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" '
+                        f'stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>'
+                    )
                 lines.append(
                     f'<text x="{harness_x:.1f}" y="{panel_bottom+24:.1f}" text-anchor="middle" '
                     f'font-size="10" font-weight="700" fill="#334155">'
@@ -1975,8 +2014,13 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                                 signal_marker_style(bucket),
                             )
                         )
-        lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
+            lines.append(
+                f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" '
+                f'stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>'
+            )
+        lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
         lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
+        append_panel_legend(panel_bottom)
 
     draw_panel(
         top_a,
@@ -2155,7 +2199,6 @@ def render_html(
     hardware_profile = os.environ.get("HARDWARE_PROFILE") or run_config.get("HARDWARE_PROFILE") or "not recorded"
     hardware_profile_path = os.environ.get("HARDWARE_PROFILE_PATH") or run_config.get("HARDWARE_PROFILE_PATH") or "not recorded"
     chart = render_pressure_chart(rows)
-    chart_legend = render_chart_legend(rows)
     signal_family_definition_table = render_signal_family_definition_table()
     pressure_definition_table = render_pressure_definition_table(rows, run_config)
     summary_table = render_table(
@@ -2257,7 +2300,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view with a compressed y-axis. Panel B shows the same deadline-pressure data on a normal linear y-axis. Panel C is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence file.</p>
+    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view with a compressed y-axis. Panel B shows the same deadline-pressure data on a normal linear y-axis. Panel C is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis, each harness has its own labeled sub-window, and signal path is encoded by color/style. Lower is better. Exact lower-level modes remain in the evidence file.</p>
 <h2>Signal Family Definitions</h2>
 <p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
 <div class="card">{signal_family_definition_table}</div>
@@ -2265,7 +2308,6 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
  	<div class="card">{pressure_definition_table}</div>
  	<div class="card">{chart}</div>
- 	{chart_legend}
  	<h2>Evidence Tables</h2>
  	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
  	<p><a href="evidence_tables.html">Open the evidence tables / raw proof file</a>.</p>
