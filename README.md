@@ -22,6 +22,7 @@ pressure levels, and multiple coding-agent harness shapes.
 | [sglang_direct_kv/README.md](sglang_direct_kv/README.md) | Long-form milestone notebook with historical detail. |
 | [sglang_direct_kv/scripts/](sglang_direct_kv/scripts/) | Experiment runners, workload drivers, report builders, and SGLang launch helpers. |
 | [aws/README.md](aws/README.md) | EC2 sync and connection workflow. |
+| [gh200/](gh200/) | GH200 sync, SSH, Docker run, smoke-test, and download helpers. |
 | [HARDWARE_EMULATION_ENVIRONMENT.md](HARDWARE_EMULATION_ENVIRONMENT.md) | Original hardware-emulation environment notes. |
 | [REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md](REPLAY_PATH_INSTRUMENTATION_PROPOSAL.md) | Replay-path instrumentation design notes. |
 
@@ -31,6 +32,7 @@ Each run updates the latest report files:
 
 ```text
 sglang_direct_kv/artifacts/results/latest_master_report.html
+sglang_direct_kv/artifacts/results/latest_evidence_tables.html
 sglang_direct_kv/artifacts/results/latest_manifest.json
 ```
 
@@ -60,6 +62,140 @@ From a local checkout, the common EC2 helper commands are:
 ./aws/ssh_to_ec2.sh 0
 ./aws/download.sh 0
 ```
+
+## GH200 Transfer And Run Workflow
+
+Use the Mac as the development machine, EC2 for quick GPU validation, and GH200
+for the serious scaled experiments. Move source code only; do not copy `.venv/`,
+`.venvs/`, `node_modules/`, or `artifacts/` between architectures.
+
+The GH200 helpers default to:
+
+| Variable | Default |
+| --- | --- |
+| `AGENTIC_GH200_USER` | `ojaiyeob` |
+| `AGENTIC_GH200_HOST` | `gracehopper` |
+| `AGENTIC_GH200_JUMP_HOST` | `falcon.7elements.com` |
+| `AGENTIC_GH200_JUMP_PORT` | `1337` |
+| `AGENTIC_GH200_REMOTE_DIR` | `/home/central/ojaiyeob/agentic_hardware` |
+
+Override any of these before running the helper scripts if the GH200 login
+changes.
+
+### 1. Sync Source To GH200
+
+Run from this local checkout:
+
+```bash
+./gh200/sync_to_gh200.sh --dry
+./gh200/sync_to_gh200.sh
+```
+
+The sync excludes generated outputs, virtual environments, `node_modules`, git
+metadata, and caches. It also protects the remote `sglang_direct_kv/artifacts/`
+directory so GH200 experiment results are not overwritten by a source sync.
+
+### 2. Enter GH200 And Build Host Dependencies
+
+```bash
+./gh200/ssh_to_gh200.sh
+
+cd ~/agentic_hardware/sglang_direct_kv
+INSTALL_SYSTEM_DEPS=0 bash scripts/setup_gh200.sh
+```
+
+Use `INSTALL_SYSTEM_DEPS=0` on the current GH200 image to avoid the known DKMS
+package conflict. This builds fresh ARM64 Python environments directly on GH200.
+
+Install ARM64 Node.js with `nvm` if needed:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source "$HOME/.nvm/nvm.sh"
+nvm install --lts
+node -p "process.arch"   # expected: arm64
+```
+
+### 3. Smoke Test Harness Wiring
+
+Run this on GH200 before long GPU jobs:
+
+```bash
+cd ~/agentic_hardware
+./gh200/smoke_harnesses.sh
+```
+
+This no-GPU smoke test verifies the native client harnesses can reach the
+inspection gateway path. It includes NAT and Hermes on the GH200 host.
+
+### 4. Run GH200 GPU Experiments
+
+Run GPU experiments inside `screen` so the job survives disconnects:
+
+```bash
+screen -S gh200_experiment
+# detach:   Ctrl+A then D
+# reattach: screen -r gh200_experiment
+```
+
+First run the sentinel:
+
+```bash
+cd ~/agentic_hardware
+./gh200/run_sentinel.sh
+```
+
+Then run the EC2-scale apples-to-apples comparison on GH200:
+
+```bash
+./gh200/run_apples_to_apples.sh
+```
+
+Then run the GH200-scaled pressure ladder:
+
+```bash
+./gh200/run_scaled_pressure.sh
+```
+
+While a run is active, watch progress from another GH200 shell with:
+
+```bash
+tail -f ~/agentic_hardware/sglang_direct_kv/artifacts/results/run_logs/<REPORT_LABEL>.log
+```
+
+All three wrappers call
+[`gh200/run_signal_design_space_docker.sh`](gh200/run_signal_design_space_docker.sh),
+which mounts the checked-out repo into `lmsysorg/sglang:latest`. Because the
+repo is mounted live, source changes synced to GH200 are immediately visible
+inside Docker; no Docker rebuild is needed.
+
+Docker GPU runs currently default to these Docker-compatible harnesses:
+
+```text
+hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw
+```
+
+`nemo_agent_toolkit` and `hermes_agent` are still smoke-tested on the host, but
+are excluded from Docker GPU runs because their Python 3.11 compiled
+dependencies do not load inside the SGLang image's Python 3.12 environment.
+
+### 5. Download GH200 Reports
+
+From the Mac:
+
+```bash
+./gh200/download.sh
+```
+
+This downloads only compact latest report artifacts by default. To download one
+archived report folder:
+
+```bash
+./gh200/download.sh --label <REPORT_LABEL>
+```
+
+Avoid `--all` unless you intentionally want the full remote artifact tree,
+because raw traces can become very large.
 
 ## Core Modes
 
@@ -168,7 +304,7 @@ Python environment directly on GH200:
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
 
-bash scripts/setup_gh200.sh
+INSTALL_SYSTEM_DEPS=0 bash scripts/setup_gh200.sh
 ```
 
 That script creates:
@@ -420,57 +556,38 @@ GH200 apples-to-apples run. Use this first after migrating the checkout to
 GH200:
 
 ```bash
-cd ~/agentic_hardware/sglang_direct_kv
-source .venv/bin/activate
-
-HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
-HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
-HARDWARE_PROFILE=ec2_a10g \
-HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
-PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
-REPORT_BUILDER_MODE=lightweight \
-REPORT_LABEL="gh200_apples_to_apples_$(date +%Y%m%d_%H%M%S)" \
-bash scripts/run_native_harness_deadline_pressure.sh \
-  Qwen/Qwen2.5-Coder-7B-Instruct
+cd ~/agentic_hardware
+./gh200/run_apples_to_apples.sh
 ```
 
 GH200-scaled pressure run. Use this after the apples-to-apples run:
 
 ```bash
-cd ~/agentic_hardware/sglang_direct_kv
-source .venv/bin/activate
-
-HARNESS_NAT_BIN=$HOME/agentic_hardware/.venvs/nat_py311/bin/nat \
-HARNESS_HERMES_BIN=$HOME/agentic_hardware/.venvs/hermes_agent_py311/bin/hermes \
-HARDWARE_PROFILE=gh200 \
-HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
-PRESSURE_LEVELS="p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue" \
-MODES="no_prefetch e2e_priority_hints e2e_priority_hints_speculative_prefill" \
-REPORT_BUILDER_MODE=lightweight \
-REPORT_LABEL="gh200_scaled_deadline_pressure_$(date +%Y%m%d_%H%M%S)" \
-bash scripts/run_native_harness_deadline_pressure.sh \
-  Qwen/Qwen2.5-Coder-7B-Instruct
+cd ~/agentic_hardware
+./gh200/run_scaled_pressure.sh
 ```
 
 The lightweight report shows the Replay Deadline Pressure Chart as a
-pressure-first overlay with two panels. Panel A measures full replay-deadline
-lateness from replay due time to first token. Panel B measures backend-only time
-from SGLang receive to first token, which separates harness/client overhead from
-SGLang queueing, KV movement, and compute. P0/P3/P5 are the main x-axis
-sections, color separates `no_prefetch` from `e2e_priority_hints`, and symbol
-shape separates harnesses.
+pressure-first overlay with three panels. Panel A measures full replay-deadline
+lateness from replay due time to first token using a compressed symlog axis.
+Panel B shows the same replay-deadline data with a normal linear y-axis. Panel C
+shows replay TTFT, measured from replay request start at the gateway/client
+boundary to first token. Pressure levels are the main x-axis sections, color
+separates the signal path, and symbol shape separates harnesses.
 
 For signal-design-space reports, the chart intentionally collapses lower-level
-implementation modes into four manager-facing colors based on the actual proof
-fields for each target replay request, not just the mode that was attempted:
+implementation modes into manager-facing signal buckets based on the actual
+proof fields for each target replay request, not just the mode that was
+attempted:
 
-| Chart color bucket | Meaning |
+| Chart bucket | Meaning |
 | --- | --- |
-| `Baseline` | No signal was actually supplied or lowered for this replay request. Failed harness-emitted attempts fall back here. |
-| `Harness Cache Emitted` | The target replay request carried a harness-emitted cache/prompt-cache signal, and the gateway lowered cache metadata for SGLang. |
-| `Harness Priority Emitted` | The target replay request carried a harness-emitted priority/latency signal, and the gateway lowered SGLang `priority`. |
-| `Front-End Supplied` | The experiment/front end supplied signal intent before the harness, and the gateway translated what came through. |
+| `Baseline` | No signal was supplied or lowered for this replay request. Failed harness-emitted attempts fall back here. |
+| `Harness Cache Emitted` | The target replay request carried a harness-emitted cache/prompt-cache signal; the gateway lowered it to speculative KV preload. |
+| `Harness Priority Emitted` | The target replay request carried a harness-emitted priority/latency signal; the gateway lowered SGLang `priority`. |
+| `Harness Cache + Priority Emitted` | The target replay request carried both cache/preload and priority signals. |
+| `Front-End Supplied` | The experiment/front end supplied signal intent before the harness; the gateway translated what came through. |
+| `Gateway Priority Injected` | The gateway attached SGLang priority at the backend boundary after the request left the harness. |
 
 The raw lower-level modes remain in the evidence tables and CSV artifacts.
 
