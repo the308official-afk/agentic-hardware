@@ -17,6 +17,15 @@ from typing import Any
 
 import httpx
 
+from agentic_kv.controller import (
+    BackendCapabilities,
+    ControllerEvent,
+    ControllerPolicy,
+    ControllerStateStore,
+    EventType,
+    ObserveOnlyBackendAdapter,
+    PolicyConfig,
+)
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
@@ -41,11 +50,13 @@ SUPPORTED_MODES = (
     "no_cache_signal",
     "harness_native_cache_lowered",
     "harness_emitted_signals",
+    "controller_observe_only",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
 HARNESS_NATIVE_CACHE_MODE = "harness_native_cache_lowered"
 HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
+CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -134,6 +145,10 @@ def harness_emitted_signal_mode(mode: str) -> bool:
     return mode == HARNESS_EMITTED_SIGNAL_MODE
 
 
+def controller_observe_only_mode(mode: str) -> bool:
+    return mode == CONTROLLER_OBSERVE_ONLY_MODE
+
+
 def nat_inferred_node_for_phase(phase: str) -> dict[str, Any]:
     if phase == "replay":
         name = "replay_after_tool_wait"
@@ -220,6 +235,39 @@ def attach_pre_harness_priority_intent(meta: dict[str, Any]) -> dict[str, Any]:
 def attach_harness_priority_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     meta = attach_pre_harness_priority_intent(meta)
     return attach_nat_inferred_priority_profile(meta)
+
+
+def controller_event_from_meta(
+    event_id: str,
+    event_type: EventType,
+    meta: dict[str, Any],
+    *,
+    monotonic_ms: int,
+    expected_completion_ms: int | None = None,
+    deadline_after_completion_ms: int | None = None,
+    eta_uncertainty_ms: int | None = None,
+) -> ControllerEvent:
+    return ControllerEvent(
+        event_id=event_id,
+        event=event_type,
+        session_id=str(meta.get("session_id") or ""),
+        prefix_id=str(meta.get("prefix_id") or meta.get("session_id") or ""),
+        session_generation=int(meta.get("session_generation") or 0),
+        monotonic_ms=monotonic_ms,
+        expected_completion_ms=expected_completion_ms,
+        eta_uncertainty_ms=eta_uncertainty_ms,
+        deadline_after_completion_ms=deadline_after_completion_ms,
+        execution_priority=int(meta.get("high_priority") or 0),
+        hbm_residency_priority=int(meta.get("hbm_residency_priority") or 0),
+        host_retention_priority=int(meta.get("host_retention_priority") or 0),
+        metadata={
+            "harness": meta.get("harness", ""),
+            "mode": meta.get("mode", ""),
+            "pressure_level": meta.get("pressure_level", ""),
+            "phase": meta.get("phase", ""),
+            "label": meta.get("label", ""),
+        },
+    )
 
 
 def harness_native_cache_enabled(meta: dict[str, Any]) -> bool:
@@ -1043,6 +1091,27 @@ async def main_async() -> None:
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     workload_start = time.perf_counter()
+    controller_enabled = controller_observe_only_mode(args.mode)
+    controller_store = ControllerStateStore()
+    controller_policy = ControllerPolicy(
+        PolicyConfig(
+            observe_only=True,
+            prepare_window_ms=max(25, args.tool_wait_ms),
+            background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
+        )
+    )
+    controller_backend = ObserveOnlyBackendAdapter(
+        BackendCapabilities(
+            priority_queue=True,
+            background_prefill_budget=True,
+            kv_demote=True,
+            kv_prefetch=True,
+            kv_release=True,
+            live_metrics=True,
+            observe_only=True,
+            backend_name="controller_observe_only",
+        )
+    )
     if args.mode == NAT_INFERRED_PRIORITY_MODE or (
         args.mode == HARNESS_EMITTED_SIGNAL_MODE and args.harness == "nemo_agent_toolkit"
     ):
@@ -1068,6 +1137,50 @@ async def main_async() -> None:
         delay = workload_start + target_ms / 1000.0 - time.perf_counter()
         if delay > 0:
             await asyncio.sleep(delay)
+
+    def record_controller_event(
+        event_id: str,
+        event_type: EventType,
+        meta: dict[str, Any],
+        *,
+        monotonic_ms: int,
+        expected_completion_ms: int | None = None,
+        deadline_after_completion_ms: int | None = None,
+        eta_uncertainty_ms: int | None = None,
+    ) -> None:
+        if not controller_enabled:
+            return
+        event = controller_event_from_meta(
+            event_id,
+            event_type,
+            meta,
+            monotonic_ms=monotonic_ms,
+            expected_completion_ms=expected_completion_ms,
+            deadline_after_completion_ms=deadline_after_completion_ms,
+            eta_uncertainty_ms=eta_uncertainty_ms,
+        )
+        state, accepted = controller_store.apply_event(event)
+        decision = controller_policy.plan(state, controller_backend.capabilities(), now_ms=monotonic_ms)
+        results = [controller_backend.apply(command).to_dict() for command in decision.commands]
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.controller.decision",
+                "controller_schema_version": decision.schema_version,
+                "controller_event": event.event.value,
+                "controller_event_id": event.event_id,
+                "controller_event_accepted": accepted,
+                "controller_phase": state.phase.value,
+                "controller_decision": decision.to_dict(),
+                "controller_backend_results": results,
+                "session_id": event.session_id,
+                "prefix_id": event.prefix_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "pressure_level": args.pressure_level,
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
 
     write_trace(
         args.trace,
@@ -1143,6 +1256,8 @@ async def main_async() -> None:
             "harness": args.harness,
             "mode": args.mode,
             "pressure_level": args.pressure_level,
+            "session_generation": 1,
+            "prefix_id": f"{pair.session_id}:prefix",
             "high_priority": 100,
             "speculative_prefill_priority": 50,
             "low_priority": -100,
@@ -1172,6 +1287,15 @@ async def main_async() -> None:
         await bounded_request(pair.prompt, initial_meta)
         tool_start_ms = offset_ms()
         replay_due_ms = tool_start_ms + args.tool_wait_ms
+        record_controller_event(
+            f"{pair.session_id}:tool_started",
+            EventType.TOOL_STARTED,
+            {**base_meta, "session_id": pair.session_id, "phase": "tool_wait", "label": f"{pair.session_id}_tool_wait"},
+            monotonic_ms=int(tool_start_ms),
+            expected_completion_ms=int(replay_due_ms),
+            deadline_after_completion_ms=args.tool_wait_ms,
+            eta_uncertainty_ms=max(1, args.tool_wait_ms // 4),
+        )
         write_trace(
             args.trace,
             {
@@ -1306,6 +1430,15 @@ async def main_async() -> None:
             for idx in range(args.filler_sessions)
         ]
         await sleep_until(replay_due_ms)
+        record_controller_event(
+            f"{pair.session_id}:prepare_checkpoint",
+            EventType.TOOL_ETA_UPDATED,
+            {**base_meta, "session_id": pair.session_id, "phase": "prepare", "label": f"{pair.session_id}_prepare"},
+            monotonic_ms=int(replay_due_ms),
+            expected_completion_ms=int(replay_due_ms),
+            deadline_after_completion_ms=args.tool_wait_ms,
+            eta_uncertainty_ms=0,
+        )
         write_trace(
             args.trace,
             {
@@ -1340,6 +1473,15 @@ async def main_async() -> None:
                 "replay_due_offset_ms": round(replay_due_ms, 3),
             },
         )
+        record_controller_event(
+            f"{pair.session_id}:tool_completed",
+            EventType.TOOL_COMPLETED,
+            {**base_meta, "session_id": pair.session_id, "phase": "replay", "label": f"{pair.session_id}_replay"},
+            monotonic_ms=int(replay_due_ms),
+            expected_completion_ms=int(replay_due_ms),
+            deadline_after_completion_ms=args.tool_wait_ms,
+            eta_uncertainty_ms=0,
+        )
         replay_meta = {
             **base_meta,
             "session_id": pair.session_id,
@@ -1353,6 +1495,12 @@ async def main_async() -> None:
         }
         replay_meta = attach_harness_priority_metadata(replay_meta)
         await bounded_request(pair.replay_prompt, replay_meta)
+        record_controller_event(
+            f"{pair.session_id}:session_finished",
+            EventType.SESSION_FINISHED,
+            {**base_meta, "session_id": pair.session_id, "phase": "finished", "label": f"{pair.session_id}_finished"},
+            monotonic_ms=int(offset_ms()),
+        )
         write_trace(
             args.trace,
             {

@@ -53,6 +53,7 @@ MODE_LABELS = {
     "no_cache_signal": "NC = No native cache signal",
     "harness_native_cache_lowered": "HC = Harness native cache lowered",
     "harness_emitted_signals": "HE = Harness emitted signals",
+    "controller_observe_only": "CO = Controller observe-only",
 }
 
 MODE_COLORS = {
@@ -64,6 +65,7 @@ MODE_COLORS = {
     "no_cache_signal": "#64748b",
     "harness_native_cache_lowered": "#f97316",
     "harness_emitted_signals": "#16a34a",
+    "controller_observe_only": "#0f172a",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -117,6 +119,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#dc2626",
         "modes": {"e2e_priority_hints_speculative_prefill"},
     },
+    "controller_observe": {
+        "label": "Controller Observe-Only",
+        "description": "Portable controller observed lifecycle state and recorded planned actions without mutating SGLang",
+        "color": "#0f172a",
+        "modes": {"controller_observe_only"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -128,6 +136,7 @@ CHART_SIGNAL_ORDER = (
     "frontend_supplied",
     "gateway_priority_injected",
     "gateway_speculative_prefill",
+    "controller_observe",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -225,6 +234,12 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "After the harness, before SGLang",
         "what_it_means": "The harness output is normal; the gateway attaches SGLang priority at the backend boundary.",
         "raw_modes": "e2e_priority_hints",
+    },
+    {
+        "family": "Controller observe-only",
+        "where_signal_is_added": "Portable controller sidecar",
+        "what_it_means": "The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang.",
+        "raw_modes": "controller_observe_only",
     },
 ]
 
@@ -1790,6 +1805,8 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")):
             return "gateway_speculative_prefill"
         return "baseline"
+    if mode == "controller_observe_only":
+        return "controller_observe"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket

@@ -286,7 +286,7 @@ run_case() {
     driver_extra_args=(--nat-inferred-profile-out "${REPORT_DIR}/nat_inferred_priority_profile.json")
   fi
 
-  "${PYTHON_BIN}" scripts/run_multi_harness_replay_driver.py \
+  PYTHONPATH="${DIRECT_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" scripts/run_multi_harness_replay_driver.py \
     --harness "${harness}" \
     --mode "${mode}" \
     --pressure-level "${level}" \

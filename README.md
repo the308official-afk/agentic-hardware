@@ -217,6 +217,41 @@ The current manager-facing comparisons use these modes:
 | `no_cache_signal` | Cache-signal baseline. The gateway is present and records native harness cache fields, but it does not lower them to SGLang. |
 | `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
 | `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
+| `controller_observe_only` | Portable controller phase 1. The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang. |
+
+## Portable Agent-Aware Controller Foundation
+
+The controller prototype is intentionally backend-neutral. It lives in
+`sglang_direct_kv/src/agentic_kv/controller/` and owns versioned lifecycle
+events, per-session state, timing estimates, policy decisions, and backend
+capability checks. SGLang-specific code should stay in a thin adapter/enforcer
+layer so the controller can move across EC2, GH200, and newer SGLang releases.
+
+Current foundation smoke test:
+
+```bash
+cd sglang_direct_kv
+PYTHONPATH=src python3 scripts/smoke_agentic_controller.py
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+The first implementation slice is observe-only by default. It records what the
+controller would do when a session enters tool wait, becomes ready after tool
+completion, or finishes, without mutating SGLang. Later phases should connect
+the same command envelope to scheduler priority, background prefill budget,
+gateway speculative KV preload, targeted KV prefetch, and eventually
+demote/restore actions.
+
+Small controller-family run:
+
+```bash
+cd sglang_direct_kv
+SIGNAL_FAMILIES=controller_observe \
+HARNESSES=hatcher \
+PRESSURE_LEVELS=p0_control \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
 
 For NeMo Agent Toolkit / NAT, `pre_harness_priority_hints` uses NAT's OpenAI
 provider pass-through path. The generated NAT workflow includes

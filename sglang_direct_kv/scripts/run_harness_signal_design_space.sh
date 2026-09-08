@@ -8,7 +8,7 @@ cd "${DIRECT_ROOT}"
 
 SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected"
+  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -28,6 +28,7 @@ BASELINE_MODES="${BASELINE_MODES:-no_prefetch}"
 HARNESS_EMITTED_MODES="${HARNESS_EMITTED_MODES:-harness_emitted_signals}"
 FRONTEND_SUPPLIED_MODES="${FRONTEND_SUPPLIED_MODES:-pre_harness_priority_hints}"
 GATEWAY_INJECTED_MODES="${GATEWAY_INJECTED_MODES:-e2e_priority_hints}"
+CONTROLLER_OBSERVE_MODES="${CONTROLLER_OBSERVE_MODES:-controller_observe_only}"
 DRY_RUN="${DRY_RUN:-0}"
 
 if [[ "${REPORT_BUILDER_MODE}" != "lightweight" ]]; then
@@ -79,10 +80,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      baseline|harness_emitted|frontend_supplied|gateway_injected) ;;
+      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected all" >&2
+        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe all" >&2
         exit 2
         ;;
     esac
@@ -162,6 +163,7 @@ write_combined_run_config() {
     echo "HARNESS_EMITTED_MODES=${HARNESS_EMITTED_MODES}"
     echo "FRONTEND_SUPPLIED_MODES=${FRONTEND_SUPPLIED_MODES}"
     echo "GATEWAY_INJECTED_MODES=${GATEWAY_INJECTED_MODES}"
+    echo "CONTROLLER_OBSERVE_MODES=${CONTROLLER_OBSERVE_MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
@@ -239,6 +241,11 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "gateway_injected:priority")"
+  elif [[ "${family}" == "controller_observe" ]]; then
+    for mode in ${CONTROLLER_OBSERVE_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_observe:lifecycle")"
   fi
 done
 
@@ -264,6 +271,9 @@ fi
 if word_in_list "gateway_injected" "${SIGNAL_FAMILIES}"; then
   echo "- gateway_injected -> ${GATEWAY_INJECTED_MODES}"
 fi
+if word_in_list "controller_observe" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_observe -> ${CONTROLLER_OBSERVE_MODES}"
+fi
 echo "Combined mode set for final report: ${EXPANDED_MODES}"
 
 if word_in_list "baseline" "${SIGNAL_FAMILIES}"; then
@@ -280,6 +290,10 @@ fi
 
 if word_in_list "gateway_injected" "${SIGNAL_FAMILIES}"; then
   run_family_piece "gateway_injected" "priority" "${GATEWAY_INJECTED_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "controller_observe" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_observe" "lifecycle" "${CONTROLLER_OBSERVE_MODES}" "${HARNESSES}"
 fi
 
 write_combined_run_config
