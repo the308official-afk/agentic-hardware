@@ -58,6 +58,7 @@ MODE_LABELS = {
     "controller_speculative_preload": "CL = Controller speculative KV preload",
     "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
     "controller_demote_restore": "CD = Controller demote/restore",
+    "controller_admission_control": "CA = Controller admission control",
 }
 
 MODE_COLORS = {
@@ -74,6 +75,7 @@ MODE_COLORS = {
     "controller_speculative_preload": "#9333ea",
     "controller_targeted_kv_prefetch": "#f59e0b",
     "controller_demote_restore": "#0d9488",
+    "controller_admission_control": "#2563eb",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -157,6 +159,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#0d9488",
         "modes": {"controller_demote_restore"},
     },
+    "controller_admission": {
+        "label": "Controller Admission Control",
+        "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
+        "color": "#2563eb",
+        "modes": {"controller_admission_control"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -173,6 +181,7 @@ CHART_SIGNAL_ORDER = (
     "controller_preload",
     "controller_targeted_prefetch",
     "controller_demote_restore",
+    "controller_admission",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -944,6 +953,104 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                         else ""
                     ),
                     "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
+                    "verdict": verdict,
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                }
+            )
+    return proof_rows
+
+
+def collect_controller_admission_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_by_session = {
+        (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
+        for row in replay_rows
+        if row.get("mode") == "controller_admission_control"
+    }
+    proof_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        admission_events = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_admission.decision"
+        ]
+        if not admission_events:
+            continue
+        warmup_start_by_session = {
+            str(row.get("session_id") or ""): row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.speculative_prefill.warmup_start"
+            and str(row.get("trigger") or "") == "controller_admission_decision"
+        }
+        warmup_end_by_session = {
+            str(row.get("session_id") or ""): row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.speculative_prefill.warmup_end"
+            and str(row.get("trigger") or "") == "controller_admission_decision"
+        }
+        warmup_error_by_session = {
+            str(row.get("session_id") or ""): row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.speculative_prefill.warmup_error"
+            and str(row.get("trigger") or "") == "controller_admission_decision"
+        }
+        for admission in admission_events:
+            session_id = str(admission.get("session_id") or "")
+            replay_row = replay_by_session.get((str(case_dir), session_id), {})
+            warmup_start = warmup_start_by_session.get(session_id, {})
+            warmup_end = warmup_end_by_session.get(session_id, {})
+            warmup_error = warmup_error_by_session.get(session_id, {})
+            admitted = str(admission.get("decision") or "") == "admit"
+            warmup_started = bool(warmup_start)
+            warmup_completed = bool(warmup_end)
+            warmup_failed = bool(warmup_error)
+            replay_priority = optional_float(replay_row.get("sglang_priority"))
+            replay_raised = replay_priority is not None and replay_priority >= 100
+            if admitted and warmup_completed and replay_raised:
+                verdict = "warmup admitted, completed, and replay was priority-raised"
+            elif admitted and warmup_started and warmup_failed:
+                verdict = "warmup admitted but failed"
+            elif admitted and not warmup_started:
+                verdict = "warmup admitted but no warmup request was observed"
+            elif not admitted and replay_raised:
+                verdict = "warmup skipped with explicit reason; replay was still priority-raised"
+            else:
+                verdict = "admission proof incomplete"
+            proof_rows.append(
+                {
+                    "harness_label": replay_row.get(
+                        "harness_label",
+                        HARNESS_LABELS.get(str(admission.get("harness") or ""), str(admission.get("harness") or "")),
+                    ),
+                    "pressure_level_label": replay_row.get(
+                        "pressure_level_label",
+                        PRESSURE_LABELS.get(str(admission.get("pressure_level") or ""), str(admission.get("pressure_level") or "")),
+                    ),
+                    "mode_label": MODE_LABELS.get("controller_admission_control", "controller_admission_control"),
+                    "session_id": session_id,
+                    "admission_decision": admission.get("decision", ""),
+                    "admission_reason": admission.get("reason", ""),
+                    "prefetch_command_id": admission.get("prefetch_command_id", ""),
+                    "budget_command_id": admission.get("budget_command_id", ""),
+                    "admitted_warmups_before": admission.get("admitted_warmups_before", ""),
+                    "admitted_warmups_after": admission.get("admitted_warmups_after", ""),
+                    "max_warmups_per_case": admission.get("max_warmups_per_case", ""),
+                    "tool_wait_ms": admission.get("tool_wait_ms", ""),
+                    "filler_sessions": admission.get("filler_sessions", ""),
+                    "concurrency": admission.get("concurrency", ""),
+                    "min_tool_wait_ms": admission.get("min_tool_wait_ms", ""),
+                    "max_filler_sessions": admission.get("max_filler_sessions", ""),
+                    "max_concurrency": admission.get("max_concurrency", ""),
+                    "warmup_started": "yes" if warmup_started else "no",
+                    "warmup_completed": "yes" if warmup_completed else "no",
+                    "warmup_failed": "yes" if warmup_failed else "no",
+                    "replay_request_id": replay_row.get("request_id", ""),
+                    "replay_sglang_priority": replay_row.get("sglang_priority", ""),
+                    "replay_priority_raised": "yes" if replay_raised else "no",
+                    "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
+                    "ttft_ms": replay_row.get("ttft_ms", ""),
+                    "sglang_receive_to_first_token_ms": replay_row.get("sglang_receive_to_first_token_ms", ""),
                     "verdict": verdict,
                     "case_id": case_dir.name,
                     "case_dir": str(case_dir),
@@ -1827,6 +1934,39 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "demote_to_replay_start_ms",
     "replay_to_restore_ms",
     "first_token_lateness_ms",
+    "verdict",
+    "case_id",
+    "case_dir",
+]
+
+
+CONTROLLER_ADMISSION_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "session_id",
+    "admission_decision",
+    "admission_reason",
+    "prefetch_command_id",
+    "budget_command_id",
+    "admitted_warmups_before",
+    "admitted_warmups_after",
+    "max_warmups_per_case",
+    "tool_wait_ms",
+    "filler_sessions",
+    "concurrency",
+    "min_tool_wait_ms",
+    "max_filler_sessions",
+    "max_concurrency",
+    "warmup_started",
+    "warmup_completed",
+    "warmup_failed",
+    "replay_request_id",
+    "replay_sglang_priority",
+    "replay_priority_raised",
+    "first_token_lateness_ms",
+    "ttft_ms",
+    "sglang_receive_to_first_token_ms",
     "verdict",
     "case_id",
     "case_dir",
@@ -2893,6 +3033,7 @@ def render_html(
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
+    controller_admission_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -3050,6 +3191,7 @@ def render_evidence_html(
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
+    controller_admission_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -3095,6 +3237,7 @@ def render_evidence_html(
         controller_demote_restore_rows,
         CONTROLLER_DEMOTE_RESTORE_COLUMNS,
     )
+    controller_admission_table = render_table(controller_admission_rows, CONTROLLER_ADMISSION_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -3184,6 +3327,9 @@ a {{ color: #2563eb; }}
 <h2>Controller Demote/Restore Proof</h2>
 <p>This table appears when the run includes <code>controller_demote_restore</code>. It proves whether background/filler traffic was lowered during the target replay window, whether the replay itself was raised to SGLang priority, and whether normal behavior was restored afterward.</p>
 <div class="card">{controller_demote_restore_table if controller_demote_restore_rows else "<p>No controller demote/restore rows found in this run.</p>"}</div>
+<h2>Controller Admission Proof</h2>
+<p>This table appears when the run includes <code>controller_admission_control</code>. It proves whether controller speculative warmup was admitted or skipped, why it was skipped, and whether replay priority was still lowered into SGLang.</p>
+<div class="card">{controller_admission_table if controller_admission_rows else "<p>No controller admission rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code> or <code>harness_emitted_signals</code>. It proves whether a background <code>max_tokens=1</code> warmup was sent before replay, whether it was triggered by gateway speculative KV preload, and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -3208,6 +3354,7 @@ def write_manifest(
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
+    controller_admission_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -3229,6 +3376,7 @@ def write_manifest(
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "targeted_kv_prefetch_row_count": len(targeted_kv_prefetch_rows),
         "controller_demote_restore_row_count": len(controller_demote_restore_rows),
+        "controller_admission_row_count": len(controller_admission_rows),
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
         "cache_signal_row_count": len(cache_signal_rows),
@@ -3268,6 +3416,7 @@ def main() -> None:
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
         targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
         controller_demote_restore_rows = read_csv_table(args.out_dir / "controller_demote_restore_proof.csv")
+        controller_admission_rows = read_csv_table(args.out_dir / "controller_admission_proof.csv")
         harness_priority_rows = read_csv_table(args.out_dir / "harness_priority_preservation_proof.csv")
         nat_service_priority_rows = read_csv_table(args.out_dir / "nat_service_priority_probe.csv")
         cache_signal_rows = read_csv_table(args.out_dir / "harness_native_cache_signal_proof.csv")
@@ -3279,6 +3428,7 @@ def main() -> None:
         speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
         targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, rows)
         controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, rows)
+        controller_admission_rows = collect_controller_admission_proof(args.root, rows)
         harness_priority_rows = collect_harness_priority_proof(args.root, rows)
         nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
         cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
@@ -3300,6 +3450,7 @@ def main() -> None:
         controller_demote_restore_rows,
         CONTROLLER_DEMOTE_RESTORE_COLUMNS,
     )
+    write_csv(args.out_dir / "controller_admission_proof.csv", controller_admission_rows, CONTROLLER_ADMISSION_COLUMNS)
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -3312,6 +3463,7 @@ def main() -> None:
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
+        controller_admission_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3328,6 +3480,7 @@ def main() -> None:
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
+        controller_admission_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3349,6 +3502,7 @@ def main() -> None:
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
+        controller_admission_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3371,6 +3525,7 @@ def main() -> None:
             speculative_prefill_rows,
             targeted_kv_prefetch_rows,
             controller_demote_restore_rows,
+            controller_admission_rows,
             harness_priority_rows,
             nat_service_priority_rows,
             cache_signal_rows,

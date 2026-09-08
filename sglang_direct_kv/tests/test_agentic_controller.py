@@ -8,6 +8,7 @@ from agentic_kv.controller import (
     ControllerPolicy,
     ControllerStateStore,
     EventType,
+    GatewayAdmissionControlBackendAdapter,
     GatewayDemoteRestoreBackendAdapter,
     GatewayPriorityBackendAdapter,
     GatewaySpeculativePreloadBackendAdapter,
@@ -212,6 +213,62 @@ class AgenticControllerTests(unittest.TestCase):
         self.assertFalse(decision.observed_only)
         self.assertIs(decision.commands[0].kv_action, KVAction.PREFETCH)
         self.assertTrue(result.acted)
+
+    def test_gateway_admission_adapter_acts_on_prefetch_budget_priority_and_release(self) -> None:
+        store = ControllerStateStore()
+        wait_state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=50,
+                deadline_after_completion_ms=50,
+                execution_priority=100,
+            )
+        )
+        policy = ControllerPolicy(PolicyConfig(observe_only=False, prepare_window_ms=100))
+        backend = GatewayAdmissionControlBackendAdapter()
+
+        wait_decision = policy.plan(wait_state, backend.capabilities(), now_ms=0)
+        wait_results = [backend.apply(command) for command in wait_decision.commands]
+        self.assertIn(KVAction.PREFETCH, {command.kv_action for command in wait_decision.commands})
+        self.assertIn(
+            SchedulerAction.SET_BACKGROUND_PREFILL_BUDGET,
+            {command.scheduler_action for command in wait_decision.commands},
+        )
+        self.assertTrue(all(result.acted for result in wait_results))
+
+        ready_state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-ready",
+                event=EventType.TOOL_COMPLETED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=50,
+                execution_priority=100,
+            )
+        )
+        ready_decision = policy.plan(ready_state, backend.capabilities(), now_ms=50)
+        ready_result = backend.apply(ready_decision.commands[0])
+        self.assertIs(ready_decision.commands[0].scheduler_action, SchedulerAction.SET_PRIORITY)
+        self.assertTrue(ready_result.acted)
+
+        finished_state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-finished",
+                event=EventType.SESSION_FINISHED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=100,
+                execution_priority=100,
+            )
+        )
+        finished_decision = policy.plan(finished_state, backend.capabilities(), now_ms=100)
+        release_result = backend.apply(finished_decision.commands[0])
+        self.assertIs(finished_decision.commands[0].kv_action, KVAction.RELEASE)
+        self.assertTrue(release_result.acted)
 
     def test_targeted_kv_prefetch_adapter_records_unavailable_hook(self) -> None:
         store = ControllerStateStore()

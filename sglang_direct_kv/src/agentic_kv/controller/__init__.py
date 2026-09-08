@@ -7,6 +7,7 @@ packages adapt its versioned commands to a specific SGLang release.
 from .backend import (
     BackendAdapter,
     BackendActionResult,
+    GatewayAdmissionControlBackendAdapter,
     GatewayDemoteRestoreBackendAdapter,
     GatewayPriorityBackendAdapter,
     GatewaySpeculativePreloadBackendAdapter,
@@ -37,6 +38,7 @@ __all__ = [
     "ControllerPolicy",
     "ControllerStateStore",
     "EventType",
+    "GatewayAdmissionControlBackendAdapter",
     "GatewayDemoteRestoreBackendAdapter",
     "GatewayPriorityBackendAdapter",
     "GatewaySpeculativePreloadBackendAdapter",

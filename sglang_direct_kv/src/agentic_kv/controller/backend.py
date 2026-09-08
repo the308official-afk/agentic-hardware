@@ -191,6 +191,72 @@ class GatewaySpeculativePreloadBackendAdapter:
         )
 
 
+class GatewayAdmissionControlBackendAdapter:
+    """Adapter for controller-driven speculative work admission.
+
+    The adapter accepts priority, prefetch, and background-budget commands. The
+    actual admit/skip choice is made by the portable experiment driver using
+    pressure knobs and the accepted command envelope.
+    """
+
+    def __init__(self, capabilities: BackendCapabilities | None = None) -> None:
+        self._capabilities = capabilities or BackendCapabilities(
+            priority_queue=True,
+            background_prefill_budget=True,
+            kv_prefetch=True,
+            kv_release=True,
+            live_metrics=True,
+            observe_only=False,
+            backend_name="controller_admission_control",
+        )
+        self.commands: list[ControllerCommand] = []
+
+    def capabilities(self) -> BackendCapabilities:
+        return self._capabilities
+
+    def apply(self, command: ControllerCommand) -> BackendActionResult:
+        self.commands.append(command)
+        if command.kv_action is KVAction.PREFETCH:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller prefetch accepted for admission-gated warmup",
+                backend_name=self._capabilities.backend_name,
+            )
+        if command.scheduler_action is SchedulerAction.SET_BACKGROUND_PREFILL_BUDGET:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller background prefill budget accepted for admission gating",
+                backend_name=self._capabilities.backend_name,
+            )
+        if command.scheduler_action is SchedulerAction.SET_PRIORITY and command.priority is not None:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller replay priority accepted for admission-control mode",
+                backend_name=self._capabilities.backend_name,
+            )
+        if command.kv_action is KVAction.RELEASE:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller admission-control release recorded after replay",
+                backend_name=self._capabilities.backend_name,
+            )
+        return BackendActionResult(
+            command_id=command.command_id,
+            accepted=True,
+            acted=False,
+            reason="controller command recorded but not active in admission-control mode",
+            backend_name=self._capabilities.backend_name,
+        )
+
+
 class SGLangTargetedKVPrefetchBackendAdapter:
     """Adapter for a future direct SGLang host-to-device KV prefetch hook.
 

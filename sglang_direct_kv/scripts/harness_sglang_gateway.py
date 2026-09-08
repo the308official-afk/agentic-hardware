@@ -24,6 +24,7 @@ PRIORITY_ENABLED_MODES = {
     "harness_emitted_signals",
     "controller_scheduler_priority",
     "controller_demote_restore",
+    "controller_admission_control",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -31,9 +32,11 @@ CACHE_LOWER_MODE = "harness_native_cache_lowered"
 HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
+CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
+    CONTROLLER_ADMISSION_CONTROL_MODE,
 }
 CACHE_SIGNAL_MODES = {
     "no_cache_signal",
@@ -579,6 +582,8 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "controller_demote_decision_id": meta.get("controller_demote_decision_id", ""),
         "controller_demote_command_id": meta.get("controller_demote_command_id", ""),
         "controller_demote_translation": meta.get("controller_demote_translation", ""),
+        "controller_admission_decision": meta.get("controller_admission_decision", ""),
+        "controller_admission_reason": meta.get("controller_admission_reason", ""),
         "harness_native_cache_signal_seen": cache_chain["harness_native_cache_signal_seen"],
         "harness_native_cache_signal": cache_chain["harness_native_cache_signal"],
         "gateway_cache_translation": cache_chain["gateway_cache_translation"],
@@ -619,6 +624,8 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "controller_demote_decision_id": meta.get("controller_demote_decision_id", ""),
             "controller_demote_command_id": meta.get("controller_demote_command_id", ""),
             "controller_demote_translation": meta.get("controller_demote_translation", ""),
+            "controller_admission_decision": meta.get("controller_admission_decision", ""),
+            "controller_admission_reason": meta.get("controller_admission_reason", ""),
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),

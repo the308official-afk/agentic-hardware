@@ -221,6 +221,8 @@ The current manager-facing comparisons use these modes:
 | `controller_scheduler_priority` | Portable controller phase 2. The controller observes replay readiness and lowers only its ready-phase priority decision to SGLang scheduler priority. |
 | `controller_speculative_preload` | Portable controller phase 3. The controller observes the tool-wait window and lowers an accepted KV prefetch decision to gateway speculative KV preload. |
 | `controller_targeted_kv_prefetch` | Portable controller phase 4. The controller requests explicit target-prefix KV movement through a capability-gated SGLang adapter. If the active SGLang version exposes no stable direct hook, the report records that instead of using a warmup fallback. |
+| `controller_demote_restore` | Portable controller phase 5. The controller lowers matching background/filler traffic during the replay-critical window, raises replay priority, and records restore/release afterward. |
+| `controller_admission_control` | Portable controller phase 6. The controller admits or skips speculative warmup based on pressure limits, so overload cases get explicit skip reasons instead of unbounded background work. |
 
 ## Portable Agent-Aware Controller Foundation
 
@@ -300,6 +302,17 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Small admission-control controller run:
+
+```bash
+cd sglang_direct_kv
+SIGNAL_FAMILIES=controller_admission \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p1_mild p4_cliff" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 ## Agent-Aware Controller Roadmap
 
 Use this as the phase checklist for integrating the one-worker agentic
@@ -315,7 +328,7 @@ smallest possible boundary adapter.
 | Phase 3: Gateway speculative KV preload | Mechanically validated on EC2; timing mixed | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | `controller_speculative_preload` accepts a controller `kv_action=prefetch` decision and lowers it to a gateway background warmup request. A Hatcher/DeepAgents P1/P2 validation showed controller warmup launch from the driver, warmup completion before SGLang received replay, and cached-prefix evidence on replay. P2 still missed the stricter warmup-before-deadline proof, so the next phase needs earlier prediction or admission control. |
 | Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, and any matching SGLang load-back or host-to-device copy before replay compute. If no stable direct hook exists, the evidence table says so explicitly. |
 | Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
-| Phase 6: Admission and overload control | Planned | Decide when the system is too busy to accept more speculative work or urgent bursts. | P4/P5 runs show bounded speculative work, clear skip reasons, and no runaway queue growth. |
+| Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
 | Phase 7: GH200 profile and scale-up | Planned | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | GH200 report uses the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 Phase gate for each implementation slice:

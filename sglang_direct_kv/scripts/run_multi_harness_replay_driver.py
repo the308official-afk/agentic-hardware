@@ -23,6 +23,7 @@ from agentic_kv.controller import (
     ControllerPolicy,
     ControllerStateStore,
     EventType,
+    GatewayAdmissionControlBackendAdapter,
     GatewayDemoteRestoreBackendAdapter,
     GatewayPriorityBackendAdapter,
     GatewaySpeculativePreloadBackendAdapter,
@@ -59,6 +60,7 @@ SUPPORTED_MODES = (
     "controller_speculative_preload",
     "controller_targeted_kv_prefetch",
     "controller_demote_restore",
+    "controller_admission_control",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -69,6 +71,7 @@ CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
+CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -177,6 +180,10 @@ def controller_demote_restore_mode(mode: str) -> bool:
     return mode == CONTROLLER_DEMOTE_RESTORE_MODE
 
 
+def controller_admission_control_mode(mode: str) -> bool:
+    return mode == CONTROLLER_ADMISSION_CONTROL_MODE
+
+
 def controller_mode(mode: str) -> bool:
     return (
         controller_observe_only_mode(mode)
@@ -184,6 +191,7 @@ def controller_mode(mode: str) -> bool:
         or controller_speculative_preload_mode(mode)
         or controller_targeted_kv_prefetch_mode(mode)
         or controller_demote_restore_mode(mode)
+        or controller_admission_control_mode(mode)
     )
 
 
@@ -1128,12 +1136,19 @@ async def main_async() -> None:
     pairs = build_pairs(args.harness, args.pressure_level, args.session_count, args.target_prompt_tokens)
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
+    admission_lock = asyncio.Lock()
+    admitted_warmups = 0
+    admission_max_warmups = int(os.environ.get("CONTROLLER_ADMISSION_MAX_WARMUPS_PER_CASE", "1"))
+    admission_min_tool_wait_ms = int(os.environ.get("CONTROLLER_ADMISSION_MIN_TOOL_WAIT_MS", "75"))
+    admission_max_filler_sessions = int(os.environ.get("CONTROLLER_ADMISSION_MAX_FILLER_SESSIONS", "16"))
+    admission_max_concurrency = int(os.environ.get("CONTROLLER_ADMISSION_MAX_CONCURRENCY", "8"))
     workload_start = time.perf_counter()
     controller_enabled = controller_mode(args.mode)
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_active_preload = controller_speculative_preload_mode(args.mode)
     controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
     controller_active_demote_restore = controller_demote_restore_mode(args.mode)
+    controller_active_admission = controller_admission_control_mode(args.mode)
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
@@ -1142,6 +1157,7 @@ async def main_async() -> None:
                 or controller_active_preload
                 or controller_active_targeted_prefetch
                 or controller_active_demote_restore
+                or controller_active_admission
             ),
             prepare_window_ms=0 if controller_active_demote_restore else max(25, args.tool_wait_ms),
             min_demote_idle_ms=0 if controller_active_demote_restore else 250,
@@ -1204,6 +1220,19 @@ async def main_async() -> None:
                 live_metrics=True,
                 observe_only=False,
                 backend_name=CONTROLLER_DEMOTE_RESTORE_MODE,
+            )
+        )
+    elif controller_active_admission:
+        controller_backend = GatewayAdmissionControlBackendAdapter(
+            BackendCapabilities(
+                priority_queue=True,
+                background_prefill_budget=True,
+                kv_demote=False,
+                kv_prefetch=True,
+                kv_release=True,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=CONTROLLER_ADMISSION_CONTROL_MODE,
             )
         )
     else:
@@ -1337,6 +1366,86 @@ async def main_async() -> None:
             kv_action=kv_action,
             require_acted=True,
         )
+
+    async def controller_admission_decision(
+        pair: HarnessPair,
+        controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None,
+        *,
+        tool_start_ms: float,
+        replay_due_ms: float,
+    ) -> dict[str, Any]:
+        nonlocal admitted_warmups
+        prefetch_command = acted_controller_command(controller_result, kv_action="prefetch")
+        budget_command = acted_controller_command(controller_result, scheduler_action="set_background_prefill_budget")
+        if prefetch_command is None:
+            decision = {
+                "admitted": False,
+                "reason": "controller_did_not_request_prefetch",
+                "prefetch_command_id": "",
+                "prefetch_decision_id": "",
+                "budget_command_id": budget_command.get("command_id", "") if budget_command else "",
+                "admitted_warmups_before": admitted_warmups,
+                "admitted_warmups_after": admitted_warmups,
+            }
+        else:
+            async with admission_lock:
+                before = admitted_warmups
+                skip_reasons: list[str] = []
+                if args.tool_wait_ms < admission_min_tool_wait_ms:
+                    skip_reasons.append(
+                        f"tool_wait_ms {args.tool_wait_ms} below minimum {admission_min_tool_wait_ms}"
+                    )
+                if args.filler_sessions > admission_max_filler_sessions:
+                    skip_reasons.append(
+                        f"filler_sessions {args.filler_sessions} above limit {admission_max_filler_sessions}"
+                    )
+                if args.concurrency > admission_max_concurrency:
+                    skip_reasons.append(f"concurrency {args.concurrency} above limit {admission_max_concurrency}")
+                if admitted_warmups >= admission_max_warmups:
+                    skip_reasons.append(
+                        f"warmup budget exhausted {admitted_warmups}/{admission_max_warmups}"
+                    )
+                admitted = not skip_reasons
+                if admitted:
+                    admitted_warmups += 1
+                decision = {
+                    "admitted": admitted,
+                    "reason": "admitted" if admitted else "; ".join(skip_reasons),
+                    "prefetch_command_id": prefetch_command.get("command_id", ""),
+                    "prefetch_decision_id": prefetch_command.get("controller_decision_id", ""),
+                    "budget_command_id": budget_command.get("command_id", "") if budget_command else "",
+                    "admitted_warmups_before": before,
+                    "admitted_warmups_after": admitted_warmups,
+                }
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.controller_admission.decision",
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "pressure_level": args.pressure_level,
+                "task_index": pair.task_index,
+                "decision": "admit" if decision["admitted"] else "skip",
+                "reason": decision["reason"],
+                "prefetch_command_id": decision["prefetch_command_id"],
+                "controller_decision_id": decision["prefetch_decision_id"],
+                "budget_command_id": decision["budget_command_id"],
+                "admitted_warmups_before": decision["admitted_warmups_before"],
+                "admitted_warmups_after": decision["admitted_warmups_after"],
+                "max_warmups_per_case": admission_max_warmups,
+                "min_tool_wait_ms": admission_min_tool_wait_ms,
+                "max_filler_sessions": admission_max_filler_sessions,
+                "max_concurrency": admission_max_concurrency,
+                "tool_wait_ms": args.tool_wait_ms,
+                "filler_sessions": args.filler_sessions,
+                "concurrency": args.concurrency,
+                "tool_start_offset_ms": round(tool_start_ms, 3),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+        return decision
 
     write_trace(
         args.trace,
@@ -1518,6 +1627,15 @@ async def main_async() -> None:
                 },
             )
         controller_speculative_preload = controller_active_preload and controller_preload_command is not None
+        controller_admission_row: dict[str, Any] | None = None
+        if controller_active_admission:
+            controller_admission_row = await controller_admission_decision(
+                pair,
+                controller_tool_start_result,
+                tool_start_ms=tool_start_ms,
+                replay_due_ms=replay_due_ms,
+            )
+        controller_admission_preload = bool(controller_admission_row and controller_admission_row.get("admitted"))
         if targeted_prefetch_command is not None:
             direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
             targeted_event_base = {
@@ -1553,10 +1671,18 @@ async def main_async() -> None:
                     "event": "m27.targeted_kv_prefetch.acted" if direct_hook_available else "m27.targeted_kv_prefetch.unavailable",
                 },
             )
-        if direct_gateway_speculative_prefill or cache_signal_driven_preload or controller_speculative_preload:
+        if (
+            direct_gateway_speculative_prefill
+            or cache_signal_driven_preload
+            or controller_speculative_preload
+            or controller_admission_preload
+        ):
             warmup_label = f"{pair.session_id}_speculative_prefill"
             replay_label = f"{pair.session_id}_replay"
             warmup_role = (
+                "controller_admission_gated_speculative_kv_preload"
+                if controller_admission_preload
+                else
                 "controller_gateway_speculative_kv_preload"
                 if controller_speculative_preload
                 else
@@ -1565,6 +1691,9 @@ async def main_async() -> None:
                 else "dynamo_like_background_warmup"
             )
             warmup_strategy = (
+                "controller_admission_gated_gateway_speculative_kv_preload"
+                if controller_admission_preload
+                else
                 "controller_lifecycle_gateway_speculative_kv_preload"
                 if controller_speculative_preload
                 else
@@ -1573,6 +1702,9 @@ async def main_async() -> None:
                 else "known_next_turn_prefix"
             )
             warmup_trigger = (
+                "controller_admission_decision"
+                if controller_admission_preload
+                else
                 "controller_prefetch_decision"
                 if controller_speculative_preload
                 else "harness_cache_signal"
@@ -1597,12 +1729,30 @@ async def main_async() -> None:
                 "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
                 "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
                 "harness_cache_signal": initial_gateway_row.get("harness_native_cache_signal", ""),
-                "controller_decision_id": controller_preload_command.get("controller_decision_id", "")
-                if controller_preload_command
-                else "",
-                "controller_command_id": controller_preload_command.get("command_id", "") if controller_preload_command else "",
-                "controller_kv_translation": "controller.prefetch=gateway_speculative_kv_preload"
-                if controller_preload_command
+                "controller_decision_id": (
+                    controller_admission_row.get("prefetch_decision_id", "")
+                    if controller_admission_preload and controller_admission_row
+                    else controller_preload_command.get("controller_decision_id", "")
+                    if controller_preload_command
+                    else ""
+                ),
+                "controller_command_id": (
+                    controller_admission_row.get("prefetch_command_id", "")
+                    if controller_admission_preload and controller_admission_row
+                    else controller_preload_command.get("command_id", "")
+                    if controller_preload_command
+                    else ""
+                ),
+                "controller_kv_translation": (
+                    "controller.admission=admitted_gateway_speculative_kv_preload"
+                    if controller_admission_preload
+                    else "controller.prefetch=gateway_speculative_kv_preload"
+                    if controller_preload_command
+                    else ""
+                ),
+                "controller_admission_decision": "admit" if controller_admission_preload else "",
+                "controller_admission_reason": controller_admission_row.get("reason", "")
+                if controller_admission_row
                 else "",
             }
             warmup_meta = attach_harness_priority_metadata(warmup_meta)
@@ -1627,6 +1777,8 @@ async def main_async() -> None:
                     "controller_decision_id": warmup_meta.get("controller_decision_id", ""),
                     "controller_command_id": warmup_meta.get("controller_command_id", ""),
                     "controller_kv_translation": warmup_meta.get("controller_kv_translation", ""),
+                    "controller_admission_decision": warmup_meta.get("controller_admission_decision", ""),
+                    "controller_admission_reason": warmup_meta.get("controller_admission_reason", ""),
                 },
             )
 
@@ -1715,6 +1867,9 @@ async def main_async() -> None:
                     else
                     "controller_gateway_speculative_kv_preload"
                     if controller_speculative_preload
+                    else
+                    "controller_admission_gated_speculative_kv_preload"
+                    if controller_admission_preload
                     else
                     "gateway_speculative_kv_preload"
                     if cache_signal_driven_preload
