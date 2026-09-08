@@ -29,7 +29,7 @@ The helpers default to:
 | `AGENTIC_GH200_HOST` | `gracehopper` |
 | `AGENTIC_GH200_JUMP_HOST` | `falcon.7elements.com` |
 | `AGENTIC_GH200_JUMP_PORT` | `1337` |
-| `AGENTIC_GH200_REMOTE_DIR` | `/home/central/ojaiyeob/agentic_hardware` |
+| `AGENTIC_GH200_REMOTE_DIR` | `/home/central/<user>/<repo-name>` (derived from local clone name) |
 | `AGENTIC_GH200_MODEL_CACHE` | `$HOME/dynamo_model_cache` |
 
 Override them on your Mac if needed:
@@ -41,12 +41,25 @@ export AGENTIC_GH200_JUMP_HOST="falcon.7elements.com"
 export AGENTIC_GH200_JUMP_PORT="1337"
 ```
 
+> **Remote dir note**: `AGENTIC_GH200_REMOTE_DIR` defaults to
+> `/home/central/<user>/<repo-name>` where `<repo-name>` is your local
+> clone's directory name. If your local clone is named `agentic-hardware`
+> but the GH200 working directory is `agentic_hardware`, set this explicitly:
+>
+> ```bash
+> export AGENTIC_GH200_REMOTE_DIR="/home/central/ojaiyeob/agentic_hardware"
+> ```
+>
+> Add this export to your shell profile or set it before every sync/download.
+
 ## 2. Sync Source From Mac To GH200
 
 Run from the repo root on your Mac:
 
 ```bash
-cd /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware
+cd /path/to/agentic-hardware   # your local clone root
+
+export AGENTIC_GH200_REMOTE_DIR="/home/central/ojaiyeob/agentic_hardware"
 
 ./gh200/sync_to_gh200.sh --dry
 ./gh200/sync_to_gh200.sh
@@ -55,6 +68,10 @@ cd /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware
 The sync copies source code only. It excludes `.git/`, `.venv/`, `.venvs/`,
 `node_modules/`, caches, logs, and `sglang_direct_kv/artifacts/`. Remote
 experiment outputs are protected.
+
+> **First-time bootstrap**: all `gh200/` helper scripts live in this repo and
+> must be synced before they can be run on GH200. Always run
+> `sync_to_gh200.sh` before following the steps below for the first time.
 
 ## 3. SSH Into GH200
 
@@ -103,12 +120,16 @@ nvm install --lts
 node -p "process.arch"   # expected: arm64
 ```
 
-For new login shells:
+For new login shells, add to `~/.bashrc`:
 
 ```bash
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 ```
+
+The GPU run scripts (`run_host_signal_design_space.sh` and anything that
+calls it) source NVM automatically if `~/.nvm/nvm.sh` exists, so Node
+does not need to be on `PATH` before invoking those scripts.
 
 ## 6. Smoke Test Harnesses
 
@@ -121,9 +142,22 @@ cd ~/agentic_hardware
 ```
 
 This is a no-GPU test. It verifies the harnesses can talk through the inspection
-gateway path, including NAT and Hermes on the host.
+gateway path, including NAT and Hermes on the host. A successful run exits with
+code 0 and prints a summary line per harness with no `ERROR` or `FAILED`
+entries. Any non-zero exit or `FAILED` line means the host environment needs
+attention before running GPU experiments.
 
 ## 7. Run GPU Experiments
+
+GPU runs require a populated model cache. The default location is
+`~/dynamo_model_cache`. If that directory is empty or missing, set:
+
+```bash
+export AGENTIC_GH200_MODEL_CACHE=/path/to/your/model_cache
+```
+
+The run scripts will abort early with a clear message if the cache is not
+found.
 
 Use `screen` so the job survives disconnects:
 
@@ -140,6 +174,12 @@ cd ~/agentic_hardware
 
 ./gh200/run_sentinel.sh
 ```
+
+`run_sentinel.sh` is a fast first check: Hatcher only, baseline vs
+gateway-injected priority, three pressure levels. Watch for the
+`REPORT_LABEL=gh200_sentinel_...` line in the output — that label is used
+to download or tail logs later. A clean exit (exit code 0) means the
+sentinel passed.
 
 If that works, run the EC2-scale apples-to-apples experiment:
 
@@ -184,7 +224,9 @@ The final report path will be:
 From your Mac:
 
 ```bash
-cd /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware
+cd /path/to/agentic-hardware   # your local clone root
+
+export AGENTIC_GH200_REMOTE_DIR="/home/central/ojaiyeob/agentic_hardware"
 
 ./gh200/download.sh
 ```
@@ -210,11 +252,12 @@ Raw traces can become very large.
 Recommended loop:
 
 ```bash
-# Mac
+# Mac (run from repo root)
 git status
 git add <changed files>
 git commit -m "<message>"
 git push origin main
+export AGENTIC_GH200_REMOTE_DIR="/home/central/ojaiyeob/agentic_hardware"
 ./gh200/sync_to_gh200.sh
 
 # GH200
@@ -284,3 +327,13 @@ EXTRA_SERVER_ARGS="--disable-cuda-graph --disable-overlap-schedule"
 ```
 
 The GH200 wrappers set that by default.
+
+- The `gh200/run_*.sh` wrappers are thin entry points that delegate to
+  `sglang_direct_kv/scripts/run_harness_signal_design_space.sh`. Both
+  must be present on GH200 (via sync) before GPU runs work.
+- Use `INSTALL_SYSTEM_DEPS=0` when re-running `setup_gh200.sh` on the current
+  GH200 image to avoid a known DKMS package conflict with older NVIDIA kernel
+  modules (`nvidia-dkms-550-open` residuals).
+- The machine may already have long-running Docker containers (`dynamo-frontend`,
+  `dynamo-nats`, `etcd`). These are unrelated to the SGLang GPU experiment
+  containers and should be left running.
