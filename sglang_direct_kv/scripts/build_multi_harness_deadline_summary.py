@@ -63,7 +63,7 @@ CHART_SIGNAL_BUCKETS = {
     },
     "harness_cache_emitted": {
         "label": "Harness Cache Emitted",
-        "description": "Harness emitted a cache/prompt-cache signal for this replay; gateway lowered cache metadata",
+        "description": "Harness emitted cache/prompt-cache for this replay; gateway lowered it to speculative KV preload",
         "color": "#f97316",
         "modes": {"harness_native_cache_lowered"},
     },
@@ -75,9 +75,15 @@ CHART_SIGNAL_BUCKETS = {
     },
     "harness_priority_emitted": {
         "label": "Harness Priority Emitted",
-        "description": "Harness emitted priority/latency signal for this replay; gateway lowered SGLang priority",
+        "description": "Harness emitted priority/latency for this replay; gateway lowered it to SGLang priority",
         "color": "#0891b2",
         "modes": {"nat_inferred_priority_hints"},
+    },
+    "harness_cache_priority_emitted": {
+        "label": "Harness Cache + Priority Emitted",
+        "description": "Harness emitted both cache/preload and priority signals for this replay",
+        "color": "#16a34a",
+        "modes": set(),
     },
     "frontend_supplied": {
         "label": "Front-End Supplied",
@@ -101,9 +107,10 @@ CHART_SIGNAL_BUCKETS = {
 
 CHART_SIGNAL_ORDER = (
     "baseline",
-    "harness_emitted",
     "harness_cache_emitted",
     "harness_priority_emitted",
+    "harness_cache_priority_emitted",
+    "harness_emitted",
     "frontend_supplied",
     "gateway_priority_injected",
     "gateway_speculative_prefill",
@@ -232,6 +239,13 @@ def read_json_file(path: Path | None) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def read_csv_table(path: Path | None) -> list[dict[str, Any]]:
+    if path is None or not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
 
 
 def case_key_from_name(name: str) -> tuple[str, str, str]:
@@ -1641,9 +1655,20 @@ def svg_text_label(text: str, x: float, y: float, color: str, anchor: str = "mid
     )
 
 
-def svg_symbol(kind: str, x: float, y: float, color: str, title: str) -> str:
+def signal_marker_style(bucket: str) -> str:
+    if bucket == "harness_cache_emitted":
+        return "cache"
+    if bucket == "harness_cache_priority_emitted":
+        return "both"
+    return "solid"
+
+
+def svg_symbol(kind: str, x: float, y: float, color: str, title: str, signal_style: str = "solid") -> str:
     escaped_title = html.escape(title)
-    common = f'fill="{color}" stroke="{color}" stroke-width="2" opacity="0.88"'
+    fill = "#ffffff" if signal_style == "cache" else color
+    stroke_width = "2.6" if signal_style == "cache" else "2"
+    dash = ' stroke-dasharray="3 2"' if signal_style == "cache" else ""
+    common = f'fill="{fill}" stroke="{color}" stroke-width="{stroke_width}" opacity="0.9"{dash}'
     if kind == "square":
         shape = f'<rect x="{x-5.5:.1f}" y="{y-5.5:.1f}" width="11" height="11" rx="2" {common}/>'
     elif kind == "triangle":
@@ -1682,13 +1707,34 @@ def svg_symbol(kind: str, x: float, y: float, color: str, title: str) -> str:
         shape = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.2" fill="#ffffff" stroke="{color}" stroke-width="2.4" opacity="0.95"/>'
     else:
         shape = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.8" {common}/>'
-    return f'<g><title>{escaped_title}</title>{shape}</g>'
+    decoration = ""
+    if signal_style == "cache":
+        dots = []
+        for i in range(8):
+            angle = i * math.pi / 4
+            dots.append(
+                f'<circle cx="{x + math.cos(angle) * 10.5:.1f}" cy="{y + math.sin(angle) * 10.5:.1f}" '
+                f'r="1.4" fill="{color}" opacity="0.9"/>'
+            )
+        decoration = "".join(dots)
+    elif signal_style == "both":
+        decoration = f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.6" fill="#ffffff" stroke="{color}" stroke-width="1"/>'
+    return f'<g><title>{escaped_title}</title>{decoration}{shape}</g>'
 
 
 def inline_symbol(kind: str, color: str) -> str:
     return (
         '<svg class="legend-symbol" viewBox="0 0 24 24" aria-hidden="true">'
         f"{svg_symbol(kind, 12, 12, color, '')}"
+        "</svg>"
+    )
+
+
+def inline_signal_symbol(bucket: str) -> str:
+    color = chart_signal_color(bucket)
+    return (
+        '<svg class="legend-symbol" viewBox="0 0 24 24" aria-hidden="true">'
+        f'{svg_symbol("circle", 12, 12, color, "", signal_marker_style(bucket))}'
         "</svg>"
     )
 
@@ -1712,8 +1758,12 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
             and is_truthy_text(row.get("gateway_cache_lowered"))
             and str(row.get("gateway_cache_invented_signal") or "").strip().lower() != "true"
         )
-        if priority_lowered or cache_lowered:
-            return "harness_emitted"
+        if priority_lowered and cache_lowered:
+            return "harness_cache_priority_emitted"
+        if priority_lowered:
+            return "harness_priority_emitted"
+        if cache_lowered:
+            return "harness_cache_emitted"
         return "baseline"
     if mode == "nat_inferred_priority_hints":
         if has_value(row.get("harness_emit_priority_signal")) and has_value(row.get("sglang_priority")):
@@ -1746,6 +1796,26 @@ def chart_signal_color(bucket: str) -> str:
     return str(CHART_SIGNAL_BUCKETS.get(bucket, CHART_SIGNAL_BUCKETS["baseline"])["color"])
 
 
+def linear_tick_values(values: list[float]) -> list[int]:
+    if not values:
+        return [0]
+    v_min = min(values)
+    v_max = max(values)
+    top = max(v_max, 0.0)
+    if top <= 1000:
+        positive = [0, 50, 250, 500, 1000]
+    elif top <= 10_000:
+        positive = [0, 1000, 2500, 5000, 7500, 10_000]
+    elif top <= 60_000:
+        positive = [0, 10_000, 20_000, 40_000, 60_000]
+    elif top <= 120_000:
+        positive = [0, 20_000, 40_000, 60_000, 90_000, 120_000]
+    else:
+        positive = [0, 30_000, 60_000, 100_000, 150_000, 200_000]
+    negative = [-1000, -500, -100] if v_min < 0 else []
+    return [tick for tick in negative + positive if tick >= v_min * 1.05 and tick <= max(top * 1.12, 1000)]
+
+
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     pressures = [pressure for pressure in PRESSURE_ORDER if any(row["pressure_level"] == pressure for row in rows)]
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
@@ -1759,13 +1829,14 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
 
     pressure_w = max(420, len(harnesses) * 44 + 110)
     width = max(1400, pressure_w * len(pressures) + 220)
-    height = 980
+    height = 1320
     left = 120
     right = 40
     panel_h = 310
     panel_gap = 145
     top_a = 82
     top_b = top_a + panel_h + panel_gap
+    top_c = top_b + panel_h + panel_gap
     bottom_margin = 95
     plot_w = width - left - right
     pressure_group_w = plot_w / len(pressures)
@@ -1805,18 +1876,25 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         zero_label: str,
         unit_label: str,
         tick_values: list[int],
+        scale: str = "symlog",
     ) -> None:
         panel_bottom = panel_top + panel_h
         panel_values = [value for row in rows if (value := optional_float(row.get(value_key))) is not None]
-        transformed = [symlog(value) for value in panel_values + [float(tick) for tick in tick_values]]
+        if not panel_values:
+            panel_values = [0.0]
+
+        def transform(value: float) -> float:
+            return symlog(value) if scale == "symlog" else value
+
+        transformed = [transform(value) for value in panel_values + [float(tick) for tick in tick_values]]
         y_min = min(transformed)
         y_max = max(transformed)
-        pad = max(0.2, (y_max - y_min) * 0.08)
+        pad = max(0.2 if scale == "symlog" else 50.0, (y_max - y_min) * 0.08)
         y_min -= pad
         y_max += pad
 
         def y_pos_panel(value: float) -> float:
-            mapped = symlog(value)
+            mapped = transform(value)
             return panel_top + (y_max - mapped) / (y_max - y_min) * panel_h
 
         lines.append(f'<text x="{left}" y="{panel_top-46:.1f}" font-size="18" font-weight="800" fill="#111827">{html.escape(heading)}</text>')
@@ -1864,7 +1942,16 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
                             f"{chart_signal_label(bucket)} | raw mode: {MODE_LABELS.get(raw_mode, raw_mode)} | "
                             f"{value:.1f} {unit_label}"
                         )
-                        lines.append(svg_symbol(HARNESS_SYMBOLS.get(harness, "circle"), dot_x, dot_y, color, title))
+                        lines.append(
+                            svg_symbol(
+                                HARNESS_SYMBOLS.get(harness, "circle"),
+                                dot_x,
+                                dot_y,
+                                color,
+                                title,
+                                signal_marker_style(bucket),
+                            )
+                        )
         lines.append(f'<line x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{panel_top}" y2="{panel_bottom}" stroke="#cbd5e1" stroke-dasharray="5 6"/>')
         lines.append(f'<text transform="translate(32 {panel_top + panel_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
 
@@ -1877,16 +1964,29 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
         "0 ms deadline",
         "ms vs deadline",
         [-1000, -500, -100, 0, 50, 500, 1000, 5000, 10000, 60000],
+        "symlog",
     )
     draw_panel(
         top_b,
+        "first_token_lateness_ms",
+        "B. Replay Deadline Pressure, Linear Axis",
+        "Same replay-deadline data as panel A, but with a normal y-axis. This preserves true distance, though small values may bunch near the bottom.",
+        "lateness vs replay deadline ms (linear)",
+        "0 ms deadline",
+        "ms vs deadline",
+        linear_tick_values([value for row in rows if (value := optional_float(row.get("first_token_lateness_ms"))) is not None]),
+        "linear",
+    )
+    draw_panel(
+        top_c,
         "ttft_ms",
-        "B. Replay TTFT Impact",
+        "C. Replay TTFT Impact",
         "Time from replay request start at the gateway/client boundary to first token. This is the clearest view for cache-control TTFT impact.",
         "replay TTFT ms (symlog)",
         "0 ms TTFT",
         "ms TTFT",
         [0, 50, 500, 1000, 5000, 10000, 60000],
+        "symlog",
     )
 
     lines.append(f'<text x="{left + plot_w / 2:.1f}" y="{height-bottom_margin+34}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
@@ -1995,7 +2095,7 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
             continue
         signal_items.append(
             '<span class="legend-item">'
-            f'<span class="legend-dot" style="background:{config["color"]}"></span>'
+            f'{inline_signal_symbol(bucket)}'
             f'{html.escape(str(config["label"]))} <span class="muted">= {html.escape(str(config["description"]))}</span>'
             "</span>"
         )
@@ -2011,6 +2111,12 @@ def render_chart_legend(rows: list[dict[str, Any]]) -> str:
         '<div class="legend-card">'
         '<div class="legend-row"><strong>Signal color</strong>'
         f'<div class="legend-items">{"".join(signal_items)}</div></div>'
+        '<div class="legend-row"><strong>Harness emitted style</strong>'
+        '<div class="legend-items">'
+        '<span class="legend-item">dotted hollow = cache/preload signal</span>'
+        '<span class="legend-item">solid = priority signal</span>'
+        '<span class="legend-item">solid with inner dot = cache + priority</span>'
+        '</div></div>'
         '<div class="legend-row"><strong>Harness symbol</strong>'
         f'<div class="legend-items">{"".join(harness_items)}</div></div>'
         "</div>"
@@ -2137,15 +2243,131 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h1>Replay Deadline Pressure Chart</h1>
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
-<p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view: how late or early the first replay token was versus the replay deadline. Panel B is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence tables.</p>
+    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each symbol is one replay request. Panel A is the original deadline-pressure view with a compressed y-axis. Panel B shows the same deadline-pressure data on a normal linear y-axis. Panel C is the TTFT-impact view: how long that replay request took to reach first token after it started. Pressure levels are grouped on the x-axis; harnesses are encoded by shape; signal path is encoded by color. Lower is better. Exact lower-level modes remain in the evidence file.</p>
 <h2>Signal Family Definitions</h2>
 <p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
 <div class="card">{signal_family_definition_table}</div>
 <h2>Pressure Level Definitions</h2>
 <p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
-<div class="card">{pressure_definition_table}</div>
-<div class="card">{chart}</div>
-{chart_legend}
+ 	<div class="card">{pressure_definition_table}</div>
+ 	<div class="card">{chart}</div>
+ 	{chart_legend}
+ 	<h2>Evidence Tables</h2>
+ 	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
+ 	<p><a href="evidence_tables.html">Open the evidence tables / raw proof file</a>.</p>
+ 	</main>
+ 	</body>
+ 	</html>
+ 	"""
+
+
+def render_evidence_html(
+    rows: list[dict[str, Any]],
+    summary: list[dict[str, Any]],
+    speculative_prefill_rows: list[dict[str, Any]],
+    harness_priority_rows: list[dict[str, Any]],
+    nat_service_priority_rows: list[dict[str, Any]],
+    cache_signal_rows: list[dict[str, Any]],
+    cache_action_rows: list[dict[str, Any]],
+    cache_benefit_rows: list[dict[str, Any]],
+    sglang_cache_path_audit_rows: list[dict[str, Any]],
+    nat_inferred_priority_profile: dict[str, Any],
+    report_label: str,
+) -> str:
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    summary_table = render_table(
+        summary,
+        [
+            "harness_label",
+            "pressure_level_label",
+            "mode_label",
+            "samples",
+            "median_first_token_lateness_ms",
+            "median_ttft_ms",
+            "median_sglang_receive_to_first_token_ms",
+            "median_due_to_sglang_receive_ms",
+            "min_first_token_lateness_ms",
+            "max_first_token_lateness_ms",
+        ],
+    )
+    breakdown_table = render_table(
+        summary,
+        [
+            "harness_label",
+            "pressure_level_label",
+            "mode_label",
+            "samples",
+            "median_due_to_request_start_ms",
+            "median_due_to_sglang_receive_ms",
+            "median_ttft_ms",
+            "median_sglang_receive_to_first_token_ms",
+            "median_first_token_lateness_ms",
+        ],
+    )
+    speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
+    harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
+    nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
+    cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
+    cache_action_table = render_table(cache_action_rows, CACHE_ACTION_COLUMNS)
+    cache_benefit_table = render_table(cache_benefit_rows, CACHE_BENEFIT_COLUMNS)
+    sglang_cache_path_audit_table = render_table(sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
+    nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
+    raw_table = render_table(
+        rows,
+        [
+            "harness_label",
+            "pressure_level_label",
+            "mode_label",
+            "session_id",
+            "first_token_lateness_ms",
+            "due_to_request_start_ms",
+            "due_to_sglang_receive_ms",
+            "sglang_receive_to_first_token_ms",
+            "ttft_ms",
+            "sglang_priority",
+            "harness_input_priority_signal",
+            "harness_emit_priority_signal",
+            "gateway_priority_translation",
+            "gateway_priority_translation_source",
+            "harness_native_cache_signal_seen",
+            "harness_native_cache_signal",
+            "harness_native_cache_signal_source",
+            "gateway_cache_lowered",
+            "gateway_cache_translation",
+            "gateway_cache_translation_source",
+            "gateway_cache_invented_signal",
+            "backend_receive_source",
+            "first_token_source",
+            "status",
+            "error",
+        ],
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Replay Deadline Pressure Evidence Tables</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: #111827; background: #f8fafc; }}
+main {{ max-width: 1600px; margin: 0 auto; padding: 32px; }}
+h1 {{ margin: 0 0 8px; font-size: 30px; }}
+h2 {{ margin-top: 32px; font-size: 22px; }}
+p {{ line-height: 1.5; color: #334155; }}
+.card {{ background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-top: 18px; overflow-x: auto; }}
+.note {{ border-left: 4px solid #2563eb; background: #eff6ff; padding: 12px 16px; color: #1e3a8a; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 13px; background: white; }}
+th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }}
+th {{ background: #f1f5f9; font-weight: 700; }}
+code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
+a {{ color: #2563eb; }}
+</style>
+</head>
+<body>
+<main>
+<h1>Replay Deadline Pressure Evidence Tables</h1>
+<p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
+<p><a href="master_report.html">Back to chart-first master report</a>.</p>
+<p class="note">These are the raw proof tables behind the chart-first report. Use this file when auditing exact request IDs, signal transport, gateway lowering, SGLang priority, cache/preload action, and timing values.</p>
 <h2>Harness Priority Preservation Proof</h2>
 <p>This table appears when the run includes <code>pre_harness_priority_hints</code>, <code>nat_inferred_priority_hints</code>, or <code>harness_emitted_signals</code>. It proves whether the harness carried or inferred priority, and whether the gateway translated that signal to SGLang priority.</p>
 <div class="card">{harness_priority_table if harness_priority_rows else "<p>No harness priority proof rows found in this run.</p>"}</div>
@@ -2158,13 +2380,13 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>This table appears when the run includes <code>no_cache_signal</code>, <code>harness_native_cache_lowered</code>, or <code>harness_emitted_signals</code>. The gateway is always present, but it only translates cache fields that the harness emitted. In the unified harness-emitted mode, cache signals are lowered to gateway speculative KV preload. <code>gateway_invented_signal</code> should remain <code>false</code>.</p>
 <div class="card">{cache_signal_table if cache_signal_rows else "<p>No harness native cache signal proof rows found in this run.</p>"}</div>
 <h2>Cache Action Proof</h2>
-<p>This target-scoped table checks whether the same replay request that carried a harness cache signal also caused a gateway cache/preload lowering action, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events. A positive row proves transport plus observed backend cache work; it does not by itself prove the cache signal caused the cache hit, because normal prefix reuse can use the same SGLang path.</p>
+<p>This target-scoped table checks whether the same replay request that carried a harness cache signal also caused a gateway cache/preload lowering action, then showed SGLang cache-path activity: prefix matching, load-back, host-to-device copy, prefill attribution, or cache-commit events.</p>
 <div class="card">{cache_action_table if cache_action_rows else "<p>No cache action proof rows found in this run.</p>"}</div>
 <h2>Cache Benefit Summary</h2>
-<p>This table compares <code>harness_native_cache_lowered</code> against <code>no_cache_signal</code> for the same harness and pressure level. Negative TTFT delta means the cache-lowered run reached the first token faster after the replay request started. Negative backend TTFT delta means it was faster after SGLang received the replay. Positive cached-prefix delta means more prompt tokens were reused. This is the main table for asking whether harness cache signals helped TTFT.</p>
+<p>This table compares <code>harness_native_cache_lowered</code> against <code>no_cache_signal</code> for the same harness and pressure level. Negative TTFT delta means the cache-lowered run reached the first token faster after the replay request started.</p>
 <div class="card">{cache_benefit_table if cache_benefit_rows else "<p>No paired cache-benefit rows found. Run both no_cache_signal and harness_native_cache_lowered for the same harness and pressure level.</p>"}</div>
 <h2>SGLang Cache Signal Path Audit</h2>
-<p>This static source audit is collected from the installed SGLang package on the experiment machine. It checks whether SGLang appears to have native code paths for fields such as <code>prompt_cache_key</code>, <code>cache_salt</code>, <code>extra_key</code>, <code>cache_control</code>, and request <code>priority</code>. Runtime proof still comes from the target-scoped trace rows above.</p>
+<p>This static source audit is collected from the installed SGLang package on the experiment machine. Runtime proof still comes from the target-scoped trace rows above.</p>
 <div class="card">{sglang_cache_path_audit_table if sglang_cache_path_audit_rows else "<p>No SGLang cache signal path audit rows found. Re-run with an environment collector on the experiment machine.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code> or <code>harness_emitted_signals</code>. It proves whether a background <code>max_tokens=1</code> warmup was sent before replay, whether it was triggered by gateway speculative KV preload, and whether the replay showed cached-prefix reuse.</p>
@@ -2172,7 +2394,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <h2>Summary</h2>
 <div class="card">{summary_table}</div>
 <h2>Delay Breakdown</h2>
-<p>This table separates replay request TTFT from backend service time. <code>median_ttft_ms</code> is the number used in panel B; <code>median_sglang_receive_to_first_token_ms</code> remains the backend-only view.</p>
+<p>This table separates replay request TTFT from backend service time. <code>median_ttft_ms</code> is the number used in panel C of the main report; <code>median_sglang_receive_to_first_token_ms</code> remains the backend-only view.</p>
 <div class="card">{breakdown_table}</div>
 <h2>Raw Replay Proof</h2>
 <div class="card">{raw_table}</div>
@@ -2234,21 +2456,36 @@ def main() -> None:
     parser.add_argument("--report-label", default=os.environ.get("REPORT_LABEL") or f"multi_harness_deadline_summary_{int(time.time())}")
     parser.add_argument("--run-config", type=Path)
     parser.add_argument("--run-environment-json", type=Path)
+    parser.add_argument("--rows-csv", type=Path, help="Reuse an existing global_kv_readiness_by_mode.csv instead of reading raw case traces.")
     parser.add_argument("--update-latest", action="store_true")
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     run_config = read_run_config(args.run_config or args.out_dir / "run_config.env")
-    rows = collect_rows(args.root)
-    summary = summarize(rows)
-    speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
-    harness_priority_rows = collect_harness_priority_proof(args.root, rows)
-    nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
-    cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
-    cache_action_rows = collect_cache_action_proof(args.root, rows)
-    cache_benefit_rows = collect_cache_benefit_summary(summary, cache_action_rows)
+    if args.rows_csv:
+        rows = read_csv_table(args.rows_csv)
+        summary = read_csv_table(args.out_dir / "global_kv_readiness_by_mode_summary.csv") or summarize(rows)
+        speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
+        harness_priority_rows = read_csv_table(args.out_dir / "harness_priority_preservation_proof.csv")
+        nat_service_priority_rows = read_csv_table(args.out_dir / "nat_service_priority_probe.csv")
+        cache_signal_rows = read_csv_table(args.out_dir / "harness_native_cache_signal_proof.csv")
+        cache_action_rows = read_csv_table(args.out_dir / "cache_action_proof.csv")
+        cache_benefit_rows = read_csv_table(args.out_dir / "cache_benefit_summary.csv")
+    else:
+        rows = collect_rows(args.root)
+        summary = summarize(rows)
+        speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
+        harness_priority_rows = collect_harness_priority_proof(args.root, rows)
+        nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
+        cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
+        cache_action_rows = collect_cache_action_proof(args.root, rows)
+        cache_benefit_rows = collect_cache_benefit_summary(summary, cache_action_rows)
     run_environment = read_json_file(args.run_environment_json or args.out_dir / "run_environment.json")
-    sglang_cache_path_audit_rows = collect_sglang_cache_path_audit(run_environment)
+    sglang_cache_path_audit_rows = (
+        read_csv_table(args.out_dir / "sglang_cache_signal_path_audit.csv")
+        if args.rows_csv
+        else collect_sglang_cache_path_audit(run_environment)
+    )
     nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
@@ -2273,8 +2510,23 @@ def main() -> None:
         args.report_label,
         run_config,
     )
+    evidence_html_text = render_evidence_html(
+        rows,
+        summary,
+        speculative_prefill_rows,
+        harness_priority_rows,
+        nat_service_priority_rows,
+        cache_signal_rows,
+        cache_action_rows,
+        cache_benefit_rows,
+        sglang_cache_path_audit_rows,
+        nat_inferred_priority_profile,
+        args.report_label,
+    )
     report_path = args.out_dir / "master_report.html"
+    evidence_path = args.out_dir / "evidence_tables.html"
     report_path.write_text(html_text, encoding="utf-8")
+    evidence_path.write_text(evidence_html_text, encoding="utf-8")
     write_manifest(
         args.out_dir / "manifest.json",
         args,
@@ -2293,6 +2545,8 @@ def main() -> None:
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
         (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
+        (args.latest_root / "evidence_tables.html").write_text(evidence_html_text, encoding="utf-8")
+        (args.latest_root / "latest_evidence_tables.html").write_text(evidence_html_text, encoding="utf-8")
         write_manifest(
             args.latest_root / "latest_manifest.json",
             args,
@@ -2309,6 +2563,7 @@ def main() -> None:
             run_config,
         )
     print(f"wrote {report_path}")
+    print(f"wrote {evidence_path}")
     print(f"rows={len(rows)} summary_rows={len(summary)}")
 
 
