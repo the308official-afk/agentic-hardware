@@ -55,6 +55,7 @@ MODE_LABELS = {
     "harness_emitted_signals": "HE = Harness emitted signals",
     "controller_observe_only": "CO = Controller observe-only",
     "controller_scheduler_priority": "CP = Controller scheduler priority",
+    "controller_speculative_preload": "CL = Controller speculative KV preload",
 }
 
 MODE_COLORS = {
@@ -68,6 +69,7 @@ MODE_COLORS = {
     "harness_emitted_signals": "#16a34a",
     "controller_observe_only": "#0f172a",
     "controller_scheduler_priority": "#be123c",
+    "controller_speculative_preload": "#9333ea",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -133,6 +135,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#be123c",
         "modes": {"controller_scheduler_priority"},
     },
+    "controller_preload": {
+        "label": "Controller Speculative KV Preload",
+        "description": "Portable controller observed the tool-wait window and launched gateway speculative KV preload before replay",
+        "color": "#9333ea",
+        "modes": {"controller_speculative_preload"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -146,6 +154,7 @@ CHART_SIGNAL_ORDER = (
     "gateway_speculative_prefill",
     "controller_observe",
     "controller_scheduler",
+    "controller_preload",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -255,6 +264,12 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
         "what_it_means": "The controller consumes lifecycle state and, when replay is ready, authorizes SGLang scheduler priority. No speculative KV work is enabled in this phase.",
         "raw_modes": "controller_scheduler_priority",
+    },
+    {
+        "family": "Controller speculative KV preload",
+        "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
+        "what_it_means": "The controller consumes lifecycle state during tool wait and authorizes a gateway speculative KV preload before replay. No scheduler priority is enabled in this phase.",
+        "raw_modes": "controller_speculative_preload",
     },
 ]
 
@@ -562,7 +577,8 @@ def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, An
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") in {"e2e_priority_hints_speculative_prefill", "harness_emitted_signals"}
+        if row.get("mode")
+        in {"e2e_priority_hints_speculative_prefill", "harness_emitted_signals", "controller_speculative_preload"}
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -1826,6 +1842,8 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")) and row.get("gateway_priority_translation_source") == "controller_ready_decision":
             return "controller_scheduler"
         return "baseline"
+    if mode == "controller_speculative_preload":
+        return "controller_preload"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket

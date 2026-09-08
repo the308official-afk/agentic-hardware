@@ -219,6 +219,7 @@ The current manager-facing comparisons use these modes:
 | `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
 | `controller_observe_only` | Portable controller phase 1. The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang. |
 | `controller_scheduler_priority` | Portable controller phase 2. The controller observes replay readiness and lowers only its ready-phase priority decision to SGLang scheduler priority. |
+| `controller_speculative_preload` | Portable controller phase 3. The controller observes the tool-wait window and lowers an accepted KV prefetch decision to gateway speculative KV preload. |
 
 ## Portable Agent-Aware Controller Foundation
 
@@ -265,6 +266,17 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Small controller speculative-preload run:
+
+```bash
+cd sglang_direct_kv
+SIGNAL_FAMILIES=controller_preload \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p1_mild p2_medium" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 ## Agent-Aware Controller Roadmap
 
 Use this as the phase checklist for integrating the one-worker agentic
@@ -277,7 +289,7 @@ smallest possible boundary adapter.
 | Phase 0: Capability and integration map | Started | Detect which SGLang/harness/backend features are available on the current machine and version. | Capability report records priority, cache, prefill, KV movement, and live trace support for EC2 and GH200. |
 | Phase 1: Passive lifecycle controller | Validated on EC2 | Observe agent lifecycle events without changing scheduling or KV behavior. | `controller_observe_only` emitted tool-start, prepare-checkpoint, tool-complete, and session-finish decisions for Hatcher/DeepAgents and NAT at P0/P3; all backend results were observe-only. |
 | Phase 2: Scheduler-only controller | Mechanically validated on EC2; outcome mixed | Convert controller decisions into scheduler priority only, with no speculative KV work yet. | Proof shows `tool_completed` produces `set_priority=100`, gateway source is `controller_ready_decision`, and SGLang scheduler receives the replay with priority `100`. A Hatcher/DeepAgents P3/P5 comparison showed P3 worse in one run and P5 median slightly better, so repeated samples are needed before claiming a performance win. |
-| Phase 3: Gateway speculative KV preload | Planned | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | Report shows preload submitted before replay, matched to the same target request, with TTFT impact measured separately from queue delay. |
+| Phase 3: Gateway speculative KV preload | Mechanically validated on EC2; timing mixed | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | `controller_speculative_preload` accepts a controller `kv_action=prefetch` decision and lowers it to a gateway background warmup request. A Hatcher/DeepAgents P1/P2 validation showed controller warmup launch from the driver, warmup completion before SGLang received replay, and cached-prefix evidence on replay. P2 still missed the stricter warmup-before-deadline proof, so the next phase needs earlier prediction or admission control. |
 | Phase 4: Targeted KV prefetch hook | Planned | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | Timestamp evidence shows requested KV blocks moved or became resident before replay compute starts. |
 | Phase 5: Demote and restore | Planned | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | Filler work is demoted during replay-critical windows and restored after, with no lost or starved requests. |
 | Phase 6: Admission and overload control | Planned | Decide when the system is too busy to accept more speculative work or urgent bursts. | P4/P5 runs show bounded speculative work, clear skip reasons, and no runaway queue growth. |

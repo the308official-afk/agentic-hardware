@@ -93,3 +93,41 @@ class GatewayPriorityBackendAdapter:
             reason="controller command recorded but not active in scheduler-only mode",
             backend_name=self._capabilities.backend_name,
         )
+
+
+class GatewaySpeculativePreloadBackendAdapter:
+    """Adapter for controller-driven gateway speculative KV preload.
+
+    The controller remains backend-neutral: it emits a KV prefetch command, and
+    the experiment gateway lowers that accepted command into the existing
+    background warmup request path.
+    """
+
+    def __init__(self, capabilities: BackendCapabilities | None = None) -> None:
+        self._capabilities = capabilities or BackendCapabilities(
+            kv_prefetch=True,
+            observe_only=False,
+            backend_name="controller_speculative_preload",
+        )
+        self.commands: list[ControllerCommand] = []
+
+    def capabilities(self) -> BackendCapabilities:
+        return self._capabilities
+
+    def apply(self, command: ControllerCommand) -> BackendActionResult:
+        self.commands.append(command)
+        if command.kv_action.value == "prefetch":
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=True,
+                reason="controller KV prefetch accepted for gateway speculative preload",
+                backend_name=self._capabilities.backend_name,
+            )
+        return BackendActionResult(
+            command_id=command.command_id,
+            accepted=True,
+            acted=False,
+            reason="controller command recorded but not active in preload-only mode",
+            backend_name=self._capabilities.backend_name,
+        )

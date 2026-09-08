@@ -9,6 +9,7 @@ from agentic_kv.controller import (
     ControllerStateStore,
     EventType,
     GatewayPriorityBackendAdapter,
+    GatewaySpeculativePreloadBackendAdapter,
     KVAction,
     PolicyConfig,
     SchedulerAction,
@@ -128,6 +129,29 @@ class AgenticControllerTests(unittest.TestCase):
         wait_decision = policy.plan(wait_state, backend.capabilities(), now_ms=0)
         wait_result = backend.apply(wait_decision.commands[0])
         self.assertFalse(wait_result.acted)
+
+    def test_gateway_speculative_preload_adapter_acts_on_prefetch(self) -> None:
+        store = ControllerStateStore()
+        state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=50,
+                deadline_after_completion_ms=50,
+            )
+        )
+        policy = ControllerPolicy(PolicyConfig(observe_only=False, prepare_window_ms=100))
+        backend = GatewaySpeculativePreloadBackendAdapter()
+
+        decision = policy.plan(state, backend.capabilities(), now_ms=0)
+        result = backend.apply(decision.commands[0])
+
+        self.assertFalse(decision.observed_only)
+        self.assertIs(decision.commands[0].kv_action, KVAction.PREFETCH)
+        self.assertTrue(result.acted)
 
 
 if __name__ == "__main__":

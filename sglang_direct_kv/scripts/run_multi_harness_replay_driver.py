@@ -24,6 +24,7 @@ from agentic_kv.controller import (
     ControllerStateStore,
     EventType,
     GatewayPriorityBackendAdapter,
+    GatewaySpeculativePreloadBackendAdapter,
     ObserveOnlyBackendAdapter,
     PolicyConfig,
 )
@@ -53,6 +54,7 @@ SUPPORTED_MODES = (
     "harness_emitted_signals",
     "controller_observe_only",
     "controller_scheduler_priority",
+    "controller_speculative_preload",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -60,6 +62,7 @@ HARNESS_NATIVE_CACHE_MODE = "harness_native_cache_lowered"
 HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
+CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -156,8 +159,16 @@ def controller_scheduler_priority_mode(mode: str) -> bool:
     return mode == CONTROLLER_SCHEDULER_PRIORITY_MODE
 
 
+def controller_speculative_preload_mode(mode: str) -> bool:
+    return mode == CONTROLLER_SPECULATIVE_PRELOAD_MODE
+
+
 def controller_mode(mode: str) -> bool:
-    return controller_observe_only_mode(mode) or controller_scheduler_priority_mode(mode)
+    return (
+        controller_observe_only_mode(mode)
+        or controller_scheduler_priority_mode(mode)
+        or controller_speculative_preload_mode(mode)
+    )
 
 
 def nat_inferred_node_for_phase(phase: str) -> dict[str, Any]:
@@ -1104,10 +1115,11 @@ async def main_async() -> None:
     workload_start = time.perf_counter()
     controller_enabled = controller_mode(args.mode)
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
+    controller_active_preload = controller_speculative_preload_mode(args.mode)
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
-            observe_only=not controller_active_priority,
+            observe_only=not (controller_active_priority or controller_active_preload),
             prepare_window_ms=max(25, args.tool_wait_ms),
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
@@ -1123,6 +1135,19 @@ async def main_async() -> None:
                 live_metrics=True,
                 observe_only=False,
                 backend_name=CONTROLLER_SCHEDULER_PRIORITY_MODE,
+            )
+        )
+    elif controller_active_preload:
+        controller_backend = GatewaySpeculativePreloadBackendAdapter(
+            BackendCapabilities(
+                priority_queue=False,
+                background_prefill_budget=False,
+                kv_demote=False,
+                kv_prefetch=True,
+                kv_release=False,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=CONTROLLER_SPECULATIVE_PRELOAD_MODE,
             )
         )
     else:
@@ -1209,6 +1234,36 @@ async def main_async() -> None:
             },
         )
         return decision_row, results
+
+    def acted_controller_command(
+        controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None,
+        *,
+        scheduler_action: str | None = None,
+        kv_action: str | None = None,
+    ) -> dict[str, Any] | None:
+        if controller_result is None:
+            return None
+        decision_row, backend_results = controller_result
+        acted_command_ids = {
+            str(result.get("command_id"))
+            for result in backend_results
+            if result.get("acted")
+        }
+        for command in decision_row.get("commands") or []:
+            if not isinstance(command, dict):
+                continue
+            if str(command.get("command_id") or "") not in acted_command_ids:
+                continue
+            if scheduler_action is not None and command.get("scheduler_action") != scheduler_action:
+                continue
+            if kv_action is not None and command.get("kv_action") != kv_action:
+                continue
+            return {
+                **command,
+                "controller_decision_id": decision_row.get("decision_id", ""),
+                "controller_decision_reason": decision_row.get("reason", ""),
+            }
+        return None
 
     write_trace(
         args.trace,
@@ -1315,7 +1370,7 @@ async def main_async() -> None:
         await bounded_request(pair.prompt, initial_meta)
         tool_start_ms = offset_ms()
         replay_due_ms = tool_start_ms + args.tool_wait_ms
-        record_controller_event(
+        controller_tool_start_result = record_controller_event(
             f"{pair.session_id}:tool_started",
             EventType.TOOL_STARTED,
             {**base_meta, "session_id": pair.session_id, "phase": "tool_wait", "label": f"{pair.session_id}_tool_wait"},
@@ -1338,26 +1393,44 @@ async def main_async() -> None:
             },
         )
         warmup_task: asyncio.Task[None] | None = None
-        initial_gateway_row = trace_event_row(args.trace, str(initial_meta["label"]), "m27.request.start")
+        initial_gateway_row = (
+            trace_event_row(args.trace, str(initial_meta["label"]), "m27.request.start")
+            if args.mode == HARNESS_EMITTED_SIGNAL_MODE
+            else {}
+        )
         cache_signal_driven_preload = (
             args.mode == HARNESS_EMITTED_SIGNAL_MODE
             and str(initial_gateway_row.get("harness_native_cache_signal_seen") or "").lower() == "yes"
         )
         direct_gateway_speculative_prefill = args.mode == "e2e_priority_hints_speculative_prefill"
-        if direct_gateway_speculative_prefill or cache_signal_driven_preload:
+        controller_preload_command = acted_controller_command(controller_tool_start_result, kv_action="prefetch")
+        controller_speculative_preload = controller_preload_command is not None
+        if direct_gateway_speculative_prefill or cache_signal_driven_preload or controller_speculative_preload:
             warmup_label = f"{pair.session_id}_speculative_prefill"
             replay_label = f"{pair.session_id}_replay"
             warmup_role = (
+                "controller_gateway_speculative_kv_preload"
+                if controller_speculative_preload
+                else
                 "gateway_speculative_kv_preload"
                 if cache_signal_driven_preload
                 else "dynamo_like_background_warmup"
             )
             warmup_strategy = (
+                "controller_lifecycle_gateway_speculative_kv_preload"
+                if controller_speculative_preload
+                else
                 "harness_cache_signal_gateway_speculative_kv_preload"
                 if cache_signal_driven_preload
                 else "known_next_turn_prefix"
             )
-            warmup_trigger = "harness_cache_signal" if cache_signal_driven_preload else "gateway_injected_speculative_prefill"
+            warmup_trigger = (
+                "controller_prefetch_decision"
+                if controller_speculative_preload
+                else "harness_cache_signal"
+                if cache_signal_driven_preload
+                else "gateway_injected_speculative_prefill"
+            )
             warmup_meta = {
                 **base_meta,
                 "session_id": pair.session_id,
@@ -1376,6 +1449,13 @@ async def main_async() -> None:
                 "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
                 "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
                 "harness_cache_signal": initial_gateway_row.get("harness_native_cache_signal", ""),
+                "controller_decision_id": controller_preload_command.get("controller_decision_id", "")
+                if controller_preload_command
+                else "",
+                "controller_command_id": controller_preload_command.get("command_id", "") if controller_preload_command else "",
+                "controller_kv_translation": "controller.prefetch=gateway_speculative_kv_preload"
+                if controller_preload_command
+                else "",
             }
             warmup_meta = attach_harness_priority_metadata(warmup_meta)
             write_trace(
@@ -1396,6 +1476,9 @@ async def main_async() -> None:
                     "warmup_prompt_tokens": warmup_meta["warmup_prompt_tokens"],
                     "tool_start_offset_ms": round(tool_start_ms, 3),
                     "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "controller_decision_id": warmup_meta.get("controller_decision_id", ""),
+                    "controller_command_id": warmup_meta.get("controller_command_id", ""),
+                    "controller_kv_translation": warmup_meta.get("controller_kv_translation", ""),
                 },
             )
 
@@ -1453,6 +1536,9 @@ async def main_async() -> None:
                     )
 
             warmup_task = asyncio.create_task(run_warmup())
+        if warmup_task is not None:
+            warmup_launch_grace_ms = max(0.0, float(os.environ.get("WARMUP_LAUNCH_GRACE_MS", "5")))
+            await asyncio.sleep(warmup_launch_grace_ms / 1000.0)
         filler_tasks = [
             asyncio.create_task(run_filler(args.gateway_base, args.model, pair, idx, base_meta, args.filler_prompt_tokens))
             for idx in range(args.filler_sessions)
@@ -1476,6 +1562,9 @@ async def main_async() -> None:
                 "harness": args.harness,
                 "replay_due_offset_ms": round(replay_due_ms, 3),
                 "expected_reuse": (
+                    "controller_gateway_speculative_kv_preload"
+                    if controller_speculative_preload
+                    else
                     "gateway_speculative_kv_preload"
                     if cache_signal_driven_preload
                     else
