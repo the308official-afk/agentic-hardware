@@ -10,6 +10,7 @@ from .backend import (
     GatewayPriorityBackendAdapter,
     GatewaySpeculativePreloadBackendAdapter,
     ObserveOnlyBackendAdapter,
+    SGLangTargetedKVPrefetchBackendAdapter,
 )
 from .models import (
     BackendCapabilities,
@@ -41,6 +42,7 @@ __all__ = [
     "ObserveOnlyBackendAdapter",
     "PolicyConfig",
     "SchedulerAction",
+    "SGLangTargetedKVPrefetchBackendAdapter",
     "SessionPhase",
     "SessionState",
     "TimingEstimator",

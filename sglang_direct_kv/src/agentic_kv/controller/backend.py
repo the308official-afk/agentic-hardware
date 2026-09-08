@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Protocol
 
 from .models import BackendCapabilities, ControllerCommand, SchedulerAction
@@ -129,5 +130,66 @@ class GatewaySpeculativePreloadBackendAdapter:
             accepted=True,
             acted=False,
             reason="controller command recorded but not active in preload-only mode",
+            backend_name=self._capabilities.backend_name,
+        )
+
+
+class SGLangTargetedKVPrefetchBackendAdapter:
+    """Adapter for a future direct SGLang host-to-device KV prefetch hook.
+
+    This adapter intentionally separates controller intent from SGLang internals.
+    If a stable direct hook is unavailable, the command is accepted and recorded
+    but not reported as acted. That keeps Phase 4 portable across SGLang
+    versions while still producing honest proof rows.
+    """
+
+    def __init__(
+        self,
+        capabilities: BackendCapabilities | None = None,
+        *,
+        direct_hook_available: bool | None = None,
+    ) -> None:
+        if direct_hook_available is None:
+            direct_hook_available = os.environ.get("AGENTIC_KV_TARGETED_PREFETCH_HOOK", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+        self.direct_hook_available = direct_hook_available
+        self._capabilities = capabilities or BackendCapabilities(
+            kv_prefetch=True,
+            live_metrics=True,
+            observe_only=False,
+            backend_name="controller_targeted_kv_prefetch",
+            backend_version="direct_hook_available=1" if direct_hook_available else "direct_hook_available=0",
+        )
+        self.commands: list[ControllerCommand] = []
+
+    def capabilities(self) -> BackendCapabilities:
+        return self._capabilities
+
+    def apply(self, command: ControllerCommand) -> BackendActionResult:
+        self.commands.append(command)
+        if command.kv_action.value != "prefetch":
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=False,
+                reason="controller command recorded but not active in targeted-prefetch mode",
+                backend_name=self._capabilities.backend_name,
+            )
+        if not self.direct_hook_available:
+            return BackendActionResult(
+                command_id=command.command_id,
+                accepted=True,
+                acted=False,
+                reason="targeted SGLang KV prefetch hook unavailable in this SGLang version",
+                backend_name=self._capabilities.backend_name,
+            )
+        return BackendActionResult(
+            command_id=command.command_id,
+            accepted=True,
+            acted=True,
+            reason="targeted SGLang KV prefetch hook accepted",
             backend_name=self._capabilities.backend_name,
         )

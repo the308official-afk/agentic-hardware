@@ -56,6 +56,7 @@ MODE_LABELS = {
     "controller_observe_only": "CO = Controller observe-only",
     "controller_scheduler_priority": "CP = Controller scheduler priority",
     "controller_speculative_preload": "CL = Controller speculative KV preload",
+    "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
 }
 
 MODE_COLORS = {
@@ -70,6 +71,7 @@ MODE_COLORS = {
     "controller_observe_only": "#0f172a",
     "controller_scheduler_priority": "#be123c",
     "controller_speculative_preload": "#9333ea",
+    "controller_targeted_kv_prefetch": "#f59e0b",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -141,6 +143,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#9333ea",
         "modes": {"controller_speculative_preload"},
     },
+    "controller_targeted_prefetch": {
+        "label": "Controller Targeted KV Prefetch",
+        "description": "Portable controller requested direct targeted host-to-device KV prefetch when the SGLang adapter exposes a stable hook",
+        "color": "#f59e0b",
+        "modes": {"controller_targeted_kv_prefetch"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -155,6 +163,7 @@ CHART_SIGNAL_ORDER = (
     "controller_observe",
     "controller_scheduler",
     "controller_preload",
+    "controller_targeted_prefetch",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -270,6 +279,12 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
         "what_it_means": "The controller consumes lifecycle state during tool wait and authorizes a gateway speculative KV preload before replay. No scheduler priority is enabled in this phase.",
         "raw_modes": "controller_speculative_preload",
+    },
+    {
+        "family": "Controller targeted KV prefetch",
+        "where_signal_is_added": "Portable controller sidecar, lowered by backend adapter when supported",
+        "what_it_means": "The controller requests explicit host-to-device KV movement for the target prefix. If the active SGLang version has no stable direct hook, the report records that honestly instead of using a warmup fallback.",
+        "raw_modes": "controller_targeted_kv_prefetch",
     },
 ]
 
@@ -670,6 +685,143 @@ def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, An
                         if ns_to_ms_delta(warmup_end_ns, replay_start_ns) is not None
                         else ""
                     ),
+                    "verdict": verdict,
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                }
+            )
+    return proof_rows
+
+
+def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_by_session = {
+        (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
+        for row in replay_rows
+        if row.get("mode") == "controller_targeted_kv_prefetch"
+    }
+    proof_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        by_event: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in trace_rows:
+            by_event[str(row.get("event") or "")].append(row)
+
+        for requested in by_event.get("m27.targeted_kv_prefetch.requested", []):
+            session_id = str(requested.get("session_id") or "")
+            replay_row = replay_by_session.get((str(case_dir), session_id), {})
+            expected_replay = str(requested.get("expected_replay_request_id") or replay_row.get("request_id") or "")
+            requested_ts_ns = int(float_value(requested.get("ts_ns")))
+            replay_start_ts_ns = int(float_value(replay_row.get("request_start_ts_ns")))
+            replay_receive_ts_ns = int(float_value(replay_row.get("sglang_receive_ts_ns")))
+            replay_compute_ts_ns = int(float_value(replay_row.get("first_token_ts_ns")))
+            outcome = next(
+                (
+                    row
+                    for row in trace_rows
+                    if str(row.get("event") or "").startswith("m27.targeted_kv_prefetch.")
+                    and str(row.get("event") or "") != "m27.targeted_kv_prefetch.requested"
+                    and str(row.get("controller_command_id") or "")
+                    == str(requested.get("controller_command_id") or "")
+                ),
+                {},
+            )
+
+            load_back_events = 0
+            h2d_copy_events = 0
+            first_movement_ts_ns = 0
+            for trace_row in trace_rows:
+                event = str(trace_row.get("event") or "")
+                category = str(trace_row.get("category") or "")
+                method = str(trace_row.get("method") or "")
+                source_event = str(trace_row.get("source_event") or "")
+                action_text = " ".join((event, category, method, source_event)).lower()
+                same_session = str(trace_row.get("session_id") or "") == session_id
+                target_match = row_matches_request(trace_row, expected_replay)
+                if not same_session and not target_match:
+                    continue
+                is_load_back = category in {"init_load_back", "load_back", "hicache_load"} or method in {
+                    "init_load_back",
+                    "load_back",
+                    "hicache_load",
+                }
+                is_h2d = category == "host_to_device_copy" or method == "load_to_device_per_layer"
+                if not (is_load_back or is_h2d or "load_back" in action_text):
+                    continue
+                ts_ns = int(float_value(trace_row.get("ts_ns")))
+                if requested_ts_ns and ts_ns and ts_ns < requested_ts_ns:
+                    continue
+                if replay_compute_ts_ns and ts_ns and ts_ns > replay_compute_ts_ns:
+                    continue
+                if is_load_back or "load_back" in action_text:
+                    load_back_events += 1
+                if is_h2d:
+                    h2d_copy_events += 1
+                if ts_ns and (not first_movement_ts_ns or ts_ns < first_movement_ts_ns):
+                    first_movement_ts_ns = ts_ns
+
+            backend_acted = is_truthy_text(requested.get("backend_acted") or outcome.get("backend_acted"))
+            backend_accepted = is_truthy_text(requested.get("backend_accepted") or outcome.get("backend_accepted"))
+            direct_hook_available = is_truthy_text(requested.get("direct_hook_available") or outcome.get("direct_hook_available"))
+            requested_before_due = bool(
+                requested_ts_ns
+                and replay_row.get("replay_due_ts_ns")
+                and requested_ts_ns <= int(float_value(replay_row.get("replay_due_ts_ns")))
+            )
+            requested_before_replay = bool(requested_ts_ns and replay_start_ts_ns and requested_ts_ns <= replay_start_ts_ns)
+            movement_before_receive = bool(
+                first_movement_ts_ns and replay_receive_ts_ns and first_movement_ts_ns <= replay_receive_ts_ns
+            )
+            movement_before_compute = bool(
+                first_movement_ts_ns and replay_compute_ts_ns and first_movement_ts_ns <= replay_compute_ts_ns
+            )
+
+            if backend_acted and movement_before_compute:
+                verdict = "targeted prefetch acted and KV movement was observed before replay compute"
+            elif backend_acted:
+                verdict = "targeted prefetch hook acted, but KV movement telemetry was not observed before replay compute"
+            elif backend_accepted and not direct_hook_available:
+                verdict = "targeted prefetch requested, but this SGLang version exposed no stable direct hook"
+            elif backend_accepted:
+                verdict = "targeted prefetch accepted but did not act"
+            else:
+                verdict = "targeted prefetch was not accepted"
+
+            proof_rows.append(
+                {
+                    "harness_label": replay_row.get(
+                        "harness_label",
+                        HARNESS_LABELS.get(str(requested.get("harness") or ""), str(requested.get("harness") or "")),
+                    ),
+                    "pressure_level_label": replay_row.get("pressure_level_label", ""),
+                    "mode_label": replay_row.get("mode_label", MODE_LABELS.get(str(requested.get("mode") or ""), "")),
+                    "session_id": session_id,
+                    "request_id": requested.get("request_id", ""),
+                    "expected_replay_request_id": expected_replay,
+                    "controller_decision_id": requested.get("controller_decision_id", ""),
+                    "controller_command_id": requested.get("controller_command_id", ""),
+                    "backend_name": requested.get("backend_name", ""),
+                    "backend_accepted": "yes" if backend_accepted else "no",
+                    "backend_acted": "yes" if backend_acted else "no",
+                    "direct_hook_available": "yes" if direct_hook_available else "no",
+                    "requested_before_replay_due": "yes" if requested_before_due else "no",
+                    "requested_before_replay_start": "yes" if requested_before_replay else "no",
+                    "requested_to_replay_due_ms": (
+                        round(ns_to_ms_delta(requested_ts_ns, int(float_value(replay_row.get("replay_due_ts_ns")))), 3)
+                        if ns_to_ms_delta(requested_ts_ns, int(float_value(replay_row.get("replay_due_ts_ns")))) is not None
+                        else ""
+                    ),
+                    "requested_to_replay_start_ms": (
+                        round(ns_to_ms_delta(requested_ts_ns, replay_start_ts_ns), 3)
+                        if ns_to_ms_delta(requested_ts_ns, replay_start_ts_ns) is not None
+                        else ""
+                    ),
+                    "load_back_events_before_replay_compute": load_back_events,
+                    "h2d_copy_events_before_replay_compute": h2d_copy_events,
+                    "first_movement_before_sglang_receive": "yes" if movement_before_receive else "no",
+                    "first_movement_before_replay_compute": "yes" if movement_before_compute else "no",
+                    "backend_reason": requested.get("backend_reason", outcome.get("backend_reason", "")),
                     "verdict": verdict,
                     "case_id": case_dir.name,
                     "case_dir": str(case_dir),
@@ -1501,6 +1653,34 @@ CACHE_BENEFIT_COLUMNS = [
     "median_hc_prefill_attribution_events",
     "prefill_attribution_delta_events",
     "verdict",
+]
+
+
+TARGETED_KV_PREFETCH_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "session_id",
+    "request_id",
+    "expected_replay_request_id",
+    "controller_decision_id",
+    "controller_command_id",
+    "backend_name",
+    "backend_accepted",
+    "backend_acted",
+    "direct_hook_available",
+    "requested_before_replay_due",
+    "requested_before_replay_start",
+    "requested_to_replay_due_ms",
+    "requested_to_replay_start_ms",
+    "load_back_events_before_replay_compute",
+    "h2d_copy_events_before_replay_compute",
+    "first_movement_before_sglang_receive",
+    "first_movement_before_replay_compute",
+    "backend_reason",
+    "verdict",
+    "case_id",
+    "case_dir",
 ]
 
 
@@ -2562,6 +2742,7 @@ def render_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
+    targeted_kv_prefetch_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -2611,6 +2792,7 @@ def render_html(
         ],
     )
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
+    targeted_kv_prefetch_table = render_table(targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -2716,6 +2898,7 @@ def render_evidence_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
+    targeted_kv_prefetch_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -2756,6 +2939,7 @@ def render_evidence_html(
         ],
     )
     speculative_prefill_table = render_table(speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
+    targeted_kv_prefetch_table = render_table(targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     nat_service_priority_table = render_table(nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     cache_signal_table = render_table(cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -2839,6 +3023,9 @@ a {{ color: #2563eb; }}
 <h2>SGLang Cache Signal Path Audit</h2>
 <p>This static source audit is collected from the installed SGLang package on the experiment machine. Runtime proof still comes from the target-scoped trace rows above.</p>
 <div class="card">{sglang_cache_path_audit_table if sglang_cache_path_audit_rows else "<p>No SGLang cache signal path audit rows found. Re-run with an environment collector on the experiment machine.</p>"}</div>
+<h2>Targeted KV Prefetch Proof</h2>
+<p>This table appears when the run includes <code>controller_targeted_kv_prefetch</code>. It proves whether the controller requested explicit target-prefix KV movement, whether the active SGLang adapter exposed a direct hook, and whether load-back or host-to-device movement was observed before replay compute.</p>
+<div class="card">{targeted_kv_prefetch_table if targeted_kv_prefetch_rows else "<p>No targeted KV prefetch rows found in this run.</p>"}</div>
 <h2>Speculative Prefill Proof</h2>
 <p>This table appears when the run includes <code>e2e_priority_hints_speculative_prefill</code> or <code>harness_emitted_signals</code>. It proves whether a background <code>max_tokens=1</code> warmup was sent before replay, whether it was triggered by gateway speculative KV preload, and whether the replay showed cached-prefix reuse.</p>
 <div class="card">{speculative_prefill_table if speculative_prefill_rows else "<p>No speculative prefill rows found in this run.</p>"}</div>
@@ -2861,6 +3048,7 @@ def write_manifest(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
+    targeted_kv_prefetch_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
     cache_signal_rows: list[dict[str, Any]],
@@ -2880,6 +3068,7 @@ def write_manifest(
         "row_count": len(rows),
         "summary_row_count": len(summary),
         "speculative_prefill_row_count": len(speculative_prefill_rows),
+        "targeted_kv_prefetch_row_count": len(targeted_kv_prefetch_rows),
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
         "cache_signal_row_count": len(cache_signal_rows),
@@ -2917,6 +3106,7 @@ def main() -> None:
         rows = read_csv_table(args.rows_csv)
         summary = read_csv_table(args.out_dir / "global_kv_readiness_by_mode_summary.csv") or summarize(rows)
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
+        targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
         harness_priority_rows = read_csv_table(args.out_dir / "harness_priority_preservation_proof.csv")
         nat_service_priority_rows = read_csv_table(args.out_dir / "nat_service_priority_probe.csv")
         cache_signal_rows = read_csv_table(args.out_dir / "harness_native_cache_signal_proof.csv")
@@ -2926,6 +3116,7 @@ def main() -> None:
         rows = collect_rows(args.root)
         summary = summarize(rows)
         speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
+        targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, rows)
         harness_priority_rows = collect_harness_priority_proof(args.root, rows)
         nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
         cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
@@ -2941,6 +3132,7 @@ def main() -> None:
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
+    write_csv(args.out_dir / "targeted_kv_prefetch_proof.csv", targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "harness_native_cache_signal_proof.csv", cache_signal_rows, CACHE_SIGNAL_COLUMNS)
@@ -2951,6 +3143,7 @@ def main() -> None:
         rows,
         summary,
         speculative_prefill_rows,
+        targeted_kv_prefetch_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -2965,6 +3158,7 @@ def main() -> None:
         rows,
         summary,
         speculative_prefill_rows,
+        targeted_kv_prefetch_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -2984,6 +3178,7 @@ def main() -> None:
         rows,
         summary,
         speculative_prefill_rows,
+        targeted_kv_prefetch_rows,
         harness_priority_rows,
         nat_service_priority_rows,
         cache_signal_rows,
@@ -3004,6 +3199,7 @@ def main() -> None:
             rows,
             summary,
             speculative_prefill_rows,
+            targeted_kv_prefetch_rows,
             harness_priority_rows,
             nat_service_priority_rows,
             cache_signal_rows,

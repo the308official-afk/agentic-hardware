@@ -27,6 +27,7 @@ from agentic_kv.controller import (
     GatewaySpeculativePreloadBackendAdapter,
     ObserveOnlyBackendAdapter,
     PolicyConfig,
+    SGLangTargetedKVPrefetchBackendAdapter,
 )
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
@@ -55,6 +56,7 @@ SUPPORTED_MODES = (
     "controller_observe_only",
     "controller_scheduler_priority",
     "controller_speculative_preload",
+    "controller_targeted_kv_prefetch",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -63,6 +65,7 @@ HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
+CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -163,11 +166,16 @@ def controller_speculative_preload_mode(mode: str) -> bool:
     return mode == CONTROLLER_SPECULATIVE_PRELOAD_MODE
 
 
+def controller_targeted_kv_prefetch_mode(mode: str) -> bool:
+    return mode == CONTROLLER_TARGETED_KV_PREFETCH_MODE
+
+
 def controller_mode(mode: str) -> bool:
     return (
         controller_observe_only_mode(mode)
         or controller_scheduler_priority_mode(mode)
         or controller_speculative_preload_mode(mode)
+        or controller_targeted_kv_prefetch_mode(mode)
     )
 
 
@@ -1116,10 +1124,11 @@ async def main_async() -> None:
     controller_enabled = controller_mode(args.mode)
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_active_preload = controller_speculative_preload_mode(args.mode)
+    controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
-            observe_only=not (controller_active_priority or controller_active_preload),
+            observe_only=not (controller_active_priority or controller_active_preload or controller_active_targeted_prefetch),
             prepare_window_ms=max(25, args.tool_wait_ms),
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
@@ -1148,6 +1157,24 @@ async def main_async() -> None:
                 live_metrics=True,
                 observe_only=False,
                 backend_name=CONTROLLER_SPECULATIVE_PRELOAD_MODE,
+            )
+        )
+    elif controller_active_targeted_prefetch:
+        controller_backend = SGLangTargetedKVPrefetchBackendAdapter(
+            BackendCapabilities(
+                priority_queue=False,
+                background_prefill_budget=False,
+                kv_demote=False,
+                kv_prefetch=True,
+                kv_release=False,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=CONTROLLER_TARGETED_KV_PREFETCH_MODE,
+                backend_version=(
+                    "direct_hook_available=1"
+                    if os.environ.get("AGENTIC_KV_TARGETED_PREFETCH_HOOK", "").lower() in {"1", "true", "yes"}
+                    else "direct_hook_available=0"
+                ),
             )
         )
     else:
@@ -1235,24 +1262,24 @@ async def main_async() -> None:
         )
         return decision_row, results
 
-    def acted_controller_command(
+    def selected_controller_command(
         controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None,
         *,
         scheduler_action: str | None = None,
         kv_action: str | None = None,
+        require_acted: bool = False,
     ) -> dict[str, Any] | None:
         if controller_result is None:
             return None
         decision_row, backend_results = controller_result
-        acted_command_ids = {
-            str(result.get("command_id"))
-            for result in backend_results
-            if result.get("acted")
-        }
+        result_by_command_id = {str(result.get("command_id")): result for result in backend_results}
         for command in decision_row.get("commands") or []:
             if not isinstance(command, dict):
                 continue
-            if str(command.get("command_id") or "") not in acted_command_ids:
+            backend_result = result_by_command_id.get(str(command.get("command_id") or ""))
+            if backend_result is None:
+                continue
+            if require_acted and not backend_result.get("acted"):
                 continue
             if scheduler_action is not None and command.get("scheduler_action") != scheduler_action:
                 continue
@@ -1260,10 +1287,27 @@ async def main_async() -> None:
                 continue
             return {
                 **command,
+                "backend_accepted": backend_result.get("accepted", ""),
+                "backend_acted": backend_result.get("acted", ""),
+                "backend_reason": backend_result.get("reason", ""),
+                "backend_name": backend_result.get("backend_name", ""),
                 "controller_decision_id": decision_row.get("decision_id", ""),
                 "controller_decision_reason": decision_row.get("reason", ""),
             }
         return None
+
+    def acted_controller_command(
+        controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None,
+        *,
+        scheduler_action: str | None = None,
+        kv_action: str | None = None,
+    ) -> dict[str, Any] | None:
+        return selected_controller_command(
+            controller_result,
+            scheduler_action=scheduler_action,
+            kv_action=kv_action,
+            require_acted=True,
+        )
 
     write_trace(
         args.trace,
@@ -1404,7 +1448,47 @@ async def main_async() -> None:
         )
         direct_gateway_speculative_prefill = args.mode == "e2e_priority_hints_speculative_prefill"
         controller_preload_command = acted_controller_command(controller_tool_start_result, kv_action="prefetch")
-        controller_speculative_preload = controller_preload_command is not None
+        targeted_prefetch_command = (
+            selected_controller_command(controller_tool_start_result, kv_action="prefetch")
+            if controller_active_targeted_prefetch
+            else None
+        )
+        controller_speculative_preload = controller_active_preload and controller_preload_command is not None
+        if targeted_prefetch_command is not None:
+            direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
+            targeted_event_base = {
+                "session_id": pair.session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "request_id": str(initial_meta["label"]),
+                "expected_replay_request_id": f"{pair.session_id}_replay",
+                "prefix_id": base_meta["prefix_id"],
+                "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
+                "controller_command_id": targeted_prefetch_command.get("command_id", ""),
+                "controller_command_reason": targeted_prefetch_command.get("reason", ""),
+                "backend_name": targeted_prefetch_command.get("backend_name", ""),
+                "backend_accepted": targeted_prefetch_command.get("backend_accepted", ""),
+                "backend_acted": targeted_prefetch_command.get("backend_acted", ""),
+                "backend_reason": targeted_prefetch_command.get("backend_reason", ""),
+                "direct_hook_available": direct_hook_available,
+                "tool_start_offset_ms": round(tool_start_ms, 3),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "offset_ms": round(offset_ms(), 3),
+            }
+            write_trace(
+                args.trace,
+                {
+                    **targeted_event_base,
+                    "event": "m27.targeted_kv_prefetch.requested",
+                },
+            )
+            write_trace(
+                args.trace,
+                {
+                    **targeted_event_base,
+                    "event": "m27.targeted_kv_prefetch.acted" if direct_hook_available else "m27.targeted_kv_prefetch.unavailable",
+                },
+            )
         if direct_gateway_speculative_prefill or cache_signal_driven_preload or controller_speculative_preload:
             warmup_label = f"{pair.session_id}_speculative_prefill"
             replay_label = f"{pair.session_id}_replay"
@@ -1562,6 +1646,9 @@ async def main_async() -> None:
                 "harness": args.harness,
                 "replay_due_offset_ms": round(replay_due_ms, 3),
                 "expected_reuse": (
+                    "controller_targeted_kv_prefetch"
+                    if targeted_prefetch_command
+                    else
                     "controller_gateway_speculative_kv_preload"
                     if controller_speculative_preload
                     else

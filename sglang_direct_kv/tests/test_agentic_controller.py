@@ -13,6 +13,7 @@ from agentic_kv.controller import (
     KVAction,
     PolicyConfig,
     SchedulerAction,
+    SGLangTargetedKVPrefetchBackendAdapter,
     SessionPhase,
 )
 
@@ -151,6 +152,53 @@ class AgenticControllerTests(unittest.TestCase):
 
         self.assertFalse(decision.observed_only)
         self.assertIs(decision.commands[0].kv_action, KVAction.PREFETCH)
+        self.assertTrue(result.acted)
+
+    def test_targeted_kv_prefetch_adapter_records_unavailable_hook(self) -> None:
+        store = ControllerStateStore()
+        state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=50,
+                deadline_after_completion_ms=50,
+            )
+        )
+        policy = ControllerPolicy(PolicyConfig(observe_only=False, prepare_window_ms=100))
+        backend = SGLangTargetedKVPrefetchBackendAdapter(direct_hook_available=False)
+
+        decision = policy.plan(state, backend.capabilities(), now_ms=0)
+        result = backend.apply(decision.commands[0])
+
+        self.assertIs(decision.commands[0].kv_action, KVAction.PREFETCH)
+        self.assertTrue(result.accepted)
+        self.assertFalse(result.acted)
+        self.assertIn("unavailable", result.reason)
+
+    def test_targeted_kv_prefetch_adapter_acts_when_hook_available(self) -> None:
+        store = ControllerStateStore()
+        state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=50,
+                deadline_after_completion_ms=50,
+            )
+        )
+        policy = ControllerPolicy(PolicyConfig(observe_only=False, prepare_window_ms=100))
+        backend = SGLangTargetedKVPrefetchBackendAdapter(direct_hook_available=True)
+
+        decision = policy.plan(state, backend.capabilities(), now_ms=0)
+        result = backend.apply(decision.commands[0])
+
+        self.assertIs(decision.commands[0].kv_action, KVAction.PREFETCH)
+        self.assertTrue(result.accepted)
         self.assertTrue(result.acted)
 
 
