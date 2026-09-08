@@ -2167,6 +2167,117 @@ def render_signal_family_definition_table() -> str:
     )
 
 
+def render_harness_cache_decision_table() -> str:
+    rows = [
+        {
+            "Harness": "Claude Code",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "cache_control on system and messages blocks",
+            "How the harness likely decided": "Structured prompt-builder rule",
+            "Simple explanation": "Claude Code knows some blocks are stable, like system instructions, tool definitions, and earlier context. It marks those blocks cacheable.",
+        },
+        {
+            "Harness": "Qwen Code",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "cache_control on system, messages, and tools blocks",
+            "How the harness likely decided": "Cache-control setting plus structured prompt-builder rule",
+            "Simple explanation": "Qwen Code was configured with cache control enabled. It then marked stable prompt sections such as system/tool/context blocks.",
+        },
+        {
+            "Harness": "OpenCode",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "promptCacheKey",
+            "How the harness likely decided": "Provider/session cache-key rule",
+            "Simple explanation": "OpenCode was configured to always attach a cache key for that provider/session. It did not inspect the request deeply.",
+        },
+        {
+            "Harness": "Codex",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "prompt_cache_key",
+            "How the harness likely decided": "Session/provider cache-key rule",
+            "Simple explanation": "Codex attached a stable cache key so related requests in the same task/session can be grouped for cache reuse.",
+        },
+        {
+            "Harness": "Pi Agent Harness",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "cache_control, prompt_cache_key, prompt_cache_retention",
+            "How the harness likely decided": "Session affinity plus cache compatibility rule",
+            "Simple explanation": 'Pi carried both block-style cache markers and a session cache identity. It was mainly saying: "this session has reusable context."',
+        },
+        {
+            "Harness": "OpenClaw",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "prompt_cache_key, prompt_cache_retention",
+            "How the harness likely decided": "Session/provider cache-key rule",
+            "Simple explanation": "OpenClaw attached a stable cache key and retention hint because the provider config said prompt cache keys and long retention are supported.",
+        },
+        {
+            "Harness": "NeMo Agent Toolkit / NAT",
+            "Did target replay emit cache signal?": "Yes",
+            "What signal appeared": "nvext.cache_control",
+            "How the harness likely decided": "Workflow/transport cache policy",
+            "Simple explanation": "NAT's Dynamo-style transport was configured to always emit cache control for that workflow path.",
+        },
+        {
+            "Harness": "DeepAgents / Hatcher",
+            "Did target replay emit cache signal?": "No",
+            "What signal appeared": "None seen",
+            "How the harness likely decided": "No cache-emitting rule observed",
+            "Simple explanation": "For the target replay rows, we did not see native cache metadata from this harness.",
+        },
+        {
+            "Harness": "Hermes Agent",
+            "Did target replay emit cache signal?": "No",
+            "What signal appeared": "None seen",
+            "How the harness likely decided": "No cache-emitting rule observed",
+            "Simple explanation": "For the target replay rows, we did not see native cache metadata from this harness.",
+        },
+    ]
+    grouping_rows = [
+        {
+            "Group": "Structured prompt block caching",
+            "Harnesses": "Claude Code, Qwen Code, Pi",
+            "Meaning": "The harness marks stable pieces of the prompt, like system instructions, tools, or context.",
+        },
+        {
+            "Group": "Session cache key caching",
+            "Harnesses": "Codex, OpenCode, OpenClaw, Pi",
+            "Meaning": "The harness attaches a stable key so related requests can be associated with the same cache/session.",
+        },
+        {
+            "Group": "Workflow transport cache policy",
+            "Harnesses": "NAT",
+            "Meaning": "The transport/workflow layer is configured to emit cache control.",
+        },
+        {
+            "Group": "No cache signal observed",
+            "Harnesses": "DeepAgents/Hatcher, Hermes",
+            "Meaning": "No target replay cache signal was seen in this run.",
+        },
+    ]
+    return "\n".join(
+        [
+            render_table(
+                rows,
+                [
+                    "Harness",
+                    "Did target replay emit cache signal?",
+                    "What signal appeared",
+                    "How the harness likely decided",
+                    "Simple explanation",
+                ],
+            ),
+            '<p class="muted">The simplest way to group them:</p>',
+            render_table(grouping_rows, ["Group", "Harnesses", "Meaning"]),
+            (
+                "<p><strong>Main takeaway:</strong> These harnesses mostly emit cache signals because their prompt builder, "
+                'provider config, session config, or workflow transport says "this request has reusable context." '
+                "They are not generally deciding that the request is urgent.</p>"
+            ),
+        ]
+    )
+
+
 def render_chart_legend(rows: list[dict[str, Any]]) -> str:
     signal_items = []
     for bucket in CHART_SIGNAL_ORDER:
@@ -2414,6 +2525,7 @@ def render_html(
     chart_controls = render_chart_controls(rows)
     chart_interaction_script = render_chart_interaction_script()
     signal_family_definition_table = render_signal_family_definition_table()
+    harness_cache_decision_table = render_harness_cache_decision_table()
     pressure_definition_table = render_pressure_definition_table(rows, run_config)
     summary_table = render_table(
         summary,
@@ -2526,11 +2638,14 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <p>Report label: <code>{html.escape(report_label)}</code>. Generated {generated}.</p>
 <p>Hardware profile: <code>{html.escape(hardware_profile)}</code>. Profile file: <code>{html.escape(hardware_profile_path)}</code>.</p>
     <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Use the controls to choose signal paths, switch the deadline-pressure axis between linear and symlog, and focus on selected pressure levels such as P0/P3/P5. The TTFT-impact view shows how long each replay request took to reach first token after it started. Lower is better. Exact lower-level modes remain in the evidence file.</p>
-<h2>Signal Family Definitions</h2>
-<p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
-<div class="card">{signal_family_definition_table}</div>
-<h2>Pressure Level Definitions</h2>
-<p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
+	<h2>Signal Family Definitions</h2>
+	<p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
+	<div class="card">{signal_family_definition_table}</div>
+	<h2>Harness Cache Signal Decision Map</h2>
+	<p>This table explains how each harness produced cache signals in this report. It focuses on the target replay requests shown in the chart.</p>
+	<div class="card">{harness_cache_decision_table}</div>
+	<h2>Pressure Level Definitions</h2>
+	<p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
  	<div class="card">{pressure_definition_table}</div>
 <div class="card">{chart_controls}{chart}</div>
  	<h2>Evidence Tables</h2>
