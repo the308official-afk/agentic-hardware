@@ -1271,6 +1271,32 @@ async def run_filler(
             "controller_demotion_applied_to": "pressure_filler",
         }
 
+    def write_background_reshape_signal(meta: dict[str, Any], *, request_id: str, stage: str) -> None:
+        if trace is None or str(meta.get("controller_demote_restore_active") or "").lower() != "yes":
+            return
+        write_trace(
+            trace,
+            {
+                "event": "m27.controller_traffic_reshape.background_request_lowered",
+                "session_id": meta.get("session_id", ""),
+                "mode": meta.get("mode", ""),
+                "harness": meta.get("harness", ""),
+                "phase": meta.get("phase", ""),
+                "request_id": request_id,
+                "label": request_id,
+                "task_index": meta.get("task_index", ""),
+                "tool_wait_step": meta.get("tool_wait_step", ""),
+                "task_replay_steps": meta.get("task_replay_steps", ""),
+                "stage": stage,
+                "controller_demote_decision_id": meta.get("controller_demote_decision_id", ""),
+                "controller_demote_command_id": meta.get("controller_demote_command_id", ""),
+                "controller_demote_trigger": meta.get("controller_demote_trigger", ""),
+                "controller_demote_translation": meta.get("controller_demote_translation", ""),
+                "effective_sglang_priority": meta.get("controller_demote_priority", ""),
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+
     filler_session = f"{pair.session_id}_pressure_{idx:03d}"
     prompt = make_pressure_filler_prompt(filler_session, tokens)
     total_steps = max(1, len(wait_specs))
@@ -1287,6 +1313,7 @@ async def run_filler(
         "task_replay_steps": total_steps,
     }
     meta = attach_pre_harness_priority_intent(meta)
+    write_background_reshape_signal(meta, request_id=str(meta["label"]), stage="initial")
     await run_hatcher_request(gateway_base, model, prompt, meta)
     if not filler_replay_deadlines:
         return
@@ -1368,6 +1395,7 @@ async def run_filler(
             "tool_wait_class": spec.wait_class,
         }
         replay_meta = attach_pre_harness_priority_intent(replay_meta)
+        write_background_reshape_signal(replay_meta, request_id=replay_label, stage="replay")
         await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
         if trace is not None:
             write_trace(
@@ -2074,6 +2102,33 @@ async def main_async() -> None:
                     "offset_ms": round(offset_ms(), 3),
                 },
             )
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.controller_traffic_reshape.window_open",
+                    "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "tool_wait_ms": wait_spec.wait_ms,
+                    "demote_trigger": trigger,
+                    "demotable_background_requests": args.filler_sessions,
+                    "background_safe_to_demote": args.filler_sessions > 0,
+                    "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                    "controller_command_id": controller_demote_command.get("command_id", ""),
+                    "controller_decision_reason": controller_demote_command.get("controller_decision_reason", ""),
+                    "effective_background_priority": -100,
+                    "tool_start_offset_ms": round(tool_start_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "open_offset_ms": round(offset_ms(), 3),
+                },
+            )
 
         for wait_spec in target_wait_specs:
             wait_ms = wait_spec.wait_ms
@@ -2639,6 +2694,29 @@ async def main_async() -> None:
                     }
                 )
             replay_meta = attach_harness_priority_metadata(replay_meta)
+            if controller_demotion_state.get("active"):
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_traffic_reshape.target_replay_entering",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "request_id": replay_label,
+                        "label": replay_label,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "controller_sglang_priority": controller_replay_priority or "",
+                        "controller_decision_id": controller_decision_id,
+                        "controller_command_id": controller_command_id,
+                        "controller_replay_rank": controller_replay_rank,
+                        "controller_urgent_replay_count": controller_replay_count,
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
             await bounded_request(step_replay_prompt, replay_meta)
             write_trace(
                 args.trace,
@@ -2697,6 +2775,23 @@ async def main_async() -> None:
                         "task_replay_steps": len(target_wait_specs),
                         "restored_phase": "pressure_filler",
                         "restored_priority": 0,
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_traffic_reshape.window_close",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "restored_phase": "pressure_filler",
+                        "restored_priority": 0,
+                        "remaining_reshape_windows": len(owners) if isinstance(owners, set) else "",
                         "offset_ms": round(offset_ms(), 3),
                     },
                 )

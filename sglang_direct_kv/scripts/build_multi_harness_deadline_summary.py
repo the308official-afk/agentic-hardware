@@ -995,6 +995,22 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             if str(row.get("event") or "")
             in {"m27.controller_demote_restore.restored", "m27.controller_demote_restore.step_restored"}
         ]
+        reshape_window_opens = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_traffic_reshape.window_open"
+        ]
+        reshape_window_closes = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_traffic_reshape.window_close"
+        ]
+        reshape_background_lowered = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_traffic_reshape.background_request_lowered"
+        ]
+        reshape_target_replays = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_traffic_reshape.target_replay_entering"
+        ]
         for demote in demote_events:
             session_id = str(demote.get("session_id") or "")
             tool_wait_step = str(demote.get("tool_wait_step") or "")
@@ -1018,6 +1034,60 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             )
             restore_ts_ns = int(float_value(restore.get("ts_ns")))
             filler_prefix = f"{session_id}_pressure_"
+            window_open = next(
+                (
+                    row
+                    for row in reshape_window_opens
+                    if str(row.get("session_id") or "") == session_id
+                    and (
+                        not tool_wait_step
+                        or not str(row.get("tool_wait_step") or "")
+                        or str(row.get("tool_wait_step") or "") == tool_wait_step
+                    )
+                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                ),
+                {},
+            )
+            window_close = next(
+                (
+                    row
+                    for row in reshape_window_closes
+                    if str(row.get("session_id") or "") == session_id
+                    and (
+                        not tool_wait_step
+                        or not str(row.get("tool_wait_step") or "")
+                        or str(row.get("tool_wait_step") or "") == tool_wait_step
+                    )
+                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                ),
+                {},
+            )
+            lowered_signals = [
+                row
+                for row in reshape_background_lowered
+                if str(row.get("session_id") or "").startswith(filler_prefix)
+                and (
+                    not tool_wait_step
+                    or not str(row.get("tool_wait_step") or "")
+                    or str(row.get("tool_wait_step") or "") == tool_wait_step
+                )
+                and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                and (not replay_start_ts_ns or int(float_value(row.get("ts_ns"))) <= replay_start_ts_ns)
+            ]
+            target_replay_signal = next(
+                (
+                    row
+                    for row in reshape_target_replays
+                    if str(row.get("session_id") or "") == session_id
+                    and (
+                        not tool_wait_step
+                        or not str(row.get("tool_wait_step") or "")
+                        or str(row.get("tool_wait_step") or "") == tool_wait_step
+                    )
+                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                ),
+                {},
+            )
             filler_rows = [
                 row
                 for row in request_starts
@@ -1088,6 +1158,10 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                     "demote_backend_acted": "yes" if demote_acted else "no",
                     "demoted_priority": demote.get("demoted_priority", ""),
                     "demote_trigger": demote.get("demote_trigger", ""),
+                    "traffic_reshape_window_opened": "yes" if window_open else "no",
+                    "traffic_reshape_background_lowered_signals": len(lowered_signals),
+                    "traffic_reshape_target_replay_signal": "yes" if target_replay_signal else "no",
+                    "traffic_reshape_window_closed": "yes" if window_close else "no",
                     "filler_requests_seen": len(filler_rows),
                     "filler_requests_between_demote_and_replay": len(filler_before_replay),
                     "filler_demoted_count": len(filler_demoted),
@@ -2142,6 +2216,10 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "demote_backend_acted",
     "demoted_priority",
     "demote_trigger",
+    "traffic_reshape_window_opened",
+    "traffic_reshape_background_lowered_signals",
+    "traffic_reshape_target_replay_signal",
+    "traffic_reshape_window_closed",
     "filler_requests_seen",
     "filler_requests_between_demote_and_replay",
     "filler_demoted_count",

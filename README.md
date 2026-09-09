@@ -532,6 +532,16 @@ failure. The proof table separately records `demote_trigger`,
 `window_filler_not_demoted_count` so the report can show whether the controller
 actually shaped traffic during the replay-critical window.
 
+The driver also emits explicit traffic-reshape trace signals during processing:
+`m27.controller_traffic_reshape.window_open`,
+`m27.controller_traffic_reshape.background_request_lowered`,
+`m27.controller_traffic_reshape.target_replay_entering`, and
+`m27.controller_traffic_reshape.window_close`. These are proof breadcrumbs, not
+extra scheduling actions. They make it clear that the controller opened a
+replay-critical window before the target replay arrived, lowered background
+requests during that window, submitted the target replay with controller
+priority, and then closed/restored the window.
+
 Phase gate for each implementation slice:
 
 1. Add or update a portable policy/wrapper first.
