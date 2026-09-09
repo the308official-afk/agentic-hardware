@@ -313,6 +313,30 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+EC2 controller repeatability run:
+
+```bash
+cd sglang_direct_kv
+bash scripts/run_ec2_controller_repeatability.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+This repeatability run intentionally stays on the EC2 profile and uses the
+DeepAgents/Hatcher harness only. It compares the useful controller paths against
+baseline and direct gateway priority across `p1_mild`, `p3_high`, `p4_cliff`,
+and `p5_boss_queue`. The purpose is to check whether the earlier controller
+ordering result repeats before spending time on broader harness or GH200 runs.
+
+Current EC2 controller observation:
+
+| Path | Current interpretation |
+| --- | --- |
+| Baseline | Slow under queue pressure because the replay enters as ordinary work. |
+| Gateway-injected priority | Helps by raising replay scheduler priority at the SGLang boundary. |
+| Controller scheduler priority | Helps when controller lifecycle state marks the replay-ready point and lowers that decision to SGLang priority. |
+| Controller demote/restore | Helps by temporarily pushing matching filler/background work down while replay is critical, then restoring normal behavior. |
+| Controller admission control | Helps by skipping speculative work when the system is already overloaded while still raising replay priority. |
+| Controller speculative preload / targeted prefetch | Mechanically validated, but not in this repeatability run because prior EC2 timing showed little benefit and sometimes extra load. |
+
 ## Agent-Aware Controller Roadmap
 
 Use this as the phase checklist for integrating the one-worker agentic
@@ -743,6 +767,7 @@ Primary scripts:
 | --- | --- |
 | [sglang_direct_kv/scripts/run_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_harness_deadline_pressure.sh) | Orchestrates the multi-harness pressure experiment and writes the latest report. |
 | [sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh](sglang_direct_kv/scripts/run_native_harness_deadline_pressure.sh) | Runs only the native CLI harnesses plus the Hatcher control. |
+| [sglang_direct_kv/scripts/run_ec2_controller_repeatability.sh](sglang_direct_kv/scripts/run_ec2_controller_repeatability.sh) | EC2-focused controller repeatability run for DeepAgents/Hatcher across the useful controller paths. |
 | [sglang_direct_kv/scripts/run_multi_harness_replay_driver.py](sglang_direct_kv/scripts/run_multi_harness_replay_driver.py) | Generates target replay and filler traffic for the selected harnesses. |
 | [sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py](sglang_direct_kv/scripts/nemo_agent_toolkit_wrapper.py) | Portable NAT wrapper that records config, process, and gateway-emission lifecycle events without patching NAT itself. |
 | [sglang_direct_kv/scripts/run_nemo_nat_service_priority_probe.py](sglang_direct_kv/scripts/run_nemo_nat_service_priority_probe.py) | Runs real `nat serve` as one shared service and can also inspect NAT Dynamo-provider `nvext.agent_hints` without a full Dynamo runtime. |

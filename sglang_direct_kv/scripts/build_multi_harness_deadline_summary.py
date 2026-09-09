@@ -30,6 +30,16 @@ HARNESS_LABELS = {
     "hermes_agent": "Hermes Agent",
 }
 
+
+def atomic_write_text(path: Path, text: str) -> None:
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def atomic_write_json(path: Path, payload: Any) -> None:
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True))
+
 HARNESS_SHORT_LABELS = {
     "hatcher": "DeepAgents",
     "codex": "Codex",
@@ -3393,7 +3403,7 @@ def write_manifest(
         "pressure_levels": sorted({row["pressure_level"] for row in rows}),
         "modes": sorted({row["mode"] for row in rows}),
     }
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_write_json(path, manifest)
 
 
 def main() -> None:
@@ -3492,8 +3502,8 @@ def main() -> None:
     )
     report_path = args.out_dir / "master_report.html"
     evidence_path = args.out_dir / "evidence_tables.html"
-    report_path.write_text(html_text, encoding="utf-8")
-    evidence_path.write_text(evidence_html_text, encoding="utf-8")
+    atomic_write_text(report_path, html_text)
+    atomic_write_text(evidence_path, evidence_html_text)
     write_manifest(
         args.out_dir / "manifest.json",
         args,
@@ -3514,9 +3524,9 @@ def main() -> None:
     )
     if args.latest_root and args.update_latest:
         args.latest_root.mkdir(parents=True, exist_ok=True)
-        (args.latest_root / "latest_master_report.html").write_text(html_text, encoding="utf-8")
-        (args.latest_root / "evidence_tables.html").write_text(evidence_html_text, encoding="utf-8")
-        (args.latest_root / "latest_evidence_tables.html").write_text(evidence_html_text, encoding="utf-8")
+        atomic_write_text(args.latest_root / "latest_master_report.html", html_text)
+        atomic_write_text(args.latest_root / "evidence_tables.html", evidence_html_text)
+        atomic_write_text(args.latest_root / "latest_evidence_tables.html", evidence_html_text)
         write_manifest(
             args.latest_root / "latest_manifest.json",
             args,
