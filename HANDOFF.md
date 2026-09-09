@@ -8,6 +8,60 @@ hardware replay-deadline infrastructure. Treat this file plus the top-level
 `sglang_direct_kv/README.md` is useful history, but it includes outdated
 milestones and should not drive current implementation choices by itself.
 
+## Project Overview
+
+This project studies a specific bottleneck in agentic LLM systems: after an
+agent calls a tool, it has to return to the model and generate the next token
+quickly. That return-to-model request is called the replay request.
+
+The user cares about whether that replay request meets a deadline. A replay is
+good if the first replay token arrives on time; it is bad if queueing, GPU
+pressure, KV-cache pressure, or other agents make it late.
+
+The testbed creates controlled pressure around that replay request:
+
+- background/filler model requests
+- queue pressure inside SGLang
+- KV-cache pressure
+- short tool-wait windows
+- multiple agents becoming replay-ready at the same time
+
+Then it compares whether different signal/controller paths make the replay
+request faster or more deadline-aware.
+
+The main measured path is:
+
+```text
+experiment driver -> harness -> gateway -> SGLang -> first replay token
+```
+
+The harness represents the agent framework or coding-agent client shape. The
+gateway is the portability boundary. It observes and translates request signals
+into SGLang-compatible fields without requiring each harness or SGLang version
+to be patched directly.
+
+The current controller work adds a portable policy layer around this path:
+
+```text
+agent lifecycle events -> controller policy -> gateway/SGLang actions
+```
+
+The controller watches when an agent enters tool wait, when replay becomes
+likely, when replay is ready, and when replay is finished. It can then decide to
+raise replay priority, temporarily demote background work, skip speculative work
+under overload, or restore normal traffic afterward.
+
+The main report output is the Replay Deadline Pressure Chart. It shows how late
+or early replay first tokens were under different pressure levels and modes.
+Exact proof lives in the evidence tables and CSV artifacts.
+
+Simple framing for the core idea:
+
+```text
+Priority says: this request matters.
+Controller says: this request matters, and I will temporarily make room for it.
+```
+
 ## Current State
 
 The repository is focused on measuring whether agentic LLM replay requests can
