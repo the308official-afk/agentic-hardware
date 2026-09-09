@@ -556,6 +556,21 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             row_mode = str(source_row.get("mode") or mode)
             row_phase = str(source_row.get("phase") or start.get("phase") or "")
             group = request_group(row_phase, session_id, label)
+            harness_controller_signal = source_row.get("harness_controller_signal") or start.get("harness_controller_signal") or {}
+            if isinstance(harness_controller_signal, dict):
+                controller_signal_schema = str(harness_controller_signal.get("schema_version") or "")
+                controller_signal_phase = str((harness_controller_signal.get("phase") or {}).get("name") or "")
+                controller_signal_work_class = str((harness_controller_signal.get("phase") or {}).get("work_class") or "")
+                controller_signal_tool_type = str((harness_controller_signal.get("tool") or {}).get("type") or "")
+                controller_signal_user_waiting = str((harness_controller_signal.get("phase") or {}).get("user_waiting") or "")
+                controller_signal_safe_to_demote = str((harness_controller_signal.get("scheduling") or {}).get("safe_to_demote") or "")
+            else:
+                controller_signal_schema = ""
+                controller_signal_phase = ""
+                controller_signal_work_class = ""
+                controller_signal_tool_type = ""
+                controller_signal_user_waiting = ""
+                controller_signal_safe_to_demote = ""
             out.append(
                 {
                     **{key: value for key, value in source_row.items() if key.startswith("encoding_")},
@@ -577,6 +592,12 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                     "tool_wait_profile": source_row.get("tool_wait_profile", start.get("tool_wait_profile", due.get("tool_wait_profile", ""))),
                     "tool_wait_class": source_row.get("tool_wait_class", start.get("tool_wait_class", due.get("tool_wait_class", ""))),
                     "tool_wait_ms": source_row.get("tool_wait_ms", start.get("tool_wait_ms", due.get("tool_wait_ms", ""))),
+                    "controller_signal_schema": controller_signal_schema,
+                    "controller_signal_phase": controller_signal_phase,
+                    "controller_signal_work_class": controller_signal_work_class,
+                    "controller_signal_tool_type": controller_signal_tool_type,
+                    "controller_signal_user_waiting": controller_signal_user_waiting,
+                    "controller_signal_safe_to_demote": controller_signal_safe_to_demote,
                     "has_replay_deadline": "yes" if due_ts_ns else "no",
                     "first_token_lateness_ms": round(lateness_ms, 3) if math.isfinite(lateness_ms) else "",
                     "replay_debt_ms": round(replay_debt_ms, 3) if math.isfinite(replay_debt_ms) else "",
@@ -1774,6 +1795,12 @@ RAW_COLUMNS = ENCODING_COLUMNS + ["prefill_full_input_tokens", "prefill_cached_p
     "tool_wait_profile",
     "tool_wait_class",
     "tool_wait_ms",
+    "controller_signal_schema",
+    "controller_signal_phase",
+    "controller_signal_work_class",
+    "controller_signal_tool_type",
+    "controller_signal_user_waiting",
+    "controller_signal_safe_to_demote",
     "has_replay_deadline",
     "first_token_lateness_ms",
     "replay_debt_ms",

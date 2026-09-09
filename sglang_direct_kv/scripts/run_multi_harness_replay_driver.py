@@ -32,6 +32,7 @@ from agentic_kv.controller import (
     ObserveOnlyBackendAdapter,
     PolicyConfig,
     SGLangTargetedKVPrefetchBackendAdapter,
+    build_harness_controller_signal,
 )
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
@@ -408,6 +409,13 @@ def controller_event_from_meta(
     deadline_after_completion_ms: int | None = None,
     eta_uncertainty_ms: int | None = None,
 ) -> ControllerEvent:
+    harness_controller_signal = build_harness_controller_signal(
+        meta,
+        monotonic_ms=monotonic_ms,
+        expected_completion_ms=expected_completion_ms,
+        deadline_after_completion_ms=deadline_after_completion_ms,
+        eta_uncertainty_ms=eta_uncertainty_ms,
+    )
     return ControllerEvent(
         event_id=event_id,
         event=event_type,
@@ -427,6 +435,7 @@ def controller_event_from_meta(
             "pressure_level": meta.get("pressure_level", ""),
             "phase": meta.get("phase", ""),
             "label": meta.get("label", ""),
+            "harness_controller_signal": harness_controller_signal,
         },
     )
 
@@ -1663,6 +1672,7 @@ async def main_async() -> None:
                 "controller_backend_results": results,
                 "session_id": event.session_id,
                 "prefix_id": event.prefix_id,
+                "harness_controller_signal": event.metadata.get("harness_controller_signal", {}),
                 "mode": args.mode,
                 "harness": args.harness,
                 "pressure_level": args.pressure_level,
@@ -1846,6 +1856,10 @@ async def main_async() -> None:
 
     async def bounded_request(prompt: str, meta: dict[str, Any]) -> None:
         async with sem:
+            meta = {
+                **meta,
+                "harness_controller_signal": build_harness_controller_signal(meta),
+            }
             write_trace(
                 args.trace,
                 {
@@ -1861,6 +1875,7 @@ async def main_async() -> None:
                     "task_replay_steps": meta.get("task_replay_steps", ""),
                     "tool_wait_profile": meta.get("tool_wait_profile", ""),
                     "tool_wait_class": meta.get("tool_wait_class", ""),
+                    "harness_controller_signal": meta.get("harness_controller_signal", {}),
                     "offset_ms": round(offset_ms(), 3),
                     "priority_intent": meta.get("priority_intent", ""),
                     "workflow_node": meta.get("workflow_node", ""),
@@ -1886,6 +1901,7 @@ async def main_async() -> None:
                     "task_replay_steps": meta.get("task_replay_steps", ""),
                     "tool_wait_profile": meta.get("tool_wait_profile", ""),
                     "tool_wait_class": meta.get("tool_wait_class", ""),
+                    "harness_controller_signal": meta.get("harness_controller_signal", {}),
                     "offset_ms": round(offset_ms(), 3),
                 },
             )

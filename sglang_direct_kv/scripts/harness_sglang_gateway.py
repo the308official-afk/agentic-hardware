@@ -15,6 +15,8 @@ from typing import Any
 
 import httpx
 
+from agentic_kv.controller import build_harness_controller_signal
+
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
 PRIORITY_ENABLED_MODES = {
     "e2e_priority_hints",
@@ -559,6 +561,13 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
     priority = sglang_priority(meta, payload)
     priority_chain = priority_translation_context(meta, payload)
     cache_chain = cache_translation_context(meta, payload)
+    observed_meta = {
+        **{key: value for key, value in meta.items() if key != "harness_controller_signal"},
+        **priority_chain,
+        **cache_chain,
+        "sglang_priority": priority if priority is not None else "",
+    }
+    harness_controller_signal = build_harness_controller_signal(observed_meta)
     agent_hints = {
         "schema": "nvext.agent_hints",
         "session_id": context["parent_run_id"],
@@ -600,6 +609,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "gateway_cache_lowered": cache_chain["gateway_cache_lowered"],
         "gateway_cache_salt": cache_chain["gateway_cache_salt"],
         "gateway_cache_invented_signal": cache_chain["gateway_cache_invented_signal"],
+        "harness_controller_signal": harness_controller_signal,
     }
     if context["phase"] == "speculative_prefill":
         agent_hints["expected_action"] = "warm_next_turn_prefix"
@@ -623,6 +633,7 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "sglang_priority": priority if priority is not None else "",
             "dynamo_hint_priority": priority if priority is not None else "",
             "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
+            "harness_controller_signal": harness_controller_signal,
             "speculative_prefill": bool(meta.get("speculative_prefill")),
             "speculative_prefill_role": meta.get("speculative_prefill_role", ""),
             "speculative_prefill_strategy": meta.get("speculative_prefill_strategy", ""),
@@ -937,6 +948,14 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "sglang_priority": priority if priority is not None else "",
                 "dynamo_hint_priority": priority if priority is not None else "",
                 "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
+                "harness_controller_signal": build_harness_controller_signal(
+                    {
+                        **{key: value for key, value in meta.items() if key != "harness_controller_signal"},
+                        **priority_chain,
+                        **cache_chain,
+                        "sglang_priority": priority if priority is not None else "",
+                    }
+                ),
                 "priority_policy": "harness_gateway_intercepted_sglang_priority" if priority is not None else "none",
                 "speculative_prefill": bool(meta.get("speculative_prefill")),
                 "speculative_prefill_role": meta.get("speculative_prefill_role", ""),

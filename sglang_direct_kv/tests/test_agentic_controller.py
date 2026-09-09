@@ -18,10 +18,70 @@ from agentic_kv.controller import (
     SchedulerAction,
     SGLangTargetedKVPrefetchBackendAdapter,
     SessionPhase,
+    build_harness_controller_signal,
 )
 
 
 class AgenticControllerTests(unittest.TestCase):
+    def test_harness_controller_signal_normalizes_tool_wait_facts(self) -> None:
+        signal = build_harness_controller_signal(
+            {
+                "harness": "claude_code",
+                "mode": "controller_full",
+                "pressure_level": "p3_high",
+                "session_id": "task_1",
+                "label": "task_1_replay_01",
+                "phase": "tool_wait",
+                "prefix_id": "task_1:prefix",
+                "session_generation": 2,
+                "task_index": 7,
+                "tool_wait_profile": "agentic_mixed",
+                "tool_wait_class": "moderate",
+                "tool_wait_ms": 2000,
+                "tool_wait_step": 1,
+                "task_replay_steps": 2,
+                "prompt_hash": "abc",
+                "max_tokens": 8,
+                "native_cache_profile": {"enabled": True, "cache_key_seed": "repo-session"},
+            },
+            monotonic_ms=100,
+            expected_completion_ms=2100,
+            deadline_after_completion_ms=50,
+            eta_uncertainty_ms=500,
+        )
+
+        self.assertEqual(signal["schema_version"], "harness_controller_signal.v1")
+        self.assertEqual(signal["task"]["session_id"], "task_1")
+        self.assertEqual(signal["phase"]["work_class"], "target")
+        self.assertTrue(signal["phase"]["user_waiting"])
+        self.assertEqual(signal["tool"]["estimated_duration_ms"], 2000)
+        self.assertEqual(signal["tool"]["expected_done_at_ms"], 2100)
+        self.assertEqual(signal["tool_wait"]["profile"], "agentic_mixed")
+        self.assertEqual(signal["tool_wait"]["step_index"], 1)
+        self.assertEqual(signal["replay"]["deadline_after_tool_ms"], 50)
+        self.assertTrue(signal["cache"]["stable_prefix"])
+        self.assertEqual(signal["cache"]["cache_key"], "repo-session")
+        self.assertFalse(signal["scheduling"]["safe_to_demote"])
+
+    def test_harness_controller_signal_marks_background_as_demotable(self) -> None:
+        signal = build_harness_controller_signal(
+            {
+                "harness": "hatcher",
+                "mode": "controller_full",
+                "session_id": "task_1_pressure_000",
+                "label": "task_1_pressure_000_replay",
+                "phase": "pressure_filler",
+                "priority_label": "low",
+                "tool_wait_ms": 500,
+            }
+        )
+
+        self.assertEqual(signal["phase"]["work_class"], "background")
+        self.assertFalse(signal["phase"]["user_waiting"])
+        self.assertTrue(signal["scheduling"]["safe_to_demote"])
+        self.assertTrue(signal["scheduling"]["preemptible"])
+        self.assertEqual(signal["scheduling"]["urgency"], "background")
+
     def test_lifecycle_events_are_idempotent_and_generation_aware(self) -> None:
         store = ControllerStateStore()
         event = ControllerEvent(

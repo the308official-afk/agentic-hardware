@@ -314,6 +314,31 @@ events, per-session state, timing estimates, policy decisions, and backend
 capability checks. SGLang-specific code should stay in a thin adapter/enforcer
 layer so the controller can move across EC2, GH200, and newer SGLang releases.
 
+Harnesses expose their controller-visible facts through the portable
+`harness_controller_signal.v1` envelope. The envelope is carried in driver
+metadata, controller-event metadata, gateway trace rows, and the forwarded
+`nvext.agent_hints` payload. It separates harness facts from controller
+decisions: the harness reports what it knows, the controller decides what to do,
+and the gateway lowers accepted decisions to SGLang.
+
+Current normalized signal buckets:
+
+| Bucket | Examples |
+| --- | --- |
+| Task identity | `session_id`, `request_id`, `prefix_id`, `session_generation`, `task_index` |
+| Agent phase | `phase.name`, `work_class`, `user_waiting`, `manager_visible`, `interactive` |
+| Tool timing | `tool.name`, `tool.type`, `estimated_duration_ms`, `expected_done_at_ms`, `eta_uncertainty_ms` |
+| Tool-wait profile | `profile`, `wait_class`, `duration_ms`, `step_index`, `total_steps` |
+| Replay expectation | `likely`, `expected_count`, `deadline_after_tool_ms`, `expected_request_id` |
+| Cache context | `stable_prefix`, `cache_key`, `reuse_scope`, `conversation_prefix_hash`, native cache signal source |
+| Scheduling context | `urgency`, `priority`, `latency_sensitivity`, `safe_to_demote`, `preemptible`, `can_delay_ms` |
+| Cost/resource context | `expected_output_tokens`, `max_tokens`, `prompt_tokens`, cached/uncached token estimates |
+
+The first controller policy uses only a small subset of these facts. The point
+of exposing the full envelope now is to make later optimization work visible
+and portable instead of baking harness-specific assumptions into the SGLang
+adapter.
+
 Current foundation smoke test:
 
 ```bash

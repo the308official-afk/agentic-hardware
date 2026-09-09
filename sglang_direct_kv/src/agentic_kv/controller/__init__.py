@@ -15,6 +15,11 @@ from .backend import (
     ObserveOnlyBackendAdapter,
     SGLangTargetedKVPrefetchBackendAdapter,
 )
+from .harness_signal import (
+    HARNESS_CONTROLLER_SIGNAL_SCHEMA,
+    HarnessControllerSignal,
+    build_harness_controller_signal,
+)
 from .models import (
     BackendCapabilities,
     ControllerCommand,
@@ -44,6 +49,8 @@ __all__ = [
     "GatewayFullControllerBackendAdapter",
     "GatewayPriorityBackendAdapter",
     "GatewaySpeculativePreloadBackendAdapter",
+    "HARNESS_CONTROLLER_SIGNAL_SCHEMA",
+    "HarnessControllerSignal",
     "KVAction",
     "ObserveOnlyBackendAdapter",
     "PolicyConfig",
@@ -52,4 +59,5 @@ __all__ = [
     "SessionPhase",
     "SessionState",
     "TimingEstimator",
+    "build_harness_controller_signal",
 ]
