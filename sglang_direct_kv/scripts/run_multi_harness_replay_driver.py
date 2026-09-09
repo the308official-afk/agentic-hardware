@@ -25,6 +25,7 @@ from agentic_kv.controller import (
     EventType,
     GatewayAdmissionControlBackendAdapter,
     GatewayDemoteRestoreBackendAdapter,
+    GatewayFullControllerBackendAdapter,
     GatewayPriorityBackendAdapter,
     GatewaySpeculativePreloadBackendAdapter,
     ObserveOnlyBackendAdapter,
@@ -61,6 +62,7 @@ SUPPORTED_MODES = (
     "controller_targeted_kv_prefetch",
     "controller_demote_restore",
     "controller_admission_control",
+    "controller_full",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -72,6 +74,7 @@ CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
+CONTROLLER_FULL_MODE = "controller_full"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -184,6 +187,10 @@ def controller_admission_control_mode(mode: str) -> bool:
     return mode == CONTROLLER_ADMISSION_CONTROL_MODE
 
 
+def controller_full_mode(mode: str) -> bool:
+    return mode == CONTROLLER_FULL_MODE
+
+
 def controller_mode(mode: str) -> bool:
     return (
         controller_observe_only_mode(mode)
@@ -192,6 +199,7 @@ def controller_mode(mode: str) -> bool:
         or controller_targeted_kv_prefetch_mode(mode)
         or controller_demote_restore_mode(mode)
         or controller_admission_control_mode(mode)
+        or controller_full_mode(mode)
     )
 
 
@@ -1149,6 +1157,7 @@ async def main_async() -> None:
     controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
     controller_active_demote_restore = controller_demote_restore_mode(args.mode)
     controller_active_admission = controller_admission_control_mode(args.mode)
+    controller_active_full = controller_full_mode(args.mode)
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
@@ -1158,10 +1167,11 @@ async def main_async() -> None:
                 or controller_active_targeted_prefetch
                 or controller_active_demote_restore
                 or controller_active_admission
+                or controller_active_full
             ),
-            prepare_window_ms=0 if controller_active_demote_restore else max(25, args.tool_wait_ms),
-            min_demote_idle_ms=0 if controller_active_demote_restore else 250,
-            safety_margin_ms=0 if controller_active_demote_restore else 6,
+            prepare_window_ms=0 if (controller_active_demote_restore or controller_active_full) else max(25, args.tool_wait_ms),
+            min_demote_idle_ms=0 if (controller_active_demote_restore or controller_active_full) else 250,
+            safety_margin_ms=0 if (controller_active_demote_restore or controller_active_full) else 6,
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
     )
@@ -1233,6 +1243,20 @@ async def main_async() -> None:
                 live_metrics=True,
                 observe_only=False,
                 backend_name=CONTROLLER_ADMISSION_CONTROL_MODE,
+            )
+        )
+    elif controller_active_full:
+        controller_backend = GatewayFullControllerBackendAdapter(
+            BackendCapabilities(
+                priority_queue=True,
+                background_prefill_budget=True,
+                kv_demote=True,
+                kv_prefetch=False,
+                kv_release=True,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=CONTROLLER_FULL_MODE,
+                backend_version="v1:no_speculative_preload",
             )
         )
     else:
@@ -1378,9 +1402,14 @@ async def main_async() -> None:
         prefetch_command = acted_controller_command(controller_result, kv_action="prefetch")
         budget_command = acted_controller_command(controller_result, scheduler_action="set_background_prefill_budget")
         if prefetch_command is None:
+            skip_reason = (
+                "controller_full_v1_skips_speculative_preload_by_policy"
+                if controller_active_full
+                else "controller_did_not_request_prefetch"
+            )
             decision = {
                 "admitted": False,
-                "reason": "controller_did_not_request_prefetch",
+                "reason": skip_reason,
                 "prefetch_command_id": "",
                 "prefetch_decision_id": "",
                 "budget_command_id": budget_command.get("command_id", "") if budget_command else "",
@@ -1501,6 +1530,18 @@ async def main_async() -> None:
                 },
             )
 
+    def full_controller_priority_for_pair(index: int) -> tuple[int, int, int]:
+        total = max(1, len(pairs))
+        rank = min(total, max(1, index + 1))
+        if total <= 1:
+            return int(base_meta_priority()), rank, total
+        # Earlier replay due times get a small ladder above the normal urgent
+        # priority so P5 does not collapse into a flat all-urgent tie.
+        return int(base_meta_priority() + (total - rank) * 10), rank, total
+
+    def base_meta_priority() -> int:
+        return 100
+
     async def run_pair(pair: HarnessPair, index: int) -> None:
         await sleep_until(index * args.arrival_gap_ms)
         write_trace(
@@ -1592,7 +1633,10 @@ async def main_async() -> None:
             else None
         )
         controller_demote_command = acted_controller_command(controller_tool_start_result, kv_action="demote")
-        demote_restore_active = controller_active_demote_restore and controller_demote_command is not None
+        demote_restore_active = (
+            (controller_active_demote_restore or controller_active_full)
+            and controller_demote_command is not None
+        )
         filler_base_meta = base_meta
         if demote_restore_active:
             filler_base_meta = {
@@ -1607,6 +1651,7 @@ async def main_async() -> None:
                 args.trace,
                 {
                     "event": "m27.controller_demote_restore.demote_start",
+                    "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "harness": args.harness,
@@ -1628,14 +1673,18 @@ async def main_async() -> None:
             )
         controller_speculative_preload = controller_active_preload and controller_preload_command is not None
         controller_admission_row: dict[str, Any] | None = None
-        if controller_active_admission:
+        if controller_active_admission or controller_active_full:
             controller_admission_row = await controller_admission_decision(
                 pair,
                 controller_tool_start_result,
                 tool_start_ms=tool_start_ms,
                 replay_due_ms=replay_due_ms,
             )
-        controller_admission_preload = bool(controller_admission_row and controller_admission_row.get("admitted"))
+        controller_admission_preload = bool(
+            controller_active_admission
+            and controller_admission_row
+            and controller_admission_row.get("admitted")
+        )
         if targeted_prefetch_command is not None:
             direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
             targeted_event_base = {
@@ -1929,6 +1978,35 @@ async def main_async() -> None:
                     break
                 except (TypeError, ValueError):
                     continue
+        controller_replay_rank = ""
+        controller_replay_count = ""
+        controller_ladder_priority = ""
+        if controller_active_full and controller_replay_priority is not None:
+            ladder_priority, replay_rank, replay_count = full_controller_priority_for_pair(index)
+            controller_replay_priority = max(controller_replay_priority, ladder_priority)
+            controller_replay_rank = replay_rank
+            controller_replay_count = replay_count
+            controller_ladder_priority = controller_replay_priority
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.controller_full.priority_ladder",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "controller_decision_id": controller_decision_id,
+                    "controller_command_id": controller_command_id,
+                    "replay_rank_by_due_time": replay_rank,
+                    "urgent_replay_count": replay_count,
+                    "assigned_sglang_priority": controller_replay_priority,
+                    "ladder_step": 10 if replay_count > 1 else 0,
+                    "reason": "deadline-aware priority ladder for tied urgent replay work",
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
         replay_meta = {
             **base_meta,
             "session_id": pair.session_id,
@@ -1947,6 +2025,9 @@ async def main_async() -> None:
                     "controller_decision_id": controller_decision_id,
                     "controller_command_id": controller_command_id,
                     "controller_priority_translation": f"controller.set_priority={controller_replay_priority}",
+                    "controller_replay_rank": controller_replay_rank,
+                    "controller_urgent_replay_count": controller_replay_count,
+                    "controller_priority_ladder": controller_ladder_priority,
                 }
             )
         replay_meta = attach_harness_priority_metadata(replay_meta)

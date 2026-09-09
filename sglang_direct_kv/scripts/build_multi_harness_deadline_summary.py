@@ -69,6 +69,7 @@ MODE_LABELS = {
     "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
     "controller_demote_restore": "CD = Controller demote/restore",
     "controller_admission_control": "CA = Controller admission control",
+    "controller_full": "CF = Full controller",
 }
 
 MODE_COLORS = {
@@ -86,6 +87,7 @@ MODE_COLORS = {
     "controller_targeted_kv_prefetch": "#f59e0b",
     "controller_demote_restore": "#0d9488",
     "controller_admission_control": "#2563eb",
+    "controller_full": "#581c87",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -175,6 +177,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#2563eb",
         "modes": {"controller_admission_control"},
     },
+    "controller_full": {
+        "label": "Full Controller",
+        "description": "Portable controller combines filler demotion, replay priority, admission/budget policy, and P5 deadline-aware priority ranking",
+        "color": "#581c87",
+        "modes": {"controller_full"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -192,6 +200,7 @@ CHART_SIGNAL_ORDER = (
     "controller_targeted_prefetch",
     "controller_demote_restore",
     "controller_admission",
+    "controller_full",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -313,6 +322,12 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "Portable controller sidecar, lowered by backend adapter when supported",
         "what_it_means": "The controller requests explicit host-to-device KV movement for the target prefix. If the active SGLang version has no stable direct hook, the report records that honestly instead of using a warmup fallback.",
         "raw_modes": "controller_targeted_kv_prefetch",
+    },
+    {
+        "family": "Full controller",
+        "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
+        "what_it_means": "The controller combines the useful EC2 pieces: demote background traffic, priority-raise replay, skip speculative preload by policy, restore after replay, and rank tied urgent replays by deadline.",
+        "raw_modes": "controller_full",
     },
 ]
 
@@ -525,6 +540,9 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                     "gateway_cache_lowered": source_row.get("gateway_cache_lowered", ""),
                     "gateway_cache_salt": source_row.get("gateway_cache_salt", ""),
                     "gateway_cache_invented_signal": source_row.get("gateway_cache_invented_signal", ""),
+                    "controller_replay_rank": source_row.get("controller_replay_rank", ""),
+                    "controller_urgent_replay_count": source_row.get("controller_urgent_replay_count", ""),
+                    "controller_priority_ladder": source_row.get("controller_priority_ladder", ""),
                     "status": status,
                     "error": error,
                 }
@@ -862,7 +880,7 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") == "controller_demote_restore"
+        if row.get("mode") in {"controller_demote_restore", "controller_full"}
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -933,7 +951,10 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                         "pressure_level_label",
                         PRESSURE_LABELS.get(str(demote.get("pressure_level") or ""), str(demote.get("pressure_level") or "")),
                     ),
-                    "mode_label": MODE_LABELS.get("controller_demote_restore", "controller_demote_restore"),
+                    "mode_label": replay_row.get(
+                        "mode_label",
+                        MODE_LABELS.get(str(demote.get("mode") or ""), str(demote.get("mode") or "")),
+                    ),
                     "session_id": session_id,
                     "demote_command_id": demote.get("controller_command_id", ""),
                     "demote_backend_acted": "yes" if demote_acted else "no",
@@ -945,6 +966,9 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                     "replay_request_id": replay_row.get("request_id", ""),
                     "replay_sglang_priority": replay_row.get("sglang_priority", ""),
                     "replay_priority_raised": "yes" if replay_raised else "no",
+                    "controller_replay_rank": replay_row.get("controller_replay_rank", ""),
+                    "controller_urgent_replay_count": replay_row.get("controller_urgent_replay_count", ""),
+                    "controller_priority_ladder": replay_row.get("controller_priority_ladder", ""),
                     "restore_command_id": restore.get("controller_command_id", ""),
                     "restore_backend_acted": "yes" if restore_acted else "no",
                     "demote_to_replay_due_ms": (
@@ -975,7 +999,7 @@ def collect_controller_admission_proof(root: Path, replay_rows: list[dict[str, A
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") == "controller_admission_control"
+        if row.get("mode") in {"controller_admission_control", "controller_full"}
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -1037,7 +1061,10 @@ def collect_controller_admission_proof(root: Path, replay_rows: list[dict[str, A
                         "pressure_level_label",
                         PRESSURE_LABELS.get(str(admission.get("pressure_level") or ""), str(admission.get("pressure_level") or "")),
                     ),
-                    "mode_label": MODE_LABELS.get("controller_admission_control", "controller_admission_control"),
+                    "mode_label": replay_row.get(
+                        "mode_label",
+                        MODE_LABELS.get(str(admission.get("mode") or ""), str(admission.get("mode") or "")),
+                    ),
                     "session_id": session_id,
                     "admission_decision": admission.get("decision", ""),
                     "admission_reason": admission.get("reason", ""),
@@ -1681,6 +1708,9 @@ RAW_COLUMNS = [
     "gateway_cache_lowered",
     "gateway_cache_salt",
     "gateway_cache_invented_signal",
+    "controller_replay_rank",
+    "controller_urgent_replay_count",
+    "controller_priority_ladder",
     "first_token_source",
     "status",
     "error",
@@ -1938,6 +1968,9 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "replay_request_id",
     "replay_sglang_priority",
     "replay_priority_raised",
+    "controller_replay_rank",
+    "controller_urgent_replay_count",
+    "controller_priority_ladder",
     "restore_command_id",
     "restore_backend_acted",
     "demote_to_replay_due_ms",
@@ -2323,6 +2356,10 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         return "baseline"
     if mode == "controller_speculative_preload":
         return "controller_preload"
+    if mode == "controller_full":
+        if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
+            return "controller_full"
+        return "baseline"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket

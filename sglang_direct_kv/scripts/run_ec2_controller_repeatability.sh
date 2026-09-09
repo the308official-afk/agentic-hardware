@@ -6,7 +6,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 MODEL="${1:-Qwen/Qwen2.5-Coder-7B-Instruct}"
 
 export HARDWARE_PROFILE="${HARDWARE_PROFILE:-ec2_a10g}"
-export SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline gateway_injected controller_scheduler controller_demote_restore controller_admission}"
+export SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline gateway_injected controller_scheduler controller_demote_restore controller_admission controller_full}"
 export HARNESSES="${HARNESSES:-hatcher}"
 export PRESSURE_LEVELS="${PRESSURE_LEVELS:-p1_mild p3_high p4_cliff p5_boss_queue}"
 export REPORT_BUILDER_MODE="${REPORT_BUILDER_MODE:-lightweight}"

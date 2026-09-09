@@ -25,6 +25,7 @@ PRIORITY_ENABLED_MODES = {
     "controller_scheduler_priority",
     "controller_demote_restore",
     "controller_admission_control",
+    "controller_full",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -33,10 +34,12 @@ HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
+CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
+    CONTROLLER_FULL_MODE,
 }
 CACHE_SIGNAL_MODES = {
     "no_cache_signal",
@@ -272,7 +275,7 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     phase = str(meta.get("phase") or "")
     mode = str(meta.get("mode") or "")
     if mode in CONTROLLER_PRIORITY_MODES:
-        if mode == CONTROLLER_DEMOTE_RESTORE_MODE and phase == "pressure_filler":
+        if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_FULL_MODE} and phase == "pressure_filler":
             return int(meta.get("controller_demote_priority") or meta.get("low_priority") or -100)
         if phase != "replay":
             return None
@@ -517,7 +520,10 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
         if priority is not None:
             source = (
                 "controller_demote_window"
-                if mode == CONTROLLER_DEMOTE_RESTORE_MODE and str(meta.get("phase") or "") == "pressure_filler"
+                if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_FULL_MODE}
+                and str(meta.get("phase") or "") == "pressure_filler"
+                else "controller_full_ready_ladder"
+                if mode == CONTROLLER_FULL_MODE and is_present(meta.get("controller_priority_ladder"))
                 else "controller_ready_decision"
             )
         else:
@@ -584,6 +590,9 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "controller_demote_translation": meta.get("controller_demote_translation", ""),
         "controller_admission_decision": meta.get("controller_admission_decision", ""),
         "controller_admission_reason": meta.get("controller_admission_reason", ""),
+        "controller_replay_rank": meta.get("controller_replay_rank", ""),
+        "controller_urgent_replay_count": meta.get("controller_urgent_replay_count", ""),
+        "controller_priority_ladder": meta.get("controller_priority_ladder", ""),
         "harness_native_cache_signal_seen": cache_chain["harness_native_cache_signal_seen"],
         "harness_native_cache_signal": cache_chain["harness_native_cache_signal"],
         "gateway_cache_translation": cache_chain["gateway_cache_translation"],
@@ -626,6 +635,9 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "controller_demote_translation": meta.get("controller_demote_translation", ""),
             "controller_admission_decision": meta.get("controller_admission_decision", ""),
             "controller_admission_reason": meta.get("controller_admission_reason", ""),
+            "controller_replay_rank": meta.get("controller_replay_rank", ""),
+            "controller_urgent_replay_count": meta.get("controller_urgent_replay_count", ""),
+            "controller_priority_ladder": meta.get("controller_priority_ladder", ""),
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
@@ -927,6 +939,9 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "controller_decision_id": meta.get("controller_decision_id", ""),
                 "controller_command_id": meta.get("controller_command_id", ""),
                 "controller_priority_translation": meta.get("controller_priority_translation", ""),
+                "controller_replay_rank": meta.get("controller_replay_rank", ""),
+                "controller_urgent_replay_count": meta.get("controller_urgent_replay_count", ""),
+                "controller_priority_ladder": meta.get("controller_priority_ladder", ""),
                 "parent_request_id": meta.get("parent_request_id", ""),
                 "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
                 "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),

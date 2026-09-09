@@ -153,8 +153,7 @@ traffic around the replay deadline, not just the replay request itself.
 
 ## Current Next Task
 
-Implement and validate `controller_full` for one harness before expanding to
-more harnesses.
+Validate `controller_full` for one harness before expanding to more harnesses.
 
 `controller_full` should combine only the controller behaviors that helped on
 EC2:
@@ -174,8 +173,7 @@ showed weak or negative benefit.
 
 ## Expected Validation Command
 
-After implementing `controller_full`, run the first validation only on
-DeepAgents/Hatcher:
+Run the first validation only on DeepAgents/Hatcher:
 
 ```bash
 cd ~/agentic_hardware/sglang_direct_kv
@@ -188,8 +186,18 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-If using the outer signal-family script, add a `controller_full` family only
-after the lower-level runner supports `controller_full`.
+The outer signal-family script also supports `controller_full`:
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p1_mild p3_high p4_cliff p5_boss_queue" \
+SIGNAL_FAMILIES="baseline gateway_injected controller_scheduler controller_demote_restore controller_admission controller_full" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
 
 ## Success Criteria
 

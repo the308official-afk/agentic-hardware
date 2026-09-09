@@ -218,6 +218,7 @@ The current manager-facing comparisons use these modes:
 | `no_cache_signal` | Cache-signal baseline. The gateway is present and records native harness cache fields, but it does not lower them to SGLang. |
 | `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
 | `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
+| `controller_full` | Combined controller path. The portable controller demotes filler/background work, raises replay priority, records admission decisions, restores background behavior, and ranks tied urgent replays by deadline. It intentionally excludes speculative preload in v1. |
 | `controller_observe_only` | Portable controller phase 1. The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang. |
 | `controller_scheduler_priority` | Portable controller phase 2. The controller observes replay readiness and lowers only its ready-phase priority decision to SGLang scheduler priority. |
 | `controller_speculative_preload` | Portable controller phase 3. The controller observes the tool-wait window and lowers an accepted KV prefetch decision to gateway speculative KV preload. |
@@ -340,11 +341,12 @@ Current EC2 controller observation:
 | Controller admission control | Helps by skipping speculative work when the system is already overloaded while still raising replay priority. |
 | Controller speculative preload / targeted prefetch | Mechanically validated, but not in this repeatability run because prior EC2 timing showed little benefit and sometimes extra load. |
 
-Next controller optimization target:
+Current controller optimization target:
 
-Add a single `controller_full` mode before expanding to more harnesses. The
-purpose is to test the strongest controller policy on one known harness first,
-instead of carrying weak or noisy modes into the broader harness comparison.
+Use the combined `controller_full` mode before expanding the controller to more
+harnesses. The purpose is to test the strongest controller policy on one known
+harness first, instead of carrying weak or noisy modes into the broader harness
+comparison.
 
 `controller_full` should combine only the controller actions that have helped on
 EC2 so far:
@@ -366,7 +368,7 @@ Do not include speculative preload or targeted KV prefetch in the first
 shown consistent EC2 timing benefit; keeping them out prevents the full
 controller from adding avoidable load.
 
-Proposed first validation:
+Focused validation with explicit modes:
 
 ```bash
 cd sglang_direct_kv
@@ -375,6 +377,17 @@ PRESSURE_LEVELS="p1_mild p3_high p4_cliff p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints controller_scheduler_priority controller_demote_restore controller_admission_control controller_full" \
 REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+The same validation can also be run through the consolidated family selector:
+
+```bash
+cd sglang_direct_kv
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p1_mild p3_high p4_cliff p5_boss_queue" \
+SIGNAL_FAMILIES="baseline gateway_injected controller_scheduler controller_demote_restore controller_admission controller_full" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
 Success condition: `controller_full` should match or beat the best individual
