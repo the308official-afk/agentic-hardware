@@ -193,6 +193,46 @@ Then run the GH200-scaled pressure ladder:
 ./gh200/run_scaled_pressure.sh
 ```
 
+### Phase 7 Controller Scale-Up
+
+Use this after the sentinel passes when you want to test the portable
+controller design on GH200 pressure. The default is intentionally focused:
+`hatcher` is the internal DeepAgents-style control harness, and the runner
+compares baseline/gateway priority against the controller modes from phases
+2 through 6.
+
+```bash
+cd ~/agentic_hardware
+
+./gh200/run_controller_scaleup.sh
+```
+
+Default Phase 7 controller families:
+
+```text
+baseline gateway_injected controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_admission
+```
+
+Default Phase 7 pressure levels:
+
+```text
+p0_control p1_mild p2_medium p3_high p4_cliff p5_boss_queue
+```
+
+To scale the same controller run across every currently wired harness:
+
+```bash
+HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
+./gh200/run_controller_scaleup.sh
+```
+
+To run only the two strongest controller candidates:
+
+```bash
+SIGNAL_FAMILIES="baseline gateway_injected controller_demote_restore controller_admission" \
+./gh200/run_controller_scaleup.sh
+```
+
 ### Full Signal Design Space Experiment
 
 Use this when you want the full manager-facing comparison across all wired

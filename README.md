@@ -329,7 +329,7 @@ smallest possible boundary adapter.
 | Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, and any matching SGLang load-back or host-to-device copy before replay compute. If no stable direct hook exists, the evidence table says so explicitly. |
 | Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
 | Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
-| Phase 7: GH200 profile and scale-up | Planned | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | GH200 report uses the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
+| Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 Phase gate for each implementation slice:
 
@@ -695,6 +695,24 @@ cd ~/agentic_hardware
 ./gh200/run_scaled_pressure.sh
 ```
 
+GH200 controller scale-up run. Use this for Phase 7 after the sentinel passes:
+
+```bash
+cd ~/agentic_hardware
+./gh200/run_controller_scaleup.sh
+```
+
+By default this uses `hatcher` as the internal DeepAgents-style control harness
+and runs:
+
+```text
+baseline gateway_injected controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_admission
+```
+
+with `HARDWARE_PROFILE=gh200`, all six pressure levels, and the lightweight
+report builder. Override `HARNESSES`, `SIGNAL_FAMILIES`, or `PRESSURE_LEVELS`
+before the command to broaden or narrow the run.
+
 The lightweight report shows the Replay Deadline Pressure Chart as a
 pressure-first overlay with three panels. Panel A measures full replay-deadline
 lateness from replay due time to first token using a compressed symlog axis.
@@ -737,6 +755,7 @@ Primary scripts:
 | [sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py](sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py) | Lightweight all-harness report builder used when the rich timeline report would be too large. |
 | [sglang_direct_kv/src/agentic_kv/sglang_adapters/capabilities.py](sglang_direct_kv/src/agentic_kv/sglang_adapters/capabilities.py) | Probes the installed SGLang version, hook surface, priority support, and static cache-signal source paths. |
 | [gh200/run_host_signal_design_space.sh](gh200/run_host_signal_design_space.sh) | Recommended GH200 runner: host-side harnesses and gateway, Dockerized SGLang backend. |
+| [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) | Phase 7 runner: GH200-scaled controller comparison using the portable controller modes validated on EC2. |
 | [gh200/run_signal_design_space_docker.sh](gh200/run_signal_design_space_docker.sh) | Docker-only fallback runner for debugging Docker-compatible harnesses. |
 
 Smoke-test native CLI wireability without starting the real GPU server:
