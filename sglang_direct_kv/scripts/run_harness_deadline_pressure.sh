@@ -45,6 +45,7 @@ PRESSURE_LEVELS="${PRESSURE_LEVELS:-p0_control p3_high p5_boss_queue}"
 MAX_TIMELINE_GAPS="${MAX_TIMELINE_GAPS:-96}"
 REPORT_BUILDER_MODE="${REPORT_BUILDER_MODE:-auto}"
 SKIP_EXISTING_CASES="${SKIP_EXISTING_CASES:-0}"
+SKIP_REPORT_BUILD="${SKIP_REPORT_BUILD:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SERVER_READY_TIMEOUT_SECS="${SERVER_READY_TIMEOUT_SECS:-900}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-12288}"
@@ -308,6 +309,10 @@ run_case() {
 }
 
 build_final_report() {
+  if [[ "${SKIP_REPORT_BUILD}" == "1" ]]; then
+    echo "Skipping report build for this run piece because SKIP_REPORT_BUILD=1."
+    return
+  fi
   write_run_config
   collect_run_environment
   local harness_count pressure_count mode_count case_count report_builder

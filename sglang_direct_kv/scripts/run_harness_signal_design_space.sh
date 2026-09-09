@@ -18,6 +18,7 @@ REPORT_DIR="${REPORT_DIR:-${RESULTS_ROOT}/reports/${REPORT_LABEL}}"
 REPORT_BUILDER_MODE="${REPORT_BUILDER_MODE:-lightweight}"
 UPDATE_LATEST="${UPDATE_LATEST:-1}"
 SKIP_EXISTING_CASES="${SKIP_EXISTING_CASES:-1}"
+SKIP_INTERIM_REPORTS="${SKIP_INTERIM_REPORTS:-0}"
 HARNESSES="${HARNESSES:-hatcher codex claude_code opencode qwen_code nemo_agent_toolkit pi_agent_harness openclaw hermes_agent}"
 PRESSURE_LEVELS="${PRESSURE_LEVELS:-p0_control p3_high p5_boss_queue}"
 HARDWARE_PROFILE="${HARDWARE_PROFILE:-ec2_a10g}"
@@ -210,6 +211,7 @@ run_family_piece() {
   RUN_ROOT="${RUN_ROOT}" \
   REPORT_DIR="${REPORT_DIR}" \
   UPDATE_LATEST=0 \
+  SKIP_REPORT_BUILD="${SKIP_INTERIM_REPORTS}" \
   SKIP_EXISTING_CASES="${SKIP_EXISTING_CASES}" \
   HARNESSES="${harnesses}" \
   MODES="${modes}" \

@@ -325,6 +325,8 @@ DeepAgents/Hatcher harness only. It compares the useful controller paths against
 baseline and direct gateway priority across `p1_mild`, `p3_high`, `p4_cliff`,
 and `p5_boss_queue`. The purpose is to check whether the earlier controller
 ordering result repeats before spending time on broader harness or GH200 runs.
+It skips interim per-family report builds by default and writes the combined
+lightweight report once at the end.
 
 Current EC2 controller observation:
 
