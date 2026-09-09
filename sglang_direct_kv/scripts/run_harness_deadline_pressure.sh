@@ -64,6 +64,9 @@ TOOL_WAIT_PROFILE="${TOOL_WAIT_PROFILE:-fixed}"
 TOOL_WAIT_PROFILE_SPEC="${TOOL_WAIT_PROFILE_SPEC:-}"
 TOOL_WAIT_SEED="${TOOL_WAIT_SEED:-42}"
 TASK_REPLAY_STEPS="${TASK_REPLAY_STEPS:-1}"
+CONTROLLER_CHUNKED_PREFILL_SIZE="${CONTROLLER_CHUNKED_PREFILL_SIZE:-2048}"
+CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS:-4096}"
+CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS:-}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -244,6 +247,9 @@ write_run_config() {
     echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
     echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
     echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
+    echo "CONTROLLER_CHUNKED_PREFILL_SIZE=${CONTROLLER_CHUNKED_PREFILL_SIZE}"
+    echo "CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}"
+    echo "CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS=${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}"
   } >"${RUN_CONFIG_ENV}"
 }
 
@@ -303,10 +309,19 @@ run_case() {
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
   elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"
+  fi
+  if [[ "${mode}" == "controller_full_chunked_prefill" ]]; then
+    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --chunked-prefill-size ${CONTROLLER_CHUNKED_PREFILL_SIZE}"
+    if [[ -n "${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}" ]]; then
+      export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --max-prefill-tokens ${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}"
+    fi
+    if [[ -n "${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}" ]]; then
+      export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --prefill-max-requests ${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}"
+    fi
   fi
 
   if [[ -n "${ENCODING_CASE_KEY}" ]]; then

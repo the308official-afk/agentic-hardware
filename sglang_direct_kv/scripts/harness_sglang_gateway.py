@@ -28,6 +28,7 @@ PRIORITY_ENABLED_MODES = {
     "controller_demote_restore",
     "controller_admission_control",
     "controller_full",
+    "controller_full_chunked_prefill",
 }
 PRE_HARNESS_PRIORITY_MODE = "pre_harness_priority_hints"
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -37,11 +38,13 @@ CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
+CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
 CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
+    CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
 }
 CACHE_SIGNAL_MODES = {
     "no_cache_signal",
@@ -277,7 +280,7 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     phase = str(meta.get("phase") or "")
     mode = str(meta.get("mode") or "")
     if mode in CONTROLLER_PRIORITY_MODES:
-        if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_FULL_MODE} and phase == "pressure_filler":
+        if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE} and phase == "pressure_filler":
             return int(meta.get("controller_demote_priority") or meta.get("low_priority") or -100)
         if phase != "replay":
             return None
@@ -522,10 +525,11 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
         if priority is not None:
             source = (
                 "controller_demote_window"
-                if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_FULL_MODE}
+                if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE}
                 and str(meta.get("phase") or "") == "pressure_filler"
                 else "controller_full_ready_ladder"
-                if mode == CONTROLLER_FULL_MODE and is_present(meta.get("controller_priority_ladder"))
+                if mode in {CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE}
+                and is_present(meta.get("controller_priority_ladder"))
                 else "controller_ready_decision"
             )
         else:

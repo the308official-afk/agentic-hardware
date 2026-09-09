@@ -199,7 +199,7 @@ Use this after the sentinel passes when you want to test the portable
 controller design on GH200 pressure. The default is intentionally focused:
 `hatcher` is the internal DeepAgents-style control harness, and the runner
 compares baseline/gateway priority against the controller modes from phases
-2 through 6.
+2 through 6, plus the full-controller variants.
 
 ```bash
 cd ~/agentic_hardware
@@ -210,7 +210,7 @@ cd ~/agentic_hardware
 Default Phase 7 controller families:
 
 ```text
-baseline gateway_injected controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_admission
+baseline gateway_injected controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_admission controller_full controller_full_chunked
 ```
 
 Default Phase 7 pressure levels:
@@ -230,6 +230,15 @@ To run only the two strongest controller candidates:
 
 ```bash
 SIGNAL_FAMILIES="baseline gateway_injected controller_demote_restore controller_admission" \
+./gh200/run_controller_scaleup.sh
+```
+
+To compare the full controller against the chunked-prefill variant only:
+
+```bash
+SIGNAL_FAMILIES="baseline gateway_injected controller_full controller_full_chunked" \
+CONTROLLER_CHUNKED_PREFILL_SIZE=2048 \
+CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=4096 \
 ./gh200/run_controller_scaleup.sh
 ```
 

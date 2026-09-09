@@ -65,6 +65,7 @@ SUPPORTED_MODES = (
     "controller_demote_restore",
     "controller_admission_control",
     "controller_full",
+    "controller_full_chunked_prefill",
 )
 
 NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
@@ -77,6 +78,7 @@ CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
+CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -306,7 +308,7 @@ def controller_admission_control_mode(mode: str) -> bool:
 
 
 def controller_full_mode(mode: str) -> bool:
-    return mode == CONTROLLER_FULL_MODE
+    return mode in {CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE}
 
 
 def controller_mode(mode: str) -> bool:
@@ -1644,8 +1646,12 @@ async def main_async() -> None:
                 kv_release=True,
                 live_metrics=True,
                 observe_only=False,
-                backend_name=CONTROLLER_FULL_MODE,
-                backend_version="v1:no_speculative_preload",
+                backend_name=args.mode,
+                backend_version=(
+                    "v1:no_speculative_preload+chunked_prefill"
+                    if args.mode == CONTROLLER_FULL_CHUNKED_PREFILL_MODE
+                    else "v1:no_speculative_preload"
+                ),
             )
         )
     else:

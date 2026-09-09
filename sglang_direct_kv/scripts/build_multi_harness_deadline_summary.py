@@ -70,6 +70,7 @@ MODE_LABELS = {
     "controller_demote_restore": "CD = Controller demote/restore",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
+    "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
 }
 
 MODE_COLORS = {
@@ -88,6 +89,7 @@ MODE_COLORS = {
     "controller_demote_restore": "#0d9488",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
+    "controller_full_chunked_prefill": "#be185d",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -183,6 +185,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#581c87",
         "modes": {"controller_full"},
     },
+    "controller_full_chunked": {
+        "label": "Full Controller + Chunked Prefill",
+        "description": "Full controller plus smaller SGLang prefill chunks, giving urgent replays more scheduler boundaries between background chunks",
+        "color": "#be185d",
+        "modes": {"controller_full_chunked_prefill"},
+    },
 }
 
 CHART_SIGNAL_ORDER = (
@@ -201,6 +209,7 @@ CHART_SIGNAL_ORDER = (
     "controller_demote_restore",
     "controller_admission",
     "controller_full",
+    "controller_full_chunked",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -209,12 +218,14 @@ MANAGER_SIGNAL_BUCKETS = (
     "harness_cache_priority_emitted",
     "frontend_supplied",
     "controller_full",
+    "controller_full_chunked",
 )
 
 COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "baseline",
     "frontend_supplied",
     "controller_full",
+    "controller_full_chunked",
 )
 
 COST_ACCOUNTING_COLORS = {
@@ -230,6 +241,10 @@ COST_ACCOUNTING_COLORS = {
         "target": "#0f766e",
         "filler": "#99f6e4",
     },
+    "controller_full_chunked": {
+        "target": "#be185d",
+        "filler": "#fecdd3",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -242,6 +257,10 @@ COST_ACCOUNTING_DELTA_COLORS = {
     "controller_full": {
         "better": "#0f766e",
         "worse": "#dc2626",
+    },
+    "controller_full_chunked": {
+        "better": "#be185d",
+        "worse": "#e11d48",
     },
 }
 
@@ -363,6 +382,12 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
         "what_it_means": "The controller combines the useful EC2 pieces: demote background traffic, priority-raise replay, skip speculative preload by policy, restore after replay, and rank tied urgent replays by deadline.",
         "raw_modes": "controller_full",
+    },
+    {
+        "family": "Full controller + chunked prefill",
+        "where_signal_is_added": "Portable controller sidecar plus SGLang launch-time chunking",
+        "what_it_means": "Same full-controller request decisions, with smaller SGLang prefill chunks so urgent replays have more scheduler boundaries between background chunks.",
+        "raw_modes": "controller_full_chunked_prefill",
     },
 ]
 
@@ -2736,6 +2761,10 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
             return "controller_full"
         return "baseline"
+    if mode == "controller_full_chunked_prefill":
+        if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
+            return "controller_full_chunked"
+        return "baseline"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket
@@ -3086,7 +3115,7 @@ def render_cost_accounting_chart(
     }
     comparison_buckets = [
         bucket
-        for bucket in ("frontend_supplied", "controller_full")
+        for bucket in ("frontend_supplied", "controller_full", "controller_full_chunked")
         if bucket in signal_buckets
     ]
     delta_by_key: dict[tuple[str, str, str], float | None] = {}
@@ -3242,7 +3271,13 @@ def render_cost_accounting_chart(
                     if delta >= 0
                     else str(delta_palette.get("worse") or COST_ACCOUNTING_DELTA_WORSE)
                 )
-                delta_label_name = "priority" if bucket == "frontend_supplied" else "controller"
+                delta_label_name = (
+                    "priority"
+                    if bucket == "frontend_supplied"
+                    else "chunked controller"
+                    if bucket == "controller_full_chunked"
+                    else "controller"
+                )
                 delta_title = (
                     f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
                     f"{HARNESS_LABELS.get(harness, harness)} | net {delta_label_name} delta "
@@ -3277,19 +3312,16 @@ def render_cost_accounting_chart(
     legend_y = bottom + 91
     legend_x = left
     lines.append(f'<text x="{legend_x:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Bars</text>')
-    lines.append(f'<rect x="{legend_x+48:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["baseline"]["target"]}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+66:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">baseline target</text>')
-    lines.append(f'<rect x="{legend_x+158:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["baseline"]["filler"]}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+176:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">baseline filler</text>')
-    lines.append(f'<rect x="{legend_x+266:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["frontend_supplied"]["target"]}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+284:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">front-end priority target</text>')
-    lines.append(f'<rect x="{legend_x+448:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["frontend_supplied"]["filler"]}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+466:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">front-end priority filler</text>')
-    lines.append(f'<rect x="{legend_x+626:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["controller_full"]["target"]}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+644:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">full controller target</text>')
-    lines.append(f'<rect x="{legend_x+782:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["controller_full"]["filler"]}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+800:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">full controller filler</text>')
-    lines.append(f'<text x="{legend_x+948:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">net bars: upward saved vs baseline; downward worse</text>')
+    legend_cursor = legend_x + 48.0
+    for bucket in signal_buckets:
+        short_label = chart_signal_label(bucket).replace("Front-End Supplied", "front-end priority").replace("Full Controller + Chunked Prefill", "chunked controller").replace("Full Controller", "full controller").replace("Baseline", "baseline")
+        for role in ("target", "filler"):
+            color = COST_ACCOUNTING_COLORS.get(bucket, {}).get(role, chart_signal_color(bucket))
+            text = f"{short_label} {role}"
+            lines.append(f'<rect x="{legend_cursor:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{color}" rx="2"/>')
+            lines.append(f'<text x="{legend_cursor+18:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">{html.escape(text)}</text>')
+            legend_cursor += max(104.0, 8.0 * len(text) + 30.0)
+    lines.append(f'<text x="{legend_cursor + 10:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">net bars: upward saved vs baseline; downward worse</text>')
     lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-10}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)

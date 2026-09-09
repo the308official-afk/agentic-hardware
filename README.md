@@ -231,6 +231,7 @@ The current manager-facing comparisons use these modes:
 | `harness_native_cache_lowered` | Harness-native cache path. The gateway translates only cache fields emitted by the harness itself. |
 | `e2e_priority_hints_speculative_prefill` | Older direct backend probe for Dynamo-like proactive warmup. This is not part of the default consolidated gateway-injected family; keep it for targeted speculative KV preload tests. |
 | `controller_full` | Combined controller path. The portable controller demotes filler/background work, raises replay priority, records admission decisions, restores background behavior, and ranks tied urgent replays by deadline. It intentionally excludes speculative preload in v1. |
+| `controller_full_chunked_prefill` | Same full-controller decisions, but SGLang is launched with smaller prefill chunks so urgent replays get more scheduler boundaries between background chunks. Override with `CONTROLLER_CHUNKED_PREFILL_SIZE` and `CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS`. |
 | `controller_observe_only` | Portable controller phase 1. The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang. |
 | `controller_scheduler_priority` | Portable controller phase 2. The controller observes replay readiness and lowers only its ready-phase priority decision to SGLang scheduler priority. |
 | `controller_speculative_preload` | Portable controller phase 3. The controller observes the tool-wait window and lowers an accepted KV prefetch decision to gateway speculative KV preload. |
@@ -449,6 +450,7 @@ Current EC2 controller observation:
 | Controller scheduler priority | Helps when controller lifecycle state marks the replay-ready point and lowers that decision to SGLang priority. |
 | Controller demote/restore | Helps by temporarily pushing matching filler/background work down while replay is critical, then restoring normal behavior. |
 | Controller admission control | Helps by skipping speculative work when the system is already overloaded while still raising replay priority. |
+| Full controller + chunked prefill | Keeps the same full-controller policy, but starts SGLang with chunked prefill so long background prefills are broken into smaller scheduling units. This should help most when filler work is still entering SGLang during the replay-critical window. |
 | Controller speculative preload / targeted prefetch | Mechanically validated, but not in this repeatability run because prior EC2 timing showed little benefit and sometimes extra load. |
 
 Current controller optimization target:
@@ -489,6 +491,32 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Focused validation of the chunked-prefill controller variant:
+
+```bash
+cd sglang_direct_kv
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p3_high p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints controller_full controller_full_chunked_prefill" \
+CONTROLLER_CHUNKED_PREFILL_SIZE=2048 \
+CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=4096 \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Equivalent consolidated selector:
+
+```bash
+cd sglang_direct_kv
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p3_high p5_boss_queue" \
+SIGNAL_FAMILIES="baseline gateway_injected controller_full controller_full_chunked" \
+CONTROLLER_CHUNKED_PREFILL_SIZE=2048 \
+CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=4096 \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 The same validation can also be run through the consolidated family selector:
 
 ```bash
@@ -523,6 +551,7 @@ smallest possible boundary adapter.
 | Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
 | Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
 | Phase 6.5: Single-harness full-controller optimization | Implemented; EC2 performance rerun pending | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | Unit tests prove timed prepare-window transition, short-wait no-demote behavior, metadata preservation, background demotion guardrails, replay priority, budget command, and release. Next EC2 run should check whether `controller_full` matches or beats the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`. |
+| Phase 6.6: Chunked-prefill full-controller scheduling | Implemented; EC2 performance run pending | Keep `controller_full` policy unchanged, but launch SGLang with smaller prefill chunks so the controller has more safe scheduling boundaries to insert urgent replay work. | Run `controller_full_chunked_prefill` against `controller_full` and `e2e_priority_hints` on DeepAgents/Hatcher at `p3_high` and `p5_boss_queue`; proof should show the mode, chunked-prefill launch knobs, controller traffic-reshape events, and replay lateness/TTFT deltas. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 For Phase 6.5, the demote/restore proof is window-aware. Earlier filler
