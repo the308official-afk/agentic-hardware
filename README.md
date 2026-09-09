@@ -21,6 +21,7 @@ pressure levels, and multiple coding-agent harness shapes.
 | [sglang_direct_kv/](sglang_direct_kv/) | Main SGLang replay-deadline testbed. |
 | [sglang_direct_kv/README.md](sglang_direct_kv/README.md) | Long-form milestone notebook with historical detail. |
 | [sglang_direct_kv/scripts/](sglang_direct_kv/scripts/) | Experiment runners, workload drivers, report builders, and SGLang launch helpers. |
+| [HANDOFF.md](HANDOFF.md) | Current handoff for another Codex task working on this infrastructure. |
 | [aws/README.md](aws/README.md) | EC2 sync and connection workflow. |
 | [gh200/README.md](gh200/README.md) | Short GH200 setup and experiment run guide. |
 | [HARDWARE_EMULATION_ENVIRONMENT.md](HARDWARE_EMULATION_ENVIRONMENT.md) | Original hardware-emulation environment notes. |
