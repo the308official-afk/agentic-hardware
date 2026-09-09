@@ -24,6 +24,8 @@ PRESSURE_LEVELS="${PRESSURE_LEVELS:-p0_control p3_high p5_boss_queue}"
 HARDWARE_PROFILE="${HARDWARE_PROFILE:-ec2_a10g}"
 HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES:-0}"
+FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS:-}"
 
 BASELINE_MODES="${BASELINE_MODES:-no_prefetch}"
 HARNESS_EMITTED_MODES="${HARNESS_EMITTED_MODES:-harness_emitted_signals}"
@@ -188,6 +190,8 @@ write_combined_run_config() {
     echo "P3_QUEUE_PRESSURE=$(level_knobs_for_config p3_high | tr ' ' ',')"
     echo "P4_CLIFF=$(level_knobs_for_config p4_cliff | tr ' ' ',')"
     echo "P5_BOSS_QUEUE=$(level_knobs_for_config p5_boss_queue | tr ' ' ',')"
+    echo "FILLER_REPLAY_DEADLINES=${FILLER_REPLAY_DEADLINES}"
+    echo "FILLER_REPLAY_DEADLINE_MS=${FILLER_REPLAY_DEADLINE_MS}"
   } >"${REPORT_DIR}/run_config.env"
 }
 
@@ -221,6 +225,8 @@ run_family_piece() {
   REPORT_BUILDER_MODE=lightweight \
   HARDWARE_PROFILE="${HARDWARE_PROFILE}" \
   HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH}" \
+  FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES}" \
+  FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS}" \
   PYTHON_BIN="${PYTHON_BIN}" \
     bash scripts/run_harness_deadline_pressure.sh "${MODEL}"
 }

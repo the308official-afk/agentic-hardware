@@ -499,7 +499,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
         prefill_by_label = prefill_token_stats_by_label(trace_rows)
 
         def request_group(phase: str, session_id: str, label: str) -> str:
-            if phase == "pressure_filler" or "_pressure_" in session_id or "_pressure_" in label:
+            if phase.startswith("pressure_filler") or "_pressure_" in session_id or "_pressure_" in label:
                 return "filler"
             return "target"
 

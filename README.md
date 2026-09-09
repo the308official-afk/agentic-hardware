@@ -252,6 +252,22 @@ When filler/background requests do not have a replay due timestamp, their TTFT
 is still counted, but their replay-debt field is marked as unmeasured rather
 than treated as a real missed deadline.
 
+For production-like cost accounting, enable filler replay deadlines. In this
+mode every filler/background session makes two calls: an initial pressure call,
+then a resume/replay call after its own tool-wait deadline. The report can then
+measure filler replay debt the same way it measures target replay debt.
+
+```bash
+cd sglang_direct_kv
+
+FILLER_REPLAY_DEADLINES=1 \
+bash scripts/run_harness_signal_design_space.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+If `FILLER_REPLAY_DEADLINE_MS` is omitted, the filler replay deadline uses the
+same `tool_wait_ms` as the active pressure level.
+
 ## Portable Agent-Aware Controller Foundation
 
 The controller prototype is intentionally backend-neutral. It lives in
@@ -1023,6 +1039,7 @@ HARDWARE_PROFILE=ec2_a10g \
 SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected" \
 HARNESSES="hatcher codex claude_code opencode qwen_code pi_agent_harness openclaw nemo_agent_toolkit hermes_agent" \
 PRESSURE_LEVELS="p0_control p3_high p5_boss_queue" \
+FILLER_REPLAY_DEADLINES=1 \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="signal_design_space_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_signal_design_space.sh \
@@ -1031,7 +1048,9 @@ bash scripts/run_harness_signal_design_space.sh \
 
 The compact signal-family selector is the preferred interface for current
 experiments. Keep the experiment surface to these three public knobs:
-`HARNESSES`, `PRESSURE_LEVELS`, and `SIGNAL_FAMILIES`.
+`HARNESSES`, `PRESSURE_LEVELS`, and `SIGNAL_FAMILIES`. For system-cost runs,
+also set `FILLER_REPLAY_DEADLINES=1` so filler/background work has measurable
+resume deadlines.
 
 | `SIGNAL_FAMILIES` value | Meaning |
 | --- | --- |

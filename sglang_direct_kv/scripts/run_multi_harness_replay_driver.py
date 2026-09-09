@@ -112,6 +112,13 @@ def write_trace(path: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def trace_has_event(path: Path, label: str, event: str) -> bool:
     if not path.exists():
         return False
@@ -269,9 +276,9 @@ def attach_pre_harness_priority_intent(meta: dict[str, Any]) -> dict[str, Any]:
     if not pre_harness_priority_enabled(str(meta.get("mode") or "")):
         return meta
     phase = str(meta.get("phase") or "")
-    priority_class = "background" if phase == "pressure_filler" else "urgent"
+    priority_class = "background" if phase.startswith("pressure_filler") else "urgent"
     reason = "tool_replay_deadline" if phase == "replay" else "session_priority_seed"
-    if phase == "pressure_filler":
+    if phase.startswith("pressure_filler"):
         reason = "pressure_filler_background_load"
     signal, source = harness_priority_signal(str(meta.get("harness") or ""), priority_class)
     out = dict(meta)
@@ -1092,14 +1099,24 @@ async def run_filler(
     idx: int,
     meta_base: dict[str, Any],
     tokens: int,
+    *,
+    trace: Path | None = None,
+    workload_start: float | None = None,
+    filler_replay_deadlines: bool = False,
+    filler_replay_deadline_ms: int | None = None,
 ) -> None:
+    def offset_ms() -> float:
+        if workload_start is None:
+            return 0.0
+        return (time.perf_counter() - workload_start) * 1000.0
+
     filler_session = f"{pair.session_id}_pressure_{idx:03d}"
     prompt = make_pressure_filler_prompt(filler_session, tokens)
     meta = {
         **meta_base,
         "session_id": filler_session,
-        "phase": "pressure_filler",
-        "label": f"{filler_session}_request",
+        "phase": "pressure_filler_initial" if filler_replay_deadlines else "pressure_filler",
+        "label": f"{filler_session}_initial" if filler_replay_deadlines else f"{filler_session}_request",
         "task_index": pair.task_index,
         "prompt_hash": prompt_hash(prompt),
         "priority_label": "low",
@@ -1107,6 +1124,84 @@ async def run_filler(
     }
     meta = attach_pre_harness_priority_intent(meta)
     await run_hatcher_request(gateway_base, model, prompt, meta)
+    if not filler_replay_deadlines:
+        return
+
+    wait_ms = int(filler_replay_deadline_ms or 0)
+    tool_start_ms = offset_ms()
+    replay_due_ms = tool_start_ms + wait_ms
+    if trace is not None:
+        write_trace(
+            trace,
+            {
+                "event": "m27.tool_wait.start",
+                "session_id": filler_session,
+                "mode": meta_base.get("mode", ""),
+                "harness": meta_base.get("harness", ""),
+                "phase": "pressure_filler",
+                "task_index": pair.task_index,
+                "tool_start_offset_ms": round(tool_start_ms, 3),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "deadline_after_completion_ms": wait_ms,
+                "request_group": "filler",
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+
+    remaining_ms = replay_due_ms - offset_ms()
+    if remaining_ms > 0:
+        await asyncio.sleep(remaining_ms / 1000.0)
+    if trace is not None:
+        write_trace(
+            trace,
+            {
+                "event": "m27.replay.due",
+                "session_id": filler_session,
+                "mode": meta_base.get("mode", ""),
+                "harness": meta_base.get("harness", ""),
+                "phase": "pressure_filler",
+                "task_index": pair.task_index,
+                "deadline_after_completion_ms": wait_ms,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "request_group": "filler",
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+
+    replay_prompt = (
+        f"{prompt}\n\n"
+        f"Tool result for {filler_session}: background work completed. "
+        "Resume the filler task and answer with one concise sentence."
+    )
+    replay_meta = {
+        **meta_base,
+        "session_id": filler_session,
+        "phase": "pressure_filler",
+        "label": f"{filler_session}_replay",
+        "task_index": pair.task_index,
+        "prompt_hash": prompt_hash(replay_prompt),
+        "priority_label": "low",
+        "max_tokens": 2,
+        "deadline_offset_ms": round(replay_due_ms, 3),
+        "tool_wait_ms": wait_ms,
+    }
+    replay_meta = attach_pre_harness_priority_intent(replay_meta)
+    await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
+    if trace is not None:
+        write_trace(
+            trace,
+            {
+                "event": "m27.tool_wait.end",
+                "session_id": filler_session,
+                "mode": meta_base.get("mode", ""),
+                "harness": meta_base.get("harness", ""),
+                "phase": "pressure_filler",
+                "task_index": pair.task_index,
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "request_group": "filler",
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
 
 
 async def main_async() -> None:
@@ -1124,6 +1219,18 @@ async def main_async() -> None:
     parser.add_argument("--workload-jsonl", type=Path, default=os.environ.get("PROMPT_WORKLOAD_JSONL") or None)
     parser.add_argument("--filler-sessions", type=int, default=0)
     parser.add_argument("--filler-prompt-tokens", type=int, default=1536)
+    parser.add_argument(
+        "--filler-replay-deadlines",
+        action="store_true",
+        default=env_flag("FILLER_REPLAY_DEADLINES", False),
+        help="Make filler/background sessions run an initial call and a deadline-bearing replay call.",
+    )
+    parser.add_argument(
+        "--filler-replay-deadline-ms",
+        type=int,
+        default=int(os.environ.get("FILLER_REPLAY_DEADLINE_MS", "0") or "0"),
+        help="Milliseconds from filler tool-wait start to filler replay due. Defaults to --tool-wait-ms.",
+    )
     parser.add_argument("--session-count", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--arrival-gap-ms", type=int, default=40)
@@ -1499,6 +1606,10 @@ async def main_async() -> None:
             "filler_sessions": args.filler_sessions,
             "target_prompt_tokens": args.target_prompt_tokens,
             "filler_prompt_tokens": args.filler_prompt_tokens,
+            "filler_replay_deadlines": args.filler_replay_deadlines,
+            "filler_replay_deadline_ms": (
+                args.filler_replay_deadline_ms if args.filler_replay_deadline_ms > 0 else args.tool_wait_ms
+            ),
         },
     )
 
@@ -1899,7 +2010,22 @@ async def main_async() -> None:
             warmup_launch_grace_ms = max(0.0, float(os.environ.get("WARMUP_LAUNCH_GRACE_MS", "5")))
             await asyncio.sleep(warmup_launch_grace_ms / 1000.0)
         filler_tasks = [
-            asyncio.create_task(run_filler(args.gateway_base, args.model, pair, idx, filler_base_meta, args.filler_prompt_tokens))
+            asyncio.create_task(
+                run_filler(
+                    args.gateway_base,
+                    args.model,
+                    pair,
+                    idx,
+                    filler_base_meta,
+                    args.filler_prompt_tokens,
+                    trace=args.trace,
+                    workload_start=workload_start,
+                    filler_replay_deadlines=args.filler_replay_deadlines,
+                    filler_replay_deadline_ms=(
+                        args.filler_replay_deadline_ms if args.filler_replay_deadline_ms > 0 else args.tool_wait_ms
+                    ),
+                )
+            )
             for idx in range(args.filler_sessions)
         ]
         await sleep_until(replay_due_ms)

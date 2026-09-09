@@ -58,6 +58,8 @@ AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
 AGENTIC_RUNTIME_TELEMETRY_BACKEND="${AGENTIC_RUNTIME_TELEMETRY_BACKEND:-sglang}"
 AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
 GPU_UTIL_SAMPLE_INTERVAL_MS="${GPU_UTIL_SAMPLE_INTERVAL_MS:-100}"
+FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES:-0}"
+FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS:-}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -232,6 +234,8 @@ write_run_config() {
     echo "P3_QUEUE_PRESSURE=$(level_knobs p3_high | tr ' ' ',')"
     echo "P4_CLIFF=$(level_knobs p4_cliff | tr ' ' ',')"
     echo "P5_BOSS_QUEUE=$(level_knobs p5_boss_queue | tr ' ' ',')"
+    echo "FILLER_REPLAY_DEADLINES=${FILLER_REPLAY_DEADLINES}"
+    echo "FILLER_REPLAY_DEADLINE_MS=${FILLER_REPLAY_DEADLINE_MS}"
   } >"${RUN_CONFIG_ENV}"
 }
 
@@ -317,8 +321,14 @@ PYPORT
   wait_for_gateway
 
   local driver_extra_args=()
+  if [[ "${FILLER_REPLAY_DEADLINES}" == "1" ]]; then
+    driver_extra_args+=(--filler-replay-deadlines)
+  fi
+  if [[ -n "${FILLER_REPLAY_DEADLINE_MS}" ]]; then
+    driver_extra_args+=(--filler-replay-deadline-ms "${FILLER_REPLAY_DEADLINE_MS}")
+  fi
   if [[ "${mode}" == "nat_inferred_priority_hints" || ( "${mode}" == "harness_emitted_signals" && "${harness}" == "nemo_agent_toolkit" ) ]]; then
-    driver_extra_args=(--nat-inferred-profile-out "${REPORT_DIR}/nat_inferred_priority_profile.json")
+    driver_extra_args+=(--nat-inferred-profile-out "${REPORT_DIR}/nat_inferred_priority_profile.json")
   fi
 
   PYTHONPATH="${DIRECT_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" scripts/run_multi_harness_replay_driver.py \

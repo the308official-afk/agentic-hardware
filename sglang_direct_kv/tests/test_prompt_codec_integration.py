@@ -195,6 +195,68 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(cost["sum_filler_replay_debt_ms"], 0)
             self.assertEqual(cost["filler_replay_debt_unmeasured_requests"], 1)
 
+    def test_cost_accounting_counts_filler_replay_deadline_debt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            case = Path(folder) / "hatcher_p3_high_controller_full_tw50_f1"
+            case.mkdir()
+            trace = case / "m27_trace.jsonl"
+            rows = [
+                {"event": "m27.replay.due", "session_id": "target", "ts_ns": 1_000_000_000},
+                {"event": "m27.replay.due", "session_id": "target_pressure_000", "phase": "pressure_filler",
+                 "request_group": "filler", "ts_ns": 1_100_000_000},
+                {
+                    "event": "m27.request.start",
+                    "session_id": "target",
+                    "label": "target_replay",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_010_000_000,
+                },
+                {
+                    "event": "m27.request.end",
+                    "session_id": "target",
+                    "label": "target_replay",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_090_000_000,
+                    "first_content_ts_ns": 1_060_000_000,
+                    "ttft_ms": 50,
+                },
+                {
+                    "event": "m27.request.start",
+                    "session_id": "target_pressure_000",
+                    "label": "target_pressure_000_replay",
+                    "phase": "pressure_filler",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_105_000_000,
+                },
+                {
+                    "event": "m27.request.end",
+                    "session_id": "target_pressure_000",
+                    "label": "target_pressure_000_replay",
+                    "phase": "pressure_filler",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_260_000_000,
+                    "first_content_ts_ns": 1_220_000_000,
+                    "ttft_ms": 115,
+                },
+            ]
+            for row in rows:
+                gateway.write_jsonl(trace, row)
+            timing_rows = report.collect_rows(Path(folder))
+            self.assertEqual([row["request_group"] for row in timing_rows], ["target", "filler"])
+            self.assertEqual(timing_rows[1]["has_replay_deadline"], "yes")
+            cost = report.collect_cost_accounting_summary(timing_rows)[0]
+            self.assertEqual(cost["filler_replay_debt_measured_requests"], 1)
+            self.assertEqual(cost["filler_replay_debt_unmeasured_requests"], 0)
+            self.assertEqual(cost["sum_target_replay_debt_ms"], 60)
+            self.assertEqual(cost["sum_filler_replay_debt_ms"], 120)
+            self.assertEqual(cost["sum_total_replay_debt_ms"], 180)
+
     def test_streaming_proxy_delivers_first_chunk_before_backend_finishes(self):
         requests, events = [], []
         release = threading.Event()
