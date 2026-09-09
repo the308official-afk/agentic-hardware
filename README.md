@@ -339,6 +339,49 @@ Current EC2 controller observation:
 | Controller admission control | Helps by skipping speculative work when the system is already overloaded while still raising replay priority. |
 | Controller speculative preload / targeted prefetch | Mechanically validated, but not in this repeatability run because prior EC2 timing showed little benefit and sometimes extra load. |
 
+Next controller optimization target:
+
+Add a single `controller_full` mode before expanding to more harnesses. The
+purpose is to test the strongest controller policy on one known harness first,
+instead of carrying weak or noisy modes into the broader harness comparison.
+
+`controller_full` should combine only the controller actions that have helped on
+EC2 so far:
+
+1. Track lifecycle state so the controller knows when a session is in tool wait,
+   replay-ready, replay-submitted, and replay-finished.
+2. Demote matching filler/background work shortly before or during the
+   replay-critical window.
+3. Raise replay scheduler priority when the replay becomes ready.
+4. In multi-replay pressure such as `p5_boss_queue`, break urgent-request ties
+   with a deadline-aware priority ladder instead of assigning every replay the
+   same priority.
+5. Use admission control to avoid speculative preload/prefetch when the system
+   is already overloaded.
+6. Restore background/filler priority after the replay-critical window closes.
+
+Do not include speculative preload or targeted KV prefetch in the first
+`controller_full` default. Those paths are mechanically useful but have not yet
+shown consistent EC2 timing benefit; keeping them out prevents the full
+controller from adding avoidable load.
+
+Proposed first validation:
+
+```bash
+cd sglang_direct_kv
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p1_mild p3_high p4_cliff p5_boss_queue" \
+MODES="no_prefetch e2e_priority_hints controller_scheduler_priority controller_demote_restore controller_admission_control controller_full" \
+REPORT_BUILDER_MODE=lightweight \
+bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Success condition: `controller_full` should match or beat the best individual
+controller mode at each pressure level, especially `p5_boss_queue`. The report
+must also prove the mechanism: replay priority assigned, filler priority
+demoted, filler priority restored, admission decision recorded, urgent replay
+rank/order recorded, and first-token lateness improved or tied.
+
 ## Agent-Aware Controller Roadmap
 
 Use this as the phase checklist for integrating the one-worker agentic
@@ -355,6 +398,7 @@ smallest possible boundary adapter.
 | Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, and any matching SGLang load-back or host-to-device copy before replay compute. If no stable direct hook exists, the evidence table says so explicitly. |
 | Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
 | Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
+| Phase 6.5: Single-harness full-controller optimization | Planned next | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | `controller_full` should match or beat the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`, while proving replay priority, filler demotion, filler restore, admission decision, and deadline-aware urgent replay ordering. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 Phase gate for each implementation slice:
