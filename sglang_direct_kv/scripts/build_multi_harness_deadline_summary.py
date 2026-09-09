@@ -478,6 +478,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
         harness, pressure, mode = case_key_from_name(case_dir.name)
         trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
         due_by_session: dict[str, dict[str, Any]] = {}
+        due_by_label: dict[str, dict[str, Any]] = {}
         request_starts: list[dict[str, Any]] = []
         request_ends: list[dict[str, Any]] = []
         sglang_receive_by_label: dict[str, dict[str, Any]] = {}
@@ -486,7 +487,11 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             event = row.get("event")
             phase = row.get("phase")
             if event == "m27.replay.due":
-                due_by_session[str(row.get("session_id") or "")] = row
+                session_id = str(row.get("session_id") or "")
+                label = str(row.get("label") or row.get("request_id") or row.get("expected_replay_request_id") or "")
+                due_by_session[session_id] = row
+                if label:
+                    due_by_label[label] = row
             elif event == "m27.request.start" and phase in {"replay", "pressure_filler"}:
                 request_starts.append(row)
             elif event == "m27.request.end" and phase in {"replay", "pressure_filler"}:
@@ -567,6 +572,11 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                     "request_id": label,
                     "phase": row_phase,
                     "request_group": group,
+                    "tool_wait_step": source_row.get("tool_wait_step", start.get("tool_wait_step", due.get("tool_wait_step", ""))),
+                    "task_replay_steps": source_row.get("task_replay_steps", start.get("task_replay_steps", due.get("task_replay_steps", ""))),
+                    "tool_wait_profile": source_row.get("tool_wait_profile", start.get("tool_wait_profile", due.get("tool_wait_profile", ""))),
+                    "tool_wait_class": source_row.get("tool_wait_class", start.get("tool_wait_class", due.get("tool_wait_class", ""))),
+                    "tool_wait_ms": source_row.get("tool_wait_ms", start.get("tool_wait_ms", due.get("tool_wait_ms", ""))),
                     "has_replay_deadline": "yes" if due_ts_ns else "no",
                     "first_token_lateness_ms": round(lateness_ms, 3) if math.isfinite(lateness_ms) else "",
                     "replay_debt_ms": round(replay_debt_ms, 3) if math.isfinite(replay_debt_ms) else "",
@@ -614,7 +624,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             ended_labels.add(label)
             session_id = str(end.get("session_id") or "")
             start = start_by_label.get(label, {})
-            due = due_by_session.get(session_id, {})
+            due = due_by_label.get(label) or due_by_session.get(session_id, {})
             start_ts_ns = timestamp_ns(start.get("ts_ns"))
             ttft_ms = float_value(end.get("ttft_ms"))
             if "first_content_ts_ns" in end:
@@ -640,7 +650,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             if label in ended_labels or label not in first_decode_by_label:
                 continue
             session_id = str(start.get("session_id") or label.rsplit("_replay", 1)[0])
-            due = due_by_session.get(session_id, {})
+            due = due_by_label.get(label) or due_by_session.get(session_id, {})
             append_timing_row(
                 label=label,
                 session_id=session_id,
@@ -1759,6 +1769,11 @@ RAW_COLUMNS = ENCODING_COLUMNS + ["prefill_full_input_tokens", "prefill_cached_p
     "request_id",
     "phase",
     "request_group",
+    "tool_wait_step",
+    "task_replay_steps",
+    "tool_wait_profile",
+    "tool_wait_class",
+    "tool_wait_ms",
     "has_replay_deadline",
     "first_token_lateness_ms",
     "replay_debt_ms",

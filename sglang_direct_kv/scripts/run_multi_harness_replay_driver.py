@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -104,6 +105,22 @@ class HarnessPair:
     prompt_tokens: int
 
 
+@dataclass(frozen=True)
+class ToolWaitSpec:
+    step_index: int
+    wait_ms: int
+    wait_class: str
+
+
+TOOL_WAIT_PROFILE_DISTRIBUTIONS = {
+    "agentic_mixed": (
+        ("quick", 70.0, 200),
+        ("moderate", 25.0, 2_000),
+        ("slow", 5.0, 20_000),
+    ),
+}
+
+
 def write_trace(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     row.setdefault("ts_ns", time.time_ns())
@@ -117,6 +134,89 @@ def env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_tool_wait_profile_spec(spec: str) -> tuple[tuple[str, float, int], ...]:
+    out: list[tuple[str, float, int]] = []
+    for item in spec.split(","):
+        raw = item.strip()
+        if not raw:
+            continue
+        parts = raw.split(":")
+        if len(parts) == 2:
+            wait_class = f"bucket_{len(out) + 1}"
+            weight_raw, wait_raw = parts
+        elif len(parts) == 3:
+            wait_class, weight_raw, wait_raw = parts
+        else:
+            raise ValueError(
+                "TOOL_WAIT_PROFILE_SPEC entries must be class:weight:wait_ms or weight:wait_ms"
+            )
+        weight = float(weight_raw)
+        wait_ms = int(float(wait_raw))
+        if weight <= 0 or wait_ms < 0:
+            raise ValueError("tool wait profile weights must be positive and waits must be non-negative")
+        out.append((wait_class.strip() or f"bucket_{len(out) + 1}", weight, wait_ms))
+    if not out:
+        raise ValueError("TOOL_WAIT_PROFILE_SPEC did not contain any buckets")
+    return tuple(out)
+
+
+def tool_wait_distribution(profile: str, base_wait_ms: int, custom_spec: str = "") -> tuple[tuple[str, float, int], ...]:
+    normalized = profile.strip().lower() if profile else "fixed"
+    if custom_spec.strip():
+        return parse_tool_wait_profile_spec(custom_spec)
+    if normalized in {"fixed", "pressure_fixed"}:
+        return (("pressure_fixed", 1.0, int(base_wait_ms)),)
+    try:
+        return TOOL_WAIT_PROFILE_DISTRIBUTIONS[normalized]
+    except KeyError as exc:
+        supported = ", ".join(["fixed", *sorted(TOOL_WAIT_PROFILE_DISTRIBUTIONS)])
+        raise ValueError(f"unknown tool wait profile {profile!r}; supported profiles: {supported}") from exc
+
+
+def sample_tool_wait_specs(
+    *,
+    profile: str,
+    base_wait_ms: int,
+    custom_spec: str,
+    steps: int,
+    seed: int,
+    stream_key: str,
+) -> list[ToolWaitSpec]:
+    if steps < 1:
+        raise ValueError("TASK_REPLAY_STEPS must be at least 1")
+    distribution = tool_wait_distribution(profile, base_wait_ms, custom_spec)
+    if len(distribution) == 1:
+        wait_class, _, wait_ms = distribution[0]
+        return [ToolWaitSpec(step_index=idx, wait_ms=wait_ms, wait_class=wait_class) for idx in range(1, steps + 1)]
+
+    rng = random.Random(f"{seed}:{stream_key}:{profile}:{custom_spec}")
+    total_weight = sum(weight for _, weight, _ in distribution)
+    specs: list[ToolWaitSpec] = []
+    for idx in range(1, steps + 1):
+        pick = rng.random() * total_weight
+        cumulative = 0.0
+        selected = distribution[-1]
+        for bucket in distribution:
+            cumulative += bucket[1]
+            if pick <= cumulative:
+                selected = bucket
+                break
+        specs.append(ToolWaitSpec(step_index=idx, wait_ms=int(selected[2]), wait_class=str(selected[0])))
+    return specs
+
+
+def replay_label_for(session_id: str, step_index: int, total_steps: int) -> str:
+    if total_steps <= 1:
+        return f"{session_id}_replay"
+    return f"{session_id}_replay_{step_index:02d}"
+
+
+def warmup_label_for(session_id: str, step_index: int, total_steps: int) -> str:
+    if total_steps <= 1:
+        return f"{session_id}_speculative_prefill"
+    return f"{session_id}_speculative_prefill_{step_index:02d}"
 
 
 def trace_has_event(path: Path, label: str, event: str) -> bool:
@@ -403,6 +503,35 @@ def build_pairs(harness: str, pressure_level: str, count: int, prompt_tokens: in
             )
         )
     return pairs
+
+
+def replay_prompt_for_step(pair: HarnessPair, step_index: int, total_steps: int) -> str:
+    if total_steps <= 1:
+        return pair.replay_prompt
+    return (
+        f"{pair.replay_prompt}\n\n"
+        f"Agent loop replay step {step_index}/{total_steps}: continue the same coding task after "
+        f"tool result {step_index}. Keep the response concise."
+    )
+
+
+def warmup_prompt_for_step(pair: HarnessPair, step_index: int, total_steps: int) -> str:
+    if total_steps <= 1:
+        return pair.warmup_prompt
+    return (
+        f"{pair.warmup_prompt}\n\n"
+        f"Likely next replay step {step_index}/{total_steps}: prepare the stable task prefix and "
+        f"the expected tool-result continuation."
+    )
+
+
+def filler_replay_prompt_for_step(prompt: str, filler_session: str, step_index: int, total_steps: int) -> str:
+    suffix = "" if total_steps <= 1 else f" step {step_index}/{total_steps}"
+    return (
+        f"{prompt}\n\n"
+        f"Tool result for {filler_session}{suffix}: background work completed. "
+        "Resume the filler task and answer with one concise sentence."
+    )
 
 
 async def run_hatcher_request(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> None:
@@ -1100,10 +1229,10 @@ async def run_filler(
     meta_base: dict[str, Any],
     tokens: int,
     *,
+    wait_specs: list[ToolWaitSpec],
     trace: Path | None = None,
     workload_start: float | None = None,
     filler_replay_deadlines: bool = False,
-    filler_replay_deadline_ms: int | None = None,
 ) -> None:
     def offset_ms() -> float:
         if workload_start is None:
@@ -1112,6 +1241,7 @@ async def run_filler(
 
     filler_session = f"{pair.session_id}_pressure_{idx:03d}"
     prompt = make_pressure_filler_prompt(filler_session, tokens)
+    total_steps = max(1, len(wait_specs))
     meta = {
         **meta_base,
         "session_id": filler_session,
@@ -1121,87 +1251,115 @@ async def run_filler(
         "prompt_hash": prompt_hash(prompt),
         "priority_label": "low",
         "max_tokens": 2,
+        "tool_wait_step": 0,
+        "task_replay_steps": total_steps,
     }
     meta = attach_pre_harness_priority_intent(meta)
     await run_hatcher_request(gateway_base, model, prompt, meta)
     if not filler_replay_deadlines:
         return
 
-    wait_ms = int(filler_replay_deadline_ms or 0)
-    tool_start_ms = offset_ms()
-    replay_due_ms = tool_start_ms + wait_ms
-    if trace is not None:
-        write_trace(
-            trace,
-            {
-                "event": "m27.tool_wait.start",
-                "session_id": filler_session,
-                "mode": meta_base.get("mode", ""),
-                "harness": meta_base.get("harness", ""),
-                "phase": "pressure_filler",
-                "task_index": pair.task_index,
-                "tool_start_offset_ms": round(tool_start_ms, 3),
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "deadline_after_completion_ms": wait_ms,
-                "request_group": "filler",
-                "offset_ms": round(offset_ms(), 3),
-            },
-        )
+    current_prompt = prompt
+    for spec in wait_specs:
+        wait_ms = int(spec.wait_ms)
+        replay_label = replay_label_for(filler_session, spec.step_index, total_steps)
+        tool_start_ms = offset_ms()
+        replay_due_ms = tool_start_ms + wait_ms
+        if trace is not None:
+            write_trace(
+                trace,
+                {
+                    "event": "m27.tool_wait.start",
+                    "session_id": filler_session,
+                    "mode": meta_base.get("mode", ""),
+                    "harness": meta_base.get("harness", ""),
+                    "phase": "pressure_filler",
+                    "label": f"{filler_session}_tool_wait_{spec.step_index:02d}",
+                    "task_index": pair.task_index,
+                    "tool_wait_step": spec.step_index,
+                    "task_replay_steps": total_steps,
+                    "tool_wait_profile": meta_base.get("tool_wait_profile", ""),
+                    "tool_wait_class": spec.wait_class,
+                    "tool_wait_ms": wait_ms,
+                    "tool_start_offset_ms": round(tool_start_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "deadline_after_completion_ms": wait_ms,
+                    "request_group": "filler",
+                    "offset_ms": round(offset_ms(), 3),
+                    "expected_replay_request_id": replay_label,
+                },
+            )
 
-    remaining_ms = replay_due_ms - offset_ms()
-    if remaining_ms > 0:
-        await asyncio.sleep(remaining_ms / 1000.0)
-    if trace is not None:
-        write_trace(
-            trace,
-            {
-                "event": "m27.replay.due",
-                "session_id": filler_session,
-                "mode": meta_base.get("mode", ""),
-                "harness": meta_base.get("harness", ""),
-                "phase": "pressure_filler",
-                "task_index": pair.task_index,
-                "deadline_after_completion_ms": wait_ms,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "request_group": "filler",
-                "offset_ms": round(offset_ms(), 3),
-            },
-        )
+        remaining_ms = replay_due_ms - offset_ms()
+        if remaining_ms > 0:
+            await asyncio.sleep(remaining_ms / 1000.0)
+        if trace is not None:
+            write_trace(
+                trace,
+                {
+                    "event": "m27.replay.due",
+                    "session_id": filler_session,
+                    "mode": meta_base.get("mode", ""),
+                    "harness": meta_base.get("harness", ""),
+                    "phase": "pressure_filler",
+                    "label": replay_label,
+                    "request_id": replay_label,
+                    "task_index": pair.task_index,
+                    "tool_wait_step": spec.step_index,
+                    "task_replay_steps": total_steps,
+                    "tool_wait_profile": meta_base.get("tool_wait_profile", ""),
+                    "tool_wait_class": spec.wait_class,
+                    "tool_wait_ms": wait_ms,
+                    "deadline_after_completion_ms": wait_ms,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "request_group": "filler",
+                    "offset_ms": round(offset_ms(), 3),
+                    "expected_replay_request_id": replay_label,
+                },
+            )
 
-    replay_prompt = (
-        f"{prompt}\n\n"
-        f"Tool result for {filler_session}: background work completed. "
-        "Resume the filler task and answer with one concise sentence."
-    )
-    replay_meta = {
-        **meta_base,
-        "session_id": filler_session,
-        "phase": "pressure_filler",
-        "label": f"{filler_session}_replay",
-        "task_index": pair.task_index,
-        "prompt_hash": prompt_hash(replay_prompt),
-        "priority_label": "low",
-        "max_tokens": 2,
-        "deadline_offset_ms": round(replay_due_ms, 3),
-        "tool_wait_ms": wait_ms,
-    }
-    replay_meta = attach_pre_harness_priority_intent(replay_meta)
-    await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
-    if trace is not None:
-        write_trace(
-            trace,
-            {
-                "event": "m27.tool_wait.end",
-                "session_id": filler_session,
-                "mode": meta_base.get("mode", ""),
-                "harness": meta_base.get("harness", ""),
-                "phase": "pressure_filler",
-                "task_index": pair.task_index,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "request_group": "filler",
-                "offset_ms": round(offset_ms(), 3),
-            },
-        )
+        replay_prompt = filler_replay_prompt_for_step(current_prompt, filler_session, spec.step_index, total_steps)
+        replay_meta = {
+            **meta_base,
+            "session_id": filler_session,
+            "session_generation": spec.step_index + 1,
+            "phase": "pressure_filler",
+            "label": replay_label,
+            "task_index": pair.task_index,
+            "prompt_hash": prompt_hash(replay_prompt),
+            "priority_label": "low",
+            "max_tokens": 2,
+            "deadline_offset_ms": round(replay_due_ms, 3),
+            "tool_wait_ms": wait_ms,
+            "tool_wait_step": spec.step_index,
+            "task_replay_steps": total_steps,
+            "tool_wait_class": spec.wait_class,
+        }
+        replay_meta = attach_pre_harness_priority_intent(replay_meta)
+        await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
+        if trace is not None:
+            write_trace(
+                trace,
+                {
+                    "event": "m27.tool_wait.end",
+                    "session_id": filler_session,
+                    "mode": meta_base.get("mode", ""),
+                    "harness": meta_base.get("harness", ""),
+                    "phase": "pressure_filler",
+                    "label": replay_label,
+                    "request_id": replay_label,
+                    "task_index": pair.task_index,
+                    "tool_wait_step": spec.step_index,
+                    "task_replay_steps": total_steps,
+                    "tool_wait_profile": meta_base.get("tool_wait_profile", ""),
+                    "tool_wait_class": spec.wait_class,
+                    "tool_wait_ms": wait_ms,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "request_group": "filler",
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
+        current_prompt = replay_prompt
 
 
 async def main_async() -> None:
@@ -1215,6 +1373,28 @@ async def main_async() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument("--tool-wait-ms", type=int, default=50)
+    parser.add_argument(
+        "--tool-wait-profile",
+        default=os.environ.get("TOOL_WAIT_PROFILE", "fixed"),
+        help="Tool-wait profile to sample per replay step. Use fixed or agentic_mixed.",
+    )
+    parser.add_argument(
+        "--tool-wait-profile-spec",
+        default=os.environ.get("TOOL_WAIT_PROFILE_SPEC", ""),
+        help="Optional custom comma list: class:weight:wait_ms,class:weight:wait_ms.",
+    )
+    parser.add_argument(
+        "--tool-wait-seed",
+        type=int,
+        default=int(os.environ.get("TOOL_WAIT_SEED", "42") or "42"),
+        help="Seed for reproducible sampled tool-wait profiles.",
+    )
+    parser.add_argument(
+        "--task-replay-steps",
+        type=int,
+        default=int(os.environ.get("TASK_REPLAY_STEPS", "1") or "1"),
+        help="Number of tool-wait/resume cycles per target task.",
+    )
     parser.add_argument("--target-prompt-tokens", type=int, default=4096)
     parser.add_argument("--workload-jsonl", type=Path, default=os.environ.get("PROMPT_WORKLOAD_JSONL") or None)
     parser.add_argument("--filler-sessions", type=int, default=0)
@@ -1236,6 +1416,8 @@ async def main_async() -> None:
     parser.add_argument("--arrival-gap-ms", type=int, default=40)
     parser.add_argument("--nat-inferred-profile-out", type=Path)
     args = parser.parse_args()
+    if args.task_replay_steps < 1:
+        raise SystemExit("--task-replay-steps must be at least 1")
 
     if args.harness in {"codex", "claude_code", "opencode", "qwen_code"} and shutil.which("npx") is None:
         missing_bins = {
@@ -1259,6 +1441,30 @@ async def main_async() -> None:
             pairs[i] = replace(pair, prompt=str(item["initial_prompt"]),
                                replay_prompt=str(item["replay_prompt"]), warmup_prompt=str(item["initial_prompt"]),
                                prompt_tokens=estimate_tokens(str(item["initial_prompt"])))
+    target_wait_specs_by_session = {
+        pair.session_id: sample_tool_wait_specs(
+            profile=args.tool_wait_profile,
+            base_wait_ms=args.tool_wait_ms,
+            custom_spec=args.tool_wait_profile_spec,
+            steps=args.task_replay_steps,
+            seed=args.tool_wait_seed,
+            stream_key=f"{args.harness}:{args.pressure_level}:{args.mode}:{pair.session_id}:target",
+        )
+        for pair in pairs
+    }
+    filler_base_wait_ms = args.filler_replay_deadline_ms if args.filler_replay_deadline_ms > 0 else args.tool_wait_ms
+    filler_wait_specs_by_session_and_index = {
+        (pair.session_id, idx): sample_tool_wait_specs(
+            profile=args.tool_wait_profile,
+            base_wait_ms=filler_base_wait_ms,
+            custom_spec=args.tool_wait_profile_spec,
+            steps=args.task_replay_steps,
+            seed=args.tool_wait_seed,
+            stream_key=f"{args.harness}:{args.pressure_level}:{args.mode}:{pair.session_id}:filler:{idx}",
+        )
+        for pair in pairs
+        for idx in range(args.filler_sessions)
+    }
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     admission_lock = asyncio.Lock()
@@ -1275,6 +1481,10 @@ async def main_async() -> None:
     controller_active_demote_restore = controller_demote_restore_mode(args.mode)
     controller_active_admission = controller_admission_control_mode(args.mode)
     controller_active_full = controller_full_mode(args.mode)
+    max_target_tool_wait_ms = max(
+        [args.tool_wait_ms]
+        + [spec.wait_ms for specs in target_wait_specs_by_session.values() for spec in specs]
+    )
     controller_store = ControllerStateStore()
     controller_policy = ControllerPolicy(
         PolicyConfig(
@@ -1286,7 +1496,7 @@ async def main_async() -> None:
                 or controller_active_admission
                 or controller_active_full
             ),
-            prepare_window_ms=0 if (controller_active_demote_restore or controller_active_full) else max(25, args.tool_wait_ms),
+            prepare_window_ms=0 if (controller_active_demote_restore or controller_active_full) else max(25, max_target_tool_wait_ms),
             min_demote_idle_ms=0 if (controller_active_demote_restore or controller_active_full) else 250,
             safety_margin_ms=0 if (controller_active_demote_restore or controller_active_full) else 6,
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
@@ -1512,6 +1722,7 @@ async def main_async() -> None:
         pair: HarnessPair,
         controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None,
         *,
+        wait_spec: ToolWaitSpec,
         tool_start_ms: float,
         replay_due_ms: float,
     ) -> dict[str, Any]:
@@ -1537,9 +1748,9 @@ async def main_async() -> None:
             async with admission_lock:
                 before = admitted_warmups
                 skip_reasons: list[str] = []
-                if args.tool_wait_ms < admission_min_tool_wait_ms:
+                if wait_spec.wait_ms < admission_min_tool_wait_ms:
                     skip_reasons.append(
-                        f"tool_wait_ms {args.tool_wait_ms} below minimum {admission_min_tool_wait_ms}"
+                        f"tool_wait_ms {wait_spec.wait_ms} below minimum {admission_min_tool_wait_ms}"
                     )
                 if args.filler_sessions > admission_max_filler_sessions:
                     skip_reasons.append(
@@ -1583,7 +1794,11 @@ async def main_async() -> None:
                 "min_tool_wait_ms": admission_min_tool_wait_ms,
                 "max_filler_sessions": admission_max_filler_sessions,
                 "max_concurrency": admission_max_concurrency,
-                "tool_wait_ms": args.tool_wait_ms,
+                "tool_wait_ms": wait_spec.wait_ms,
+                "tool_wait_step": wait_spec.step_index,
+                "task_replay_steps": args.task_replay_steps,
+                "tool_wait_profile": args.tool_wait_profile,
+                "tool_wait_class": wait_spec.wait_class,
                 "filler_sessions": args.filler_sessions,
                 "concurrency": args.concurrency,
                 "tool_start_offset_ms": round(tool_start_ms, 3),
@@ -1602,7 +1817,23 @@ async def main_async() -> None:
             "pressure_level": args.pressure_level,
             "model": args.model,
             "pairs": len(pairs),
-            "tool_wait_list_ms": [args.tool_wait_ms],
+            "tool_wait_list_ms": [
+                spec.wait_ms
+                for pair in pairs
+                for spec in target_wait_specs_by_session[pair.session_id]
+            ],
+            "tool_wait_profile": args.tool_wait_profile,
+            "tool_wait_profile_spec": args.tool_wait_profile_spec,
+            "tool_wait_seed": args.tool_wait_seed,
+            "task_replay_steps": args.task_replay_steps,
+            "tool_wait_distribution": [
+                {"class": name, "weight": weight, "wait_ms": wait_ms}
+                for name, weight, wait_ms in tool_wait_distribution(
+                    args.tool_wait_profile,
+                    args.tool_wait_ms,
+                    args.tool_wait_profile_spec,
+                )
+            ],
             "filler_sessions": args.filler_sessions,
             "target_prompt_tokens": args.target_prompt_tokens,
             "filler_prompt_tokens": args.filler_prompt_tokens,
@@ -1626,6 +1857,10 @@ async def main_async() -> None:
                     "label": meta.get("label", ""),
                     "request_id": meta.get("label", ""),
                     "prompt_hash": meta.get("prompt_hash", ""),
+                    "tool_wait_step": meta.get("tool_wait_step", ""),
+                    "task_replay_steps": meta.get("task_replay_steps", ""),
+                    "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                    "tool_wait_class": meta.get("tool_wait_class", ""),
                     "offset_ms": round(offset_ms(), 3),
                     "priority_intent": meta.get("priority_intent", ""),
                     "workflow_node": meta.get("workflow_node", ""),
@@ -1647,6 +1882,10 @@ async def main_async() -> None:
                     "harness": meta.get("harness", args.harness),
                     "label": meta.get("label", ""),
                     "request_id": meta.get("label", ""),
+                    "tool_wait_step": meta.get("tool_wait_step", ""),
+                    "task_replay_steps": meta.get("task_replay_steps", ""),
+                    "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                    "tool_wait_class": meta.get("tool_wait_class", ""),
                     "offset_ms": round(offset_ms(), 3),
                 },
             )
@@ -1665,6 +1904,7 @@ async def main_async() -> None:
 
     async def run_pair(pair: HarnessPair, index: int) -> None:
         await sleep_until(index * args.arrival_gap_ms)
+        target_wait_specs = target_wait_specs_by_session[pair.session_id]
         write_trace(
             args.trace,
             {
@@ -1676,6 +1916,11 @@ async def main_async() -> None:
                 "tool_names": "synthetic_tool",
                 "arrival_offset_ms": round(offset_ms(), 3),
                 "tool_wait_ms": args.tool_wait_ms,
+                "tool_wait_profile": args.tool_wait_profile,
+                "tool_wait_seed": args.tool_wait_seed,
+                "task_replay_steps": len(target_wait_specs),
+                "sampled_tool_waits_ms": [spec.wait_ms for spec in target_wait_specs],
+                "sampled_tool_wait_classes": [spec.wait_class for spec in target_wait_specs],
                 "prompt_tokens": pair.prompt_tokens,
             },
         )
@@ -1689,6 +1934,10 @@ async def main_async() -> None:
             "speculative_prefill_priority": 50,
             "low_priority": -100,
             "tool_wait_ms": args.tool_wait_ms,
+            "tool_wait_profile": args.tool_wait_profile,
+            "tool_wait_profile_spec": args.tool_wait_profile_spec,
+            "tool_wait_seed": args.tool_wait_seed,
+            "task_replay_steps": len(target_wait_specs),
             "_trace_path": str(args.trace),
             "nat_inferred_prefix_total_requests": 10,
             "nat_inferred_prefix_osl": 512,
@@ -1708,470 +1957,575 @@ async def main_async() -> None:
             "prompt_hash": prompt_hash(pair.prompt),
             "priority_label": "high",
             "max_tokens": 8,
+            "tool_wait_step": 0,
             "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
         }
         initial_meta = attach_harness_priority_metadata(initial_meta)
         await bounded_request(pair.prompt, initial_meta)
-        tool_start_ms = offset_ms()
-        replay_due_ms = tool_start_ms + args.tool_wait_ms
-        controller_tool_start_result = record_controller_event(
-            f"{pair.session_id}:tool_started",
-            EventType.TOOL_STARTED,
-            {**base_meta, "session_id": pair.session_id, "phase": "tool_wait", "label": f"{pair.session_id}_tool_wait"},
-            monotonic_ms=int(tool_start_ms),
-            expected_completion_ms=int(replay_due_ms),
-            deadline_after_completion_ms=args.tool_wait_ms,
-            eta_uncertainty_ms=max(1, args.tool_wait_ms // 4),
-        )
-        write_trace(
-            args.trace,
-            {
-                "event": "m27.tool_wait.start",
-                "session_id": pair.session_id,
-                "mode": args.mode,
-                "harness": args.harness,
-                "tool_start_offset_ms": round(tool_start_ms, 3),
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "tool_wait_ms": args.tool_wait_ms,
-                "prompt_hash": prompt_hash(pair.prompt),
-            },
-        )
-        warmup_task: asyncio.Task[None] | None = None
-        initial_gateway_row = (
-            trace_event_row(args.trace, str(initial_meta["label"]), "m27.request.start")
-            if args.mode == HARNESS_EMITTED_SIGNAL_MODE
-            else {}
-        )
-        cache_signal_driven_preload = (
-            args.mode == HARNESS_EMITTED_SIGNAL_MODE
-            and str(initial_gateway_row.get("harness_native_cache_signal_seen") or "").lower() == "yes"
-        )
-        direct_gateway_speculative_prefill = args.mode == "e2e_priority_hints_speculative_prefill"
-        controller_preload_command = acted_controller_command(controller_tool_start_result, kv_action="prefetch")
-        targeted_prefetch_command = (
-            selected_controller_command(controller_tool_start_result, kv_action="prefetch")
-            if controller_active_targeted_prefetch
-            else None
-        )
-        controller_demote_command = acted_controller_command(controller_tool_start_result, kv_action="demote")
-        demote_restore_active = (
-            (controller_active_demote_restore or controller_active_full)
-            and controller_demote_command is not None
-        )
         filler_base_meta = base_meta
-        if demote_restore_active:
-            filler_base_meta = {
+        filler_tasks: list[asyncio.Task[None]] = []
+        active_demote_command: dict[str, Any] | None = None
+        demote_restore_active = False
+        for wait_spec in target_wait_specs:
+            wait_ms = wait_spec.wait_ms
+            replay_label = replay_label_for(pair.session_id, wait_spec.step_index, len(target_wait_specs))
+            warmup_label = warmup_label_for(pair.session_id, wait_spec.step_index, len(target_wait_specs))
+            step_base_meta = {
                 **base_meta,
-                "controller_demote_restore_active": "yes",
-                "controller_demote_priority": -100,
-                "controller_demote_decision_id": controller_demote_command.get("controller_decision_id", ""),
-                "controller_demote_command_id": controller_demote_command.get("command_id", ""),
-                "controller_demote_translation": "controller.demote=pressure_filler.priority:-100",
+                "session_generation": wait_spec.step_index + 1,
+                "tool_wait_ms": wait_ms,
+                "tool_wait_step": wait_spec.step_index,
+                "tool_wait_class": wait_spec.wait_class,
             }
+            tool_start_ms = offset_ms()
+            replay_due_ms = tool_start_ms + wait_ms
+            controller_tool_start_result = record_controller_event(
+                f"{pair.session_id}:tool_started:{wait_spec.step_index}",
+                EventType.TOOL_STARTED,
+                {
+                    **step_base_meta,
+                    "session_id": pair.session_id,
+                    "phase": "tool_wait",
+                    "label": f"{pair.session_id}_tool_wait_{wait_spec.step_index:02d}",
+                },
+                monotonic_ms=int(tool_start_ms),
+                expected_completion_ms=int(replay_due_ms),
+                deadline_after_completion_ms=wait_ms,
+                eta_uncertainty_ms=max(1, wait_ms // 4),
+            )
             write_trace(
                 args.trace,
                 {
-                    "event": "m27.controller_demote_restore.demote_start",
-                    "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
+                    "event": "m27.tool_wait.start",
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "harness": args.harness,
-                    "pressure_level": args.pressure_level,
                     "task_index": pair.task_index,
-                    "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
-                    "controller_command_id": controller_demote_command.get("command_id", ""),
-                    "controller_command_reason": controller_demote_command.get("reason", ""),
-                    "backend_name": controller_demote_command.get("backend_name", ""),
-                    "backend_accepted": controller_demote_command.get("backend_accepted", ""),
-                    "backend_acted": controller_demote_command.get("backend_acted", ""),
-                    "backend_reason": controller_demote_command.get("backend_reason", ""),
-                    "demoted_phase": "pressure_filler",
-                    "demoted_priority": -100,
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
                     "tool_start_offset_ms": round(tool_start_ms, 3),
                     "replay_due_offset_ms": round(replay_due_ms, 3),
-                    "offset_ms": round(offset_ms(), 3),
-                },
-            )
-        controller_speculative_preload = controller_active_preload and controller_preload_command is not None
-        controller_admission_row: dict[str, Any] | None = None
-        if controller_active_admission or controller_active_full:
-            controller_admission_row = await controller_admission_decision(
-                pair,
-                controller_tool_start_result,
-                tool_start_ms=tool_start_ms,
-                replay_due_ms=replay_due_ms,
-            )
-        controller_admission_preload = bool(
-            controller_active_admission
-            and controller_admission_row
-            and controller_admission_row.get("admitted")
-        )
-        if targeted_prefetch_command is not None:
-            direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
-            targeted_event_base = {
-                "session_id": pair.session_id,
-                "mode": args.mode,
-                "harness": args.harness,
-                "request_id": str(initial_meta["label"]),
-                "expected_replay_request_id": f"{pair.session_id}_replay",
-                "prefix_id": base_meta["prefix_id"],
-                "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
-                "controller_command_id": targeted_prefetch_command.get("command_id", ""),
-                "controller_command_reason": targeted_prefetch_command.get("reason", ""),
-                "backend_name": targeted_prefetch_command.get("backend_name", ""),
-                "backend_accepted": targeted_prefetch_command.get("backend_accepted", ""),
-                "backend_acted": targeted_prefetch_command.get("backend_acted", ""),
-                "backend_reason": targeted_prefetch_command.get("backend_reason", ""),
-                "direct_hook_available": direct_hook_available,
-                "tool_start_offset_ms": round(tool_start_ms, 3),
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "offset_ms": round(offset_ms(), 3),
-            }
-            write_trace(
-                args.trace,
-                {
-                    **targeted_event_base,
-                    "event": "m27.targeted_kv_prefetch.requested",
-                },
-            )
-            write_trace(
-                args.trace,
-                {
-                    **targeted_event_base,
-                    "event": "m27.targeted_kv_prefetch.acted" if direct_hook_available else "m27.targeted_kv_prefetch.unavailable",
-                },
-            )
-        if (
-            direct_gateway_speculative_prefill
-            or cache_signal_driven_preload
-            or controller_speculative_preload
-            or controller_admission_preload
-        ):
-            warmup_label = f"{pair.session_id}_speculative_prefill"
-            replay_label = f"{pair.session_id}_replay"
-            warmup_role = (
-                "controller_admission_gated_speculative_kv_preload"
-                if controller_admission_preload
-                else
-                "controller_gateway_speculative_kv_preload"
-                if controller_speculative_preload
-                else
-                "gateway_speculative_kv_preload"
-                if cache_signal_driven_preload
-                else "dynamo_like_background_warmup"
-            )
-            warmup_strategy = (
-                "controller_admission_gated_gateway_speculative_kv_preload"
-                if controller_admission_preload
-                else
-                "controller_lifecycle_gateway_speculative_kv_preload"
-                if controller_speculative_preload
-                else
-                "harness_cache_signal_gateway_speculative_kv_preload"
-                if cache_signal_driven_preload
-                else "known_next_turn_prefix"
-            )
-            warmup_trigger = (
-                "controller_admission_decision"
-                if controller_admission_preload
-                else
-                "controller_prefetch_decision"
-                if controller_speculative_preload
-                else "harness_cache_signal"
-                if cache_signal_driven_preload
-                else "gateway_injected_speculative_prefill"
-            )
-            warmup_meta = {
-                **base_meta,
-                "session_id": pair.session_id,
-                "phase": "speculative_prefill",
-                "label": warmup_label,
-                "task_index": pair.task_index,
-                "prompt_hash": prompt_hash(pair.warmup_prompt),
-                "priority_label": "background",
-                "deadline_offset_ms": round(replay_due_ms, 3),
-                "max_tokens": 1,
-                "speculative_prefill": True,
-                "speculative_prefill_role": warmup_role,
-                "speculative_prefill_strategy": warmup_strategy,
-                "parent_request_id": str(initial_meta["label"]),
-                "expected_replay_request_id": replay_label,
-                "warmup_prompt_tokens": estimate_tokens(pair.warmup_prompt),
-                "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
-                "harness_cache_signal": initial_gateway_row.get("harness_native_cache_signal", ""),
-                "controller_decision_id": (
-                    controller_admission_row.get("prefetch_decision_id", "")
-                    if controller_admission_preload and controller_admission_row
-                    else controller_preload_command.get("controller_decision_id", "")
-                    if controller_preload_command
-                    else ""
-                ),
-                "controller_command_id": (
-                    controller_admission_row.get("prefetch_command_id", "")
-                    if controller_admission_preload and controller_admission_row
-                    else controller_preload_command.get("command_id", "")
-                    if controller_preload_command
-                    else ""
-                ),
-                "controller_kv_translation": (
-                    "controller.admission=admitted_gateway_speculative_kv_preload"
-                    if controller_admission_preload
-                    else "controller.prefetch=gateway_speculative_kv_preload"
-                    if controller_preload_command
-                    else ""
-                ),
-                "controller_admission_decision": "admit" if controller_admission_preload else "",
-                "controller_admission_reason": controller_admission_row.get("reason", "")
-                if controller_admission_row
-                else "",
-            }
-            warmup_meta = attach_harness_priority_metadata(warmup_meta)
-            write_trace(
-                args.trace,
-                {
-                    "event": "m27.speculative_prefill.hint_seen",
-                    "session_id": pair.session_id,
-                    "mode": args.mode,
-                    "harness": args.harness,
-                    "request_id": initial_meta["label"],
-                    "warmup_request_id": warmup_label,
+                    "tool_wait_ms": wait_ms,
+                    "prompt_hash": prompt_hash(pair.prompt),
                     "expected_replay_request_id": replay_label,
-                    "strategy": warmup_strategy,
-                    "role": warmup_role,
-                    "trigger": warmup_trigger,
-                    "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
-                    "warmup_prompt_hash": warmup_meta["prompt_hash"],
-                    "warmup_prompt_tokens": warmup_meta["warmup_prompt_tokens"],
-                    "tool_start_offset_ms": round(tool_start_ms, 3),
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                    "controller_decision_id": warmup_meta.get("controller_decision_id", ""),
-                    "controller_command_id": warmup_meta.get("controller_command_id", ""),
-                    "controller_kv_translation": warmup_meta.get("controller_kv_translation", ""),
-                    "controller_admission_decision": warmup_meta.get("controller_admission_decision", ""),
-                    "controller_admission_reason": warmup_meta.get("controller_admission_reason", ""),
                 },
             )
-
-            async def run_warmup() -> None:
+            initial_gateway_row = (
+                trace_event_row(args.trace, str(initial_meta["label"]), "m27.request.start")
+                if args.mode == HARNESS_EMITTED_SIGNAL_MODE
+                else {}
+            )
+            cache_signal_driven_preload = (
+                args.mode == HARNESS_EMITTED_SIGNAL_MODE
+                and str(initial_gateway_row.get("harness_native_cache_signal_seen") or "").lower() == "yes"
+            )
+            direct_gateway_speculative_prefill = args.mode == "e2e_priority_hints_speculative_prefill"
+            controller_preload_command = acted_controller_command(controller_tool_start_result, kv_action="prefetch")
+            targeted_prefetch_command = (
+                selected_controller_command(controller_tool_start_result, kv_action="prefetch")
+                if controller_active_targeted_prefetch
+                else None
+            )
+            controller_demote_command = acted_controller_command(controller_tool_start_result, kv_action="demote")
+            step_demote_restore_active = (
+                (controller_active_demote_restore or controller_active_full)
+                and controller_demote_command is not None
+            )
+            if step_demote_restore_active:
+                active_demote_command = controller_demote_command
+                demote_restore_active = True
+                filler_base_meta = {
+                    **step_base_meta,
+                    "controller_demote_restore_active": "yes",
+                    "controller_demote_priority": -100,
+                    "controller_demote_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                    "controller_demote_command_id": controller_demote_command.get("command_id", ""),
+                    "controller_demote_translation": "controller.demote=pressure_filler.priority:-100",
+                }
                 write_trace(
                     args.trace,
                     {
-                        "event": "m27.speculative_prefill.warmup_start",
+                        "event": "m27.controller_demote_restore.demote_start",
+                        "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
                         "session_id": pair.session_id,
                         "mode": args.mode,
                         "harness": args.harness,
-                        "request_id": warmup_label,
-                        "expected_replay_request_id": replay_label,
-                        "strategy": warmup_strategy,
-                        "role": warmup_role,
-                        "trigger": warmup_trigger,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "tool_wait_profile": args.tool_wait_profile,
+                        "tool_wait_class": wait_spec.wait_class,
+                        "tool_wait_ms": wait_ms,
+                        "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                        "controller_command_id": controller_demote_command.get("command_id", ""),
+                        "controller_command_reason": controller_demote_command.get("reason", ""),
+                        "backend_name": controller_demote_command.get("backend_name", ""),
+                        "backend_accepted": controller_demote_command.get("backend_accepted", ""),
+                        "backend_acted": controller_demote_command.get("backend_acted", ""),
+                        "backend_reason": controller_demote_command.get("backend_reason", ""),
+                        "demoted_phase": "pressure_filler",
+                        "demoted_priority": -100,
+                        "tool_start_offset_ms": round(tool_start_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
                         "offset_ms": round(offset_ms(), 3),
                     },
                 )
-                try:
-                    await run_gateway_background_warmup(args.gateway_base, args.model, pair.warmup_prompt, warmup_meta)
-                    write_trace(
-                        args.trace,
-                        {
-                            "event": "m27.speculative_prefill.warmup_end",
-                            "session_id": pair.session_id,
-                            "mode": args.mode,
-                            "harness": args.harness,
-                            "request_id": warmup_label,
-                            "expected_replay_request_id": replay_label,
-                            "strategy": warmup_strategy,
-                            "role": warmup_role,
-                            "trigger": warmup_trigger,
-                            "offset_ms": round(offset_ms(), 3),
-                            "status": "ok",
-                        },
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    write_trace(
-                        args.trace,
-                        {
-                            "event": "m27.speculative_prefill.warmup_error",
-                            "session_id": pair.session_id,
-                            "mode": args.mode,
-                            "harness": args.harness,
-                            "request_id": warmup_label,
-                            "expected_replay_request_id": replay_label,
-                            "strategy": warmup_strategy,
-                            "role": warmup_role,
-                            "trigger": warmup_trigger,
-                            "offset_ms": round(offset_ms(), 3),
-                            "status": "error",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        },
-                    )
-
-            warmup_task = asyncio.create_task(run_warmup())
-        if warmup_task is not None:
-            warmup_launch_grace_ms = max(0.0, float(os.environ.get("WARMUP_LAUNCH_GRACE_MS", "5")))
-            await asyncio.sleep(warmup_launch_grace_ms / 1000.0)
-        filler_tasks = [
-            asyncio.create_task(
-                run_filler(
-                    args.gateway_base,
-                    args.model,
+            controller_speculative_preload = controller_active_preload and controller_preload_command is not None
+            controller_admission_row: dict[str, Any] | None = None
+            if controller_active_admission or controller_active_full:
+                controller_admission_row = await controller_admission_decision(
                     pair,
-                    idx,
-                    filler_base_meta,
-                    args.filler_prompt_tokens,
-                    trace=args.trace,
-                    workload_start=workload_start,
-                    filler_replay_deadlines=args.filler_replay_deadlines,
-                    filler_replay_deadline_ms=(
-                        args.filler_replay_deadline_ms if args.filler_replay_deadline_ms > 0 else args.tool_wait_ms
-                    ),
+                    controller_tool_start_result,
+                    wait_spec=wait_spec,
+                    tool_start_ms=tool_start_ms,
+                    replay_due_ms=replay_due_ms,
                 )
+            controller_admission_preload = bool(
+                controller_active_admission
+                and controller_admission_row
+                and controller_admission_row.get("admitted")
             )
-            for idx in range(args.filler_sessions)
-        ]
-        await sleep_until(replay_due_ms)
-        record_controller_event(
-            f"{pair.session_id}:prepare_checkpoint",
-            EventType.TOOL_ETA_UPDATED,
-            {**base_meta, "session_id": pair.session_id, "phase": "prepare", "label": f"{pair.session_id}_prepare"},
-            monotonic_ms=int(replay_due_ms),
-            expected_completion_ms=int(replay_due_ms),
-            deadline_after_completion_ms=args.tool_wait_ms,
-            eta_uncertainty_ms=0,
-        )
-        write_trace(
-            args.trace,
-            {
-                "event": "m27.pre_replay.checkpoint",
-                "session_id": pair.session_id,
-                "mode": args.mode,
-                "harness": args.harness,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-                "expected_reuse": (
-                    "controller_targeted_kv_prefetch"
-                    if targeted_prefetch_command
+            if targeted_prefetch_command is not None:
+                direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
+                targeted_event_base = {
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "request_id": str(initial_meta["label"]),
+                    "expected_replay_request_id": replay_label,
+                    "prefix_id": step_base_meta["prefix_id"],
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "tool_wait_ms": wait_ms,
+                    "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
+                    "controller_command_id": targeted_prefetch_command.get("command_id", ""),
+                    "controller_command_reason": targeted_prefetch_command.get("reason", ""),
+                    "backend_name": targeted_prefetch_command.get("backend_name", ""),
+                    "backend_accepted": targeted_prefetch_command.get("backend_accepted", ""),
+                    "backend_acted": targeted_prefetch_command.get("backend_acted", ""),
+                    "backend_reason": targeted_prefetch_command.get("backend_reason", ""),
+                    "direct_hook_available": direct_hook_available,
+                    "tool_start_offset_ms": round(tool_start_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "offset_ms": round(offset_ms(), 3),
+                }
+                write_trace(args.trace, {**targeted_event_base, "event": "m27.targeted_kv_prefetch.requested"})
+                write_trace(
+                    args.trace,
+                    {
+                        **targeted_event_base,
+                        "event": "m27.targeted_kv_prefetch.acted"
+                        if direct_hook_available
+                        else "m27.targeted_kv_prefetch.unavailable",
+                    },
+                )
+            warmup_task: asyncio.Task[None] | None = None
+            if (
+                direct_gateway_speculative_prefill
+                or cache_signal_driven_preload
+                or controller_speculative_preload
+                or controller_admission_preload
+            ):
+                step_warmup_prompt = warmup_prompt_for_step(pair, wait_spec.step_index, len(target_wait_specs))
+                warmup_role = (
+                    "controller_admission_gated_speculative_kv_preload"
+                    if controller_admission_preload
                     else
                     "controller_gateway_speculative_kv_preload"
                     if controller_speculative_preload
                     else
-                    "controller_admission_gated_speculative_kv_preload"
-                    if controller_admission_preload
-                    else
                     "gateway_speculative_kv_preload"
                     if cache_signal_driven_preload
+                    else "dynamo_like_background_warmup"
+                )
+                warmup_strategy = (
+                    "controller_admission_gated_gateway_speculative_kv_preload"
+                    if controller_admission_preload
                     else
-                    "dynamo_like_speculative_prefill"
-                    if args.mode == "e2e_priority_hints_speculative_prefill"
-                    else "intercepted_priority"
-                    if args.mode == "e2e_priority_hints"
-                    else "baseline"
-                ),
-                "gpu_resident_tokens": "unknown",
-                "host_resident_tokens": "unknown",
-                "missing_tokens": "unknown",
-                "protected_tokens": "unknown",
-            },
-        )
-        write_trace(
-            args.trace,
-            {
-                "event": "m27.replay.due",
-                "session_id": pair.session_id,
-                "mode": args.mode,
-                "harness": args.harness,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-            },
-        )
-        controller_ready_result = record_controller_event(
-            f"{pair.session_id}:tool_completed",
-            EventType.TOOL_COMPLETED,
-            {**base_meta, "session_id": pair.session_id, "phase": "replay", "label": f"{pair.session_id}_replay"},
-            monotonic_ms=int(replay_due_ms),
-            expected_completion_ms=int(replay_due_ms),
-            deadline_after_completion_ms=args.tool_wait_ms,
-            eta_uncertainty_ms=0,
-        )
-        controller_replay_priority: int | None = None
-        controller_decision_id = ""
-        controller_command_id = ""
-        if controller_ready_result is not None:
-            decision_row, backend_results = controller_ready_result
-            controller_decision_id = str(decision_row.get("decision_id") or "")
-            acted_command_ids = {
-                str(result.get("command_id"))
-                for result in backend_results
-                if result.get("acted")
-            }
-            for command in decision_row.get("commands") or []:
-                if not isinstance(command, dict):
-                    continue
-                if command.get("scheduler_action") != "set_priority":
-                    continue
-                if str(command.get("command_id") or "") not in acted_command_ids:
-                    continue
-                try:
-                    controller_replay_priority = int(command.get("priority"))
-                    controller_command_id = str(command.get("command_id") or "")
-                    break
-                except (TypeError, ValueError):
-                    continue
-        controller_replay_rank = ""
-        controller_replay_count = ""
-        controller_ladder_priority = ""
-        if controller_active_full and controller_replay_priority is not None:
-            ladder_priority, replay_rank, replay_count = full_controller_priority_for_pair(index)
-            controller_replay_priority = max(controller_replay_priority, ladder_priority)
-            controller_replay_rank = replay_rank
-            controller_replay_count = replay_count
-            controller_ladder_priority = controller_replay_priority
+                    "controller_lifecycle_gateway_speculative_kv_preload"
+                    if controller_speculative_preload
+                    else
+                    "harness_cache_signal_gateway_speculative_kv_preload"
+                    if cache_signal_driven_preload
+                    else "known_next_turn_prefix"
+                )
+                warmup_trigger = (
+                    "controller_admission_decision"
+                    if controller_admission_preload
+                    else
+                    "controller_prefetch_decision"
+                    if controller_speculative_preload
+                    else "harness_cache_signal"
+                    if cache_signal_driven_preload
+                    else "gateway_injected_speculative_prefill"
+                )
+                warmup_meta = {
+                    **step_base_meta,
+                    "session_id": pair.session_id,
+                    "phase": "speculative_prefill",
+                    "label": warmup_label,
+                    "task_index": pair.task_index,
+                    "prompt_hash": prompt_hash(step_warmup_prompt),
+                    "priority_label": "background",
+                    "deadline_offset_ms": round(replay_due_ms, 3),
+                    "max_tokens": 1,
+                    "speculative_prefill": True,
+                    "speculative_prefill_role": warmup_role,
+                    "speculative_prefill_strategy": warmup_strategy,
+                    "parent_request_id": str(initial_meta["label"]),
+                    "expected_replay_request_id": replay_label,
+                    "warmup_prompt_tokens": estimate_tokens(step_warmup_prompt),
+                    "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
+                    "harness_cache_signal": initial_gateway_row.get("harness_native_cache_signal", ""),
+                    "controller_decision_id": (
+                        controller_admission_row.get("prefetch_decision_id", "")
+                        if controller_admission_preload and controller_admission_row
+                        else controller_preload_command.get("controller_decision_id", "")
+                        if controller_preload_command
+                        else ""
+                    ),
+                    "controller_command_id": (
+                        controller_admission_row.get("prefetch_command_id", "")
+                        if controller_admission_preload and controller_admission_row
+                        else controller_preload_command.get("command_id", "")
+                        if controller_preload_command
+                        else ""
+                    ),
+                    "controller_kv_translation": (
+                        "controller.admission=admitted_gateway_speculative_kv_preload"
+                        if controller_admission_preload
+                        else "controller.prefetch=gateway_speculative_kv_preload"
+                        if controller_preload_command
+                        else ""
+                    ),
+                    "controller_admission_decision": "admit" if controller_admission_preload else "",
+                    "controller_admission_reason": controller_admission_row.get("reason", "")
+                    if controller_admission_row
+                    else "",
+                }
+                warmup_meta = attach_harness_priority_metadata(warmup_meta)
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.speculative_prefill.hint_seen",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "request_id": initial_meta["label"],
+                        "warmup_request_id": warmup_label,
+                        "expected_replay_request_id": replay_label,
+                        "strategy": warmup_strategy,
+                        "role": warmup_role,
+                        "trigger": warmup_trigger,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "tool_wait_profile": args.tool_wait_profile,
+                        "tool_wait_class": wait_spec.wait_class,
+                        "tool_wait_ms": wait_ms,
+                        "harness_cache_signal_source": initial_gateway_row.get("harness_native_cache_signal_source", ""),
+                        "warmup_prompt_hash": warmup_meta["prompt_hash"],
+                        "warmup_prompt_tokens": warmup_meta["warmup_prompt_tokens"],
+                        "tool_start_offset_ms": round(tool_start_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "controller_decision_id": warmup_meta.get("controller_decision_id", ""),
+                        "controller_command_id": warmup_meta.get("controller_command_id", ""),
+                        "controller_kv_translation": warmup_meta.get("controller_kv_translation", ""),
+                        "controller_admission_decision": warmup_meta.get("controller_admission_decision", ""),
+                        "controller_admission_reason": warmup_meta.get("controller_admission_reason", ""),
+                    },
+                )
+
+                async def run_warmup() -> None:
+                    write_trace(
+                        args.trace,
+                        {
+                            "event": "m27.speculative_prefill.warmup_start",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "harness": args.harness,
+                            "request_id": warmup_label,
+                            "expected_replay_request_id": replay_label,
+                            "strategy": warmup_strategy,
+                            "role": warmup_role,
+                            "trigger": warmup_trigger,
+                            "tool_wait_step": wait_spec.step_index,
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+                    try:
+                        await run_gateway_background_warmup(args.gateway_base, args.model, step_warmup_prompt, warmup_meta)
+                        write_trace(
+                            args.trace,
+                            {
+                                "event": "m27.speculative_prefill.warmup_end",
+                                "session_id": pair.session_id,
+                                "mode": args.mode,
+                                "harness": args.harness,
+                                "request_id": warmup_label,
+                                "expected_replay_request_id": replay_label,
+                                "strategy": warmup_strategy,
+                                "role": warmup_role,
+                                "trigger": warmup_trigger,
+                                "tool_wait_step": wait_spec.step_index,
+                                "offset_ms": round(offset_ms(), 3),
+                                "status": "ok",
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        write_trace(
+                            args.trace,
+                            {
+                                "event": "m27.speculative_prefill.warmup_error",
+                                "session_id": pair.session_id,
+                                "mode": args.mode,
+                                "harness": args.harness,
+                                "request_id": warmup_label,
+                                "expected_replay_request_id": replay_label,
+                                "strategy": warmup_strategy,
+                                "role": warmup_role,
+                                "trigger": warmup_trigger,
+                                "tool_wait_step": wait_spec.step_index,
+                                "offset_ms": round(offset_ms(), 3),
+                                "status": "error",
+                                "error": f"{type(exc).__name__}: {exc}",
+                            },
+                        )
+
+                warmup_task = asyncio.create_task(run_warmup())
+            if warmup_task is not None:
+                warmup_launch_grace_ms = max(0.0, float(os.environ.get("WARMUP_LAUNCH_GRACE_MS", "5")))
+                await asyncio.sleep(warmup_launch_grace_ms / 1000.0)
+            if not filler_tasks:
+                filler_tasks = [
+                    asyncio.create_task(
+                        run_filler(
+                            args.gateway_base,
+                            args.model,
+                            pair,
+                            idx,
+                            filler_base_meta,
+                            args.filler_prompt_tokens,
+                            wait_specs=filler_wait_specs_by_session_and_index[(pair.session_id, idx)],
+                            trace=args.trace,
+                            workload_start=workload_start,
+                            filler_replay_deadlines=args.filler_replay_deadlines,
+                        )
+                    )
+                    for idx in range(args.filler_sessions)
+                ]
+            await sleep_until(replay_due_ms)
+            record_controller_event(
+                f"{pair.session_id}:prepare_checkpoint:{wait_spec.step_index}",
+                EventType.TOOL_ETA_UPDATED,
+                {
+                    **step_base_meta,
+                    "session_id": pair.session_id,
+                    "phase": "prepare",
+                    "label": f"{pair.session_id}_prepare_{wait_spec.step_index:02d}",
+                },
+                monotonic_ms=int(replay_due_ms),
+                expected_completion_ms=int(replay_due_ms),
+                deadline_after_completion_ms=wait_ms,
+                eta_uncertainty_ms=0,
+            )
             write_trace(
                 args.trace,
                 {
-                    "event": "m27.controller_full.priority_ladder",
+                    "event": "m27.pre_replay.checkpoint",
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "harness": args.harness,
-                    "pressure_level": args.pressure_level,
-                    "task_index": pair.task_index,
-                    "controller_decision_id": controller_decision_id,
-                    "controller_command_id": controller_command_id,
-                    "replay_rank_by_due_time": replay_rank,
-                    "urgent_replay_count": replay_count,
-                    "assigned_sglang_priority": controller_replay_priority,
-                    "ladder_step": 10 if replay_count > 1 else 0,
-                    "reason": "deadline-aware priority ladder for tied urgent replay work",
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "tool_wait_ms": wait_ms,
                     "replay_due_offset_ms": round(replay_due_ms, 3),
-                    "offset_ms": round(offset_ms(), 3),
+                    "expected_reuse": (
+                        "controller_targeted_kv_prefetch"
+                        if targeted_prefetch_command
+                        else
+                        "controller_gateway_speculative_kv_preload"
+                        if controller_speculative_preload
+                        else
+                        "controller_admission_gated_speculative_kv_preload"
+                        if controller_admission_preload
+                        else
+                        "gateway_speculative_kv_preload"
+                        if cache_signal_driven_preload
+                        else
+                        "dynamo_like_speculative_prefill"
+                        if args.mode == "e2e_priority_hints_speculative_prefill"
+                        else "intercepted_priority"
+                        if args.mode == "e2e_priority_hints"
+                        else "baseline"
+                    ),
+                    "gpu_resident_tokens": "unknown",
+                    "host_resident_tokens": "unknown",
+                    "missing_tokens": "unknown",
+                    "protected_tokens": "unknown",
                 },
             )
-        replay_meta = {
-            **base_meta,
-            "session_id": pair.session_id,
-            "phase": "replay",
-            "label": f"{pair.session_id}_replay",
-            "task_index": pair.task_index,
-            "prompt_hash": prompt_hash(pair.replay_prompt),
-            "priority_label": "high",
-            "deadline_offset_ms": round(replay_due_ms, 3),
-            "max_tokens": 8,
-        }
-        if controller_replay_priority is not None:
-            replay_meta.update(
+            write_trace(
+                args.trace,
                 {
-                    "controller_sglang_priority": controller_replay_priority,
-                    "controller_decision_id": controller_decision_id,
-                    "controller_command_id": controller_command_id,
-                    "controller_priority_translation": f"controller.set_priority={controller_replay_priority}",
-                    "controller_replay_rank": controller_replay_rank,
-                    "controller_urgent_replay_count": controller_replay_count,
-                    "controller_priority_ladder": controller_ladder_priority,
+                    "event": "m27.replay.due",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "label": replay_label,
+                    "request_id": replay_label,
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "tool_wait_ms": wait_ms,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "expected_replay_request_id": replay_label,
+                },
+            )
+            controller_ready_result = record_controller_event(
+                f"{pair.session_id}:tool_completed:{wait_spec.step_index}",
+                EventType.TOOL_COMPLETED,
+                {**step_base_meta, "session_id": pair.session_id, "phase": "replay", "label": replay_label},
+                monotonic_ms=int(replay_due_ms),
+                expected_completion_ms=int(replay_due_ms),
+                deadline_after_completion_ms=wait_ms,
+                eta_uncertainty_ms=0,
+            )
+            controller_replay_priority: int | None = None
+            controller_decision_id = ""
+            controller_command_id = ""
+            if controller_ready_result is not None:
+                decision_row, backend_results = controller_ready_result
+                controller_decision_id = str(decision_row.get("decision_id") or "")
+                acted_command_ids = {
+                    str(result.get("command_id"))
+                    for result in backend_results
+                    if result.get("acted")
+                }
+                for command in decision_row.get("commands") or []:
+                    if not isinstance(command, dict):
+                        continue
+                    if command.get("scheduler_action") != "set_priority":
+                        continue
+                    if str(command.get("command_id") or "") not in acted_command_ids:
+                        continue
+                    try:
+                        controller_replay_priority = int(command.get("priority"))
+                        controller_command_id = str(command.get("command_id") or "")
+                        break
+                    except (TypeError, ValueError):
+                        continue
+            controller_replay_rank = ""
+            controller_replay_count = ""
+            controller_ladder_priority = ""
+            if controller_active_full and controller_replay_priority is not None:
+                ladder_priority, replay_rank, replay_count = full_controller_priority_for_pair(index)
+                controller_replay_priority = max(controller_replay_priority, ladder_priority)
+                controller_replay_rank = replay_rank
+                controller_replay_count = replay_count
+                controller_ladder_priority = controller_replay_priority
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_full.priority_ladder",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "tool_wait_profile": args.tool_wait_profile,
+                        "tool_wait_class": wait_spec.wait_class,
+                        "tool_wait_ms": wait_ms,
+                        "controller_decision_id": controller_decision_id,
+                        "controller_command_id": controller_command_id,
+                        "replay_rank_by_due_time": replay_rank,
+                        "urgent_replay_count": replay_count,
+                        "assigned_sglang_priority": controller_replay_priority,
+                        "ladder_step": 10 if replay_count > 1 else 0,
+                        "reason": "deadline-aware priority ladder for tied urgent replay work",
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+            step_replay_prompt = replay_prompt_for_step(pair, wait_spec.step_index, len(target_wait_specs))
+            replay_meta = {
+                **step_base_meta,
+                "session_id": pair.session_id,
+                "phase": "replay",
+                "label": replay_label,
+                "task_index": pair.task_index,
+                "prompt_hash": prompt_hash(step_replay_prompt),
+                "priority_label": "high",
+                "deadline_offset_ms": round(replay_due_ms, 3),
+                "max_tokens": 8,
+            }
+            if controller_replay_priority is not None:
+                replay_meta.update(
+                    {
+                        "controller_sglang_priority": controller_replay_priority,
+                        "controller_decision_id": controller_decision_id,
+                        "controller_command_id": controller_command_id,
+                        "controller_priority_translation": f"controller.set_priority={controller_replay_priority}",
+                        "controller_replay_rank": controller_replay_rank,
+                        "controller_urgent_replay_count": controller_replay_count,
+                        "controller_priority_ladder": controller_ladder_priority,
+                    }
+                )
+            replay_meta = attach_harness_priority_metadata(replay_meta)
+            await bounded_request(step_replay_prompt, replay_meta)
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.tool_wait.end",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "label": replay_label,
+                    "request_id": replay_label,
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "tool_wait_ms": wait_ms,
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                },
+            )
+            if warmup_task is not None:
+                await asyncio.gather(warmup_task, return_exceptions=True)
+            rows.append(
+                {
+                    "harness": args.harness,
+                    "mode": args.mode,
+                    "session_id": pair.session_id,
+                    "tool_wait_ms": wait_ms,
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "filler_sessions": args.filler_sessions,
+                    "target_prompt_tokens": args.target_prompt_tokens,
+                    "pressure_level": args.pressure_level,
                 }
             )
-        replay_meta = attach_harness_priority_metadata(replay_meta)
-        await bounded_request(pair.replay_prompt, replay_meta)
         controller_finish_result = record_controller_event(
             f"{pair.session_id}:session_finished",
             EventType.SESSION_FINISHED,
-            {**base_meta, "session_id": pair.session_id, "phase": "finished", "label": f"{pair.session_id}_finished"},
+            {
+                **base_meta,
+                "session_generation": len(target_wait_specs) + 1,
+                "session_id": pair.session_id,
+                "phase": "finished",
+                "label": f"{pair.session_id}_finished",
+            },
             monotonic_ms=int(offset_ms()),
         )
         controller_restore_command = acted_controller_command(controller_finish_result, kv_action="release")
@@ -2188,7 +2542,13 @@ async def main_async() -> None:
                     "controller_decision_id": (
                         controller_restore_command.get("controller_decision_id", "") if controller_restore_command else ""
                     ),
-                    "controller_command_id": controller_restore_command.get("command_id", "") if controller_restore_command else "",
+                    "controller_command_id": (
+                        controller_restore_command.get("command_id", "")
+                        if controller_restore_command
+                        else active_demote_command.get("command_id", "")
+                        if active_demote_command
+                        else ""
+                    ),
                     "controller_command_reason": controller_restore_command.get("reason", "") if controller_restore_command else "",
                     "backend_name": controller_restore_command.get("backend_name", "") if controller_restore_command else "",
                     "backend_accepted": controller_restore_command.get("backend_accepted", "") if controller_restore_command else "",
@@ -2199,30 +2559,7 @@ async def main_async() -> None:
                     "offset_ms": round(offset_ms(), 3),
                 },
             )
-        write_trace(
-            args.trace,
-            {
-                "event": "m27.tool_wait.end",
-                "session_id": pair.session_id,
-                "mode": args.mode,
-                "harness": args.harness,
-                "replay_due_offset_ms": round(replay_due_ms, 3),
-            },
-        )
-        if warmup_task is not None:
-            await asyncio.gather(warmup_task, return_exceptions=True)
         await asyncio.gather(*filler_tasks, return_exceptions=True)
-        rows.append(
-            {
-                "harness": args.harness,
-                "mode": args.mode,
-                "session_id": pair.session_id,
-                "tool_wait_ms": args.tool_wait_ms,
-                "filler_sessions": args.filler_sessions,
-                "target_prompt_tokens": args.target_prompt_tokens,
-                "pressure_level": args.pressure_level,
-            }
-        )
 
     await asyncio.gather(*(run_pair(pair, idx) for idx, pair in enumerate(pairs)))
     write_trace(args.trace, {"event": "m27.workload_end", "harness": args.harness, "mode": args.mode, "row_count": len(rows)})

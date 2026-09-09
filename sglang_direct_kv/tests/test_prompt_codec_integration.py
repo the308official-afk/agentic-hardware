@@ -15,9 +15,11 @@ from unittest.mock import patch
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import harness_sglang_gateway as gateway
 import build_multi_harness_deadline_summary as report
 import evaluate_prompt_codec as evaluation
+import run_multi_harness_replay_driver as harness_driver
 from agentic_prompt_codec import CodecConfig, PromptEncoder
 from agentic_prompt_codec.proxy import make_proxy_handler
 from test_prompt_codec import CharacterCounter, PROSE
@@ -256,6 +258,118 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(cost["sum_target_replay_debt_ms"], 60)
             self.assertEqual(cost["sum_filler_replay_debt_ms"], 120)
             self.assertEqual(cost["sum_total_replay_debt_ms"], 180)
+
+    def test_tool_wait_profile_sampling_is_reproducible_and_step_labeled(self):
+        sampled = harness_driver.sample_tool_wait_specs(
+            profile="agentic_mixed",
+            base_wait_ms=50,
+            custom_spec="",
+            steps=4,
+            seed=7,
+            stream_key="session-a",
+        )
+        sampled_again = harness_driver.sample_tool_wait_specs(
+            profile="agentic_mixed",
+            base_wait_ms=50,
+            custom_spec="",
+            steps=4,
+            seed=7,
+            stream_key="session-a",
+        )
+        self.assertEqual(sampled, sampled_again)
+        self.assertEqual([spec.step_index for spec in sampled], [1, 2, 3, 4])
+        self.assertTrue({spec.wait_ms for spec in sampled}.issubset({200, 2_000, 20_000}))
+
+        fixed = harness_driver.sample_tool_wait_specs(
+            profile="fixed",
+            base_wait_ms=75,
+            custom_spec="",
+            steps=2,
+            seed=99,
+            stream_key="ignored",
+        )
+        self.assertEqual([spec.wait_ms for spec in fixed], [75, 75])
+        self.assertEqual([spec.wait_class for spec in fixed], ["pressure_fixed", "pressure_fixed"])
+        self.assertEqual(harness_driver.replay_label_for("s", 1, 1), "s_replay")
+        self.assertEqual(harness_driver.replay_label_for("s", 2, 3), "s_replay_02")
+
+    def test_report_matches_multiple_replay_due_rows_by_label(self):
+        with tempfile.TemporaryDirectory() as folder:
+            case = Path(folder) / "hatcher_p3_high_controller_full_tw50_f0_twprofagentic_mixed_steps2_seed7"
+            case.mkdir()
+            trace = case / "m27_trace.jsonl"
+            rows = [
+                {
+                    "event": "m27.replay.due",
+                    "session_id": "target",
+                    "label": "target_replay_01",
+                    "request_id": "target_replay_01",
+                    "tool_wait_step": 1,
+                    "tool_wait_profile": "agentic_mixed",
+                    "tool_wait_class": "quick",
+                    "tool_wait_ms": 200,
+                    "ts_ns": 1_000_000_000,
+                },
+                {
+                    "event": "m27.replay.due",
+                    "session_id": "target",
+                    "label": "target_replay_02",
+                    "request_id": "target_replay_02",
+                    "tool_wait_step": 2,
+                    "tool_wait_profile": "agentic_mixed",
+                    "tool_wait_class": "moderate",
+                    "tool_wait_ms": 2_000,
+                    "ts_ns": 2_000_000_000,
+                },
+                {
+                    "event": "m27.request.start",
+                    "session_id": "target",
+                    "label": "target_replay_01",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_010_000_000,
+                },
+                {
+                    "event": "m27.request.end",
+                    "session_id": "target",
+                    "label": "target_replay_01",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_100_000_000,
+                    "first_content_ts_ns": 1_050_000_000,
+                    "ttft_ms": 40,
+                },
+                {
+                    "event": "m27.request.start",
+                    "session_id": "target",
+                    "label": "target_replay_02",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 2_015_000_000,
+                },
+                {
+                    "event": "m27.request.end",
+                    "session_id": "target",
+                    "label": "target_replay_02",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 2_090_000_000,
+                    "first_content_ts_ns": 2_070_000_000,
+                    "ttft_ms": 55,
+                },
+            ]
+            for row in rows:
+                gateway.write_jsonl(trace, row)
+
+            timing_rows = report.collect_rows(Path(folder))
+            self.assertEqual([row["request_id"] for row in timing_rows], ["target_replay_01", "target_replay_02"])
+            self.assertEqual([row["first_token_lateness_ms"] for row in timing_rows], [50, 70])
+            self.assertEqual([row["tool_wait_step"] for row in timing_rows], [1, 2])
+            self.assertEqual([row["tool_wait_class"] for row in timing_rows], ["quick", "moderate"])
 
     def test_streaming_proxy_delivers_first_chunk_before_backend_finishes(self):
         requests, events = [], []

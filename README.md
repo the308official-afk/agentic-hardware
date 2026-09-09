@@ -271,6 +271,41 @@ bash scripts/run_harness_signal_design_space.sh \
 If `FILLER_REPLAY_DEADLINE_MS` is omitted, the filler replay deadline uses the
 same `tool_wait_ms` as the active pressure level.
 
+### Production-like tool waits
+
+By default, each task still uses the pressure level's fixed tool-wait gap. To
+make the workload look more like real coding-agent traffic, enable sampled
+tool waits and multiple resume cycles per task:
+
+```bash
+cd sglang_direct_kv
+
+TOOL_WAIT_PROFILE=agentic_mixed \
+TASK_REPLAY_STEPS=2 \
+TOOL_WAIT_SEED=42 \
+FILLER_REPLAY_DEADLINES=1 \
+bash scripts/run_harness_signal_design_space.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+`TOOL_WAIT_PROFILE=agentic_mixed` samples each tool wait from this reproducible
+mix: 70% quick waits at 200 ms, 25% moderate waits at 2 seconds, and 5% slow
+waits at 20 seconds. `TASK_REPLAY_STEPS=2` means each target task can go through
+two tool-wait/resume cycles instead of only one. When
+`FILLER_REPLAY_DEADLINES=1` is also set, filler/background sessions use the same
+kind of repeated resume structure, so the cost-accounting charts can measure
+whether target replay gains are shifting delay onto background work.
+
+For a custom distribution, set:
+
+```bash
+TOOL_WAIT_PROFILE_SPEC="quick:70:200,moderate:25:2000,slow:5:20000"
+```
+
+The sampler is deterministic for the same `TOOL_WAIT_SEED`, harness, pressure
+level, mode, and session id. This keeps runs reproducible while still giving the
+experiment richer timing structure.
+
 ## Portable Agent-Aware Controller Foundation
 
 The controller prototype is intentionally backend-neutral. It lives in

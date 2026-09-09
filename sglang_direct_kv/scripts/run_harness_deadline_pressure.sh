@@ -60,6 +60,10 @@ AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
 GPU_UTIL_SAMPLE_INTERVAL_MS="${GPU_UTIL_SAMPLE_INTERVAL_MS:-100}"
 FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES:-0}"
 FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS:-}"
+TOOL_WAIT_PROFILE="${TOOL_WAIT_PROFILE:-fixed}"
+TOOL_WAIT_PROFILE_SPEC="${TOOL_WAIT_PROFILE_SPEC:-}"
+TOOL_WAIT_SEED="${TOOL_WAIT_SEED:-42}"
+TASK_REPLAY_STEPS="${TASK_REPLAY_STEPS:-1}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -236,6 +240,10 @@ write_run_config() {
     echo "P5_BOSS_QUEUE=$(level_knobs p5_boss_queue | tr ' ' ',')"
     echo "FILLER_REPLAY_DEADLINES=${FILLER_REPLAY_DEADLINES}"
     echo "FILLER_REPLAY_DEADLINE_MS=${FILLER_REPLAY_DEADLINE_MS}"
+    echo "TOOL_WAIT_PROFILE=${TOOL_WAIT_PROFILE}"
+    echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
+    echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
+    echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
   } >"${RUN_CONFIG_ENV}"
 }
 
@@ -258,6 +266,11 @@ run_case() {
   local tool_wait_ms target_prompt_tokens filler_sessions filler_prompt_tokens session_count concurrency
   eval "${knobs}"
   local case_id="${harness}_${level}_${mode}_tw${tool_wait_ms}_f${filler_sessions}"
+  if [[ "${TOOL_WAIT_PROFILE}" != "fixed" || "${TASK_REPLAY_STEPS}" != "1" || -n "${TOOL_WAIT_PROFILE_SPEC}" ]]; then
+    local safe_tool_wait_profile
+    safe_tool_wait_profile="$(printf '%s' "${TOOL_WAIT_PROFILE}" | tr -c 'A-Za-z0-9_' '_')"
+    case_id="${case_id}_twprof${safe_tool_wait_profile}_steps${TASK_REPLAY_STEPS}_seed${TOOL_WAIT_SEED}"
+  fi
   if [[ -n "${ENCODING_CASE_KEY}" ]]; then case_id="${case_id}_enc${ENCODING_CASE_KEY}"; fi
   local case_root="${RUN_ROOT}/${case_id}"
   local trace="${case_root}/m27_trace.jsonl"
@@ -341,6 +354,10 @@ PYPORT
     --out "${metrics}" \
     --log-dir "${case_root}/harness_logs" \
     --tool-wait-ms "${tool_wait_ms}" \
+    --tool-wait-profile "${TOOL_WAIT_PROFILE}" \
+    --tool-wait-profile-spec "${TOOL_WAIT_PROFILE_SPEC}" \
+    --tool-wait-seed "${TOOL_WAIT_SEED}" \
+    --task-replay-steps "${TASK_REPLAY_STEPS}" \
     --target-prompt-tokens "${target_prompt_tokens}" \
     --filler-sessions "${filler_sessions}" \
     --filler-prompt-tokens "${filler_prompt_tokens}" \
@@ -438,6 +455,12 @@ echo "HARDWARE_PROFILE_PATH=${HARDWARE_PROFILE_PATH}"
 echo "HARNESSES=${HARNESSES}"
 echo "MODES=${MODES}"
 echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
+echo "TOOL_WAIT_PROFILE=${TOOL_WAIT_PROFILE}"
+echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
+echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
+if [[ -n "${TOOL_WAIT_PROFILE_SPEC}" ]]; then
+  echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
+fi
 
 start_gpu_util_sampler
 for harness in ${HARNESSES}; do
