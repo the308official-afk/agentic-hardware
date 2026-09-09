@@ -19,6 +19,7 @@ class SessionState:
     hbm_residency_priority: int = 0
     host_retention_priority: int = 0
     last_event_ms: int = 0
+    metadata: dict[str, object] = field(default_factory=dict)
     seen_event_ids: frozenset[str] = field(default_factory=frozenset)
 
     @property
@@ -80,6 +81,7 @@ class ControllerStateStore:
             hbm_residency_priority=event.hbm_residency_priority or base.hbm_residency_priority,
             host_retention_priority=event.host_retention_priority or base.host_retention_priority,
             last_event_ms=event.monotonic_ms,
+            metadata={**base.metadata, **event.metadata},
             seen_event_ids=base.seen_event_ids | frozenset({event.event_id}),
         )
         self._sessions[event.session_id] = updated
@@ -92,7 +94,7 @@ class ControllerStateStore:
         if event is EventType.TOOL_STARTED:
             return SessionPhase.TOOL_WAIT
         if event is EventType.TOOL_ETA_UPDATED:
-            return SessionPhase.PREPARE if current is SessionPhase.PREPARE else current
+            return SessionPhase.PREPARE if current in {SessionPhase.TOOL_WAIT, SessionPhase.PREPARE} else current
         if event is EventType.TOOL_COMPLETED:
             return SessionPhase.READY
         if event is EventType.SESSION_FINISHED:

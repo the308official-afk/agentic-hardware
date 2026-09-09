@@ -332,12 +332,17 @@ Current normalized signal buckets:
 | Replay expectation | `likely`, `expected_count`, `deadline_after_tool_ms`, `expected_request_id` |
 | Cache context | `stable_prefix`, `cache_key`, `reuse_scope`, `conversation_prefix_hash`, native cache signal source |
 | Scheduling context | `urgency`, `priority`, `latency_sensitivity`, `safe_to_demote`, `preemptible`, `can_delay_ms` |
+| Competition context | `active_background_requests`, `demotable_background_requests`, `background_safe_to_demote`, `background_can_delay_ms`, `concurrency` |
+| Cost feedback | `recent_target_replay_debt_ms`, `recent_background_ttft_ms`, `recent_background_slowdown_ratio`, `allow_background_demote` |
 | Cost/resource context | `expected_output_tokens`, `max_tokens`, `prompt_tokens`, cached/uncached token estimates |
 
-The first controller policy uses only a small subset of these facts. The point
-of exposing the full envelope now is to make later optimization work visible
-and portable instead of baking harness-specific assumptions into the SGLang
-adapter.
+The controller policy now uses this envelope for timing-aware full-controller
+decisions. Short waits avoid early demotion and rely mostly on replay priority.
+Medium and long waits enter a prepare window shortly before replay due time.
+During that window, `controller_full` can demote safe background/filler work,
+lower background prefill budget, and later restore normal background behavior.
+Those decisions stay backend-neutral; the gateway lowers accepted commands into
+the SGLang request fields.
 
 Current foundation smoke test:
 
@@ -517,7 +522,7 @@ smallest possible boundary adapter.
 | Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, and any matching SGLang load-back or host-to-device copy before replay compute. If no stable direct hook exists, the evidence table says so explicitly. |
 | Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
 | Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
-| Phase 6.5: Single-harness full-controller optimization | Planned next | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | `controller_full` should match or beat the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`, while proving replay priority, filler demotion, filler restore, admission decision, and deadline-aware urgent replay ordering. |
+| Phase 6.5: Single-harness full-controller optimization | Implemented; EC2 performance rerun pending | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | Unit tests prove timed prepare-window transition, short-wait no-demote behavior, metadata preservation, background demotion guardrails, replay priority, budget command, and release. Next EC2 run should check whether `controller_full` matches or beats the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 Phase gate for each implementation slice:

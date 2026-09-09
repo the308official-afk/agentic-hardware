@@ -153,23 +153,41 @@ traffic around the replay deadline, not just the replay request itself.
 
 ## Current Next Task
 
-Validate `controller_full` for one harness before expanding to more harnesses.
+Run the focused EC2 validation for the timing-aware `controller_full` policy on
+one harness before expanding to more harnesses.
 
-`controller_full` should combine only the controller behaviors that helped on
-EC2:
+`controller_full` now combines only the controller behaviors that helped on EC2
+and uses the portable `harness_controller_signal.v1` envelope:
 
 1. Track session lifecycle state: tool wait, replay ready, replay submitted,
    replay finished.
-2. Demote matching filler/background work during the replay-critical window.
-3. Raise replay scheduler priority when the replay becomes ready.
-4. For `p5_boss_queue`, assign deadline-aware priority ranks among urgent
+2. Use tool-wait duration and expected completion time to wait for a prepare
+   window instead of demoting background work immediately.
+3. Demote matching filler/background work during the replay-critical window
+   only when the signal says safe background work exists.
+4. Skip early demotion for short waits under 500 ms.
+5. Raise replay scheduler priority when the replay becomes ready.
+6. For `p5_boss_queue`, assign deadline-aware priority ranks among urgent
    replays instead of giving every urgent replay the same priority.
-5. Use admission control to skip speculative preload/prefetch under overload.
-6. Restore filler/background priority after the replay-critical window closes.
+7. Use admission/cost guardrails to avoid speculative preload/prefetch under
+   overload or when background slowdown is already too high.
+8. Restore filler/background priority after each replay-critical window closes.
 
 Do not include speculative preload or targeted KV prefetch in the first
 `controller_full` default. Those are mechanically wired, but prior EC2 timing
 showed weak or negative benefit.
+
+The latest local implementation already added:
+
+- `competition` and `cost_feedback` buckets to
+  `sglang_direct_kv/src/agentic_kv/controller/harness_signal.py`
+- controller-state metadata preservation and `TOOL_ETA_UPDATED -> PREPARE`
+  transition in `sglang_direct_kv/src/agentic_kv/controller/state_store.py`
+- signal-aware prepare/demotion guardrails in
+  `sglang_direct_kv/src/agentic_kv/controller/policy.py`
+- timed prepare-window events plus shared background demotion state in
+  `sglang_direct_kv/scripts/run_multi_harness_replay_driver.py`
+- unit tests in `sglang_direct_kv/tests/test_agentic_controller.py`
 
 ## Expected Validation Command
 

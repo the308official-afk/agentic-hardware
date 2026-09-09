@@ -30,6 +30,15 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class TaskSignal:
     session_id: str
@@ -102,6 +111,23 @@ class SchedulingSignal:
 
 
 @dataclass(frozen=True)
+class CompetitionSignal:
+    active_background_requests: int = 0
+    demotable_background_requests: int = 0
+    background_safe_to_demote: bool = False
+    background_can_delay_ms: int | None = None
+    concurrency: int | None = None
+
+
+@dataclass(frozen=True)
+class CostFeedbackSignal:
+    recent_target_replay_debt_ms: int | None = None
+    recent_background_ttft_ms: int | None = None
+    recent_background_slowdown_ratio: float | None = None
+    allow_background_demote: bool = True
+
+
+@dataclass(frozen=True)
 class OutputSignal:
     expected_output_tokens: int | None = None
     max_tokens: int | None = None
@@ -128,6 +154,8 @@ class HarnessControllerSignal:
     replay: ReplaySignal = field(default_factory=ReplaySignal)
     cache: CacheSignal = field(default_factory=CacheSignal)
     scheduling: SchedulingSignal = field(default_factory=SchedulingSignal)
+    competition: CompetitionSignal = field(default_factory=CompetitionSignal)
+    cost_feedback: CostFeedbackSignal = field(default_factory=CostFeedbackSignal)
     output: OutputSignal = field(default_factory=OutputSignal)
     resource: ResourceSignal = field(default_factory=ResourceSignal)
     native_signals: dict[str, Any] = field(default_factory=dict)
@@ -282,6 +310,19 @@ def build_harness_controller_signal(
             can_delay_ms=_int_or_none(meta.get("can_delay_ms")) or (5000 if safe_to_demote else 0),
             fairness_group=_text(meta.get("fairness_group") or session_id),
             tenant_id=_text(meta.get("tenant_id")),
+        ),
+        competition=CompetitionSignal(
+            active_background_requests=_int_or_none(meta.get("active_background_requests")) or 0,
+            demotable_background_requests=_int_or_none(meta.get("demotable_background_requests")) or 0,
+            background_safe_to_demote=_bool(meta.get("background_safe_to_demote"), default=False),
+            background_can_delay_ms=_int_or_none(meta.get("background_can_delay_ms")),
+            concurrency=_int_or_none(meta.get("concurrency")),
+        ),
+        cost_feedback=CostFeedbackSignal(
+            recent_target_replay_debt_ms=_int_or_none(meta.get("recent_target_replay_debt_ms")),
+            recent_background_ttft_ms=_int_or_none(meta.get("recent_background_ttft_ms")),
+            recent_background_slowdown_ratio=_float_or_none(meta.get("recent_background_slowdown_ratio")),
+            allow_background_demote=_bool(meta.get("cost_feedback_allow_background_demote"), default=True),
         ),
         output=OutputSignal(
             expected_output_tokens=_int_or_none(meta.get("expected_output_tokens") or meta.get("max_tokens")),

@@ -220,6 +220,16 @@ def warmup_label_for(session_id: str, step_index: int, total_steps: int) -> str:
     return f"{session_id}_speculative_prefill_{step_index:02d}"
 
 
+def controller_prepare_lead_ms(wait_ms: int) -> int:
+    if wait_ms < 500:
+        return 0
+    if wait_ms <= 3_000:
+        return min(wait_ms, 500)
+    if wait_ms <= 10_000:
+        return min(wait_ms, 1_000)
+    return min(wait_ms, 1_500)
+
+
 def trace_has_event(path: Path, label: str, event: str) -> bool:
     if not path.exists():
         return False
@@ -1242,17 +1252,30 @@ async def run_filler(
     trace: Path | None = None,
     workload_start: float | None = None,
     filler_replay_deadlines: bool = False,
+    demotion_state: dict[str, Any] | None = None,
 ) -> None:
     def offset_ms() -> float:
         if workload_start is None:
             return 0.0
         return (time.perf_counter() - workload_start) * 1000.0
 
+    def current_meta_base() -> dict[str, Any]:
+        if not demotion_state or not demotion_state.get("active"):
+            return dict(meta_base)
+        demote_meta = demotion_state.get("meta")
+        if not isinstance(demote_meta, dict):
+            return dict(meta_base)
+        return {
+            **meta_base,
+            **demote_meta,
+            "controller_demotion_applied_to": "pressure_filler",
+        }
+
     filler_session = f"{pair.session_id}_pressure_{idx:03d}"
     prompt = make_pressure_filler_prompt(filler_session, tokens)
     total_steps = max(1, len(wait_specs))
     meta = {
-        **meta_base,
+        **current_meta_base(),
         "session_id": filler_session,
         "phase": "pressure_filler_initial" if filler_replay_deadlines else "pressure_filler",
         "label": f"{filler_session}_initial" if filler_replay_deadlines else f"{filler_session}_request",
@@ -1329,7 +1352,7 @@ async def run_filler(
 
         replay_prompt = filler_replay_prompt_for_step(current_prompt, filler_session, spec.step_index, total_steps)
         replay_meta = {
-            **meta_base,
+            **current_meta_base(),
             "session_id": filler_session,
             "session_generation": spec.step_index + 1,
             "phase": "pressure_filler",
@@ -1483,6 +1506,7 @@ async def main_async() -> None:
     admission_max_filler_sessions = int(os.environ.get("CONTROLLER_ADMISSION_MAX_FILLER_SESSIONS", "16"))
     admission_max_concurrency = int(os.environ.get("CONTROLLER_ADMISSION_MAX_CONCURRENCY", "8"))
     workload_start = time.perf_counter()
+    controller_demotion_state: dict[str, Any] = {"active": False, "meta": {}, "owners": set()}
     controller_enabled = controller_mode(args.mode)
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_active_preload = controller_speculative_preload_mode(args.mode)
@@ -1508,6 +1532,7 @@ async def main_async() -> None:
             prepare_window_ms=0 if (controller_active_demote_restore or controller_active_full) else max(25, max_target_tool_wait_ms),
             min_demote_idle_ms=0 if (controller_active_demote_restore or controller_active_full) else 250,
             safety_margin_ms=0 if (controller_active_demote_restore or controller_active_full) else 6,
+            signal_timing_enabled=controller_active_full,
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
     )
@@ -1954,6 +1979,12 @@ async def main_async() -> None:
             "tool_wait_profile_spec": args.tool_wait_profile_spec,
             "tool_wait_seed": args.tool_wait_seed,
             "task_replay_steps": len(target_wait_specs),
+            "active_background_requests": args.filler_sessions,
+            "demotable_background_requests": args.filler_sessions,
+            "background_safe_to_demote": args.filler_sessions > 0,
+            "background_can_delay_ms": max(500, args.tool_wait_ms * 2),
+            "concurrency": args.concurrency,
+            "cost_feedback_allow_background_demote": True,
             "_trace_path": str(args.trace),
             "nat_inferred_prefix_total_requests": 10,
             "nat_inferred_prefix_osl": 512,
@@ -1982,6 +2013,68 @@ async def main_async() -> None:
         filler_tasks: list[asyncio.Task[None]] = []
         active_demote_command: dict[str, Any] | None = None
         demote_restore_active = False
+
+        def activate_controller_demote(
+            controller_demote_command: dict[str, Any],
+            *,
+            step_base_meta: dict[str, Any],
+            wait_spec: ToolWaitSpec,
+            tool_start_ms: float,
+            replay_due_ms: float,
+            trigger: str,
+        ) -> None:
+            nonlocal active_demote_command, demote_restore_active, filler_base_meta
+            active_demote_command = controller_demote_command
+            demote_restore_active = True
+            demote_meta = {
+                "controller_demote_restore_active": "yes",
+                "controller_demote_priority": -100,
+                "controller_demote_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                "controller_demote_command_id": controller_demote_command.get("command_id", ""),
+                "controller_demote_translation": "controller.demote=pressure_filler.priority:-100",
+                "controller_demote_trigger": trigger,
+            }
+            owner = f"{pair.session_id}:{wait_spec.step_index}"
+            owners = controller_demotion_state.setdefault("owners", set())
+            if isinstance(owners, set):
+                owners.add(owner)
+            controller_demotion_state["active"] = True
+            controller_demotion_state["meta"] = demote_meta
+            filler_base_meta = {**step_base_meta, **demote_meta}
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.controller_demote_restore.demote_start",
+                    "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "tool_wait_step": wait_spec.step_index,
+                    "task_replay_steps": len(target_wait_specs),
+                    "tool_wait_profile": args.tool_wait_profile,
+                    "tool_wait_class": wait_spec.wait_class,
+                    "tool_wait_ms": wait_spec.wait_ms,
+                    "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
+                    "controller_command_id": controller_demote_command.get("command_id", ""),
+                    "controller_command_reason": controller_demote_command.get("reason", ""),
+                    "controller_decision_reason": controller_demote_command.get("controller_decision_reason", ""),
+                    "backend_name": controller_demote_command.get("backend_name", ""),
+                    "backend_accepted": controller_demote_command.get("backend_accepted", ""),
+                    "backend_acted": controller_demote_command.get("backend_acted", ""),
+                    "backend_reason": controller_demote_command.get("backend_reason", ""),
+                    "demoted_phase": "pressure_filler",
+                    "demoted_priority": -100,
+                    "demote_trigger": trigger,
+                    "demotable_background_requests": args.filler_sessions,
+                    "background_safe_to_demote": args.filler_sessions > 0,
+                    "tool_start_offset_ms": round(tool_start_ms, 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
+
         for wait_spec in target_wait_specs:
             wait_ms = wait_spec.wait_ms
             replay_label = replay_label_for(pair.session_id, wait_spec.step_index, len(target_wait_specs))
@@ -2050,44 +2143,13 @@ async def main_async() -> None:
                 and controller_demote_command is not None
             )
             if step_demote_restore_active:
-                active_demote_command = controller_demote_command
-                demote_restore_active = True
-                filler_base_meta = {
-                    **step_base_meta,
-                    "controller_demote_restore_active": "yes",
-                    "controller_demote_priority": -100,
-                    "controller_demote_decision_id": controller_demote_command.get("controller_decision_id", ""),
-                    "controller_demote_command_id": controller_demote_command.get("command_id", ""),
-                    "controller_demote_translation": "controller.demote=pressure_filler.priority:-100",
-                }
-                write_trace(
-                    args.trace,
-                    {
-                        "event": "m27.controller_demote_restore.demote_start",
-                        "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
-                        "session_id": pair.session_id,
-                        "mode": args.mode,
-                        "harness": args.harness,
-                        "pressure_level": args.pressure_level,
-                        "task_index": pair.task_index,
-                        "tool_wait_step": wait_spec.step_index,
-                        "task_replay_steps": len(target_wait_specs),
-                        "tool_wait_profile": args.tool_wait_profile,
-                        "tool_wait_class": wait_spec.wait_class,
-                        "tool_wait_ms": wait_ms,
-                        "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
-                        "controller_command_id": controller_demote_command.get("command_id", ""),
-                        "controller_command_reason": controller_demote_command.get("reason", ""),
-                        "backend_name": controller_demote_command.get("backend_name", ""),
-                        "backend_accepted": controller_demote_command.get("backend_accepted", ""),
-                        "backend_acted": controller_demote_command.get("backend_acted", ""),
-                        "backend_reason": controller_demote_command.get("backend_reason", ""),
-                        "demoted_phase": "pressure_filler",
-                        "demoted_priority": -100,
-                        "tool_start_offset_ms": round(tool_start_ms, 3),
-                        "replay_due_offset_ms": round(replay_due_ms, 3),
-                        "offset_ms": round(offset_ms(), 3),
-                    },
+                activate_controller_demote(
+                    controller_demote_command,
+                    step_base_meta=step_base_meta,
+                    wait_spec=wait_spec,
+                    tool_start_ms=tool_start_ms,
+                    replay_due_ms=replay_due_ms,
+                    trigger="tool_started",
                 )
             controller_speculative_preload = controller_active_preload and controller_preload_command is not None
             controller_admission_row: dict[str, Any] | None = None
@@ -2330,12 +2392,77 @@ async def main_async() -> None:
                             trace=args.trace,
                             workload_start=workload_start,
                             filler_replay_deadlines=args.filler_replay_deadlines,
+                            demotion_state=controller_demotion_state,
                         )
                     )
                     for idx in range(args.filler_sessions)
                 ]
+            prepare_lead_ms = controller_prepare_lead_ms(wait_ms) if controller_active_full else 0
+            prepare_checkpoint_ms = max(tool_start_ms, replay_due_ms - prepare_lead_ms)
+            prepare_controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None = None
+            if (
+                prepare_lead_ms > 0
+                and prepare_checkpoint_ms > offset_ms() + 1
+                and prepare_checkpoint_ms < replay_due_ms
+            ):
+                await sleep_until(prepare_checkpoint_ms)
+                prepare_controller_result = record_controller_event(
+                    f"{pair.session_id}:prepare_window:{wait_spec.step_index}",
+                    EventType.TOOL_ETA_UPDATED,
+                    {
+                        **step_base_meta,
+                        "session_id": pair.session_id,
+                        "phase": "prepare",
+                        "label": f"{pair.session_id}_prepare_{wait_spec.step_index:02d}",
+                    },
+                    monotonic_ms=int(prepare_checkpoint_ms),
+                    expected_completion_ms=int(replay_due_ms),
+                    deadline_after_completion_ms=wait_ms,
+                    eta_uncertainty_ms=max(0, int(replay_due_ms - prepare_checkpoint_ms)),
+                )
+                prepare_demote_command = acted_controller_command(prepare_controller_result, kv_action="demote")
+                if (
+                    (controller_active_demote_restore or controller_active_full)
+                    and prepare_demote_command is not None
+                    and not step_demote_restore_active
+                ):
+                    activate_controller_demote(
+                        prepare_demote_command,
+                        step_base_meta=step_base_meta,
+                        wait_spec=wait_spec,
+                        tool_start_ms=tool_start_ms,
+                        replay_due_ms=replay_due_ms,
+                        trigger="prepare_window",
+                    )
+                    step_demote_restore_active = True
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_full.prepare_window",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "tool_wait_profile": args.tool_wait_profile,
+                        "tool_wait_class": wait_spec.wait_class,
+                        "tool_wait_ms": wait_ms,
+                        "prepare_lead_ms": prepare_lead_ms,
+                        "prepare_checkpoint_offset_ms": round(prepare_checkpoint_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "controller_decision_id": (
+                            prepare_controller_result[0].get("decision_id", "")
+                            if prepare_controller_result
+                            else ""
+                        ),
+                        "controller_demote_activated": prepare_demote_command is not None,
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
             await sleep_until(replay_due_ms)
-            record_controller_event(
+            due_prepare_result = record_controller_event(
                 f"{pair.session_id}:prepare_checkpoint:{wait_spec.step_index}",
                 EventType.TOOL_ETA_UPDATED,
                 {
@@ -2349,6 +2476,21 @@ async def main_async() -> None:
                 deadline_after_completion_ms=wait_ms,
                 eta_uncertainty_ms=0,
             )
+            due_demote_command = acted_controller_command(due_prepare_result, kv_action="demote")
+            if (
+                (controller_active_demote_restore or controller_active_full)
+                and due_demote_command is not None
+                and not step_demote_restore_active
+            ):
+                activate_controller_demote(
+                    due_demote_command,
+                    step_base_meta=step_base_meta,
+                    wait_spec=wait_spec,
+                    tool_start_ms=tool_start_ms,
+                    replay_due_ms=replay_due_ms,
+                    trigger="replay_due_checkpoint",
+                )
+                step_demote_restore_active = True
             write_trace(
                 args.trace,
                 {
@@ -2532,6 +2674,32 @@ async def main_async() -> None:
                     "pressure_level": args.pressure_level,
                 }
             )
+            if step_demote_restore_active:
+                owners = controller_demotion_state.get("owners")
+                if isinstance(owners, set):
+                    owners.discard(f"{pair.session_id}:{wait_spec.step_index}")
+                    controller_demotion_state["active"] = bool(owners)
+                else:
+                    controller_demotion_state["active"] = False
+                if not controller_demotion_state["active"]:
+                    controller_demotion_state["meta"] = {}
+                filler_base_meta = base_meta
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_demote_restore.step_restored",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "restored_phase": "pressure_filler",
+                        "restored_priority": 0,
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
         controller_finish_result = record_controller_event(
             f"{pair.session_id}:session_finished",
             EventType.SESSION_FINISHED,
@@ -2546,6 +2714,16 @@ async def main_async() -> None:
         )
         controller_restore_command = acted_controller_command(controller_finish_result, kv_action="release")
         if demote_restore_active:
+            owners = controller_demotion_state.get("owners")
+            if isinstance(owners, set):
+                for owner in list(owners):
+                    if str(owner).startswith(f"{pair.session_id}:"):
+                        owners.discard(owner)
+                controller_demotion_state["active"] = bool(owners)
+            else:
+                controller_demotion_state["active"] = False
+            if not controller_demotion_state["active"]:
+                controller_demotion_state["meta"] = {}
             write_trace(
                 args.trace,
                 {

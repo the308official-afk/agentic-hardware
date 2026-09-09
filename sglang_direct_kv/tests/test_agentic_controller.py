@@ -62,6 +62,8 @@ class AgenticControllerTests(unittest.TestCase):
         self.assertTrue(signal["cache"]["stable_prefix"])
         self.assertEqual(signal["cache"]["cache_key"], "repo-session")
         self.assertFalse(signal["scheduling"]["safe_to_demote"])
+        self.assertEqual(signal["competition"]["demotable_background_requests"], 0)
+        self.assertTrue(signal["cost_feedback"]["allow_background_demote"])
 
     def test_harness_controller_signal_marks_background_as_demotable(self) -> None:
         signal = build_harness_controller_signal(
@@ -115,6 +117,54 @@ class AgenticControllerTests(unittest.TestCase):
         )
         self.assertFalse(accepted)
         self.assertEqual(stale, state)
+
+    def test_eta_update_moves_tool_wait_into_prepare_and_keeps_metadata(self) -> None:
+        store = ControllerStateStore()
+        signal = build_harness_controller_signal(
+            {
+                "harness": "hatcher",
+                "mode": "controller_full",
+                "session_id": "s1",
+                "phase": "tool_wait",
+                "tool_wait_ms": 2000,
+                "active_background_requests": 8,
+                "demotable_background_requests": 8,
+                "background_safe_to_demote": True,
+            },
+            expected_completion_ms=2000,
+            deadline_after_completion_ms=50,
+        )
+        store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=2000,
+                deadline_after_completion_ms=50,
+                metadata={"harness_controller_signal": signal},
+            )
+        )
+        prepare_state, accepted = store.apply_event(
+            ControllerEvent(
+                event_id="event-prepare",
+                event=EventType.TOOL_ETA_UPDATED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=1500,
+                expected_completion_ms=2000,
+                deadline_after_completion_ms=50,
+                metadata={"harness_controller_signal": signal},
+            )
+        )
+
+        self.assertTrue(accepted)
+        self.assertIs(prepare_state.phase, SessionPhase.PREPARE)
+        self.assertEqual(
+            prepare_state.metadata["harness_controller_signal"],
+            signal,
+        )
 
     def test_observe_only_policy_records_intent_without_active_mutation(self) -> None:
         store = ControllerStateStore()
@@ -410,6 +460,100 @@ class AgenticControllerTests(unittest.TestCase):
         finished_result = backend.apply(finished_decision.commands[0])
         self.assertIs(finished_decision.commands[0].kv_action, KVAction.RELEASE)
         self.assertTrue(finished_result.acted)
+
+    def test_signal_aware_policy_waits_for_prepare_window_before_demoting(self) -> None:
+        store = ControllerStateStore()
+        signal = build_harness_controller_signal(
+            {
+                "harness": "hatcher",
+                "mode": "controller_full",
+                "session_id": "s1",
+                "phase": "tool_wait",
+                "priority_label": "high",
+                "tool_wait_ms": 2000,
+                "active_background_requests": 8,
+                "demotable_background_requests": 8,
+                "background_safe_to_demote": True,
+            },
+            expected_completion_ms=2000,
+            deadline_after_completion_ms=50,
+        )
+        state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=2000,
+                deadline_after_completion_ms=50,
+                execution_priority=100,
+                metadata={"harness_controller_signal": signal},
+            )
+        )
+        policy = ControllerPolicy(
+            PolicyConfig(observe_only=False, prepare_window_ms=0, signal_timing_enabled=True)
+        )
+        backend = GatewayFullControllerBackendAdapter()
+
+        wait_decision = policy.plan(state, backend.capabilities(), now_ms=0)
+        self.assertNotIn(KVAction.DEMOTE, {command.kv_action for command in wait_decision.commands})
+        self.assertIn("waiting for prepare window", wait_decision.reason)
+
+        prepare_state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-prepare",
+                event=EventType.TOOL_ETA_UPDATED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=1500,
+                expected_completion_ms=2000,
+                deadline_after_completion_ms=50,
+                execution_priority=100,
+                metadata={"harness_controller_signal": signal},
+            )
+        )
+        prepare_decision = policy.plan(prepare_state, backend.capabilities(), now_ms=1500)
+        self.assertIn(KVAction.DEMOTE, {command.kv_action for command in prepare_decision.commands})
+
+    def test_signal_aware_policy_skips_demote_for_short_waits(self) -> None:
+        store = ControllerStateStore()
+        signal = build_harness_controller_signal(
+            {
+                "harness": "hatcher",
+                "mode": "controller_full",
+                "session_id": "s1",
+                "phase": "tool_wait",
+                "priority_label": "high",
+                "tool_wait_ms": 250,
+                "active_background_requests": 8,
+                "demotable_background_requests": 8,
+                "background_safe_to_demote": True,
+            },
+            expected_completion_ms=250,
+            deadline_after_completion_ms=50,
+        )
+        state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=250,
+                deadline_after_completion_ms=50,
+                execution_priority=100,
+                metadata={"harness_controller_signal": signal},
+            )
+        )
+        policy = ControllerPolicy(
+            PolicyConfig(observe_only=False, prepare_window_ms=0, signal_timing_enabled=True)
+        )
+        backend = GatewayFullControllerBackendAdapter()
+
+        decision = policy.plan(state, backend.capabilities(), now_ms=250)
+        self.assertNotIn(KVAction.DEMOTE, {command.kv_action for command in decision.commands})
+        self.assertIn("short tool wait", decision.reason)
 
     def test_targeted_kv_prefetch_adapter_records_unavailable_hook(self) -> None:
         store = ControllerStateStore()
