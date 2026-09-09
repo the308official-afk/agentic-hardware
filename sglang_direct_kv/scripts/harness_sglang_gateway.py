@@ -693,9 +693,11 @@ def extract_chat_delta(line: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def call_sglang(target_base: str, payload: dict[str, Any]) -> tuple[str, float, float, int, int]:
+def call_sglang(target_base: str, payload: dict[str, Any]) -> tuple[str, float | None, float, int, int, int | None, int]:
     start = time.perf_counter()
+    forward_started_ns = time.time_ns()
     first = None
+    first_content_ns = None
     text_parts: list[str] = []
     chunks = 0
     status = 502
@@ -707,13 +709,14 @@ def call_sglang(target_base: str, payload: dict[str, Any]) -> tuple[str, float, 
                 chunk = extract_chat_delta(line)
                 if chunk and first is None:
                     first = time.perf_counter()
+                    first_content_ns = time.time_ns()
                 if chunk:
                     text_parts.append(chunk)
                 if line.startswith("data: ") and line.removeprefix("data: ").strip() != "[DONE]":
                     chunks += 1
     end = time.perf_counter()
-    first = first if first is not None else end
-    return "".join(text_parts) or "ok", (first - start) * 1000.0, (end - start) * 1000.0, chunks, status
+    return ("".join(text_parts), (first - start) * 1000.0 if first is not None else None,
+            (end - start) * 1000.0, chunks, status, first_content_ns, forward_started_ns)
 
 
 def fake_chat_response(text: str, model: str) -> bytes:
@@ -832,7 +835,8 @@ def api_kind_from_path(path: str) -> str:
     return "chat"
 
 
-def make_handler(target_base: str, trace_path: Path | None, log_path: Path | None, model: str):
+def make_handler(target_base: str, trace_path: Path | None, log_path: Path | None, model: str,
+                 encoder=None, encoding_scope: str = "target_requests"):
     class Handler(BaseHTTPRequestHandler):
         server_version = "HarnessSGLangGateway/0.1"
 
@@ -868,6 +872,7 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
 
         def do_POST(self) -> None:
             started = time.perf_counter()
+            received_ns = time.time_ns()
             body = self.rfile.read(int(self.headers.get("content-length", "0") or 0))
             try:
                 payload = json.loads(body.decode("utf-8")) if body else {}
@@ -952,6 +957,11 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             write_jsonl(trace_path, {"event": "m27.request.submitted", **common})
             write_jsonl(trace_path, {"event": "m27.request.start", **common})
             status = 502
+            first_content_ns = None
+            forward_started_ns = None
+            common["gateway_received_ns"] = received_ns
+            common["encoding_codec"] = "identity"
+            common["encoding_status"] = "disabled"
             text = ""
             ttft_ms = 0.0
             latency_ms = 0.0
@@ -959,15 +969,34 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
             error = ""
             try:
                 sglang_payload = build_sglang_payload(as_dict(payload), meta, api_kind, model)
+                if encoder is not None:
+                    eligible = (encoding_scope == "all" or phase == "replay"
+                                or (encoding_scope == "target_requests" and phase == "initial_turn"))
+                    common["encoding_codec"] = encoder.config.codec
+                    common["encoding_config_hash"] = encoder.fingerprint
+                    common["encoding_scope"] = encoding_scope
+                    if eligible:
+                        encoding = encoder.encode(sglang_payload, "openai_chat")
+                        sglang_payload = encoding.payload
+                        common.update(encoding.evidence())
+                    else:
+                        common.update(encoding_status="skipped", encoding_reason="out_of_scope")
+                    write_jsonl(log_path, {"event": "gateway.prompt_encoding", **common})
                 write_jsonl(log_path, {"event": "gateway.forward_start", "path": self.path, **common})
-                text, ttft_ms, latency_ms, chunks, status = call_sglang(target_base, sglang_payload)
+                text, ttft_ms, latency_ms, chunks, status, first_content_ns, forward_started_ns = call_sglang(target_base, sglang_payload)
             except Exception as exc:  # noqa: BLE001
                 error = f"{type(exc).__name__}: {exc}"
                 text = "gateway-error"
                 latency_ms = (time.perf_counter() - started) * 1000.0
-                ttft_ms = latency_ms
-            write_jsonl(trace_path, {"event": "m27.request.end", **common, "ttft_ms": round(ttft_ms, 3), "total_latency_ms": round(latency_ms, 3), "stream_chunks": chunks, "status": status, "error": error})
-            write_jsonl(log_path, {"event": "gateway.forwarded_request", "path": self.path, "api_kind": api_kind, **common, "ttft_ms": round(ttft_ms, 3), "total_latency_ms": round(latency_ms, 3), "stream_chunks": chunks, "status": status, "error": error})
+                ttft_ms = None
+            common.update(first_content_ts_ns=first_content_ns, backend_forward_started_ns=forward_started_ns,
+                          first_token_observed=first_content_ns is not None,
+                          gateway_to_first_content_ms=((first_content_ns - received_ns) / 1e6
+                                                       if first_content_ns is not None else None))
+            if not error and first_content_ns is None:
+                error = "empty_backend_content"
+            write_jsonl(trace_path, {"event": "m27.request.end", **common, "ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else None, "total_latency_ms": round(latency_ms, 3), "stream_chunks": chunks, "status": status, "error": error})
+            write_jsonl(log_path, {"event": "gateway.forwarded_request", "path": self.path, "api_kind": api_kind, **common, "ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else None, "total_latency_ms": round(latency_ms, 3), "stream_chunks": chunks, "status": status, "error": error})
             if error:
                 return self._send_bytes(502, json.dumps({"error": error}).encode("utf-8"), "application/json")
             if api_kind == "anthropic":
@@ -989,10 +1018,21 @@ def main() -> None:
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
+    parser.add_argument("--prompt-codec-config", default=os.environ.get("PROMPT_CODEC_CONFIG", ""))
+    parser.add_argument("--encoding-scope", choices=("target_requests", "replay", "all"),
+                        default=os.environ.get("PROMPT_ENCODING_SCOPE", "target_requests"))
     args = parser.parse_args()
+    encoder = None
+    if args.prompt_codec_config:
+        from agentic_prompt_codec.config import load_encoder
+        encoder = load_encoder(args.prompt_codec_config, args.model)
+        write_jsonl(args.log, {"event": "gateway.encoding_config", "encoding_codec": encoder.config.codec,
+                              "encoding_config_hash": encoder.fingerprint,
+                              "encoding_scope": args.encoding_scope,
+                              "tokenizer_id": getattr(encoder.counter, "identity", "")})
     args.trace.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    server = ThreadingHTTPServer((args.listen_host, args.listen_port), make_handler(args.target_base, args.trace, args.log, args.model))
+    server = ThreadingHTTPServer((args.listen_host, args.listen_port), make_handler(args.target_base, args.trace, args.log, args.model, encoder, args.encoding_scope))
     setattr(server, "seen_request_labels", set())
     print(f"harness gateway listening on http://{args.listen_host}:{args.listen_port} -> {args.target_base}", flush=True)
     server.serve_forever()

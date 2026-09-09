@@ -429,6 +429,14 @@ def row_agent_label(row: dict[str, Any]) -> str:
     return ""
 
 
+def timestamp_ns(value: Any) -> int:
+    # Integer nanoseconds exceed float's exact range. Never round through float.
+    try:
+        return int(value) if value not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def collect_rows(root: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -455,7 +463,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             ):
                 label = row_agent_label(row)
                 current = sglang_receive_by_label.get(label)
-                if current is None or int(float_value(row.get("ts_ns"))) < int(float_value(current.get("ts_ns"))):
+                if current is None or timestamp_ns(row.get("ts_ns")) < timestamp_ns(current.get("ts_ns")):
                     sglang_receive_by_label[label] = row
             elif (
                 event == "kv_telemetry.request_stage"
@@ -465,8 +473,10 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             ):
                 label = row_agent_label(row)
                 current = first_decode_by_label.get(label)
-                if current is None or int(float_value(row.get("ts_ns"))) < int(float_value(current.get("ts_ns"))):
+                if current is None or timestamp_ns(row.get("ts_ns")) < timestamp_ns(current.get("ts_ns")):
                     first_decode_by_label[label] = row
+
+        prefill_by_label = prefill_token_stats_by_label(trace_rows)
 
         def append_replay_row(
             *,
@@ -481,12 +491,12 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             status: Any,
             error: Any,
         ) -> None:
-            start_ts_ns = int(float_value(start.get("ts_ns")))
-            due_ts_ns = int(float_value(due.get("ts_ns")))
+            start_ts_ns = timestamp_ns(start.get("ts_ns"))
+            due_ts_ns = timestamp_ns(due.get("ts_ns"))
             ttft_ms = ((first_token_ts_ns - start_ts_ns) / 1_000_000.0) if first_token_ts_ns and start_ts_ns else float("nan")
             lateness_ms = ((first_token_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and first_token_ts_ns else float("nan")
             sglang_receive = sglang_receive_by_label.get(label, {})
-            sglang_receive_ts_ns = int(float_value(sglang_receive.get("ts_ns")))
+            sglang_receive_ts_ns = timestamp_ns(sglang_receive.get("ts_ns"))
             receive_source = "sglang_receive_hook" if sglang_receive_ts_ns else "gateway_request_start_fallback"
             backend_start_ts_ns = sglang_receive_ts_ns or start_ts_ns
             due_to_request_start_ms = ((start_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and start_ts_ns else float("nan")
@@ -500,6 +510,8 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             row_mode = str(source_row.get("mode") or mode)
             out.append(
                 {
+                    **{key: value for key, value in source_row.items() if key.startswith("encoding_")},
+                    **prefill_by_label.get(label, {}),
                     "case_id": case_dir.name,
                     "case_dir": str(case_dir),
                     "harness": row_harness,
@@ -556,9 +568,15 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             session_id = str(end.get("session_id") or "")
             start = start_by_label.get(label, {})
             due = due_by_session.get(session_id, {})
-            start_ts_ns = int(float_value(start.get("ts_ns")))
+            start_ts_ns = timestamp_ns(start.get("ts_ns"))
             ttft_ms = float_value(end.get("ttft_ms"))
-            first_token_ts_ns = start_ts_ns + int(round(ttft_ms * 1_000_000))
+            if "first_content_ts_ns" in end:
+                first_token_ts_ns = timestamp_ns(end.get("first_content_ts_ns"))
+                first_token_source = "gateway_first_content_timestamp" if first_token_ts_ns else "not_observed"
+            else:
+                # Legacy runs only: their TTFT starts after gateway payload construction.
+                first_token_ts_ns = start_ts_ns + int(round(ttft_ms * 1_000_000)) if not end.get("error") else 0
+                first_token_source = "legacy_gateway_request_end_ttft_inferred"
             append_replay_row(
                 label=label,
                 session_id=session_id,
@@ -566,8 +584,8 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                 start=start,
                 due=due,
                 first_token_ts_ns=first_token_ts_ns,
-                request_end_ts_ns=int(float_value(end.get("ts_ns"))),
-                first_token_source="gateway_request_end_ttft",
+                request_end_ts_ns=timestamp_ns(end.get("ts_ns")),
+                first_token_source=first_token_source,
                 status=end.get("status", ""),
                 error=end.get("error", ""),
             )
@@ -1669,6 +1687,7 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 "sglang_receive_to_first_token_ms": replay_row.get("sglang_receive_to_first_token_ms", ""),
                 "verdict": verdict,
                 "causality_note": causality_note,
+                **{key: value for key, value in replay_row.items() if key.startswith("encoding_")},
                 "case_id": replay_row.get("case_id", ""),
                 "case_dir": replay_row.get("case_dir", ""),
             }
@@ -1676,7 +1695,13 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
     return proof_rows
 
 
-RAW_COLUMNS = [
+ENCODING_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scope", "encoding_status",
+                    "encoding_reason", "encoding_original_tokens", "encoding_encoded_tokens",
+                    "encoding_candidate_tokens", "encoding_saved_tokens", "encoding_elapsed_ms",
+                    "encoding_legend_tokens", "encoding_validation", "encoding_original_hash",
+                    "encoding_encoded_hash", "encoding_tokenizer_id"]
+
+RAW_COLUMNS = ENCODING_COLUMNS + ["prefill_full_input_tokens", "prefill_cached_prefix_tokens", "prefill_uncached_token_count"] + [
     "harness",
     "harness_label",
     "pressure_level",
@@ -1724,7 +1749,7 @@ RAW_COLUMNS = [
     "backend_receive_source",
 ]
 
-SUMMARY_COLUMNS = [
+SUMMARY_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scope", "requests", "failures"] + [
     "harness",
     "harness_label",
     "pressure_level",
@@ -1855,7 +1880,7 @@ CACHE_SIGNAL_COLUMNS = [
     "case_dir",
 ]
 
-CACHE_ACTION_COLUMNS = [
+CACHE_ACTION_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scope"] + [
     "harness_label",
     "pressure_level_label",
     "mode_label",
@@ -1889,7 +1914,7 @@ CACHE_ACTION_COLUMNS = [
     "case_dir",
 ]
 
-CACHE_BENEFIT_COLUMNS = [
+CACHE_BENEFIT_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scope"] + [
     "harness_label",
     "pressure_level_label",
     "samples_no_cache_signal",
@@ -2040,11 +2065,11 @@ def write_csv(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> Non
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        if row.get("first_token_lateness_ms") == "":
-            continue
-        grouped[(str(row["harness"]), str(row["pressure_level"]), str(row["mode"]))].append(row)
+        grouped[(str(row["harness"]), str(row["pressure_level"]), str(row["mode"]),
+                 str(row.get("encoding_codec", "identity")), str(row.get("encoding_config_hash", "")),
+                 str(row.get("encoding_scope", "")))].append(row)
     out: list[dict[str, Any]] = []
-    for (harness, pressure, mode), group_rows in sorted(grouped.items(), key=lambda item: (item[0][0], PRESSURE_ORDER.index(item[0][1]) if item[0][1] in PRESSURE_ORDER else 999, item[0][2])):
+    for (harness, pressure, mode, codec, codec_hash, scope), group_rows in sorted(grouped.items(), key=lambda item: (item[0][0], PRESSURE_ORDER.index(item[0][1]) if item[0][1] in PRESSURE_ORDER else 999, item[0][2])):
         values = [float(row["first_token_lateness_ms"]) for row in group_rows if row.get("first_token_lateness_ms") != ""]
         due_to_request_start = [value for row in group_rows if (value := optional_float(row.get("due_to_request_start_ms"))) is not None]
         due_to_sglang_receive = [value for row in group_rows if (value := optional_float(row.get("due_to_sglang_receive_ms"))) is not None]
@@ -2058,14 +2083,19 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "pressure_level_label": PRESSURE_LABELS.get(pressure, pressure),
                 "mode": mode,
                 "mode_label": MODE_LABELS.get(mode, mode),
+                "encoding_codec": codec,
+                "encoding_config_hash": codec_hash,
+                "encoding_scope": scope,
+                "requests": len(group_rows),
+                "failures": sum(bool(row.get("error")) for row in group_rows),
                 "samples": len(values),
-                "median_first_token_lateness_ms": round(statistics.median(values), 3),
+                "median_first_token_lateness_ms": round(statistics.median(values), 3) if values else "",
                 "median_due_to_request_start_ms": round(statistics.median(due_to_request_start), 3) if due_to_request_start else "",
                 "median_due_to_sglang_receive_ms": round(statistics.median(due_to_sglang_receive), 3) if due_to_sglang_receive else "",
                 "median_ttft_ms": round(statistics.median(ttft_values), 3) if ttft_values else "",
                 "median_sglang_receive_to_first_token_ms": round(statistics.median(backend_values), 3) if backend_values else "",
-                "min_first_token_lateness_ms": round(min(values), 3),
-                "max_first_token_lateness_ms": round(max(values), 3),
+                "min_first_token_lateness_ms": round(min(values), 3) if values else "",
+                "max_first_token_lateness_ms": round(max(values), 3) if values else "",
             }
         )
     return out
@@ -2098,7 +2128,19 @@ def delta_text(candidate: float | None, baseline: float | None) -> str:
 def collect_cache_benefit_summary(
     summary_rows: list[dict[str, Any]],
     cache_action_rows: list[dict[str, Any]],
+    _split_encoding: bool = True,
 ) -> list[dict[str, Any]]:
+    if _split_encoding and any(row.get("encoding_config_hash") for row in summary_rows):
+        fields = ("encoding_codec", "encoding_config_hash", "encoding_scope")
+        def encoding_key(row):
+            return tuple(str(row.get(field, "")) for field in fields)
+        out = []
+        for key in sorted({encoding_key(row) for row in summary_rows}):
+            sub = collect_cache_benefit_summary(
+                [row for row in summary_rows if encoding_key(row) == key],
+                [row for row in cache_action_rows if encoding_key(row) == key], False)
+            out.extend({**row, **dict(zip(fields, key))} for row in sub)
+        return out
     summary_by_key = {
         (str(row.get("harness") or ""), str(row.get("pressure_level") or ""), str(row.get("mode") or "")): row
         for row in summary_rows
@@ -2395,6 +2437,13 @@ def linear_tick_values(values: list[float]) -> list[int]:
 
 
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
+    encoding_groups = defaultdict(list)
+    for row in rows:
+        encoding_groups[(row.get("encoding_codec", "identity"), row.get("encoding_config_hash", ""),
+                         row.get("encoding_scope", ""))].append(row)
+    if len(encoding_groups) > 1:
+        return "".join(f"<h3>Encoding: {html.escape(str(key))}</h3>" + render_pressure_chart(group)
+                       for key, group in sorted(encoding_groups.items()))
     pressures = [pressure for pressure in PRESSURE_ORDER if any(row["pressure_level"] == pressure for row in rows)]
     harnesses = [harness for harness in HARNESS_LABELS if any(row["harness"] == harness for row in rows)]
     signal_buckets = [
@@ -3106,6 +3155,8 @@ def render_html(
             "harness_label",
             "pressure_level_label",
             "mode_label",
+            "encoding_codec",
+            "encoding_config_hash",
             "samples",
             "median_first_token_lateness_ms",
             "median_ttft_ms",
@@ -3121,6 +3172,8 @@ def render_html(
             "harness_label",
             "pressure_level_label",
             "mode_label",
+            "encoding_codec",
+            "encoding_config_hash",
             "samples",
             "median_due_to_request_start_ms",
             "median_due_to_sglang_receive_ms",
@@ -3144,6 +3197,8 @@ def render_html(
             "harness_label",
             "pressure_level_label",
             "mode_label",
+            "encoding_codec",
+            "encoding_config_hash",
             "session_id",
             "first_token_lateness_ms",
             "due_to_request_start_ms",
@@ -3255,6 +3310,8 @@ def render_evidence_html(
             "harness_label",
             "pressure_level_label",
             "mode_label",
+            "encoding_codec",
+            "encoding_config_hash",
             "samples",
             "median_first_token_lateness_ms",
             "median_ttft_ms",
@@ -3270,6 +3327,8 @@ def render_evidence_html(
             "harness_label",
             "pressure_level_label",
             "mode_label",
+            "encoding_codec",
+            "encoding_config_hash",
             "samples",
             "median_due_to_request_start_ms",
             "median_due_to_sglang_receive_ms",
@@ -3298,6 +3357,8 @@ def render_evidence_html(
             "harness_label",
             "pressure_level_label",
             "mode_label",
+            "encoding_codec",
+            "encoding_config_hash",
             "session_id",
             "first_token_lateness_ms",
             "due_to_request_start_ms",
@@ -3439,6 +3500,7 @@ def write_manifest(
         "harnesses": sorted({row["harness"] for row in rows}),
         "pressure_levels": sorted({row["pressure_level"] for row in rows}),
         "modes": sorted({row["mode"] for row in rows}),
+        "prompt_encodings": sorted({str(row.get("encoding_codec", "identity")) + ":" + str(row.get("encoding_config_hash", "")) for row in rows}),
     }
     atomic_write_json(path, manifest)
 
@@ -3537,6 +3599,11 @@ def main() -> None:
         nat_inferred_priority_profile,
         args.report_label,
     )
+    if any(row.get("encoding_config_hash") for row in rows):
+        from agentic_prompt_codec.reporting import write_encoding_report
+        encoding_html = write_encoding_report(args.root, args.out_dir, rows, reuse_existing=bool(args.rows_csv))
+        html_text = html_text.replace("</body>", encoding_html + "</body>")
+        evidence_html_text = evidence_html_text.replace("</body>", encoding_html + "</body>")
     report_path = args.out_dir / "master_report.html"
     evidence_path = args.out_dir / "evidence_tables.html"
     atomic_write_text(report_path, html_text)

@@ -205,6 +205,18 @@ archived report folder:
 Avoid `--all` unless you intentionally want the full remote artifact tree,
 because raw traces can become very large.
 
+## Optional Prompt Encoding
+
+A removable, request-local shorthand encoder is available as the independent
+`agentic_prompt_codec` package. It is disabled by default. Dictionary shorthand
+and a small relation grammar are token-counted with their legends included;
+failed or unhelpful transformations pass through unchanged. Scheduling modes
+remain independent of encoding.
+
+See [the prompt codec guide](sglang_direct_kv/docs/prompt_codec.md) for library
+usage, the streaming proxy, token/quality evaluation, and an isolated EC2
+pressure matrix. Do not launch the matrix while another GPU experiment is active.
+
 ## Core Modes
 
 The current manager-facing comparisons use these modes:

@@ -1,0 +1,11 @@
+{
+  "codec": {
+    "codec": "dictionary_v1",
+    "min_saved_tokens": 16,
+    "min_saved_ratio": 0.05,
+    "max_encode_ms": 100,
+    "max_input_chars": 100000,
+    "max_dictionary_entries": 8
+  },
+  "tokenizer": {"model": "Qwen/Qwen2.5-Coder-7B-Instruct", "local_files_only": true}
+}

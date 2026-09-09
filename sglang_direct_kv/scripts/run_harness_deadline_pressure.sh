@@ -63,6 +63,7 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
 fi
 export PYTHON_BIN
+export PYTHONPATH="${DIRECT_ROOT}/src:${PYTHONPATH:-}"
 
 RESULTS_ROOT="$(mkdir -p "${RESULTS_ROOT}" && cd "${RESULTS_ROOT}" && pwd)"
 RUN_ROOT="$(mkdir -p "${RUN_ROOT}" && cd "${RUN_ROOT}" && pwd)"
@@ -71,6 +72,24 @@ RUN_CONFIG_ENV="${REPORT_DIR}/run_config.env"
 RUN_ENV_JSON="${REPORT_DIR}/run_environment.json"
 GPU_UTIL_CSV="${REPORT_DIR}/gpu_utilization_samples.csv"
 GPU_UTIL_LOG="${REPORT_DIR}/gpu_utilization_sampler.log"
+# Snapshot encoding configuration so a concurrent edit cannot alter a live run.
+ENCODING_CASE_KEY=""
+if [[ -n "${PROMPT_CODEC_CONFIG:-}" ]]; then
+  cp "${PROMPT_CODEC_CONFIG}" "${REPORT_DIR}/prompt_codec.input.json"
+  export PROMPT_CODEC_CONFIG="${REPORT_DIR}/prompt_codec.input.json"
+  ENCODING_CASE_KEY="$("${PYTHON_BIN}" - <<'PYCODEC'
+import hashlib, json, os, subprocess
+from pathlib import Path
+config = json.loads(Path(os.environ["PROMPT_CODEC_CONFIG"]).read_text())
+workload = os.environ.get("PROMPT_WORKLOAD_JSONL", "")
+value = {"config": config, "scope": os.environ.get("PROMPT_ENCODING_SCOPE", "target_requests"),
+         "repetition": os.environ.get("PROMPT_REPETITION", "0"),
+         "workload": hashlib.sha256(Path(workload).read_bytes()).hexdigest() if workload else "synthetic",
+         "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
+print(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16])
+PYCODEC
+)"
+fi
 GPU_UTIL_SAMPLER_PID=""
 SERVER_PID=""
 GATEWAY_PID=""
@@ -198,6 +217,10 @@ write_run_config() {
     echo "HARDWARE_PROFILE_PATH=${HARDWARE_PROFILE_PATH}"
     echo "HARNESSES=${HARNESSES}"
     echo "MODES=${MODES}"
+    echo "PROMPT_CODEC_CONFIG=${PROMPT_CODEC_CONFIG:-}"
+    echo "PROMPT_ENCODING_SCOPE=${PROMPT_ENCODING_SCOPE:-target_requests}"
+    echo "PROMPT_WORKLOAD_JSONL=${PROMPT_WORKLOAD_JSONL:-}"
+    echo "ENCODING_CASE_KEY=${ENCODING_CASE_KEY}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS}"
@@ -231,6 +254,7 @@ run_case() {
   local tool_wait_ms target_prompt_tokens filler_sessions filler_prompt_tokens session_count concurrency
   eval "${knobs}"
   local case_id="${harness}_${level}_${mode}_tw${tool_wait_ms}_f${filler_sessions}"
+  if [[ -n "${ENCODING_CASE_KEY}" ]]; then case_id="${case_id}_enc${ENCODING_CASE_KEY}"; fi
   local case_root="${RUN_ROOT}/${case_id}"
   local trace="${case_root}/m27_trace.jsonl"
   local telemetry="${case_root}/m27_copy_telemetry.jsonl"
@@ -268,6 +292,16 @@ run_case() {
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"
   fi
 
+  if [[ -n "${ENCODING_CASE_KEY}" ]]; then
+    # Never attach to or terminate another experiment's serving processes.
+    "${PYTHON_BIN}" - <<'PYPORT'
+import socket
+for port in (30000, 31080):
+    with socket.socket() as sock:
+        if sock.connect_ex(("127.0.0.1", port)) == 0:
+            raise SystemExit(f"Port {port} is occupied; leave the active experiment running and retry later.")
+PYPORT
+  fi
   setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
   SERVER_PID="$!"
   wait_for_server "${server_log}"

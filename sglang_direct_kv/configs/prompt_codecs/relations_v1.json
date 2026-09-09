@@ -1,0 +1,4 @@
+{
+  "codec": {"codec": "relations_v1", "max_encode_ms": 100},
+  "tokenizer": {"model": "Qwen/Qwen2.5-Coder-7B-Instruct", "local_files_only": true}
+}

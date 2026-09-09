@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -1121,6 +1121,7 @@ async def main_async() -> None:
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument("--tool-wait-ms", type=int, default=50)
     parser.add_argument("--target-prompt-tokens", type=int, default=4096)
+    parser.add_argument("--workload-jsonl", type=Path, default=os.environ.get("PROMPT_WORKLOAD_JSONL") or None)
     parser.add_argument("--filler-sessions", type=int, default=0)
     parser.add_argument("--filler-prompt-tokens", type=int, default=1536)
     parser.add_argument("--session-count", type=int, default=1)
@@ -1142,6 +1143,15 @@ async def main_async() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.log_dir.mkdir(parents=True, exist_ok=True)
     pairs = build_pairs(args.harness, args.pressure_level, args.session_count, args.target_prompt_tokens)
+    if args.workload_jsonl:
+        workload = [json.loads(line) for line in args.workload_jsonl.read_text().splitlines() if line.strip()]
+        if not workload:
+            raise ValueError("empty prompt encoding workload")
+        for i, pair in enumerate(pairs):
+            item = workload[i % len(workload)]
+            pairs[i] = replace(pair, prompt=str(item["initial_prompt"]),
+                               replay_prompt=str(item["replay_prompt"]), warmup_prompt=str(item["initial_prompt"]),
+                               prompt_tokens=estimate_tokens(str(item["initial_prompt"])))
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     admission_lock = asyncio.Lock()
