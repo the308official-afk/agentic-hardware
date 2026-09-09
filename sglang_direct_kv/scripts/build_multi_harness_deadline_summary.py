@@ -211,6 +211,22 @@ MANAGER_SIGNAL_BUCKETS = (
     "controller_full",
 )
 
+COST_ACCOUNTING_SIGNAL_BUCKETS = (
+    "baseline",
+    "frontend_supplied",
+)
+
+COST_ACCOUNTING_COLORS = {
+    "baseline": {
+        "target": "#475569",
+        "filler": "#cbd5e1",
+    },
+    "frontend_supplied": {
+        "target": "#7c3aed",
+        "filler": "#c4b5fd",
+    },
+}
+
 CORE_PRESSURE_LEVELS = (
     "p0_control",
     "p3_high",
@@ -2853,7 +2869,7 @@ def render_cost_accounting_chart(
     harnesses = [harness for harness in HARNESS_LABELS if any(row.get("harness") == harness for row in cost_rows)]
     signal_buckets = [
         bucket
-        for bucket in CHART_SIGNAL_ORDER
+        for bucket in COST_ACCOUNTING_SIGNAL_BUCKETS
         if any(row.get("signal_bucket") == bucket for row in cost_rows)
     ]
     if not pressures or not harnesses or not signal_buckets:
@@ -2869,10 +2885,13 @@ def render_cost_accounting_chart(
     height = int(bottom + 145)
     plot_w = width - left - right
     pressure_group_w = plot_w / len(pressures)
-    max_total = max((optional_float(row.get(total_key)) or 0.0) for row in cost_rows)
-    if max_total <= 0:
-        max_total = 1.0
-    y_max = max_total * 1.12
+    max_value = max(
+        max(optional_float(row.get(target_key)) or 0.0, optional_float(row.get(filler_key)) or 0.0)
+        for row in cost_rows
+    )
+    if max_value <= 0:
+        max_value = 1.0
+    y_max = max_value * 1.18
 
     def y_pos(value: float) -> float:
         return bottom - (value / y_max) * chart_h
@@ -2886,7 +2905,18 @@ def render_cost_accounting_chart(
 
     def bucket_offset(bucket: str) -> float:
         index = signal_buckets.index(bucket)
-        return (index - (len(signal_buckets) - 1) / 2) * 17.0
+        return (index - (len(signal_buckets) - 1) / 2) * 31.0
+
+    def role_offset(role: str) -> float:
+        return -6.5 if role == "target" else 6.5
+
+    def bar_color(bucket: str, role: str) -> str:
+        return COST_ACCOUNTING_COLORS.get(bucket, {}).get(role, chart_signal_color(bucket))
+
+    def measured_key(role: str) -> str:
+        if "ttft" in target_key:
+            return f"{role}_ttft_measured_requests"
+        return f"{role}_replay_debt_measured_requests"
 
     rows_by_key = {
         (str(row.get("pressure_level") or ""), str(row.get("harness") or ""), str(row.get("signal_bucket") or "")): row
@@ -2946,34 +2976,35 @@ def render_cost_accounting_chart(
                 row = rows_by_key.get((pressure, harness, bucket))
                 if not row:
                     continue
-                target_value = optional_float(row.get(target_key)) or 0.0
-                filler_value = optional_float(row.get(filler_key)) or 0.0
-                total_value = optional_float(row.get(total_key)) or (target_value + filler_value)
-                if total_value <= 0:
-                    continue
-                bar_w = 11.0
-                bx = harness_x + bucket_offset(bucket) - bar_w / 2
-                target_top = y_pos(target_value)
-                filler_top = y_pos(target_value + filler_value)
-                color = chart_signal_color(bucket)
-                title = (
-                    f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
-                    f"{HARNESS_LABELS.get(harness, harness)} | {chart_signal_label(bucket)} | "
-                    f"target {target_value:.1f} ms | filler {filler_value:.1f} ms | total {total_value:.1f} ms"
-                )
-                lines.append(f'<g class="signal-bucket" data-signal-bucket="{html.escape(bucket)}"><title>{html.escape(title)}</title>')
-                lines.append(
-                    f'<rect x="{bx:.1f}" y="{target_top:.1f}" width="{bar_w:.1f}" height="{max(1.0, bottom-target_top):.1f}" '
-                    f'fill="{color}" opacity="0.96" rx="2"/>'
-                )
-                if filler_value > 0:
-                    lines.append(
-                        f'<rect x="{bx:.1f}" y="{filler_top:.1f}" width="{bar_w:.1f}" height="{max(1.0, target_top-filler_top):.1f}" '
-                        f'fill="#fbbf24" opacity="0.86" rx="2"/>'
+                lines.append(f'<g class="signal-bucket" data-signal-bucket="{html.escape(bucket)}">')
+                for role, value_key in (("target", target_key), ("filler", filler_key)):
+                    value = optional_float(row.get(value_key)) or 0.0
+                    measured = int(float(row.get(measured_key(role)) or 0))
+                    color = bar_color(bucket, role)
+                    cx = harness_x + bucket_offset(bucket) + role_offset(role)
+                    bar_w = 10.0
+                    label_y = bottom - 6
+                    title_value = "n/a" if measured <= 0 else f"{value:.1f} ms"
+                    title = (
+                        f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
+                        f"{HARNESS_LABELS.get(harness, harness)} | {chart_signal_label(bucket)} | "
+                        f"{role} {title_value}"
                     )
-                lines.append(svg_text_label(compact_ms(total_value), harness_x + bucket_offset(bucket), filler_top - 6, color))
-                if int(float(row.get("filler_replay_debt_unmeasured_requests") or 0)) and "debt" in total_key:
-                    lines.append(svg_text_label("filler debt n/a", harness_x + bucket_offset(bucket), bottom - 7, "#64748b"))
+                    lines.append(f'<g><title>{html.escape(title)}</title>')
+                    if measured <= 0:
+                        lines.append(
+                            f'<line x1="{cx - bar_w / 2:.1f}" x2="{cx + bar_w / 2:.1f}" '
+                            f'y1="{bottom:.1f}" y2="{bottom:.1f}" stroke="{color}" stroke-width="2" opacity="0.75"/>'
+                        )
+                        lines.append(svg_text_label("n/a", cx, label_y, color))
+                    else:
+                        bar_top = y_pos(value)
+                        lines.append(
+                            f'<rect x="{cx - bar_w / 2:.1f}" y="{bar_top:.1f}" width="{bar_w:.1f}" '
+                            f'height="{max(1.0, bottom-bar_top):.1f}" fill="{color}" opacity="0.96" rx="2"/>'
+                        )
+                        lines.append(svg_text_label(compact_ms(value), cx, bar_top - 6, color))
+                    lines.append("</g>")
                 lines.append("</g>")
         cx = x + pressure_group_w / 2
         lines.append(f'<text x="{cx:.1f}" y="{bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
@@ -2982,11 +3013,15 @@ def render_cost_accounting_chart(
     lines.append(f'<text transform="translate(32 {top + chart_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
     legend_y = bottom + 91
     legend_x = left
-    lines.append(f'<text x="{legend_x:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Stack</text>')
-    lines.append(f'<rect x="{legend_x+54:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="#581c87" rx="2"/>')
-    lines.append(f'<text x="{legend_x+72:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">target replay requests use the signal color</text>')
-    lines.append(f'<rect x="{legend_x+318:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="#fbbf24" rx="2" opacity="0.86"/>')
-    lines.append(f'<text x="{legend_x+336:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">filler/background requests</text>')
+    lines.append(f'<text x="{legend_x:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Bars</text>')
+    lines.append(f'<rect x="{legend_x+48:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["baseline"]["target"]}" rx="2"/>')
+    lines.append(f'<text x="{legend_x+66:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">baseline target</text>')
+    lines.append(f'<rect x="{legend_x+158:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["baseline"]["filler"]}" rx="2"/>')
+    lines.append(f'<text x="{legend_x+176:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">baseline filler</text>')
+    lines.append(f'<rect x="{legend_x+266:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["frontend_supplied"]["target"]}" rx="2"/>')
+    lines.append(f'<text x="{legend_x+284:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">front-end priority target</text>')
+    lines.append(f'<rect x="{legend_x+448:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["frontend_supplied"]["filler"]}" rx="2"/>')
+    lines.append(f'<text x="{legend_x+466:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">front-end priority filler</text>')
     lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-10}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)
@@ -3015,7 +3050,7 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     ttft_chart = render_cost_accounting_chart(
         cost_rows,
         heading="C. Total Replay TTFT Cost",
-        note="Stacked bars sum TTFT across target replay requests and filler/background requests. This shows whether target gains came with filler cost.",
+        note="Four bars per harness: baseline target/filler, then front-end priority target/filler. Darker bars are target replay requests; lighter bars are filler/background requests.",
         target_key="sum_target_ttft_ms",
         filler_key="sum_filler_ttft_ms",
         total_key="sum_total_ttft_ms",
@@ -3024,7 +3059,7 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     debt_chart = render_cost_accounting_chart(
         cost_rows,
         heading="D. Total Replay Deadline Debt",
-        note="Stacked bars sum positive replay lateness only. Filler debt appears only when filler requests have replay due timestamps.",
+        note="Same four-bar layout, but summing positive replay lateness. Filler debt is n/a unless filler requests have replay due timestamps.",
         target_key="sum_target_replay_debt_ms",
         filler_key="sum_filler_replay_debt_ms",
         total_key="sum_total_replay_debt_ms",
@@ -3033,6 +3068,7 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     return (
         "<h2>System Cost Accounting</h2>"
         "<p>This section asks whether priority/controller reduced target replay misses by moving delay onto filler/background work.</p>"
+        "<p>The manager-facing cost charts intentionally show only Baseline and Front-End Supplied so each harness window has four bars.</p>"
         f'<div class="card">{ttft_chart}</div>'
         f'<div class="card">{debt_chart}</div>'
         "<details><summary>Open cost accounting summary table</summary>"
