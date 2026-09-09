@@ -498,7 +498,7 @@ cd sglang_direct_kv
 HARNESSES=hatcher \
 PRESSURE_LEVELS="p3_high p5_boss_queue" \
 MODES="no_prefetch e2e_priority_hints controller_full controller_full_chunked_prefill" \
-CONTROLLER_CHUNKED_PREFILL_SIZE=2048 \
+CONTROLLER_CHUNKED_PREFILL_SIZE=512 \
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=4096 \
 REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
@@ -511,7 +511,7 @@ cd sglang_direct_kv
 HARNESSES=hatcher \
 PRESSURE_LEVELS="p3_high p5_boss_queue" \
 SIGNAL_FAMILIES="baseline gateway_injected controller_full controller_full_chunked" \
-CONTROLLER_CHUNKED_PREFILL_SIZE=2048 \
+CONTROLLER_CHUNKED_PREFILL_SIZE=512 \
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=4096 \
 REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct

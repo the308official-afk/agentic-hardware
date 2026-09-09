@@ -237,7 +237,7 @@ To compare the full controller against the chunked-prefill variant only:
 
 ```bash
 SIGNAL_FAMILIES="baseline gateway_injected controller_full controller_full_chunked" \
-CONTROLLER_CHUNKED_PREFILL_SIZE=2048 \
+CONTROLLER_CHUNKED_PREFILL_SIZE=512 \
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=4096 \
 ./gh200/run_controller_scaleup.sh
 ```
