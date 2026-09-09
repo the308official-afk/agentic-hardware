@@ -210,32 +210,38 @@ CSV proof fields and request IDs.
 
 ## Code Areas To Inspect First
 
-Controller package:
+Use this map to decide where to make changes.
 
-```text
-sglang_direct_kv/src/agentic_kv/controller/
-```
+| Need | File or directory | Notes |
+| --- | --- | --- |
+| Understand the controller API | `sglang_direct_kv/src/agentic_kv/controller/__init__.py` | Public exports for controller models, policies, state, timing, and backend adapters. |
+| Add or modify controller decisions | `sglang_direct_kv/src/agentic_kv/controller/policy.py` | Main place for `controller_full`. Keep policy logic backend-neutral. |
+| Add new controller event/command fields | `sglang_direct_kv/src/agentic_kv/controller/models.py` | Add portable fields here first, then lower them at the gateway/backend boundary. |
+| Track per-session lifecycle state | `sglang_direct_kv/src/agentic_kv/controller/state_store.py` | Stores tool-wait, ready, generation, and session state. |
+| Change deadline or timing estimates | `sglang_direct_kv/src/agentic_kv/controller/timing_estimator.py` | Keep timing logic separate from SGLang-specific code. |
+| Lower controller commands to backend actions | `sglang_direct_kv/src/agentic_kv/controller/backend.py` | Adapter/enforcer layer. Do not put high-level policy here. |
+| Add a new experiment mode | `sglang_direct_kv/scripts/run_multi_harness_replay_driver.py` | Driver creates replay/filler traffic and emits lifecycle events. Add `controller_full` behavior here after policy support exists. |
+| Ensure SGLang launch flags match the mode | `sglang_direct_kv/scripts/run_harness_deadline_pressure.sh` | Add `controller_full` to the priority-enabled mode list so SGLang gets priority scheduling flags. |
+| Add a signal-family wrapper | `sglang_direct_kv/scripts/run_harness_signal_design_space.sh` | Only needed if `controller_full` should be selectable as a signal family. Lower-level mode support should come first. |
+| Translate harness/controller metadata at the SGLang boundary | `sglang_direct_kv/scripts/harness_sglang_gateway.py` | Gateway should translate or enforce signals, not invent hidden experiment behavior unless the mode explicitly asks for it. |
+| Update report chart/proof tables | `sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py` | Add summary/proof columns for `controller_full`, urgent replay rank, demote/restore, and admission evidence. |
+| Collect environment/capability proof | `sglang_direct_kv/scripts/collect_run_environment.py` | Use this when a report needs machine, SGLang, or capability metadata. |
+| Smoke-test controller logic without GPU | `sglang_direct_kv/scripts/smoke_agentic_controller.py` | Fast sanity check for policy behavior. |
+| Unit-test controller behavior | `sglang_direct_kv/tests/test_agentic_controller.py` | Add tests before EC2 runs. At minimum test full-controller commands and proof fields. |
+| Run the focused EC2 repeatability ladder | `sglang_direct_kv/scripts/run_ec2_controller_repeatability.sh` | Existing script for the current one-harness EC2 controller comparison. Update later if `controller_full` becomes the default. |
+| EC2 connection and sync | `aws/check_ec2_ready.sh`, `aws/upload.sh`, `aws/ssh_to_ec2.sh` | Use these from the local repo root. |
+| GH200 docs and runners | `gh200/README.md`, `gh200/run_controller_scaleup.sh` | Migration target only from this computer. Do not assume GH200 access here. |
 
-Main runner and gateway:
+Suggested first implementation path for `controller_full`:
 
-```text
-sglang_direct_kv/scripts/run_harness_deadline_pressure.sh
-sglang_direct_kv/scripts/run_harness_signal_design_space.sh
-sglang_direct_kv/scripts/run_multi_harness_replay_driver.py
-sglang_direct_kv/scripts/harness_sglang_gateway.py
-```
-
-Report builder:
-
-```text
-sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py
-```
-
-Tests:
-
-```text
-sglang_direct_kv/tests/test_agentic_controller.py
-```
+1. Add a backend-neutral policy path in `controller/policy.py`.
+2. Add any missing command/proof fields in `controller/models.py`.
+3. Add unit coverage in `tests/test_agentic_controller.py`.
+4. Wire the mode into `run_multi_harness_replay_driver.py`.
+5. Add launch/report support in `run_harness_deadline_pressure.sh` and
+   `build_multi_harness_deadline_summary.py`.
+6. Run local validation.
+7. Upload to EC2 and run the DeepAgents/Hatcher validation.
 
 ## Validation Before Push
 
