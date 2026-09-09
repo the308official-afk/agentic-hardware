@@ -125,6 +125,76 @@ class IntegrationTests(unittest.TestCase):
         self.assertIsNone(result[1])
         self.assertIsNone(result[5])
 
+    def test_cost_accounting_splits_target_and_filler_timing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            case = Path(folder) / "hatcher_p3_high_controller_full_tw50_f1"
+            case.mkdir()
+            trace = case / "m27_trace.jsonl"
+            rows = [
+                {"event": "m27.replay.due", "session_id": "target", "ts_ns": 1_000_000_000},
+                {
+                    "event": "m27.request.start",
+                    "session_id": "target",
+                    "label": "target_replay",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_010_000_000,
+                    "sglang_priority": 100,
+                    "gateway_priority_translation_source": "controller_ready_decision",
+                },
+                {
+                    "event": "m27.request.end",
+                    "session_id": "target",
+                    "label": "target_replay",
+                    "phase": "replay",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_080_000_000,
+                    "first_content_ts_ns": 1_060_000_000,
+                    "ttft_ms": 50,
+                    "sglang_priority": 100,
+                    "gateway_priority_translation_source": "controller_ready_decision",
+                },
+                {
+                    "event": "m27.request.start",
+                    "session_id": "target_pressure_000",
+                    "label": "target_pressure_000_request",
+                    "phase": "pressure_filler",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_005_000_000,
+                },
+                {
+                    "event": "m27.request.end",
+                    "session_id": "target_pressure_000",
+                    "label": "target_pressure_000_request",
+                    "phase": "pressure_filler",
+                    "mode": "controller_full",
+                    "harness": "hatcher",
+                    "ts_ns": 1_200_000_000,
+                    "first_content_ts_ns": 1_155_000_000,
+                    "ttft_ms": 150,
+                },
+            ]
+            for row in rows:
+                gateway.write_jsonl(trace, row)
+            timing_rows = report.collect_rows(Path(folder))
+            self.assertEqual([row["request_group"] for row in timing_rows], ["target", "filler"])
+            chart_rows = report.target_replay_rows(timing_rows)
+            self.assertEqual(len(chart_rows), 1)
+            cost_rows = report.collect_cost_accounting_summary(timing_rows)
+            self.assertEqual(len(cost_rows), 1)
+            cost = cost_rows[0]
+            self.assertEqual(cost["target_request_count"], 1)
+            self.assertEqual(cost["filler_request_count"], 1)
+            self.assertEqual(cost["sum_target_ttft_ms"], 50)
+            self.assertEqual(cost["sum_filler_ttft_ms"], 150)
+            self.assertEqual(cost["sum_total_ttft_ms"], 200)
+            self.assertEqual(cost["sum_target_replay_debt_ms"], 60)
+            self.assertEqual(cost["sum_filler_replay_debt_ms"], 0)
+            self.assertEqual(cost["filler_replay_debt_unmeasured_requests"], 1)
+
     def test_streaming_proxy_delivers_first_chunk_before_backend_finishes(self):
         requests, events = [], []
         release = threading.Event()

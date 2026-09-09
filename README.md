@@ -238,6 +238,20 @@ The current manager-facing comparisons use these modes:
 | `controller_demote_restore` | Portable controller phase 5. The controller lowers matching background/filler traffic during the replay-critical window, raises replay priority, and records restore/release afterward. |
 | `controller_admission_control` | Portable controller phase 6. The controller admits or skips speculative warmup based on pressure limits, so overload cases get explicit skip reasons instead of unbounded background work. |
 
+The lightweight master report also includes a **System Cost Accounting** section.
+It sums TTFT and positive replay-deadline debt separately for target replay
+requests and filler/background requests. This is the tradeoff view: it shows
+whether priority or controller modes reduced target replay misses by increasing
+background/filler cost. The CSV artifact is:
+
+```text
+sglang_direct_kv/artifacts/results/latest_cost_accounting_summary.csv
+```
+
+When filler/background requests do not have a replay due timestamp, their TTFT
+is still counted, but their replay-debt field is marked as unmeasured rather
+than treated as a real missed deadline.
+
 ## Portable Agent-Aware Controller Foundation
 
 The controller prototype is intentionally backend-neutral. It lives in

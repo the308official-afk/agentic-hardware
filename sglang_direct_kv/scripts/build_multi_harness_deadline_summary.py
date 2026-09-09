@@ -208,6 +208,7 @@ MANAGER_SIGNAL_BUCKETS = (
     "harness_cache_emitted",
     "harness_cache_priority_emitted",
     "frontend_supplied",
+    "controller_full",
 )
 
 CORE_PRESSURE_LEVELS = (
@@ -443,8 +444,8 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
         harness, pressure, mode = case_key_from_name(case_dir.name)
         trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
         due_by_session: dict[str, dict[str, Any]] = {}
-        replay_starts: list[dict[str, Any]] = []
-        replay_ends: list[dict[str, Any]] = []
+        request_starts: list[dict[str, Any]] = []
+        request_ends: list[dict[str, Any]] = []
         sglang_receive_by_label: dict[str, dict[str, Any]] = {}
         first_decode_by_label: dict[str, dict[str, Any]] = {}
         for row in trace_rows:
@@ -452,10 +453,10 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             phase = row.get("phase")
             if event == "m27.replay.due":
                 due_by_session[str(row.get("session_id") or "")] = row
-            elif event == "m27.request.start" and phase == "replay":
-                replay_starts.append(row)
-            elif event == "m27.request.end" and phase == "replay":
-                replay_ends.append(row)
+            elif event == "m27.request.start" and phase in {"replay", "pressure_filler"}:
+                request_starts.append(row)
+            elif event == "m27.request.end" and phase in {"replay", "pressure_filler"}:
+                request_ends.append(row)
             elif (
                 event == "kv_telemetry.request_stage"
                 and row.get("category") == "sglang_receive"
@@ -478,7 +479,12 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
 
         prefill_by_label = prefill_token_stats_by_label(trace_rows)
 
-        def append_replay_row(
+        def request_group(phase: str, session_id: str, label: str) -> str:
+            if phase == "pressure_filler" or "_pressure_" in session_id or "_pressure_" in label:
+                return "filler"
+            return "target"
+
+        def append_timing_row(
             *,
             label: str,
             session_id: str,
@@ -495,6 +501,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             due_ts_ns = timestamp_ns(due.get("ts_ns"))
             ttft_ms = ((first_token_ts_ns - start_ts_ns) / 1_000_000.0) if first_token_ts_ns and start_ts_ns else float("nan")
             lateness_ms = ((first_token_ts_ns - due_ts_ns) / 1_000_000.0) if due_ts_ns and first_token_ts_ns else float("nan")
+            replay_debt_ms = max(lateness_ms, 0.0) if math.isfinite(lateness_ms) else float("nan")
             sglang_receive = sglang_receive_by_label.get(label, {})
             sglang_receive_ts_ns = timestamp_ns(sglang_receive.get("ts_ns"))
             receive_source = "sglang_receive_hook" if sglang_receive_ts_ns else "gateway_request_start_fallback"
@@ -508,6 +515,8 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
             )
             row_harness = str(source_row.get("harness") or harness)
             row_mode = str(source_row.get("mode") or mode)
+            row_phase = str(source_row.get("phase") or start.get("phase") or "")
+            group = request_group(row_phase, session_id, label)
             out.append(
                 {
                     **{key: value for key, value in source_row.items() if key.startswith("encoding_")},
@@ -522,7 +531,11 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                     "pressure_level_label": PRESSURE_LABELS.get(pressure, pressure),
                     "session_id": session_id,
                     "request_id": label,
+                    "phase": row_phase,
+                    "request_group": group,
+                    "has_replay_deadline": "yes" if due_ts_ns else "no",
                     "first_token_lateness_ms": round(lateness_ms, 3) if math.isfinite(lateness_ms) else "",
+                    "replay_debt_ms": round(replay_debt_ms, 3) if math.isfinite(replay_debt_ms) else "",
                     "due_to_request_start_ms": round(due_to_request_start_ms, 3) if math.isfinite(due_to_request_start_ms) else "",
                     "due_to_sglang_receive_ms": round(due_to_sglang_receive_ms, 3) if math.isfinite(due_to_sglang_receive_ms) else "",
                     "sglang_receive_to_first_token_ms": round(sglang_receive_to_first_token_ms, 3) if math.isfinite(sglang_receive_to_first_token_ms) else "",
@@ -560,9 +573,9 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                 }
             )
 
-        start_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in replay_starts}
+        start_by_label = {str(row.get("label") or row.get("request_id") or ""): row for row in request_starts}
         ended_labels: set[str] = set()
-        for end in replay_ends:
+        for end in request_ends:
             label = str(end.get("label") or end.get("request_id") or "")
             ended_labels.add(label)
             session_id = str(end.get("session_id") or "")
@@ -577,7 +590,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                 # Legacy runs only: their TTFT starts after gateway payload construction.
                 first_token_ts_ns = start_ts_ns + int(round(ttft_ms * 1_000_000)) if not end.get("error") else 0
                 first_token_source = "legacy_gateway_request_end_ttft_inferred"
-            append_replay_row(
+            append_timing_row(
                 label=label,
                 session_id=session_id,
                 source_row=end,
@@ -594,7 +607,7 @@ def collect_rows(root: Path) -> list[dict[str, Any]]:
                 continue
             session_id = str(start.get("session_id") or label.rsplit("_replay", 1)[0])
             due = due_by_session.get(session_id, {})
-            append_replay_row(
+            append_timing_row(
                 label=label,
                 session_id=session_id,
                 source_row=start,
@@ -1710,7 +1723,11 @@ RAW_COLUMNS = ENCODING_COLUMNS + ["prefill_full_input_tokens", "prefill_cached_p
     "mode_label",
     "session_id",
     "request_id",
+    "phase",
+    "request_group",
+    "has_replay_deadline",
     "first_token_lateness_ms",
+    "replay_debt_ms",
     "due_to_request_start_ms",
     "due_to_sglang_receive_ms",
     "sglang_receive_to_first_token_ms",
@@ -1764,6 +1781,33 @@ SUMMARY_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scope", "
     "median_sglang_receive_to_first_token_ms",
     "min_first_token_lateness_ms",
     "max_first_token_lateness_ms",
+]
+
+COST_ACCOUNTING_COLUMNS = [
+    "encoding_codec",
+    "encoding_config_hash",
+    "encoding_scope",
+    "harness",
+    "harness_label",
+    "pressure_level",
+    "pressure_level_label",
+    "mode",
+    "mode_label",
+    "signal_bucket",
+    "signal_bucket_label",
+    "target_request_count",
+    "filler_request_count",
+    "target_ttft_measured_requests",
+    "filler_ttft_measured_requests",
+    "sum_target_ttft_ms",
+    "sum_filler_ttft_ms",
+    "sum_total_ttft_ms",
+    "target_replay_debt_measured_requests",
+    "filler_replay_debt_measured_requests",
+    "filler_replay_debt_unmeasured_requests",
+    "sum_target_replay_debt_ms",
+    "sum_filler_replay_debt_ms",
+    "sum_total_replay_debt_ms",
 ]
 
 SPECULATIVE_PREFILL_COLUMNS = [
@@ -2096,6 +2140,104 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "median_sglang_receive_to_first_token_ms": round(statistics.median(backend_values), 3) if backend_values else "",
                 "min_first_token_lateness_ms": round(min(values), 3) if values else "",
                 "max_first_token_lateness_ms": round(max(values), 3) if values else "",
+            }
+        )
+    return out
+
+
+def target_replay_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if str(row.get("request_group") or "target") == "target"
+        and str(row.get("phase") or "replay") == "replay"
+    ]
+
+
+def cost_signal_bucket(group_rows: list[dict[str, Any]], mode: str) -> str:
+    target_rows = [row for row in group_rows if str(row.get("request_group") or "target") == "target"]
+    candidate_rows = target_rows or group_rows
+    for row in candidate_rows:
+        bucket = chart_signal_bucket(row)
+        if bucket != "baseline" or mode in {"no_prefetch", "no_cache_signal"}:
+            return bucket
+    return CHART_SIGNAL_BUCKETS.get(mode, {}).get("label", "") or chart_signal_bucket({"mode": mode})
+
+
+def collect_cost_accounting_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[
+            (
+                str(row.get("harness") or ""),
+                str(row.get("pressure_level") or ""),
+                str(row.get("mode") or ""),
+                str(row.get("encoding_codec") or "identity"),
+                str(row.get("encoding_config_hash") or ""),
+                str(row.get("encoding_scope") or ""),
+            )
+        ].append(row)
+
+    out: list[dict[str, Any]] = []
+    for (harness, pressure, mode, codec, codec_hash, scope), group_rows in sorted(
+        grouped.items(),
+        key=lambda item: (
+            HARNESS_LABELS.get(item[0][0], item[0][0]),
+            PRESSURE_ORDER.index(item[0][1]) if item[0][1] in PRESSURE_ORDER else 999,
+            item[0][2],
+        ),
+    ):
+        target_rows = [row for row in group_rows if str(row.get("request_group") or "target") == "target"]
+        filler_rows = [row for row in group_rows if str(row.get("request_group") or "target") == "filler"]
+        target_ttft = [value for row in target_rows if (value := optional_float(row.get("ttft_ms"))) is not None]
+        filler_ttft = [value for row in filler_rows if (value := optional_float(row.get("ttft_ms"))) is not None]
+        def replay_debt_value(row: dict[str, Any]) -> float | None:
+            value = optional_float(row.get("replay_debt_ms"))
+            if value is not None:
+                return value
+            lateness = optional_float(row.get("first_token_lateness_ms"))
+            if lateness is None:
+                return None
+            return max(lateness, 0.0)
+
+        target_debt = [value for row in target_rows if (value := replay_debt_value(row)) is not None]
+        filler_debt = [value for row in filler_rows if (value := replay_debt_value(row)) is not None]
+        filler_debt_unmeasured = sum(
+            1
+            for row in filler_rows
+            if optional_float(row.get("ttft_ms")) is not None and replay_debt_value(row) is None
+        )
+        bucket = cost_signal_bucket(group_rows, mode)
+        sum_target_ttft = sum(target_ttft)
+        sum_filler_ttft = sum(filler_ttft)
+        sum_target_debt = sum(target_debt)
+        sum_filler_debt = sum(filler_debt)
+        out.append(
+            {
+                "encoding_codec": codec,
+                "encoding_config_hash": codec_hash,
+                "encoding_scope": scope,
+                "harness": harness,
+                "harness_label": HARNESS_LABELS.get(harness, harness),
+                "pressure_level": pressure,
+                "pressure_level_label": PRESSURE_LABELS.get(pressure, pressure),
+                "mode": mode,
+                "mode_label": MODE_LABELS.get(mode, mode),
+                "signal_bucket": bucket,
+                "signal_bucket_label": chart_signal_label(bucket),
+                "target_request_count": len(target_rows),
+                "filler_request_count": len(filler_rows),
+                "target_ttft_measured_requests": len(target_ttft),
+                "filler_ttft_measured_requests": len(filler_ttft),
+                "sum_target_ttft_ms": round(sum_target_ttft, 3),
+                "sum_filler_ttft_ms": round(sum_filler_ttft, 3),
+                "sum_total_ttft_ms": round(sum_target_ttft + sum_filler_ttft, 3),
+                "target_replay_debt_measured_requests": len(target_debt),
+                "filler_replay_debt_measured_requests": len(filler_debt),
+                "filler_replay_debt_unmeasured_requests": filler_debt_unmeasured,
+                "sum_target_replay_debt_ms": round(sum_target_debt, 3),
+                "sum_filler_replay_debt_ms": round(sum_filler_debt, 3),
+                "sum_total_replay_debt_ms": round(sum_target_debt + sum_filler_debt, 3),
             }
         )
     return out
@@ -2437,6 +2579,7 @@ def linear_tick_values(values: list[float]) -> list[int]:
 
 
 def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
+    rows = target_replay_rows(rows)
     encoding_groups = defaultdict(list)
     for row in rows:
         encoding_groups[(row.get("encoding_codec", "identity"), row.get("encoding_config_hash", ""),
@@ -2692,6 +2835,210 @@ def render_pressure_chart(rows: list[dict[str, Any]]) -> str:
     lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-bottom_margin+34}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)
+
+
+def render_cost_accounting_chart(
+    cost_rows: list[dict[str, Any]],
+    *,
+    heading: str,
+    note: str,
+    target_key: str,
+    filler_key: str,
+    total_key: str,
+    y_axis_label: str,
+) -> str:
+    if not cost_rows:
+        return "<p>No cost accounting rows found.</p>"
+    pressures = [pressure for pressure in PRESSURE_ORDER if any(row.get("pressure_level") == pressure for row in cost_rows)]
+    harnesses = [harness for harness in HARNESS_LABELS if any(row.get("harness") == harness for row in cost_rows)]
+    signal_buckets = [
+        bucket
+        for bucket in CHART_SIGNAL_ORDER
+        if any(row.get("signal_bucket") == bucket for row in cost_rows)
+    ]
+    if not pressures or not harnesses or not signal_buckets:
+        return "<p>No cost accounting rows found.</p>"
+
+    pressure_w = max(820, len(harnesses) * 132 + 170)
+    width = max(1400, pressure_w * len(pressures) + 220)
+    left = 120
+    right = 40
+    top = 86
+    chart_h = 330
+    bottom = top + chart_h
+    height = int(bottom + 145)
+    plot_w = width - left - right
+    pressure_group_w = plot_w / len(pressures)
+    max_total = max((optional_float(row.get(total_key)) or 0.0) for row in cost_rows)
+    if max_total <= 0:
+        max_total = 1.0
+    y_max = max_total * 1.12
+
+    def y_pos(value: float) -> float:
+        return bottom - (value / y_max) * chart_h
+
+    def nice_ticks(top_value: float) -> list[float]:
+        candidates = [0, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+        ticks = [tick for tick in candidates if tick <= top_value]
+        if not ticks or ticks[-1] < top_value * 0.55:
+            ticks.append(top_value)
+        return ticks
+
+    def bucket_offset(bucket: str) -> float:
+        index = signal_buckets.index(bucket)
+        return (index - (len(signal_buckets) - 1) / 2) * 17.0
+
+    rows_by_key = {
+        (str(row.get("pressure_level") or ""), str(row.get("harness") or ""), str(row.get("signal_bucket") or "")): row
+        for row in cost_rows
+    }
+    lines = [
+        (
+            f'<svg class="replay-pressure-chart cost-accounting-chart" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+            f'data-full-width="{width}" data-chart-height="{height}" data-left="{left}" data-right="{right}" '
+            f'data-pressure-width="{pressure_group_w:.6f}" '
+            f'data-pressure-order="{html.escape(json.dumps(pressures))}" '
+            f'role="img" aria-label="{html.escape(heading)}">'
+        ),
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="{left}" y="{top-46:.1f}" font-size="18" font-weight="800" fill="#111827">{html.escape(heading)}</text>',
+        f'<text x="{left}" y="{top-24:.1f}" font-size="12" fill="#64748b">{html.escape(note)}</text>',
+    ]
+    for tick in nice_ticks(y_max):
+        y = y_pos(tick)
+        lines.append(f'<line class="chart-horizontal-span" x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
+        lines.append(f'<text x="{left-12}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#374151">{compact_ms(tick)}</text>')
+
+    for pressure_index, pressure in enumerate(pressures):
+        x = left + pressure_index * pressure_group_w
+        lines.append(
+            f'<g class="pressure-level" data-pressure-level="{html.escape(pressure)}" '
+            f'data-pressure-index="{pressure_index}">'
+        )
+        if pressure_index % 2 == 1:
+            lines.append(f'<rect x="{x:.1f}" y="{top}" width="{pressure_group_w:.1f}" height="{chart_h}" fill="#f8fafc" opacity="0.62"/>')
+        lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{top}" y2="{bottom+34:.1f}" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>')
+        harness_step = pressure_group_w / max(1, len(harnesses))
+        for harness_index, harness in enumerate(harnesses):
+            harness_left = x + harness_step * harness_index
+            harness_right = harness_left + harness_step
+            harness_x = harness_left + harness_step / 2
+            if harness_index % 2 == 1:
+                lines.append(
+                    f'<rect x="{harness_left:.1f}" y="{top}" width="{harness_step:.1f}" '
+                    f'height="{chart_h + 34:.1f}" fill="#f8fafc" opacity="0.45"/>'
+                )
+            lines.append(
+                f'<line x1="{harness_left:.1f}" x2="{harness_left:.1f}" y1="{top}" y2="{bottom+34:.1f}" '
+                f'stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>'
+            )
+            if harness_index == len(harnesses) - 1:
+                lines.append(
+                    f'<line x1="{harness_right:.1f}" x2="{harness_right:.1f}" y1="{top}" y2="{bottom+34:.1f}" '
+                    f'stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>'
+                )
+            lines.append(
+                f'<text x="{harness_x:.1f}" y="{bottom+24:.1f}" text-anchor="middle" '
+                f'font-size="10" font-weight="700" fill="#334155">'
+                f'{html.escape(HARNESS_SHORT_LABELS.get(harness, HARNESS_LABELS.get(harness, harness)))}</text>'
+            )
+            for bucket in signal_buckets:
+                row = rows_by_key.get((pressure, harness, bucket))
+                if not row:
+                    continue
+                target_value = optional_float(row.get(target_key)) or 0.0
+                filler_value = optional_float(row.get(filler_key)) or 0.0
+                total_value = optional_float(row.get(total_key)) or (target_value + filler_value)
+                if total_value <= 0:
+                    continue
+                bar_w = 11.0
+                bx = harness_x + bucket_offset(bucket) - bar_w / 2
+                target_top = y_pos(target_value)
+                filler_top = y_pos(target_value + filler_value)
+                color = chart_signal_color(bucket)
+                title = (
+                    f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
+                    f"{HARNESS_LABELS.get(harness, harness)} | {chart_signal_label(bucket)} | "
+                    f"target {target_value:.1f} ms | filler {filler_value:.1f} ms | total {total_value:.1f} ms"
+                )
+                lines.append(f'<g class="signal-bucket" data-signal-bucket="{html.escape(bucket)}"><title>{html.escape(title)}</title>')
+                lines.append(
+                    f'<rect x="{bx:.1f}" y="{target_top:.1f}" width="{bar_w:.1f}" height="{max(1.0, bottom-target_top):.1f}" '
+                    f'fill="{color}" opacity="0.96" rx="2"/>'
+                )
+                if filler_value > 0:
+                    lines.append(
+                        f'<rect x="{bx:.1f}" y="{filler_top:.1f}" width="{bar_w:.1f}" height="{max(1.0, target_top-filler_top):.1f}" '
+                        f'fill="#fbbf24" opacity="0.86" rx="2"/>'
+                    )
+                lines.append(svg_text_label(compact_ms(total_value), harness_x + bucket_offset(bucket), filler_top - 6, color))
+                if int(float(row.get("filler_replay_debt_unmeasured_requests") or 0)) and "debt" in total_key:
+                    lines.append(svg_text_label("filler debt n/a", harness_x + bucket_offset(bucket), bottom - 7, "#64748b"))
+                lines.append("</g>")
+        cx = x + pressure_group_w / 2
+        lines.append(f'<text x="{cx:.1f}" y="{bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
+        lines.append("</g>")
+    lines.append(f'<line class="chart-right-boundary" x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{top}" y2="{bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
+    lines.append(f'<text transform="translate(32 {top + chart_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
+    legend_y = bottom + 91
+    legend_x = left
+    lines.append(f'<text x="{legend_x:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Stack</text>')
+    lines.append(f'<rect x="{legend_x+54:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="#581c87" rx="2"/>')
+    lines.append(f'<text x="{legend_x+72:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">target replay requests use the signal color</text>')
+    lines.append(f'<rect x="{legend_x+318:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="#fbbf24" rx="2" opacity="0.86"/>')
+    lines.append(f'<text x="{legend_x+336:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">filler/background requests</text>')
+    lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-10}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
+    if not cost_rows:
+        return '<h2>System Cost Accounting</h2><p>No target/filler cost accounting rows found.</p>'
+    cost_table = render_table(
+        cost_rows,
+        [
+            "harness_label",
+            "pressure_level_label",
+            "signal_bucket_label",
+            "target_request_count",
+            "filler_request_count",
+            "sum_target_ttft_ms",
+            "sum_filler_ttft_ms",
+            "sum_total_ttft_ms",
+            "sum_target_replay_debt_ms",
+            "sum_filler_replay_debt_ms",
+            "sum_total_replay_debt_ms",
+            "filler_replay_debt_unmeasured_requests",
+        ],
+    )
+    ttft_chart = render_cost_accounting_chart(
+        cost_rows,
+        heading="C. Total Replay TTFT Cost",
+        note="Stacked bars sum TTFT across target replay requests and filler/background requests. This shows whether target gains came with filler cost.",
+        target_key="sum_target_ttft_ms",
+        filler_key="sum_filler_ttft_ms",
+        total_key="sum_total_ttft_ms",
+        y_axis_label="total TTFT ms",
+    )
+    debt_chart = render_cost_accounting_chart(
+        cost_rows,
+        heading="D. Total Replay Deadline Debt",
+        note="Stacked bars sum positive replay lateness only. Filler debt appears only when filler requests have replay due timestamps.",
+        target_key="sum_target_replay_debt_ms",
+        filler_key="sum_filler_replay_debt_ms",
+        total_key="sum_total_replay_debt_ms",
+        y_axis_label="total replay debt ms",
+    )
+    return (
+        "<h2>System Cost Accounting</h2>"
+        "<p>This section asks whether priority/controller reduced target replay misses by moving delay onto filler/background work.</p>"
+        f'<div class="card">{ttft_chart}</div>'
+        f'<div class="card">{debt_chart}</div>'
+        "<details><summary>Open cost accounting summary table</summary>"
+        f'<div class="card">{cost_table}</div>'
+        "</details>"
+    )
 
 
 def render_table(rows: list[dict[str, Any]], columns: list[str]) -> str:
@@ -2978,7 +3325,7 @@ def render_chart_controls(rows: list[dict[str, Any]]) -> str:
         '<strong>View</strong>'
         '<button type="button" class="control-button" data-chart-preset="manager">Manager View</button>'
         '<button type="button" class="control-button" data-chart-preset="all">Show All</button>'
-        '<span class="control-hint">Manager View keeps baseline, harness cache, harness cache + priority, and front-end supplied signals visible.</span>'
+        '<span class="control-hint">Manager View keeps baseline, harness cache, harness cache + priority, front-end supplied, and full controller visible.</span>'
         "</div>"
         '<div class="control-row">'
         '<strong>Deadline axis</strong>'
@@ -3126,6 +3473,7 @@ def render_chart_interaction_script() -> str:
 def render_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
+    cost_accounting_rows: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
@@ -3146,6 +3494,7 @@ def render_html(
     chart = render_pressure_chart(rows)
     chart_controls = render_chart_controls(rows)
     chart_interaction_script = render_chart_interaction_script()
+    cost_accounting_section = render_cost_accounting_section(cost_accounting_rows)
     signal_family_definition_table = render_signal_family_definition_table()
     harness_cache_decision_table = render_harness_cache_decision_table()
     pressure_definition_table = render_pressure_definition_table(rows, run_config)
@@ -3275,8 +3624,9 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 	<div class="card">{harness_cache_decision_table}</div>
 	<h2>Pressure Level Definitions</h2>
 	<p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
- 	<div class="card">{pressure_definition_table}</div>
+	<div class="card">{pressure_definition_table}</div>
 <div class="card">{chart_controls}{chart}</div>
+{cost_accounting_section}
  	<h2>Evidence Tables</h2>
  	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
  	<p><a href="evidence_tables.html">Open the evidence tables / raw proof file</a>.</p>
@@ -3290,6 +3640,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 def render_evidence_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
+    cost_accounting_rows: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
@@ -3351,6 +3702,7 @@ def render_evidence_html(
     cache_benefit_table = render_table(cache_benefit_rows, CACHE_BENEFIT_COLUMNS)
     sglang_cache_path_audit_table = render_table(sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
     nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
+    cost_accounting_table = render_table(cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
     raw_table = render_table(
         rows,
         [
@@ -3360,7 +3712,12 @@ def render_evidence_html(
             "encoding_codec",
             "encoding_config_hash",
             "session_id",
+            "request_id",
+            "phase",
+            "request_group",
+            "has_replay_deadline",
             "first_token_lateness_ms",
+            "replay_debt_ms",
             "due_to_request_start_ms",
             "due_to_sglang_receive_ms",
             "sglang_receive_to_first_token_ms",
@@ -3429,6 +3786,9 @@ a {{ color: #2563eb; }}
 <h2>SGLang Cache Signal Path Audit</h2>
 <p>This static source audit is collected from the installed SGLang package on the experiment machine. Runtime proof still comes from the target-scoped trace rows above.</p>
 <div class="card">{sglang_cache_path_audit_table if sglang_cache_path_audit_rows else "<p>No SGLang cache signal path audit rows found. Re-run with an environment collector on the experiment machine.</p>"}</div>
+<h2>System Cost Accounting</h2>
+<p>This table sums TTFT and positive replay debt for target versus filler/background requests. Filler debt is present only when the filler request had a replay due timestamp.</p>
+<div class="card">{cost_accounting_table if cost_accounting_rows else "<p>No system cost accounting rows found.</p>"}</div>
 <h2>Targeted KV Prefetch Proof</h2>
 <p>This table appears when the run includes <code>controller_targeted_kv_prefetch</code>. It proves whether the controller requested explicit target-prefix KV movement, whether the active SGLang adapter exposed a direct hook, and whether load-back or host-to-device movement was observed before replay compute.</p>
 <div class="card">{targeted_kv_prefetch_table if targeted_kv_prefetch_rows else "<p>No targeted KV prefetch rows found in this run.</p>"}</div>
@@ -3459,6 +3819,7 @@ def write_manifest(
     args: argparse.Namespace,
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
+    cost_accounting_rows: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
@@ -3481,6 +3842,7 @@ def write_manifest(
         "report_dir": str(args.out_dir),
         "row_count": len(rows),
         "summary_row_count": len(summary),
+        "cost_accounting_row_count": len(cost_accounting_rows),
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "targeted_kv_prefetch_row_count": len(targeted_kv_prefetch_rows),
         "controller_demote_restore_row_count": len(controller_demote_restore_rows),
@@ -3521,7 +3883,9 @@ def main() -> None:
     run_config = read_run_config(args.run_config or args.out_dir / "run_config.env")
     if args.rows_csv:
         rows = read_csv_table(args.rows_csv)
-        summary = read_csv_table(args.out_dir / "global_kv_readiness_by_mode_summary.csv") or summarize(rows)
+        target_rows = target_replay_rows(rows)
+        summary = read_csv_table(args.out_dir / "global_kv_readiness_by_mode_summary.csv") or summarize(target_rows)
+        cost_accounting_rows = collect_cost_accounting_summary(rows)
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
         targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
         controller_demote_restore_rows = read_csv_table(args.out_dir / "controller_demote_restore_proof.csv")
@@ -3533,15 +3897,17 @@ def main() -> None:
         cache_benefit_rows = read_csv_table(args.out_dir / "cache_benefit_summary.csv")
     else:
         rows = collect_rows(args.root)
-        summary = summarize(rows)
-        speculative_prefill_rows = collect_speculative_prefill_proof(args.root, rows)
-        targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, rows)
-        controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, rows)
-        controller_admission_rows = collect_controller_admission_proof(args.root, rows)
-        harness_priority_rows = collect_harness_priority_proof(args.root, rows)
+        target_rows = target_replay_rows(rows)
+        summary = summarize(target_rows)
+        cost_accounting_rows = collect_cost_accounting_summary(rows)
+        speculative_prefill_rows = collect_speculative_prefill_proof(args.root, target_rows)
+        targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, target_rows)
+        controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, target_rows)
+        controller_admission_rows = collect_controller_admission_proof(args.root, target_rows)
+        harness_priority_rows = collect_harness_priority_proof(args.root, target_rows)
         nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
-        cache_signal_rows = collect_harness_native_cache_signal_proof(rows)
-        cache_action_rows = collect_cache_action_proof(args.root, rows)
+        cache_signal_rows = collect_harness_native_cache_signal_proof(target_rows)
+        cache_action_rows = collect_cache_action_proof(args.root, target_rows)
         cache_benefit_rows = collect_cache_benefit_summary(summary, cache_action_rows)
     run_environment = read_json_file(args.run_environment_json or args.out_dir / "run_environment.json")
     sglang_cache_path_audit_rows = (
@@ -3552,6 +3918,7 @@ def main() -> None:
     nat_inferred_priority_profile = read_nat_inferred_priority_profile(args.out_dir)
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
+    write_csv(args.out_dir / "cost_accounting_summary.csv", cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     write_csv(args.out_dir / "targeted_kv_prefetch_proof.csv", targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
     write_csv(
@@ -3569,6 +3936,7 @@ def main() -> None:
     html_text = render_html(
         rows,
         summary,
+        cost_accounting_rows,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
@@ -3586,6 +3954,7 @@ def main() -> None:
     evidence_html_text = render_evidence_html(
         rows,
         summary,
+        cost_accounting_rows,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
@@ -3613,6 +3982,7 @@ def main() -> None:
         args,
         rows,
         summary,
+        cost_accounting_rows,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
@@ -3631,11 +4001,13 @@ def main() -> None:
         atomic_write_text(args.latest_root / "latest_master_report.html", html_text)
         atomic_write_text(args.latest_root / "evidence_tables.html", evidence_html_text)
         atomic_write_text(args.latest_root / "latest_evidence_tables.html", evidence_html_text)
+        write_csv(args.latest_root / "latest_cost_accounting_summary.csv", cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
         write_manifest(
             args.latest_root / "latest_manifest.json",
             args,
             rows,
             summary,
+            cost_accounting_rows,
             speculative_prefill_rows,
             targeted_kv_prefetch_rows,
             controller_demote_restore_rows,
@@ -3651,7 +4023,7 @@ def main() -> None:
         )
     print(f"wrote {report_path}")
     print(f"wrote {evidence_path}")
-    print(f"rows={len(rows)} summary_rows={len(summary)}")
+    print(f"rows={len(rows)} summary_rows={len(summary)} cost_accounting_rows={len(cost_accounting_rows)}")
 
 
 if __name__ == "__main__":
