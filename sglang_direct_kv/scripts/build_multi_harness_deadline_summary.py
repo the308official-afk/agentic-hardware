@@ -990,15 +990,32 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             continue
         request_starts = [row for row in trace_rows if row.get("event") == "m27.request.start"]
         restore_events = [
-            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_demote_restore.restored"
+            row
+            for row in trace_rows
+            if str(row.get("event") or "")
+            in {"m27.controller_demote_restore.restored", "m27.controller_demote_restore.step_restored"}
         ]
         for demote in demote_events:
             session_id = str(demote.get("session_id") or "")
+            tool_wait_step = str(demote.get("tool_wait_step") or "")
             replay_row = replay_by_session.get((str(case_dir), session_id), {})
             demote_ts_ns = int(float_value(demote.get("ts_ns")))
             replay_start_ts_ns = int(float_value(replay_row.get("request_start_ts_ns")))
             replay_due_ts_ns = int(float_value(replay_row.get("replay_due_ts_ns")))
-            restore = next((row for row in restore_events if str(row.get("session_id") or "") == session_id), {})
+            restore = next(
+                (
+                    row
+                    for row in restore_events
+                    if str(row.get("session_id") or "") == session_id
+                    and (
+                        not tool_wait_step
+                        or not str(row.get("tool_wait_step") or "")
+                        or str(row.get("tool_wait_step") or "") == tool_wait_step
+                    )
+                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                ),
+                {},
+            )
             restore_ts_ns = int(float_value(restore.get("ts_ns")))
             filler_prefix = f"{session_id}_pressure_"
             filler_rows = [
@@ -1023,16 +1040,31 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                 and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
                 and (not replay_start_ts_ns or int(float_value(row.get("ts_ns"))) <= replay_start_ts_ns)
             ]
+            filler_demoted_in_window = [
+                row
+                for row in filler_before_replay
+                if optional_float(row.get("sglang_priority")) is not None and float_value(row.get("sglang_priority")) < 0
+            ]
+            filler_not_demoted_in_window = [
+                row
+                for row in filler_before_replay
+                if not (optional_float(row.get("sglang_priority")) is not None and float_value(row.get("sglang_priority")) < 0)
+            ]
             replay_priority = optional_float(replay_row.get("sglang_priority"))
             demote_acted = is_truthy_text(demote.get("backend_acted"))
-            restore_acted = is_truthy_text(restore.get("backend_acted"))
+            restore_acted = (
+                str(restore.get("event") or "") == "m27.controller_demote_restore.step_restored"
+                or is_truthy_text(restore.get("backend_acted"))
+            )
             replay_raised = replay_priority is not None and replay_priority >= 100
-            if demote_acted and filler_rows and not filler_not_demoted and replay_raised and restore_acted:
-                verdict = "filler traffic was demoted, replay was raised, and restore was recorded"
+            if demote_acted and filler_before_replay and not filler_not_demoted_in_window and replay_raised and restore_acted:
+                verdict = "filler traffic in the replay window was demoted, replay was raised, and restore was recorded"
             elif demote_acted and not filler_rows and replay_raised and restore_acted:
                 verdict = "demote/restore acted, but this pressure level had no filler requests"
-            elif demote_acted and filler_demoted and replay_raised:
-                verdict = "demotion and replay raise were seen; restore proof is incomplete"
+            elif demote_acted and not filler_before_replay and replay_raised and restore_acted:
+                verdict = "demote/restore acted, but no filler request entered during the replay window"
+            elif demote_acted and filler_demoted_in_window and replay_raised:
+                verdict = "window demotion and replay raise were seen; restore proof is incomplete"
             elif demote_acted:
                 verdict = "demote command acted, but request-level proof is incomplete"
             else:
@@ -1055,10 +1087,13 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                     "demote_command_id": demote.get("controller_command_id", ""),
                     "demote_backend_acted": "yes" if demote_acted else "no",
                     "demoted_priority": demote.get("demoted_priority", ""),
+                    "demote_trigger": demote.get("demote_trigger", ""),
                     "filler_requests_seen": len(filler_rows),
                     "filler_requests_between_demote_and_replay": len(filler_before_replay),
                     "filler_demoted_count": len(filler_demoted),
                     "filler_not_demoted_count": len(filler_not_demoted),
+                    "window_filler_demoted_count": len(filler_demoted_in_window),
+                    "window_filler_not_demoted_count": len(filler_not_demoted_in_window),
                     "replay_request_id": replay_row.get("request_id", ""),
                     "replay_sglang_priority": replay_row.get("sglang_priority", ""),
                     "replay_priority_raised": "yes" if replay_raised else "no",
@@ -2106,10 +2141,13 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "demote_command_id",
     "demote_backend_acted",
     "demoted_priority",
+    "demote_trigger",
     "filler_requests_seen",
     "filler_requests_between_demote_and_replay",
     "filler_demoted_count",
     "filler_not_demoted_count",
+    "window_filler_demoted_count",
+    "window_filler_not_demoted_count",
     "replay_request_id",
     "replay_sglang_priority",
     "replay_priority_raised",

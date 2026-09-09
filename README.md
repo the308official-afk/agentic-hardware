@@ -525,6 +525,13 @@ smallest possible boundary adapter.
 | Phase 6.5: Single-harness full-controller optimization | Implemented; EC2 performance rerun pending | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | Unit tests prove timed prepare-window transition, short-wait no-demote behavior, metadata preservation, background demotion guardrails, replay priority, budget command, and release. Next EC2 run should check whether `controller_full` matches or beats the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
+For Phase 6.5, the demote/restore proof is window-aware. Earlier filler
+requests that entered before controller demotion are not counted as a demotion
+failure. The proof table separately records `demote_trigger`,
+`filler_requests_between_demote_and_replay`, `window_filler_demoted_count`, and
+`window_filler_not_demoted_count` so the report can show whether the controller
+actually shaped traffic during the replay-critical window.
+
 Phase gate for each implementation slice:
 
 1. Add or update a portable policy/wrapper first.

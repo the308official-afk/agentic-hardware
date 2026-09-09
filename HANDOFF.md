@@ -187,6 +187,8 @@ The latest local implementation already added:
   `sglang_direct_kv/src/agentic_kv/controller/policy.py`
 - timed prepare-window events plus shared background demotion state in
   `sglang_direct_kv/scripts/run_multi_harness_replay_driver.py`
+- window-aware demote/restore proof fields in
+  `sglang_direct_kv/scripts/build_multi_harness_deadline_summary.py`
 - unit tests in `sglang_direct_kv/tests/test_agentic_controller.py`
 
 ## Expected Validation Command
