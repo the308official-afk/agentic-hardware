@@ -242,7 +242,10 @@ The lightweight master report also includes a **System Cost Accounting** section
 It sums TTFT and positive replay-deadline debt separately for target replay
 requests and filler/background requests. This is the tradeoff view: it shows
 whether priority or controller modes reduced target replay misses by increasing
-background/filler cost. The CSV artifact is:
+background/filler cost. When available, the chart compares Baseline,
+Front-End Supplied, and Full Controller side by side, with net bars showing
+whether each non-baseline mode saved or added total system cost. The CSV
+artifact is:
 
 ```text
 sglang_direct_kv/artifacts/results/latest_cost_accounting_summary.csv

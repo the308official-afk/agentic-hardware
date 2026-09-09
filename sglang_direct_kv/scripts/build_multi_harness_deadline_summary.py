@@ -214,6 +214,7 @@ MANAGER_SIGNAL_BUCKETS = (
 COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "baseline",
     "frontend_supplied",
+    "controller_full",
 )
 
 COST_ACCOUNTING_COLORS = {
@@ -225,10 +226,24 @@ COST_ACCOUNTING_COLORS = {
         "target": "#7c3aed",
         "filler": "#c4b5fd",
     },
+    "controller_full": {
+        "target": "#0f766e",
+        "filler": "#99f6e4",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
 COST_ACCOUNTING_DELTA_UNKNOWN = "#94a3b8"
+COST_ACCOUNTING_DELTA_COLORS = {
+    "frontend_supplied": {
+        "better": "#7c3aed",
+        "worse": "#db2777",
+    },
+    "controller_full": {
+        "better": "#0f766e",
+        "worse": "#dc2626",
+    },
+}
 
 CORE_PRESSURE_LEVELS = (
     "p0_control",
@@ -2911,15 +2926,26 @@ def render_cost_accounting_chart(
         (str(row.get("pressure_level") or ""), str(row.get("harness") or ""), str(row.get("signal_bucket") or "")): row
         for row in cost_rows
     }
-    delta_by_key: dict[tuple[str, str], float | None] = {}
+    comparison_buckets = [
+        bucket
+        for bucket in ("frontend_supplied", "controller_full")
+        if bucket in signal_buckets
+    ]
+    delta_by_key: dict[tuple[str, str, str], float | None] = {}
     for pressure in pressures:
         for harness in harnesses:
             baseline_row = rows_by_key.get((pressure, harness, "baseline"))
-            frontend_row = rows_by_key.get((pressure, harness, "frontend_supplied"))
-            if baseline_row and frontend_row and row_total_is_measured(baseline_row) and row_total_is_measured(frontend_row):
-                delta_by_key[(pressure, harness)] = row_total_value(baseline_row) - row_total_value(frontend_row)
-            else:
-                delta_by_key[(pressure, harness)] = None
+            for bucket in comparison_buckets:
+                comparison_row = rows_by_key.get((pressure, harness, bucket))
+                if (
+                    baseline_row
+                    and comparison_row
+                    and row_total_is_measured(baseline_row)
+                    and row_total_is_measured(comparison_row)
+                ):
+                    delta_by_key[(pressure, harness, bucket)] = row_total_value(baseline_row) - row_total_value(comparison_row)
+                else:
+                    delta_by_key[(pressure, harness, bucket)] = None
 
     raw_values = []
     for row in cost_rows:
@@ -3047,41 +3073,44 @@ def render_cost_accounting_chart(
                         lines.append(svg_text_label(compact_ms(value), cx, bar_top - 6, color))
                     lines.append("</g>")
                 lines.append("</g>")
-            delta = delta_by_key.get((pressure, harness))
-            delta_cx = harness_x + 58.0
-            delta_color = (
-                COST_ACCOUNTING_DELTA_UNKNOWN
-                if delta is None
-                else COST_ACCOUNTING_DELTA_BETTER
-                if delta >= 0
-                else COST_ACCOUNTING_DELTA_WORSE
-            )
-            delta_title = (
-                f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
-                f"{HARNESS_LABELS.get(harness, harness)} | net priority delta "
-                f"(baseline total - front-end priority total) "
-                f"{'n/a' if delta is None else f'{delta:.1f} ms'}"
-            )
-            lines.append(f'<g><title>{html.escape(delta_title)}</title>')
-            if delta is None:
-                delta_label_y = zero_y - 6 if zero_y > top + 28 else zero_y + 14
-                lines.append(
-                    f'<line x1="{delta_cx - 6:.1f}" x2="{delta_cx + 6:.1f}" y1="{zero_y:.1f}" y2="{zero_y:.1f}" '
-                    f'stroke="{delta_color}" stroke-width="2.2" opacity="0.8"/>'
+            for delta_index, bucket in enumerate(comparison_buckets):
+                delta = delta_by_key.get((pressure, harness, bucket))
+                delta_cx = harness_x + 54.0 + delta_index * 16.0
+                delta_palette = COST_ACCOUNTING_DELTA_COLORS.get(bucket, {})
+                delta_color = (
+                    COST_ACCOUNTING_DELTA_UNKNOWN
+                    if delta is None
+                    else str(delta_palette.get("better") or COST_ACCOUNTING_DELTA_BETTER)
+                    if delta >= 0
+                    else str(delta_palette.get("worse") or COST_ACCOUNTING_DELTA_WORSE)
                 )
-                lines.append(svg_text_label("net n/a", delta_cx, delta_label_y, delta_color))
-            else:
-                delta_y = y_pos(delta)
-                bar_y = min(delta_y, zero_y)
-                bar_h = max(1.0, abs(zero_y - delta_y))
-                label = f"+{compact_ms(delta)} saved" if delta >= 0 else f"-{compact_ms(abs(delta))} worse"
-                label_y_delta = delta_y - 6 if delta >= 0 else delta_y + 14
-                lines.append(
-                    f'<rect x="{delta_cx - 6:.1f}" y="{bar_y:.1f}" width="12" height="{bar_h:.1f}" '
-                    f'fill="{delta_color}" opacity="0.96" rx="2"/>'
+                delta_label_name = "priority" if bucket == "frontend_supplied" else "controller"
+                delta_title = (
+                    f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
+                    f"{HARNESS_LABELS.get(harness, harness)} | net {delta_label_name} delta "
+                    f"(baseline total - {chart_signal_label(bucket).lower()} total) "
+                    f"{'n/a' if delta is None else f'{delta:.1f} ms'}"
                 )
-                lines.append(svg_text_label(label, delta_cx, label_y_delta, delta_color))
-            lines.append("</g>")
+                lines.append(f'<g><title>{html.escape(delta_title)}</title>')
+                if delta is None:
+                    delta_label_y = zero_y - 6 if zero_y > top + 28 else zero_y + 14
+                    lines.append(
+                        f'<line x1="{delta_cx - 5:.1f}" x2="{delta_cx + 5:.1f}" y1="{zero_y:.1f}" y2="{zero_y:.1f}" '
+                        f'stroke="{delta_color}" stroke-width="2.2" opacity="0.8"/>'
+                    )
+                    lines.append(svg_text_label("n/a", delta_cx, delta_label_y, delta_color))
+                else:
+                    delta_y = y_pos(delta)
+                    bar_y = min(delta_y, zero_y)
+                    bar_h = max(1.0, abs(zero_y - delta_y))
+                    label = f"+{compact_ms(delta)}" if delta >= 0 else f"-{compact_ms(abs(delta))}"
+                    label_y_delta = delta_y - 6 if delta >= 0 else delta_y + 14
+                    lines.append(
+                        f'<rect x="{delta_cx - 5:.1f}" y="{bar_y:.1f}" width="10" height="{bar_h:.1f}" '
+                        f'fill="{delta_color}" opacity="0.96" rx="2"/>'
+                    )
+                    lines.append(svg_text_label(label, delta_cx, label_y_delta, delta_color))
+                lines.append("</g>")
         cx = x + pressure_group_w / 2
         lines.append(f'<text x="{cx:.1f}" y="{bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
         lines.append("</g>")
@@ -3098,9 +3127,11 @@ def render_cost_accounting_chart(
     lines.append(f'<text x="{legend_x+284:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">front-end priority target</text>')
     lines.append(f'<rect x="{legend_x+448:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["frontend_supplied"]["filler"]}" rx="2"/>')
     lines.append(f'<text x="{legend_x+466:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">front-end priority filler</text>')
-    lines.append(f'<rect x="{legend_x+626:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_DELTA_BETTER}" rx="2"/>')
-    lines.append(f'<rect x="{legend_x+642:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_DELTA_WORSE}" rx="2"/>')
-    lines.append(f'<text x="{legend_x+662:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">net delta: green saved, red worse</text>')
+    lines.append(f'<rect x="{legend_x+626:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["controller_full"]["target"]}" rx="2"/>')
+    lines.append(f'<text x="{legend_x+644:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">full controller target</text>')
+    lines.append(f'<rect x="{legend_x+782:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{COST_ACCOUNTING_COLORS["controller_full"]["filler"]}" rx="2"/>')
+    lines.append(f'<text x="{legend_x+800:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">full controller filler</text>')
+    lines.append(f'<text x="{legend_x+948:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">net bars: upward saved vs baseline; downward worse</text>')
     lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-10}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)
@@ -3129,7 +3160,7 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     ttft_chart = render_cost_accounting_chart(
         cost_rows,
         heading="C. Total Replay TTFT Cost",
-        note="Five bars per harness: baseline target/filler, front-end priority target/filler, then net delta = baseline total - priority total.",
+        note="Per harness: target/filler bars for each available mode, plus net deltas versus baseline.",
         target_key="sum_target_ttft_ms",
         filler_key="sum_filler_ttft_ms",
         total_key="sum_total_ttft_ms",
@@ -3138,7 +3169,7 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     debt_chart = render_cost_accounting_chart(
         cost_rows,
         heading="D. Total Replay Deadline Debt",
-        note="Same five-bar layout, but summing positive replay lateness. Upward net delta means priority reduced total replay debt.",
+        note="Same layout, but summing positive replay lateness. Upward net deltas mean the mode reduced total replay debt.",
         target_key="sum_target_replay_debt_ms",
         filler_key="sum_filler_replay_debt_ms",
         total_key="sum_total_replay_debt_ms",
@@ -3147,7 +3178,7 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     return (
         "<h2>System Cost Accounting</h2>"
         "<p>This section asks whether priority/controller reduced target replay misses by moving delay onto filler/background work.</p>"
-        "<p>The manager-facing cost charts intentionally compare only Baseline and Front-End Supplied. The fifth bar shows whether priority reduced or increased total system cost.</p>"
+        "<p>The manager-facing cost charts compare Baseline, Front-End Supplied, and Full Controller when those modes are present. Net bars show whether each non-baseline mode reduced or increased total system cost.</p>"
         f'<div class="card">{ttft_chart}</div>'
         f'<div class="card">{debt_chart}</div>'
         "<details><summary>Open cost accounting summary table</summary>"
