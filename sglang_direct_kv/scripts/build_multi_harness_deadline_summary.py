@@ -70,6 +70,9 @@ MODE_LABELS = {
     "controller_demote_restore": "CD = Controller demote/restore",
     "controller_priority_demote": "PD = Controller priority + demote",
     "controller_priority_demotion_admission": "PDA = Controller priority + demotion + admission",
+    "controller_priority_demotion_admission_soft": "PDA-S = Controller priority + demotion + admission / soft",
+    "controller_priority_demotion_admission_medium": "PDA-M = Controller priority + demotion + admission / medium",
+    "controller_priority_demotion_admission_hard": "PDA-H = Controller priority + demotion + admission / hard",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
@@ -91,6 +94,9 @@ MODE_COLORS = {
     "controller_demote_restore": "#0d9488",
     "controller_priority_demote": "#0891b2",
     "controller_priority_demotion_admission": "#0369a1",
+    "controller_priority_demotion_admission_soft": "#0284c7",
+    "controller_priority_demotion_admission_medium": "#0369a1",
+    "controller_priority_demotion_admission_hard": "#1d4ed8",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
@@ -189,6 +195,24 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#0369a1",
         "modes": {"controller_priority_demotion_admission"},
     },
+    "controller_priority_demotion_admission_soft": {
+        "label": "Controller Admission Soft",
+        "description": "Controller raises replay priority and holds background admission only during the final quarter of the tool-wait window",
+        "color": "#0284c7",
+        "modes": {"controller_priority_demotion_admission_soft"},
+    },
+    "controller_priority_demotion_admission_medium": {
+        "label": "Controller Admission Medium",
+        "description": "Controller raises replay priority and holds background admission during the final half of the tool-wait window",
+        "color": "#0369a1",
+        "modes": {"controller_priority_demotion_admission_medium"},
+    },
+    "controller_priority_demotion_admission_hard": {
+        "label": "Controller Admission Hard",
+        "description": "Controller raises replay priority and holds background admission for the full tool-wait window",
+        "color": "#1d4ed8",
+        "modes": {"controller_priority_demotion_admission_hard"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
@@ -225,6 +249,9 @@ CHART_SIGNAL_ORDER = (
     "controller_demote_restore",
     "controller_priority_demote",
     "controller_priority_demotion_admission",
+    "controller_priority_demotion_admission_soft",
+    "controller_priority_demotion_admission_medium",
+    "controller_priority_demotion_admission_hard",
     "controller_admission",
     "controller_full",
     "controller_full_chunked",
@@ -244,6 +271,9 @@ COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "frontend_supplied",
     "controller_priority_demote",
     "controller_priority_demotion_admission",
+    "controller_priority_demotion_admission_soft",
+    "controller_priority_demotion_admission_medium",
+    "controller_priority_demotion_admission_hard",
     "controller_full",
     "controller_full_chunked",
 )
@@ -273,6 +303,18 @@ COST_ACCOUNTING_COLORS = {
         "target": "#0369a1",
         "filler": "#bfdbfe",
     },
+    "controller_priority_demotion_admission_soft": {
+        "target": "#0284c7",
+        "filler": "#bae6fd",
+    },
+    "controller_priority_demotion_admission_medium": {
+        "target": "#0369a1",
+        "filler": "#bfdbfe",
+    },
+    "controller_priority_demotion_admission_hard": {
+        "target": "#1d4ed8",
+        "filler": "#bfdbfe",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -296,6 +338,18 @@ COST_ACCOUNTING_DELTA_COLORS = {
     },
     "controller_priority_demotion_admission": {
         "better": "#0369a1",
+        "worse": "#dc2626",
+    },
+    "controller_priority_demotion_admission_soft": {
+        "better": "#0284c7",
+        "worse": "#dc2626",
+    },
+    "controller_priority_demotion_admission_medium": {
+        "better": "#0369a1",
+        "worse": "#dc2626",
+    },
+    "controller_priority_demotion_admission_hard": {
+        "better": "#1d4ed8",
         "worse": "#dc2626",
     },
 }
@@ -1042,6 +1096,9 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             "controller_demote_restore",
             "controller_priority_demote",
             "controller_priority_demotion_admission",
+            "controller_priority_demotion_admission_soft",
+            "controller_priority_demotion_admission_medium",
+            "controller_priority_demotion_admission_hard",
             "controller_full",
         }
     }
@@ -1578,6 +1635,9 @@ def collect_controller_admission_proof(root: Path, replay_rows: list[dict[str, A
         if row.get("mode") in {
             "controller_admission_control",
             "controller_priority_demotion_admission",
+            "controller_priority_demotion_admission_soft",
+            "controller_priority_demotion_admission_medium",
+            "controller_priority_demotion_admission_hard",
             "controller_full",
         }
     }
@@ -3146,9 +3206,14 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
             return "controller_priority_demote"
         return "baseline"
-    if mode == "controller_priority_demotion_admission":
+    if mode in {
+        "controller_priority_demotion_admission",
+        "controller_priority_demotion_admission_soft",
+        "controller_priority_demotion_admission_medium",
+        "controller_priority_demotion_admission_hard",
+    }:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
-            return "controller_priority_demotion_admission"
+            return mode
         return "baseline"
     if mode == "controller_speculative_preload":
         return "controller_preload"
@@ -3514,6 +3579,9 @@ def render_cost_accounting_chart(
             "frontend_supplied",
             "controller_priority_demote",
             "controller_priority_demotion_admission",
+            "controller_priority_demotion_admission_soft",
+            "controller_priority_demotion_admission_medium",
+            "controller_priority_demotion_admission_hard",
             "controller_full",
             "controller_full_chunked",
         )
@@ -3679,6 +3747,12 @@ def render_cost_accounting_chart(
                     if bucket == "controller_priority_demote"
                     else "priority+demotion+admission"
                     if bucket == "controller_priority_demotion_admission"
+                    else "PDA soft"
+                    if bucket == "controller_priority_demotion_admission_soft"
+                    else "PDA medium"
+                    if bucket == "controller_priority_demotion_admission_medium"
+                    else "PDA hard"
+                    if bucket == "controller_priority_demotion_admission_hard"
                     else "chunked controller"
                     if bucket == "controller_full_chunked"
                     else "controller"

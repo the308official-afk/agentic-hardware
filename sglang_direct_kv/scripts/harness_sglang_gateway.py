@@ -28,6 +28,9 @@ PRIORITY_ENABLED_MODES = {
     "controller_demote_restore",
     "controller_priority_demote",
     "controller_priority_demotion_admission",
+    "controller_priority_demotion_admission_soft",
+    "controller_priority_demotion_admission_medium",
+    "controller_priority_demotion_admission_hard",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -40,6 +43,15 @@ CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admission"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE = "controller_priority_demotion_admission_soft"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE = "controller_priority_demotion_admission_medium"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE = "controller_priority_demotion_admission_hard"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES = {
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
+}
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -47,7 +59,7 @@ CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_PRIORITY_DEMOTE_MODE,
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+    *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
@@ -289,7 +301,7 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
         if mode in {
             CONTROLLER_DEMOTE_RESTORE_MODE,
             CONTROLLER_PRIORITY_DEMOTE_MODE,
-            CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+            *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
             CONTROLLER_FULL_MODE,
             CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
         } and phase == "pressure_filler":
@@ -540,7 +552,7 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
                 if mode in {
                     CONTROLLER_DEMOTE_RESTORE_MODE,
                     CONTROLLER_PRIORITY_DEMOTE_MODE,
-                    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+                    *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
                     CONTROLLER_FULL_MODE,
                     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
                 }

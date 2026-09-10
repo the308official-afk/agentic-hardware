@@ -65,6 +65,9 @@ SUPPORTED_MODES = (
     "controller_demote_restore",
     "controller_priority_demote",
     "controller_priority_demotion_admission",
+    "controller_priority_demotion_admission_soft",
+    "controller_priority_demotion_admission_medium",
+    "controller_priority_demotion_admission_hard",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -80,6 +83,15 @@ CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admission"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE = "controller_priority_demotion_admission_soft"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE = "controller_priority_demotion_admission_medium"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE = "controller_priority_demotion_admission_hard"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES = {
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
+}
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -311,12 +323,32 @@ def controller_demote_restore_mode(mode: str) -> bool:
     return mode in {
         CONTROLLER_DEMOTE_RESTORE_MODE,
         CONTROLLER_PRIORITY_DEMOTE_MODE,
-        CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+        *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
     }
 
 
 def controller_priority_demotion_admission_mode(mode: str) -> bool:
-    return mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE
+    return mode in CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES
+
+
+def controller_admission_aggressiveness(mode: str) -> str:
+    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE:
+        return "soft"
+    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE:
+        return "medium"
+    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE:
+        return "hard"
+    configured = os.environ.get("CONTROLLER_ADMISSION_AGGRESSIVENESS", "hard").strip().lower()
+    return configured if configured in {"soft", "medium", "hard"} else "hard"
+
+
+def controller_admission_lead_ms(mode: str, wait_ms: int) -> float:
+    aggressiveness = controller_admission_aggressiveness(mode)
+    if aggressiveness == "hard":
+        return float(wait_ms)
+    if aggressiveness == "medium":
+        return max(25.0, float(wait_ms) * 0.5)
+    return max(25.0, float(wait_ms) * 0.25)
 
 
 def controller_admission_control_mode(mode: str) -> bool:
@@ -1622,6 +1654,7 @@ async def main_async() -> None:
     controller_active_priority_demotion_admission = controller_priority_demotion_admission_mode(args.mode)
     controller_active_admission = controller_admission_control_mode(args.mode)
     controller_active_full = controller_full_mode(args.mode)
+    admission_aggressiveness = controller_admission_aggressiveness(args.mode)
     max_target_tool_wait_ms = max(
         [args.tool_wait_ms]
         + [spec.wait_ms for specs in target_wait_specs_by_session.values() for spec in specs]
@@ -1996,6 +2029,9 @@ async def main_async() -> None:
             "filler_replay_deadline_ms": (
                 args.filler_replay_deadline_ms if args.filler_replay_deadline_ms > 0 else args.tool_wait_ms
             ),
+            "controller_admission_aggressiveness": admission_aggressiveness
+            if controller_active_priority_demotion_admission
+            else "",
         },
     )
 
@@ -2105,6 +2141,9 @@ async def main_async() -> None:
             "background_can_delay_ms": max(500, args.tool_wait_ms * 2),
             "concurrency": args.concurrency,
             "cost_feedback_allow_background_demote": True,
+            "controller_admission_aggressiveness": admission_aggressiveness
+            if controller_active_priority_demotion_admission
+            else "",
             "_trace_path": str(args.trace),
             "nat_inferred_prefix_total_requests": 10,
             "nat_inferred_prefix_osl": 512,
@@ -2168,6 +2207,7 @@ async def main_async() -> None:
                     "session_id": pair.session_id,
                     "tool_wait_step": wait_spec.step_index,
                     "reason": "hold filler/background admission during target replay critical window",
+                    "aggressiveness": admission_aggressiveness,
                     "open_offset_ms": round(offset_ms(), 3),
                     "replay_due_offset_ms": round(replay_due_ms, 3),
                 }
@@ -2187,6 +2227,7 @@ async def main_async() -> None:
                         "tool_wait_class": wait_spec.wait_class,
                         "tool_wait_ms": wait_spec.wait_ms,
                         "demote_trigger": trigger,
+                        "controller_admission_aggressiveness": admission_aggressiveness,
                         "admission_action": "hold_background_until_target_replay_completes",
                         "demotable_background_requests": args.filler_sessions,
                         "tool_start_offset_ms": round(tool_start_ms, 3),
@@ -2220,6 +2261,9 @@ async def main_async() -> None:
                     "demoted_phase": "pressure_filler",
                     "demoted_priority": -100,
                     "demote_trigger": trigger,
+                    "controller_admission_aggressiveness": admission_aggressiveness
+                    if controller_active_priority_demotion_admission
+                    else "",
                     "demotable_background_requests": args.filler_sessions,
                     "background_safe_to_demote": args.filler_sessions > 0,
                     "tool_start_offset_ms": round(tool_start_ms, 3),
@@ -2243,6 +2287,9 @@ async def main_async() -> None:
                     "tool_wait_class": wait_spec.wait_class,
                     "tool_wait_ms": wait_spec.wait_ms,
                     "demote_trigger": trigger,
+                    "controller_admission_aggressiveness": admission_aggressiveness
+                    if controller_active_priority_demotion_admission
+                    else "",
                     "demotable_background_requests": args.filler_sessions,
                     "background_safe_to_demote": args.filler_sessions > 0,
                     "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
@@ -2322,7 +2369,12 @@ async def main_async() -> None:
                 (controller_active_demote_restore or controller_active_full)
                 and controller_demote_command is not None
             )
-            if step_demote_restore_active:
+            defer_admission_demote = (
+                controller_active_priority_demotion_admission
+                and controller_demote_command is not None
+                and admission_aggressiveness in {"soft", "medium"}
+            )
+            if step_demote_restore_active and not defer_admission_demote:
                 activate_controller_demote(
                     controller_demote_command,
                     step_base_meta=step_base_meta,
@@ -2578,6 +2630,20 @@ async def main_async() -> None:
                     )
                     for idx in range(args.filler_sessions)
                 ]
+            if defer_admission_demote:
+                admission_lead_ms = controller_admission_lead_ms(args.mode, wait_ms)
+                admission_open_ms = max(tool_start_ms, replay_due_ms - admission_lead_ms)
+                if admission_open_ms > offset_ms() + 1:
+                    await sleep_until(admission_open_ms)
+                activate_controller_demote(
+                    controller_demote_command,
+                    step_base_meta=step_base_meta,
+                    wait_spec=wait_spec,
+                    tool_start_ms=tool_start_ms,
+                    replay_due_ms=replay_due_ms,
+                    trigger=f"admission_{admission_aggressiveness}_window",
+                )
+                step_demote_restore_active = True
             prepare_lead_ms = controller_prepare_lead_ms(wait_ms) if controller_active_full else 0
             prepare_checkpoint_ms = max(tool_start_ms, replay_due_ms - prepare_lead_ms)
             prepare_controller_result: tuple[dict[str, Any], list[dict[str, Any]]] | None = None
