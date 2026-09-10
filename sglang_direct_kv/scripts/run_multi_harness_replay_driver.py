@@ -63,6 +63,7 @@ SUPPORTED_MODES = (
     "controller_speculative_preload",
     "controller_targeted_kv_prefetch",
     "controller_demote_restore",
+    "controller_priority_demote",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -76,6 +77,7 @@ CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
+CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -300,7 +302,7 @@ def controller_targeted_kv_prefetch_mode(mode: str) -> bool:
 
 
 def controller_demote_restore_mode(mode: str) -> bool:
-    return mode == CONTROLLER_DEMOTE_RESTORE_MODE
+    return mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_PRIORITY_DEMOTE_MODE}
 
 
 def controller_admission_control_mode(mode: str) -> bool:
@@ -2079,7 +2081,7 @@ async def main_async() -> None:
                 args.trace,
                 {
                     "event": "m27.controller_demote_restore.demote_start",
-                    "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
+                    "controller_policy": args.mode,
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "harness": args.harness,
@@ -2112,7 +2114,7 @@ async def main_async() -> None:
                 args.trace,
                 {
                     "event": "m27.controller_traffic_reshape.window_open",
-                    "controller_policy": CONTROLLER_FULL_MODE if controller_active_full else CONTROLLER_DEMOTE_RESTORE_MODE,
+                    "controller_policy": args.mode,
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "harness": args.harness,

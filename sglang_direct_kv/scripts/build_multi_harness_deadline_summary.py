@@ -68,6 +68,7 @@ MODE_LABELS = {
     "controller_speculative_preload": "CL = Controller speculative KV preload",
     "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
     "controller_demote_restore": "CD = Controller demote/restore",
+    "controller_priority_demote": "PD = Controller priority + demote",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
@@ -87,6 +88,7 @@ MODE_COLORS = {
     "controller_speculative_preload": "#9333ea",
     "controller_targeted_kv_prefetch": "#f59e0b",
     "controller_demote_restore": "#0d9488",
+    "controller_priority_demote": "#0891b2",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
@@ -173,6 +175,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#0d9488",
         "modes": {"controller_demote_restore"},
     },
+    "controller_priority_demote": {
+        "label": "Controller Priority + Demote",
+        "description": "Minimal controller path: raise target replay priority and aggressively lower filler/background priority during the tool-wait window",
+        "color": "#0891b2",
+        "modes": {"controller_priority_demote"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
@@ -207,6 +215,7 @@ CHART_SIGNAL_ORDER = (
     "controller_preload",
     "controller_targeted_prefetch",
     "controller_demote_restore",
+    "controller_priority_demote",
     "controller_admission",
     "controller_full",
     "controller_full_chunked",
@@ -224,6 +233,7 @@ MANAGER_SIGNAL_BUCKETS = (
 COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "baseline",
     "frontend_supplied",
+    "controller_priority_demote",
     "controller_full",
     "controller_full_chunked",
 )
@@ -245,6 +255,10 @@ COST_ACCOUNTING_COLORS = {
         "target": "#be185d",
         "filler": "#fecdd3",
     },
+    "controller_priority_demote": {
+        "target": "#0891b2",
+        "filler": "#bae6fd",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -261,6 +275,10 @@ COST_ACCOUNTING_DELTA_COLORS = {
     "controller_full_chunked": {
         "better": "#be185d",
         "worse": "#e11d48",
+    },
+    "controller_priority_demote": {
+        "better": "#0891b2",
+        "worse": "#dc2626",
     },
 }
 
@@ -1001,7 +1019,7 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") in {"controller_demote_restore", "controller_full"}
+        if row.get("mode") in {"controller_demote_restore", "controller_priority_demote", "controller_full"}
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -2755,6 +2773,10 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")) and row.get("gateway_priority_translation_source") == "controller_ready_decision":
             return "controller_scheduler"
         return "baseline"
+    if mode == "controller_priority_demote":
+        if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
+            return "controller_priority_demote"
+        return "baseline"
     if mode == "controller_speculative_preload":
         return "controller_preload"
     if mode == "controller_full":
@@ -3115,7 +3137,7 @@ def render_cost_accounting_chart(
     }
     comparison_buckets = [
         bucket
-        for bucket in ("frontend_supplied", "controller_full", "controller_full_chunked")
+        for bucket in ("frontend_supplied", "controller_priority_demote", "controller_full", "controller_full_chunked")
         if bucket in signal_buckets
     ]
     delta_by_key: dict[tuple[str, str, str], float | None] = {}
@@ -3274,6 +3296,8 @@ def render_cost_accounting_chart(
                 delta_label_name = (
                     "priority"
                     if bucket == "frontend_supplied"
+                    else "priority+demote"
+                    if bucket == "controller_priority_demote"
                     else "chunked controller"
                     if bucket == "controller_full_chunked"
                     else "controller"

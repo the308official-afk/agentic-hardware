@@ -237,6 +237,7 @@ The current manager-facing comparisons use these modes:
 | `controller_speculative_preload` | Portable controller phase 3. The controller observes the tool-wait window and lowers an accepted KV prefetch decision to gateway speculative KV preload. |
 | `controller_targeted_kv_prefetch` | Portable controller phase 4. The controller requests explicit target-prefix KV movement through a capability-gated SGLang adapter. If the active SGLang version exposes no stable direct hook, the report records that instead of using a warmup fallback. |
 | `controller_demote_restore` | Portable controller phase 5. The controller lowers matching background/filler traffic during the replay-critical window, raises replay priority, and records restore/release afterward. |
+| `controller_priority_demote` | Minimal controller probe. The controller does only two active things: lower filler/background requests to priority `-100` during the tool-wait window, and raise the target replay to priority `100`. |
 | `controller_admission_control` | Portable controller phase 6. The controller admits or skips speculative warmup based on pressure limits, so overload cases get explicit skip reasons instead of unbounded background work. |
 
 The lightweight master report also includes a **System Cost Accounting** section.
@@ -491,6 +492,22 @@ REPORT_BUILDER_MODE=lightweight \
 bash scripts/run_harness_deadline_pressure.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+Minimal priority-plus-demotion controller probe:
+
+```bash
+cd sglang_direct_kv
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p3_high" \
+SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demote" \
+TOOL_WAIT_PROFILE=fixed \
+TOOL_WAIT_PROFILE_SPEC=1000 \
+FILLER_REPLAY_DEADLINES=1 \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="priority_demote_p3_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 Focused validation of the chunked-prefill controller variant:
 
 ```bash
@@ -552,6 +569,7 @@ smallest possible boundary adapter.
 | Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
 | Phase 6.5: Single-harness full-controller optimization | Implemented; EC2 performance rerun pending | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | Unit tests prove timed prepare-window transition, short-wait no-demote behavior, metadata preservation, background demotion guardrails, replay priority, budget command, and release. Next EC2 run should check whether `controller_full` matches or beats the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`. |
 | Phase 6.6: Chunked-prefill full-controller scheduling | Implemented; EC2 performance run pending | Keep `controller_full` policy unchanged, but launch SGLang with smaller prefill chunks so the controller has more safe scheduling boundaries to insert urgent replay work. | Run `controller_full_chunked_prefill` against `controller_full` and `e2e_priority_hints` on DeepAgents/Hatcher at `p3_high` and `p5_boss_queue`; proof should show the mode, chunked-prefill launch knobs, controller traffic-reshape events, and replay lateness/TTFT deltas. |
+| Phase 6.7: Minimal priority-plus-demotion probe | Implemented; EC2 run pending | Strip the controller back to the two highest-value actions: raise target replay priority and aggressively demote filler/background work. | Run `controller_priority_demote` against baseline and front-end priority on DeepAgents/Hatcher at `p3_high` with a 1000 ms fixed tool wait. Success requires proof that filler requests entering during the replay window were lowered to priority `-100`, the target replay reached SGLang with priority `100`, and the target replay improved without hiding filler cost. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 For Phase 6.5, the demote/restore proof is window-aware. Earlier filler
