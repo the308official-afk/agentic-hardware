@@ -14,6 +14,43 @@ current experiments focus on replay-deadline readiness with real SGLang serving,
 HiCache, live timestamped telemetry, SGLang priority scheduling, controlled
 pressure levels, and multiple coding-agent harness shapes.
 
+## What We Mean By Shorthand
+
+In this project, **shorthand means representing a relationship with a reusable
+symbol defined in a legend**. Each expression has the form
+`subject [symbol] object`. The same symbol keeps the same meaning when the
+subject and object change.
+
+For example, the original text is:
+
+```text
+The cat is on the table. The book is on the shelf. The cup is next to the plate.
+```
+
+Its symbolic representation is:
+
+```text
+Legend:
+[x1] = the subject is on the object
+[x2] = the subject is next to the object
+
+cat [x1] table.
+book [x1] shelf.
+cup [x2] plate.
+```
+
+The receiving LLM gets both the legend and the encoded text. The goal is to
+preserve every stated fact and qualification while expressing relationships
+compactly. Summarization and repeated-phrase substitution are separate
+techniques; neither defines what we mean by shorthand here.
+
+This example defines the intended notation, not the current codec's literal
+output or a measured token saving. The portable `agentic_prompt_codec` module
+currently includes a narrow `is on` relation prototype using `@`, alongside a
+separate dictionary codec. See the [shorthand definition and implementation
+boundaries](sglang_direct_kv/docs/prompt_codec.md#what-shorthand-means-in-this-project)
+and the [module README](sglang_direct_kv/src/agentic_prompt_codec/README.md).
+
 ## Repository Map
 
 | Path | Purpose |

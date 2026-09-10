@@ -1,9 +1,78 @@
 # Request-local prompt encoding
 
-The encoder replaces repeated language with shorthand and a legend before the
-model sees the request. It is disabled by default and does not change the
-scheduling controller. Each request is independent: there is no conversation
-summary, remembered dictionary, fine-tuning, or hidden inference call.
+The portable encoder supports separate relation and dictionary codecs before
+the model sees the request. It is disabled by default and does not change the
+scheduling controller. Built-in encoding is request-local: there is no
+conversation summary, remembered dictionary, fine-tuning, or hidden inference
+call.
+
+## What shorthand means in this project
+
+**Shorthand is a symbolic representation of relationships, using a legend.**
+An expression follows `subject [symbol] object`. The symbol describes the
+relationship, independently of the particular subject and object. Reuse the
+same symbol for that relationship across different combinations.
+
+Original paragraph:
+
+```text
+The cat is on the table. The book is on the shelf. The cup is on the tray.
+The cat is next to the lamp. The book is next to the clock.
+The table is inside the kitchen. The shelf is inside the study.
+```
+
+Legend and encoded paragraph:
+
+```text
+Legend:
+[x1] = the subject is on the object
+[x2] = the subject is next to the object
+[x3] = the subject is inside the object
+
+cat [x1] table.
+book [x1] shelf.
+cup [x1] tray.
+cat [x2] lamp.
+book [x2] clock.
+table [x3] kitchen.
+shelf [x3] study.
+```
+
+Here, `cat [x1] table` means "the cat is on the table" and `book [x1] shelf`
+means "the book is on the shelf". Both use the same definition of `[x1]`.
+The receiving LLM gets the legend with the encoded text and interprets it
+directly.
+
+For future contributors and Codex tasks, preserve these distinctions:
+
+- **Relational shorthand:** encode who/what is related to whom/what, using
+  symbols with explicit, stable meanings within the legend's scope.
+- **Dictionary substitution:** replace an identical repeated text span with an
+  alias and retain its exact expansion. This is a separate codec and baseline.
+- **Summarization:** select or rephrase information into a shorter account.
+  This is a separate optional extension, not the definition of shorthand.
+
+The shorthand goal is to preserve all stated facts, including negation,
+uncertainty, time, quantities, entity identity, and exceptions. These simple
+examples contain only positive relations between unambiguous entities. Do not
+encode "may be on", "was on", or "is not on" as the unconditional `[x1]`.
+Preserve unsupported statements verbatim rather than silently dropping their
+qualifications. Semantic preservation does not require identical wording, but
+it does require retaining every distinction relevant to the original meaning.
+
+The example is a design definition, not executable codec output. Current
+`relations_v1` recognizes only a narrow, line-based positive `is on` grammar
+and uses `@`; it does not implement `[x1]`/`[x2]`/`[x3]`, `next to`, `inside`,
+or arbitrary paragraph parsing. `dictionary_v1` remains phrase substitution.
+The earlier approximately 17% synthetic token reduction came from that
+dictionary codec, not a validation of this broader relational notation.
+
+Keep encoding request-local rather than repeatedly summarizing a trajectory.
+If earlier encoded content is carried into later history, retain its existing
+text and scoped legend. Count the complete model input, including the legend,
+when checking savings. Model comprehension and task quality require their own
+evaluation; fewer characters alone establish neither token savings nor equal
+understanding.
 
 ## What ships
 
