@@ -3527,6 +3527,7 @@ def render_cost_accounting_chart(
     filler_key: str,
     total_key: str,
     y_axis_label: str,
+    include_net_bars: bool = False,
 ) -> str:
     if not cost_rows:
         return "<p>No cost accounting rows found.</p>"
@@ -3588,27 +3589,28 @@ def render_cost_accounting_chart(
         if bucket in signal_buckets
     ]
     delta_by_key: dict[tuple[str, str, str], float | None] = {}
-    for pressure in pressures:
-        for harness in harnesses:
-            baseline_row = rows_by_key.get((pressure, harness, "baseline"))
-            for bucket in comparison_buckets:
-                comparison_row = rows_by_key.get((pressure, harness, bucket))
-                if (
-                    baseline_row
-                    and comparison_row
-                    and row_total_is_measured(baseline_row)
-                    and row_total_is_measured(comparison_row)
-                ):
-                    delta_by_key[(pressure, harness, bucket)] = row_total_value(baseline_row) - row_total_value(comparison_row)
-                else:
-                    delta_by_key[(pressure, harness, bucket)] = None
+    if include_net_bars:
+        for pressure in pressures:
+            for harness in harnesses:
+                baseline_row = rows_by_key.get((pressure, harness, "baseline"))
+                for bucket in comparison_buckets:
+                    comparison_row = rows_by_key.get((pressure, harness, bucket))
+                    if (
+                        baseline_row
+                        and comparison_row
+                        and row_total_is_measured(baseline_row)
+                        and row_total_is_measured(comparison_row)
+                    ):
+                        delta_by_key[(pressure, harness, bucket)] = row_total_value(baseline_row) - row_total_value(comparison_row)
+                    else:
+                        delta_by_key[(pressure, harness, bucket)] = None
 
     raw_values = []
     for row in cost_rows:
         for role, value_key in (("target", target_key), ("filler", filler_key)):
             if role_is_measured(row, role):
                 raw_values.append(optional_float(row.get(value_key)) or 0.0)
-    delta_values = [value for value in delta_by_key.values() if value is not None]
+    delta_values = [value for value in delta_by_key.values() if value is not None] if include_net_bars else []
     max_positive = max([0.0, *raw_values, *[value for value in delta_values if value > 0]])
     min_negative = min([0.0, *[value for value in delta_values if value < 0]])
     if max_positive <= 0:
@@ -3729,6 +3731,8 @@ def render_cost_accounting_chart(
                         lines.append(svg_text_label(compact_ms(value), cx, bar_top - 6, color))
                     lines.append("</g>")
                 lines.append("</g>")
+            if not include_net_bars:
+                continue
             for delta_index, bucket in enumerate(comparison_buckets):
                 delta = delta_by_key.get((pressure, harness, bucket))
                 delta_cx = harness_x + 54.0 + delta_index * 16.0
@@ -3800,7 +3804,227 @@ def render_cost_accounting_chart(
             lines.append(f'<rect x="{legend_cursor:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{color}" rx="2"/>')
             lines.append(f'<text x="{legend_cursor+18:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">{html.escape(text)}</text>')
             legend_cursor += max(104.0, 8.0 * len(text) + 30.0)
-    lines.append(f'<text x="{legend_cursor + 10:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">net bars: upward saved vs baseline; downward worse</text>')
+    if include_net_bars:
+        lines.append(f'<text x="{legend_cursor + 10:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">net bars: upward saved vs baseline; downward worse</text>')
+    lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-10}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def render_cost_accounting_delta_chart(
+    cost_rows: list[dict[str, Any]],
+    *,
+    heading: str,
+    note: str,
+    target_key: str,
+    filler_key: str,
+    y_axis_label: str,
+) -> str:
+    if not cost_rows:
+        return "<p>No cost accounting rows found.</p>"
+    pressures = [pressure for pressure in PRESSURE_ORDER if any(row.get("pressure_level") == pressure for row in cost_rows)]
+    harnesses = [harness for harness in HARNESS_LABELS if any(row.get("harness") == harness for row in cost_rows)]
+    signal_buckets = [
+        bucket
+        for bucket in COST_ACCOUNTING_SIGNAL_BUCKETS
+        if any(row.get("signal_bucket") == bucket for row in cost_rows)
+    ]
+    comparison_buckets = [bucket for bucket in signal_buckets if bucket != "baseline"]
+    if not pressures or not harnesses or not comparison_buckets:
+        return "<p>No non-baseline cost accounting rows found.</p>"
+
+    def measured_key(role: str) -> str:
+        if "ttft" in target_key:
+            return f"{role}_ttft_measured_requests"
+        return f"{role}_replay_debt_measured_requests"
+
+    def request_count_key(role: str) -> str:
+        return f"{role}_request_count"
+
+    def role_is_measured(row: dict[str, Any], role: str) -> bool:
+        request_count = int(float(row.get(request_count_key(role)) or 0))
+        measured = int(float(row.get(measured_key(role)) or 0))
+        return request_count == 0 or measured > 0
+
+    def row_total_is_measured(row: dict[str, Any]) -> bool:
+        return role_is_measured(row, "target") and role_is_measured(row, "filler")
+
+    def row_total_value(row: dict[str, Any]) -> float:
+        return (optional_float(row.get(target_key)) or 0.0) + (optional_float(row.get(filler_key)) or 0.0)
+
+    rows_by_key = {
+        (str(row.get("pressure_level") or ""), str(row.get("harness") or ""), str(row.get("signal_bucket") or "")): row
+        for row in cost_rows
+    }
+    delta_by_key: dict[tuple[str, str, str], float | None] = {}
+    for pressure in pressures:
+        for harness in harnesses:
+            baseline_row = rows_by_key.get((pressure, harness, "baseline"))
+            for bucket in comparison_buckets:
+                comparison_row = rows_by_key.get((pressure, harness, bucket))
+                if (
+                    baseline_row
+                    and comparison_row
+                    and row_total_is_measured(baseline_row)
+                    and row_total_is_measured(comparison_row)
+                ):
+                    delta_by_key[(pressure, harness, bucket)] = row_total_value(baseline_row) - row_total_value(comparison_row)
+                else:
+                    delta_by_key[(pressure, harness, bucket)] = None
+
+    delta_values = [value for value in delta_by_key.values() if value is not None]
+    max_positive = max([0.0, *[value for value in delta_values if value > 0]])
+    min_negative = min([0.0, *[value for value in delta_values if value < 0]])
+    if max_positive <= 0 and min_negative >= 0:
+        max_positive = 1.0
+    y_max = max_positive * 1.18 if max_positive > 0 else abs(min_negative) * 0.18
+    y_min = min_negative * 1.18 if min_negative < 0 else -max_positive * 0.18
+    if y_min == y_max:
+        y_min = -1.0
+        y_max = 1.0
+
+    pressure_w = max(820, len(harnesses) * 132 + 170)
+    width = max(1400, pressure_w * len(pressures) + 220)
+    left = 120
+    right = 40
+    top = 86
+    chart_h = 330
+    bottom = top + chart_h
+    height = int(bottom + 145)
+    plot_w = width - left - right
+    pressure_group_w = plot_w / len(pressures)
+
+    def y_pos(value: float) -> float:
+        return bottom - ((value - y_min) / (y_max - y_min)) * chart_h
+
+    def nice_ticks(bottom_value: float, top_value: float) -> list[float]:
+        span = max(abs(bottom_value), abs(top_value), 1.0)
+        candidates = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+        step = next((candidate for candidate in candidates if span / candidate <= 4), candidates[-1])
+        ticks = [0.0]
+        positive = step
+        while positive <= top_value:
+            ticks.append(float(positive))
+            positive += step
+        negative = -step
+        while negative >= bottom_value:
+            ticks.insert(0, float(negative))
+            negative -= step
+        if top_value > max(ticks):
+            ticks.append(top_value)
+        if bottom_value < min(ticks):
+            ticks.insert(0, bottom_value)
+        return ticks
+
+    def bucket_offset(bucket: str) -> float:
+        index = comparison_buckets.index(bucket)
+        return (index - (len(comparison_buckets) - 1) / 2) * 18.0
+
+    lines = [
+        (
+            f'<svg class="replay-pressure-chart cost-accounting-chart cost-accounting-delta-chart" '
+            f'viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+            f'data-full-width="{width}" data-chart-height="{height}" data-left="{left}" data-right="{right}" '
+            f'data-pressure-width="{pressure_group_w:.6f}" '
+            f'data-pressure-order="{html.escape(json.dumps(pressures))}" '
+            f'role="img" aria-label="{html.escape(heading)}">'
+        ),
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="{left}" y="{top-46:.1f}" font-size="18" font-weight="800" fill="#111827">{html.escape(heading)}</text>',
+        f'<text x="{left}" y="{top-24:.1f}" font-size="12" fill="#64748b">{html.escape(note)}</text>',
+    ]
+    for tick in nice_ticks(y_min, y_max):
+        y = y_pos(tick)
+        lines.append(f'<line class="chart-horizontal-span" x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
+        lines.append(f'<text x="{left-12}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#374151">{compact_ms(tick)}</text>')
+    zero_y = y_pos(0.0)
+    lines.append(f'<line class="chart-horizontal-span" x1="{left}" x2="{width-right}" y1="{zero_y:.1f}" y2="{zero_y:.1f}" stroke="#111827" stroke-width="1.8"/>')
+
+    for pressure_index, pressure in enumerate(pressures):
+        x = left + pressure_index * pressure_group_w
+        lines.append(
+            f'<g class="pressure-level" data-pressure-level="{html.escape(pressure)}" '
+            f'data-pressure-index="{pressure_index}">'
+        )
+        if pressure_index % 2 == 1:
+            lines.append(f'<rect x="{x:.1f}" y="{top}" width="{pressure_group_w:.1f}" height="{chart_h}" fill="#f8fafc" opacity="0.62"/>')
+        lines.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{top}" y2="{bottom+34:.1f}" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>')
+        harness_step = pressure_group_w / max(1, len(harnesses))
+        for harness_index, harness in enumerate(harnesses):
+            harness_left = x + harness_step * harness_index
+            harness_right = harness_left + harness_step
+            harness_x = harness_left + harness_step / 2
+            if harness_index % 2 == 1:
+                lines.append(
+                    f'<rect x="{harness_left:.1f}" y="{top}" width="{harness_step:.1f}" '
+                    f'height="{chart_h + 34:.1f}" fill="#f8fafc" opacity="0.45"/>'
+                )
+            lines.append(
+                f'<line x1="{harness_left:.1f}" x2="{harness_left:.1f}" y1="{top}" y2="{bottom+34:.1f}" '
+                f'stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>'
+            )
+            if harness_index == len(harnesses) - 1:
+                lines.append(
+                    f'<line x1="{harness_right:.1f}" x2="{harness_right:.1f}" y1="{top}" y2="{bottom+34:.1f}" '
+                    f'stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>'
+                )
+            lines.append(
+                f'<text x="{harness_x:.1f}" y="{bottom+24:.1f}" text-anchor="middle" '
+                f'font-size="10" font-weight="700" fill="#334155">'
+                f'{html.escape(HARNESS_SHORT_LABELS.get(harness, HARNESS_LABELS.get(harness, harness)))}</text>'
+            )
+            for bucket in comparison_buckets:
+                delta = delta_by_key.get((pressure, harness, bucket))
+                cx = harness_x + bucket_offset(bucket)
+                palette = COST_ACCOUNTING_DELTA_COLORS.get(bucket, {})
+                color = (
+                    COST_ACCOUNTING_DELTA_UNKNOWN
+                    if delta is None
+                    else str(palette.get("better") or COST_ACCOUNTING_DELTA_BETTER)
+                    if delta >= 0
+                    else str(palette.get("worse") or COST_ACCOUNTING_DELTA_WORSE)
+                )
+                title = (
+                    f"{heading} | {PRESSURE_LABELS.get(pressure, pressure)} | "
+                    f"{HARNESS_LABELS.get(harness, harness)} | {chart_signal_label(bucket)} | "
+                    f"net baseline-minus-mode {'n/a' if delta is None else f'{delta:.1f} ms'}"
+                )
+                lines.append(f'<g class="signal-bucket" data-signal-bucket="{html.escape(bucket)}"><title>{html.escape(title)}</title>')
+                if delta is None:
+                    label_y = zero_y - 6 if zero_y > top + 28 else zero_y + 14
+                    lines.append(
+                        f'<line x1="{cx - 5:.1f}" x2="{cx + 5:.1f}" y1="{zero_y:.1f}" y2="{zero_y:.1f}" '
+                        f'stroke="{color}" stroke-width="2.2" opacity="0.8"/>'
+                    )
+                    lines.append(svg_text_label("n/a", cx, label_y, color))
+                else:
+                    delta_y = y_pos(delta)
+                    bar_y = min(delta_y, zero_y)
+                    bar_h = max(1.0, abs(zero_y - delta_y))
+                    label = f"+{compact_ms(delta)}" if delta >= 0 else f"-{compact_ms(abs(delta))}"
+                    label_y = delta_y - 6 if delta >= 0 else delta_y + 14
+                    lines.append(
+                        f'<rect x="{cx - 5:.1f}" y="{bar_y:.1f}" width="10" height="{bar_h:.1f}" '
+                        f'fill="{color}" opacity="0.96" rx="2"/>'
+                    )
+                    lines.append(svg_text_label(label, cx, label_y, color))
+                lines.append("</g>")
+        cx = x + pressure_group_w / 2
+        lines.append(f'<text x="{cx:.1f}" y="{bottom+56:.1f}" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>')
+        lines.append("</g>")
+    lines.append(f'<line class="chart-right-boundary" x1="{width-right:.1f}" x2="{width-right:.1f}" y1="{top}" y2="{bottom+34:.1f}" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>')
+    lines.append(f'<text transform="translate(32 {top + chart_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">{html.escape(y_axis_label)}</text>')
+    legend_y = bottom + 91
+    legend_x = left
+    lines.append(f'<text x="{legend_x:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Net</text>')
+    lines.append(f'<text x="{legend_x + 36:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">baseline total - mode total; upward saves time/debt, downward adds cost/debt</text>')
+    legend_cursor = legend_x + 372.0
+    for bucket in comparison_buckets:
+        color = COST_ACCOUNTING_DELTA_COLORS.get(bucket, {}).get("better", chart_signal_color(bucket))
+        label = chart_signal_label(bucket)
+        lines.append(f'<rect x="{legend_cursor:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{color}" rx="2"/>')
+        lines.append(f'<text x="{legend_cursor+18:.1f}" y="{legend_y:.1f}" font-size="11" fill="#334155">{html.escape(label)}</text>')
+        legend_cursor += max(108.0, 8.0 * len(label) + 30.0)
     lines.append(f'<text class="chart-x-axis-label" x="{left + plot_w / 2:.1f}" y="{height-10}" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>')
     lines.append("</svg>")
     return "\n".join(lines)
@@ -3828,28 +4052,46 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     )
     ttft_chart = render_cost_accounting_chart(
         cost_rows,
-        heading="C. Total Replay TTFT Cost",
-        note="Per harness: target/filler bars for each available mode, plus net deltas versus baseline.",
+        heading="C1. Total Replay TTFT Cost",
+        note="Actual target/filler TTFT totals only. Dark bars are target replay requests; light bars are filler/background requests.",
         target_key="sum_target_ttft_ms",
         filler_key="sum_filler_ttft_ms",
         total_key="sum_total_ttft_ms",
         y_axis_label="total TTFT ms",
     )
+    ttft_delta_chart = render_cost_accounting_delta_chart(
+        cost_rows,
+        heading="C2. Net TTFT Change vs Baseline",
+        note="One net bar per non-baseline mode. Upward means the mode saved total TTFT versus baseline; downward means it added cost.",
+        target_key="sum_target_ttft_ms",
+        filler_key="sum_filler_ttft_ms",
+        y_axis_label="baseline total - mode total TTFT ms",
+    )
     debt_chart = render_cost_accounting_chart(
         cost_rows,
-        heading="D. Total Replay Deadline Debt",
-        note="Same layout, but summing positive replay lateness. Upward net deltas mean the mode reduced total replay debt.",
+        heading="D1. Total Replay Deadline Debt",
+        note="Actual positive replay lateness totals only. Dark bars are target replay requests; light bars are filler/background requests.",
         target_key="sum_target_replay_debt_ms",
         filler_key="sum_filler_replay_debt_ms",
         total_key="sum_total_replay_debt_ms",
         y_axis_label="total replay debt ms",
     )
+    debt_delta_chart = render_cost_accounting_delta_chart(
+        cost_rows,
+        heading="D2. Net Replay Debt Change vs Baseline",
+        note="One net bar per non-baseline mode. Upward means the mode reduced replay debt versus baseline; downward means it increased debt.",
+        target_key="sum_target_replay_debt_ms",
+        filler_key="sum_filler_replay_debt_ms",
+        y_axis_label="baseline total - mode total replay debt ms",
+    )
     return (
         "<h2>System Cost Accounting</h2>"
         "<p>This section asks whether priority/controller reduced target replay misses by moving delay onto filler/background work.</p>"
-        "<p>The manager-facing cost charts compare Baseline, Front-End Supplied, and Full Controller when those modes are present. Net bars show whether each non-baseline mode reduced or increased total system cost.</p>"
+        "<p>The manager-facing cost charts compare Baseline, Front-End Supplied, and controller modes when those modes are present. Actual totals and net changes are separated so the tradeoff is easier to read.</p>"
         f'<div class="card">{ttft_chart}</div>'
+        f'<div class="card">{ttft_delta_chart}</div>'
         f'<div class="card">{debt_chart}</div>'
+        f'<div class="card">{debt_delta_chart}</div>'
         "<details><summary>Open cost accounting summary table</summary>"
         f'<div class="card">{cost_table}</div>'
         "</details>"
