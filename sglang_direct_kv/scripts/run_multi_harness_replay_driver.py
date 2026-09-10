@@ -148,14 +148,18 @@ def parse_tool_wait_profile_spec(spec: str) -> tuple[tuple[str, float, int], ...
         if not raw:
             continue
         parts = raw.split(":")
-        if len(parts) == 2:
+        if len(parts) == 1:
+            wait_class = "fixed"
+            weight_raw = "1"
+            wait_raw = parts[0]
+        elif len(parts) == 2:
             wait_class = f"bucket_{len(out) + 1}"
             weight_raw, wait_raw = parts
         elif len(parts) == 3:
             wait_class, weight_raw, wait_raw = parts
         else:
             raise ValueError(
-                "TOOL_WAIT_PROFILE_SPEC entries must be class:weight:wait_ms or weight:wait_ms"
+                "TOOL_WAIT_PROFILE_SPEC entries must be wait_ms, class:weight:wait_ms, or weight:wait_ms"
             )
         weight = float(weight_raw)
         wait_ms = int(float(wait_raw))
