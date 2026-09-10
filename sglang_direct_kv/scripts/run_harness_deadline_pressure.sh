@@ -309,7 +309,7 @@ run_case() {
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
   elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"

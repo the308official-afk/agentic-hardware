@@ -27,6 +27,7 @@ PRIORITY_ENABLED_MODES = {
     "controller_scheduler_priority",
     "controller_demote_restore",
     "controller_priority_demote",
+    "controller_priority_demotion_admission",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -38,6 +39,7 @@ HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admission"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -45,6 +47,7 @@ CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_PRIORITY_DEMOTE_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
@@ -283,7 +286,13 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     phase = str(meta.get("phase") or "")
     mode = str(meta.get("mode") or "")
     if mode in CONTROLLER_PRIORITY_MODES:
-        if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_PRIORITY_DEMOTE_MODE, CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE} and phase == "pressure_filler":
+        if mode in {
+            CONTROLLER_DEMOTE_RESTORE_MODE,
+            CONTROLLER_PRIORITY_DEMOTE_MODE,
+            CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+            CONTROLLER_FULL_MODE,
+            CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
+        } and phase == "pressure_filler":
             return int(meta.get("controller_demote_priority") or meta.get("low_priority") or -100)
         if phase != "replay":
             return None
@@ -528,7 +537,13 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
         if priority is not None:
             source = (
                 "controller_demote_window"
-                if mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_PRIORITY_DEMOTE_MODE, CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE}
+                if mode in {
+                    CONTROLLER_DEMOTE_RESTORE_MODE,
+                    CONTROLLER_PRIORITY_DEMOTE_MODE,
+                    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+                    CONTROLLER_FULL_MODE,
+                    CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
+                }
                 and str(meta.get("phase") or "") == "pressure_filler"
                 else "controller_full_ready_ladder"
                 if mode in {CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE}

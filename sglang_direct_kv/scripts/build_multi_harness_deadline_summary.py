@@ -69,6 +69,7 @@ MODE_LABELS = {
     "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
     "controller_demote_restore": "CD = Controller demote/restore",
     "controller_priority_demote": "PD = Controller priority + demote",
+    "controller_priority_demotion_admission": "PDA = Controller priority + demotion + admission",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
@@ -89,6 +90,7 @@ MODE_COLORS = {
     "controller_targeted_kv_prefetch": "#f59e0b",
     "controller_demote_restore": "#0d9488",
     "controller_priority_demote": "#0891b2",
+    "controller_priority_demotion_admission": "#0369a1",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
@@ -181,6 +183,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#0891b2",
         "modes": {"controller_priority_demote"},
     },
+    "controller_priority_demotion_admission": {
+        "label": "Controller Priority + Demotion + Admission",
+        "description": "Controller raises target replay priority, lowers filler/background priority, and holds background admission during the replay-critical window",
+        "color": "#0369a1",
+        "modes": {"controller_priority_demotion_admission"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
@@ -216,6 +224,7 @@ CHART_SIGNAL_ORDER = (
     "controller_targeted_prefetch",
     "controller_demote_restore",
     "controller_priority_demote",
+    "controller_priority_demotion_admission",
     "controller_admission",
     "controller_full",
     "controller_full_chunked",
@@ -234,6 +243,7 @@ COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "baseline",
     "frontend_supplied",
     "controller_priority_demote",
+    "controller_priority_demotion_admission",
     "controller_full",
     "controller_full_chunked",
 )
@@ -259,6 +269,10 @@ COST_ACCOUNTING_COLORS = {
         "target": "#0891b2",
         "filler": "#bae6fd",
     },
+    "controller_priority_demotion_admission": {
+        "target": "#0369a1",
+        "filler": "#bfdbfe",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -278,6 +292,10 @@ COST_ACCOUNTING_DELTA_COLORS = {
     },
     "controller_priority_demote": {
         "better": "#0891b2",
+        "worse": "#dc2626",
+    },
+    "controller_priority_demotion_admission": {
+        "better": "#0369a1",
         "worse": "#dc2626",
     },
 }
@@ -1019,7 +1037,13 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") in {"controller_demote_restore", "controller_priority_demote", "controller_full"}
+        if row.get("mode")
+        in {
+            "controller_demote_restore",
+            "controller_priority_demote",
+            "controller_priority_demotion_admission",
+            "controller_full",
+        }
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -1053,6 +1077,22 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             row
             for row in trace_rows
             if str(row.get("event") or "") == "m27.controller_traffic_reshape.target_replay_entering"
+        ]
+        admission_gate_opens = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_admission_gate.window_open"
+        ]
+        admission_gate_closes = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller_admission_gate.window_close"
+        ]
+        admission_gate_blocked = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_admission_gate.background_request_blocked"
+        ]
+        admission_gate_released = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_admission_gate.background_request_released"
         ]
         for demote in demote_events:
             session_id = str(demote.get("session_id") or "")
@@ -1131,6 +1171,56 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                 ),
                 {},
             )
+            admission_gate_open = next(
+                (
+                    row
+                    for row in admission_gate_opens
+                    if str(row.get("session_id") or "") == session_id
+                    and (
+                        not tool_wait_step
+                        or not str(row.get("tool_wait_step") or "")
+                        or str(row.get("tool_wait_step") or "") == tool_wait_step
+                    )
+                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                ),
+                {},
+            )
+            admission_gate_close = next(
+                (
+                    row
+                    for row in admission_gate_closes
+                    if str(row.get("session_id") or "") == session_id
+                    and (
+                        not tool_wait_step
+                        or not str(row.get("tool_wait_step") or "")
+                        or str(row.get("tool_wait_step") or "") == tool_wait_step
+                    )
+                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+                ),
+                {},
+            )
+            gate_blocked_rows = [
+                row
+                for row in admission_gate_blocked
+                if str(row.get("gate_owner_session_id") or "") == session_id
+                and (
+                    not tool_wait_step
+                    or not str(row.get("gate_tool_wait_step") or "")
+                    or str(row.get("gate_tool_wait_step") or "") == tool_wait_step
+                )
+                and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+            ]
+            gate_released_rows = [
+                row
+                for row in admission_gate_released
+                if str(row.get("gate_owner_session_id") or "") == session_id
+                and (
+                    not tool_wait_step
+                    or not str(row.get("gate_tool_wait_step") or "")
+                    or str(row.get("gate_tool_wait_step") or "") == tool_wait_step
+                )
+                and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+            ]
             filler_rows = [
                 row
                 for row in request_starts
@@ -1172,6 +1262,8 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             replay_raised = replay_priority is not None and replay_priority >= 100
             if demote_acted and filler_before_replay and not filler_not_demoted_in_window and replay_raised and restore_acted:
                 verdict = "filler traffic in the replay window was demoted, replay was raised, and restore was recorded"
+            elif demote_acted and admission_gate_open and gate_blocked_rows and admission_gate_close and replay_raised and restore_acted:
+                verdict = "background admission was held during the replay window, replay was raised, and restore was recorded"
             elif demote_acted and not filler_rows and replay_raised and restore_acted:
                 verdict = "demote/restore acted, but this pressure level had no filler requests"
             elif demote_acted and not filler_before_replay and replay_raised and restore_acted:
@@ -1205,6 +1297,10 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                     "traffic_reshape_background_lowered_signals": len(lowered_signals),
                     "traffic_reshape_target_replay_signal": "yes" if target_replay_signal else "no",
                     "traffic_reshape_window_closed": "yes" if window_close else "no",
+                    "admission_gate_opened": "yes" if admission_gate_open else "no",
+                    "admission_gate_background_blocked": len(gate_blocked_rows),
+                    "admission_gate_background_released": len(gate_released_rows),
+                    "admission_gate_closed": "yes" if admission_gate_close else "no",
                     "filler_requests_seen": len(filler_rows),
                     "filler_requests_between_demote_and_replay": len(filler_before_replay),
                     "filler_demoted_count": len(filler_demoted),
@@ -2263,6 +2359,10 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "traffic_reshape_background_lowered_signals",
     "traffic_reshape_target_replay_signal",
     "traffic_reshape_window_closed",
+    "admission_gate_opened",
+    "admission_gate_background_blocked",
+    "admission_gate_background_released",
+    "admission_gate_closed",
     "filler_requests_seen",
     "filler_requests_between_demote_and_replay",
     "filler_demoted_count",
@@ -2777,6 +2877,10 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
             return "controller_priority_demote"
         return "baseline"
+    if mode == "controller_priority_demotion_admission":
+        if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
+            return "controller_priority_demotion_admission"
+        return "baseline"
     if mode == "controller_speculative_preload":
         return "controller_preload"
     if mode == "controller_full":
@@ -3137,7 +3241,13 @@ def render_cost_accounting_chart(
     }
     comparison_buckets = [
         bucket
-        for bucket in ("frontend_supplied", "controller_priority_demote", "controller_full", "controller_full_chunked")
+        for bucket in (
+            "frontend_supplied",
+            "controller_priority_demote",
+            "controller_priority_demotion_admission",
+            "controller_full",
+            "controller_full_chunked",
+        )
         if bucket in signal_buckets
     ]
     delta_by_key: dict[tuple[str, str, str], float | None] = {}
@@ -3298,6 +3408,8 @@ def render_cost_accounting_chart(
                     if bucket == "frontend_supplied"
                     else "priority+demote"
                     if bucket == "controller_priority_demote"
+                    else "priority+demotion+admission"
+                    if bucket == "controller_priority_demotion_admission"
                     else "chunked controller"
                     if bucket == "controller_full_chunked"
                     else "controller"

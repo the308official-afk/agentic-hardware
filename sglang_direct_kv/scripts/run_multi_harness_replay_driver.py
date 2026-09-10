@@ -64,6 +64,7 @@ SUPPORTED_MODES = (
     "controller_targeted_kv_prefetch",
     "controller_demote_restore",
     "controller_priority_demote",
+    "controller_priority_demotion_admission",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -78,6 +79,7 @@ CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admission"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -306,7 +308,15 @@ def controller_targeted_kv_prefetch_mode(mode: str) -> bool:
 
 
 def controller_demote_restore_mode(mode: str) -> bool:
-    return mode in {CONTROLLER_DEMOTE_RESTORE_MODE, CONTROLLER_PRIORITY_DEMOTE_MODE}
+    return mode in {
+        CONTROLLER_DEMOTE_RESTORE_MODE,
+        CONTROLLER_PRIORITY_DEMOTE_MODE,
+        CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+    }
+
+
+def controller_priority_demotion_admission_mode(mode: str) -> bool:
+    return mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE
 
 
 def controller_admission_control_mode(mode: str) -> bool:
@@ -324,6 +334,7 @@ def controller_mode(mode: str) -> bool:
         or controller_speculative_preload_mode(mode)
         or controller_targeted_kv_prefetch_mode(mode)
         or controller_demote_restore_mode(mode)
+        or controller_priority_demotion_admission_mode(mode)
         or controller_admission_control_mode(mode)
         or controller_full_mode(mode)
     )
@@ -1261,6 +1272,7 @@ async def run_filler(
     workload_start: float | None = None,
     filler_replay_deadlines: bool = False,
     demotion_state: dict[str, Any] | None = None,
+    admission_gate_state: dict[str, Any] | None = None,
 ) -> None:
     def offset_ms() -> float:
         if workload_start is None:
@@ -1305,6 +1317,63 @@ async def run_filler(
             },
         )
 
+    async def wait_for_admission_if_needed(meta: dict[str, Any], *, request_id: str, stage: str) -> None:
+        if not admission_gate_state or not admission_gate_state.get("active"):
+            return
+        release_event = admission_gate_state.get("release_event")
+        if not isinstance(release_event, asyncio.Event) or release_event.is_set():
+            return
+        blocked_offset = offset_ms()
+        gate_meta = admission_gate_state.get("meta")
+        if not isinstance(gate_meta, dict):
+            gate_meta = {}
+        if trace is not None:
+            write_trace(
+                trace,
+                {
+                    "event": "m27.controller_admission_gate.background_request_blocked",
+                    "session_id": meta.get("session_id", ""),
+                    "mode": meta.get("mode", ""),
+                    "harness": meta.get("harness", ""),
+                    "pressure_level": meta.get("pressure_level", ""),
+                    "phase": meta.get("phase", ""),
+                    "request_id": request_id,
+                    "label": request_id,
+                    "task_index": meta.get("task_index", ""),
+                    "tool_wait_step": meta.get("tool_wait_step", ""),
+                    "task_replay_steps": meta.get("task_replay_steps", ""),
+                    "stage": stage,
+                    "gate_owner_session_id": gate_meta.get("session_id", ""),
+                    "gate_tool_wait_step": gate_meta.get("tool_wait_step", ""),
+                    "gate_reason": gate_meta.get("reason", "target replay critical window"),
+                    "gate_open_offset_ms": gate_meta.get("open_offset_ms", ""),
+                    "offset_ms": round(blocked_offset, 3),
+                },
+            )
+        await release_event.wait()
+        if trace is not None:
+            write_trace(
+                trace,
+                {
+                    "event": "m27.controller_admission_gate.background_request_released",
+                    "session_id": meta.get("session_id", ""),
+                    "mode": meta.get("mode", ""),
+                    "harness": meta.get("harness", ""),
+                    "pressure_level": meta.get("pressure_level", ""),
+                    "phase": meta.get("phase", ""),
+                    "request_id": request_id,
+                    "label": request_id,
+                    "task_index": meta.get("task_index", ""),
+                    "tool_wait_step": meta.get("tool_wait_step", ""),
+                    "task_replay_steps": meta.get("task_replay_steps", ""),
+                    "stage": stage,
+                    "gate_owner_session_id": gate_meta.get("session_id", ""),
+                    "gate_tool_wait_step": gate_meta.get("tool_wait_step", ""),
+                    "blocked_for_ms": round(offset_ms() - blocked_offset, 3),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
+
     filler_session = f"{pair.session_id}_pressure_{idx:03d}"
     prompt = make_pressure_filler_prompt(filler_session, tokens)
     total_steps = max(1, len(wait_specs))
@@ -1322,6 +1391,7 @@ async def run_filler(
     }
     meta = attach_pre_harness_priority_intent(meta)
     write_background_reshape_signal(meta, request_id=str(meta["label"]), stage="initial")
+    await wait_for_admission_if_needed(meta, request_id=str(meta["label"]), stage="initial")
     await run_hatcher_request(gateway_base, model, prompt, meta)
     if not filler_replay_deadlines:
         return
@@ -1404,6 +1474,7 @@ async def run_filler(
         }
         replay_meta = attach_pre_harness_priority_intent(replay_meta)
         write_background_reshape_signal(replay_meta, request_id=replay_label, stage="replay")
+        await wait_for_admission_if_needed(replay_meta, request_id=replay_label, stage="replay")
         await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
         if trace is not None:
             write_trace(
@@ -1548,6 +1619,7 @@ async def main_async() -> None:
     controller_active_preload = controller_speculative_preload_mode(args.mode)
     controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
     controller_active_demote_restore = controller_demote_restore_mode(args.mode)
+    controller_active_priority_demotion_admission = controller_priority_demotion_admission_mode(args.mode)
     controller_active_admission = controller_admission_control_mode(args.mode)
     controller_active_full = controller_full_mode(args.mode)
     max_target_tool_wait_ms = max(
@@ -1562,6 +1634,7 @@ async def main_async() -> None:
                 or controller_active_preload
                 or controller_active_targeted_prefetch
                 or controller_active_demote_restore
+                or controller_active_priority_demotion_admission
                 or controller_active_admission
                 or controller_active_full
             ),
@@ -1572,6 +1645,13 @@ async def main_async() -> None:
             background_prefill_budget_tokens=min(1024, max(128, args.filler_prompt_tokens // 2)),
         )
     )
+    controller_admission_gate_event = asyncio.Event()
+    controller_admission_gate_event.set()
+    controller_admission_gate_state: dict[str, Any] = {
+        "active": False,
+        "meta": {},
+        "release_event": controller_admission_gate_event,
+    }
     if controller_active_priority:
         controller_backend = GatewayPriorityBackendAdapter(
             BackendCapabilities(
@@ -1626,7 +1706,7 @@ async def main_async() -> None:
                 kv_release=True,
                 live_metrics=True,
                 observe_only=False,
-                backend_name=CONTROLLER_DEMOTE_RESTORE_MODE,
+                backend_name=args.mode,
             )
         )
     elif controller_active_admission:
@@ -2081,6 +2161,39 @@ async def main_async() -> None:
             controller_demotion_state["active"] = True
             controller_demotion_state["meta"] = demote_meta
             filler_base_meta = {**step_base_meta, **demote_meta}
+            if controller_active_priority_demotion_admission:
+                controller_admission_gate_event.clear()
+                controller_admission_gate_state["active"] = True
+                controller_admission_gate_state["meta"] = {
+                    "session_id": pair.session_id,
+                    "tool_wait_step": wait_spec.step_index,
+                    "reason": "hold filler/background admission during target replay critical window",
+                    "open_offset_ms": round(offset_ms(), 3),
+                    "replay_due_offset_ms": round(replay_due_ms, 3),
+                }
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_admission_gate.window_open",
+                        "controller_policy": args.mode,
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "tool_wait_profile": args.tool_wait_profile,
+                        "tool_wait_class": wait_spec.wait_class,
+                        "tool_wait_ms": wait_spec.wait_ms,
+                        "demote_trigger": trigger,
+                        "admission_action": "hold_background_until_target_replay_completes",
+                        "demotable_background_requests": args.filler_sessions,
+                        "tool_start_offset_ms": round(tool_start_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "open_offset_ms": round(offset_ms(), 3),
+                    },
+                )
             write_trace(
                 args.trace,
                 {
@@ -2460,6 +2573,7 @@ async def main_async() -> None:
                             workload_start=workload_start,
                             filler_replay_deadlines=args.filler_replay_deadlines,
                             demotion_state=controller_demotion_state,
+                            admission_gate_state=controller_admission_gate_state,
                         )
                     )
                     for idx in range(args.filler_sessions)
@@ -2730,6 +2844,31 @@ async def main_async() -> None:
                     },
                 )
             await bounded_request(step_replay_prompt, replay_meta)
+            if controller_active_priority_demotion_admission and controller_admission_gate_state.get("active"):
+                controller_admission_gate_state["active"] = False
+                controller_admission_gate_event.set()
+                gate_meta = controller_admission_gate_state.get("meta")
+                if not isinstance(gate_meta, dict):
+                    gate_meta = {}
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.controller_admission_gate.window_close",
+                        "controller_policy": args.mode,
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "tool_wait_step": wait_spec.step_index,
+                        "task_replay_steps": len(target_wait_specs),
+                        "admission_action": "release_background_after_target_replay",
+                        "gate_open_offset_ms": gate_meta.get("open_offset_ms", ""),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "close_offset_ms": round(offset_ms(), 3),
+                    },
+                )
+                controller_admission_gate_state["meta"] = {}
             write_trace(
                 args.trace,
                 {
