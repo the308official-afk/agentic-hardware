@@ -74,6 +74,7 @@ MODE_LABELS = {
     "controller_priority_demotion_admission_medium": "PDA-M = Controller priority + demotion + admission / medium",
     "controller_priority_demotion_admission_hard": "PDA-H = Controller priority + demotion + admission / hard",
     "controller_priority_demotion_admission_earlyprepare": "PDA-EP = Controller priority + demotion + admission + EarlyPrepare",
+    "controller_priority_demotion_admission_shorthand": "PDA-SH = Controller priority + demotion + admission + shorthand",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
@@ -99,6 +100,7 @@ MODE_COLORS = {
     "controller_priority_demotion_admission_medium": "#0369a1",
     "controller_priority_demotion_admission_hard": "#1d4ed8",
     "controller_priority_demotion_admission_earlyprepare": "#4338ca",
+    "controller_priority_demotion_admission_shorthand": "#be185d",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
@@ -221,6 +223,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#4338ca",
         "modes": {"controller_priority_demotion_admission_earlyprepare"},
     },
+    "controller_priority_demotion_admission_shorthand": {
+        "label": "Controller Shorthand",
+        "description": "Controller priority, demotion, and admission plus request-local prompt shorthand when it proves net token savings",
+        "color": "#be185d",
+        "modes": {"controller_priority_demotion_admission_shorthand"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
@@ -261,6 +269,7 @@ CHART_SIGNAL_ORDER = (
     "controller_priority_demotion_admission_medium",
     "controller_priority_demotion_admission_hard",
     "controller_priority_demotion_admission_earlyprepare",
+    "controller_priority_demotion_admission_shorthand",
     "controller_admission",
     "controller_full",
     "controller_full_chunked",
@@ -284,6 +293,7 @@ COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "controller_priority_demotion_admission_medium",
     "controller_priority_demotion_admission_hard",
     "controller_priority_demotion_admission_earlyprepare",
+    "controller_priority_demotion_admission_shorthand",
     "controller_full",
     "controller_full_chunked",
 )
@@ -328,6 +338,10 @@ COST_ACCOUNTING_COLORS = {
     "controller_priority_demotion_admission_earlyprepare": {
         "target": "#4338ca",
         "filler": "#c7d2fe",
+    },
+    "controller_priority_demotion_admission_shorthand": {
+        "target": "#be185d",
+        "filler": "#fbcfe8",
     },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
@@ -3232,6 +3246,7 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         "controller_priority_demotion_admission_medium",
         "controller_priority_demotion_admission_hard",
         "controller_priority_demotion_admission_earlyprepare",
+        "controller_priority_demotion_admission_shorthand",
     }:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
             return mode

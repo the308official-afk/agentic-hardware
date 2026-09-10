@@ -8,7 +8,7 @@ cd "${DIRECT_ROOT}"
 
 SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_admission controller_full controller_full_chunked"
+  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_shorthand controller_admission controller_full controller_full_chunked"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -34,6 +34,8 @@ CONTROLLER_CHUNKED_PREFILL_SIZE="${CONTROLLER_CHUNKED_PREFILL_SIZE:-512}"
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS:-4096}"
 CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS:-}"
 CONTROLLER_ADMISSION_AGGRESSIVENESS="${CONTROLLER_ADMISSION_AGGRESSIVENESS:-hard}"
+CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/dictionary_v1.json}"
+CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE:-target_requests}"
 
 BASELINE_MODES="${BASELINE_MODES:-no_prefetch}"
 HARNESS_EMITTED_MODES="${HARNESS_EMITTED_MODES:-harness_emitted_signals}"
@@ -46,6 +48,7 @@ CONTROLLER_TARGETED_PREFETCH_MODES="${CONTROLLER_TARGETED_PREFETCH_MODES:-contro
 CONTROLLER_DEMOTE_RESTORE_MODES="${CONTROLLER_DEMOTE_RESTORE_MODES:-controller_demote_restore}"
 CONTROLLER_PRIORITY_DEMOTE_MODES="${CONTROLLER_PRIORITY_DEMOTE_MODES:-controller_priority_demote}"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES:-controller_priority_demotion_admission}"
+CONTROLLER_SHORTHAND_MODES="${CONTROLLER_SHORTHAND_MODES:-controller_priority_demotion_admission_shorthand}"
 CONTROLLER_ADMISSION_MODES="${CONTROLLER_ADMISSION_MODES:-controller_admission_control}"
 CONTROLLER_FULL_MODES="${CONTROLLER_FULL_MODES:-controller_full}"
 CONTROLLER_FULL_CHUNKED_MODES="${CONTROLLER_FULL_CHUNKED_MODES:-controller_full_chunked_prefill}"
@@ -100,10 +103,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore|controller_priority_demote|controller_priority_demotion_admission|controller_admission|controller_full|controller_full_chunked) ;;
+      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore|controller_priority_demote|controller_priority_demotion_admission|controller_shorthand|controller_admission|controller_full|controller_full_chunked) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_admission controller_full controller_full_chunked all" >&2
+        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_shorthand controller_admission controller_full controller_full_chunked all" >&2
         exit 2
         ;;
     esac
@@ -189,6 +192,8 @@ write_combined_run_config() {
     echo "CONTROLLER_TARGETED_PREFETCH_MODES=${CONTROLLER_TARGETED_PREFETCH_MODES}"
     echo "CONTROLLER_DEMOTE_RESTORE_MODES=${CONTROLLER_DEMOTE_RESTORE_MODES}"
     echo "CONTROLLER_PRIORITY_DEMOTE_MODES=${CONTROLLER_PRIORITY_DEMOTE_MODES}"
+    echo "CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES=${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES}"
+    echo "CONTROLLER_SHORTHAND_MODES=${CONTROLLER_SHORTHAND_MODES}"
     echo "CONTROLLER_ADMISSION_MODES=${CONTROLLER_ADMISSION_MODES}"
     echo "CONTROLLER_FULL_MODES=${CONTROLLER_FULL_MODES}"
     echo "CONTROLLER_FULL_CHUNKED_MODES=${CONTROLLER_FULL_CHUNKED_MODES}"
@@ -213,6 +218,8 @@ write_combined_run_config() {
     echo "CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}"
     echo "CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS=${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}"
     echo "CONTROLLER_ADMISSION_AGGRESSIVENESS=${CONTROLLER_ADMISSION_AGGRESSIVENESS}"
+    echo "CONTROLLER_SHORTHAND_CODEC_CONFIG=${CONTROLLER_SHORTHAND_CODEC_CONFIG}"
+    echo "CONTROLLER_SHORTHAND_ENCODING_SCOPE=${CONTROLLER_SHORTHAND_ENCODING_SCOPE}"
   } >"${REPORT_DIR}/run_config.env"
 }
 
@@ -256,6 +263,8 @@ run_family_piece() {
   CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}" \
   CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}" \
   CONTROLLER_ADMISSION_AGGRESSIVENESS="${CONTROLLER_ADMISSION_AGGRESSIVENESS}" \
+  CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG}" \
+  CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE}" \
   PYTHON_BIN="${PYTHON_BIN}" \
     bash scripts/run_harness_deadline_pressure.sh "${MODEL}"
 }
@@ -325,6 +334,11 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_priority_demotion_admission:priority_plus_demotion_plus_admission")"
+  elif [[ "${family}" == "controller_shorthand" ]]; then
+    for mode in ${CONTROLLER_SHORTHAND_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_shorthand:priority_plus_demotion_plus_admission_plus_prompt_shorthand")"
   elif [[ "${family}" == "controller_admission" ]]; then
     for mode in ${CONTROLLER_ADMISSION_MODES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
@@ -392,6 +406,9 @@ fi
 if word_in_list "controller_priority_demotion_admission" "${SIGNAL_FAMILIES}"; then
   echo "- controller_priority_demotion_admission -> ${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES}"
 fi
+if word_in_list "controller_shorthand" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_shorthand -> ${CONTROLLER_SHORTHAND_MODES}"
+fi
 if word_in_list "controller_admission" "${SIGNAL_FAMILIES}"; then
   echo "- controller_admission -> ${CONTROLLER_ADMISSION_MODES}"
 fi
@@ -445,6 +462,10 @@ fi
 
 if word_in_list "controller_priority_demotion_admission" "${SIGNAL_FAMILIES}"; then
   run_family_piece "controller_priority_demotion_admission" "priority_plus_demotion_plus_admission" "${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "controller_shorthand" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_shorthand" "priority_plus_demotion_plus_admission_plus_prompt_shorthand" "${CONTROLLER_SHORTHAND_MODES}" "${HARNESSES}"
 fi
 
 if word_in_list "controller_admission" "${SIGNAL_FAMILIES}"; then

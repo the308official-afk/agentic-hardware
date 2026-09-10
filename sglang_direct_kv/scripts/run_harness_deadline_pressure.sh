@@ -68,6 +68,8 @@ CONTROLLER_CHUNKED_PREFILL_SIZE="${CONTROLLER_CHUNKED_PREFILL_SIZE:-512}"
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS:-4096}"
 CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS:-}"
 CONTROLLER_ADMISSION_AGGRESSIVENESS="${CONTROLLER_ADMISSION_AGGRESSIVENESS:-hard}"
+CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/dictionary_v1.json}"
+CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE:-target_requests}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -82,7 +84,7 @@ RUN_CONFIG_ENV="${REPORT_DIR}/run_config.env"
 RUN_ENV_JSON="${REPORT_DIR}/run_environment.json"
 GPU_UTIL_CSV="${REPORT_DIR}/gpu_utilization_samples.csv"
 GPU_UTIL_LOG="${REPORT_DIR}/gpu_utilization_sampler.log"
-# Snapshot encoding configuration so a concurrent edit cannot alter a live run.
+# Snapshot explicit global encoding configuration so a concurrent edit cannot alter a live run.
 ENCODING_CASE_KEY=""
 if [[ -n "${PROMPT_CODEC_CONFIG:-}" ]]; then
   cp "${PROMPT_CODEC_CONFIG}" "${REPORT_DIR}/prompt_codec.input.json"
@@ -252,6 +254,8 @@ write_run_config() {
     echo "CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}"
     echo "CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS=${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}"
     echo "CONTROLLER_ADMISSION_AGGRESSIVENESS=${CONTROLLER_ADMISSION_AGGRESSIVENESS}"
+    echo "CONTROLLER_SHORTHAND_CODEC_CONFIG=${CONTROLLER_SHORTHAND_CODEC_CONFIG}"
+    echo "CONTROLLER_SHORTHAND_ENCODING_SCOPE=${CONTROLLER_SHORTHAND_ENCODING_SCOPE}"
   } >"${RUN_CONFIG_ENV}"
 }
 
@@ -280,6 +284,9 @@ run_case() {
     case_id="${case_id}_twprof${safe_tool_wait_profile}_steps${TASK_REPLAY_STEPS}_seed${TOOL_WAIT_SEED}"
   fi
   if [[ -n "${ENCODING_CASE_KEY}" ]]; then case_id="${case_id}_enc${ENCODING_CASE_KEY}"; fi
+  if [[ "${mode}" == "controller_priority_demotion_admission_shorthand" && -z "${PROMPT_CODEC_CONFIG:-}" ]]; then
+    case_id="${case_id}_codecshorthand"
+  fi
   local case_root="${RUN_ROOT}/${case_id}"
   local trace="${case_root}/m27_trace.jsonl"
   local telemetry="${case_root}/m27_copy_telemetry.jsonl"
@@ -288,6 +295,13 @@ run_case() {
   local server_log="${case_root}/sglang_server.log"
   local gateway_log="${case_root}/harness_gateway.log"
   local gateway_events="${case_root}/harness_gateway_events.jsonl"
+  local case_prompt_codec_config="${PROMPT_CODEC_CONFIG:-}"
+  local case_prompt_encoding_scope="${PROMPT_ENCODING_SCOPE:-target_requests}"
+
+  if [[ "${mode}" == "controller_priority_demotion_admission_shorthand" && -z "${case_prompt_codec_config}" ]]; then
+    case_prompt_codec_config="${CONTROLLER_SHORTHAND_CODEC_CONFIG}"
+    case_prompt_encoding_scope="${CONTROLLER_SHORTHAND_ENCODING_SCOPE}"
+  fi
 
   mkdir -p "${case_root}"
   if [[ "${SKIP_EXISTING_CASES}" == "1" && -s "${metrics}" && -s "${trace}" ]] && grep -q '"event": "m27.workload_end"' "${trace}"; then
@@ -296,6 +310,10 @@ run_case() {
     return
   fi
   rm -f "${trace}" "${telemetry}" "${runtime_telemetry}" "${metrics}" "${server_log}" "${gateway_log}" "${gateway_events}"
+  if [[ -n "${case_prompt_codec_config}" ]]; then
+    cp "${case_prompt_codec_config}" "${case_root}/prompt_codec.input.json"
+    case_prompt_codec_config="${case_root}/prompt_codec.input.json"
+  fi
 
   echo
   echo "==== Multi-harness case: harness=${harness} mode=${mode} level=${level} ===="
@@ -311,7 +329,7 @@ run_case() {
   export HICACHE_SIZE_GB
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_priority_demotion_admission_soft" || "${mode}" == "controller_priority_demotion_admission_medium" || "${mode}" == "controller_priority_demotion_admission_hard" || "${mode}" == "controller_priority_demotion_admission_earlyprepare" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_priority_demotion_admission_soft" || "${mode}" == "controller_priority_demotion_admission_medium" || "${mode}" == "controller_priority_demotion_admission_hard" || "${mode}" == "controller_priority_demotion_admission_earlyprepare" || "${mode}" == "controller_priority_demotion_admission_shorthand" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
   elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"
@@ -346,7 +364,9 @@ PYPORT
     --target-base "${HOST_URL}" \
     --trace "${trace}" \
     --log "${gateway_events}" \
-    --model "${MODEL}" >"${gateway_log}" 2>&1 &
+    --model "${MODEL}" \
+    --prompt-codec-config "${case_prompt_codec_config}" \
+    --encoding-scope "${case_prompt_encoding_scope}" >"${gateway_log}" 2>&1 &
   GATEWAY_PID="$!"
   wait_for_gateway
 

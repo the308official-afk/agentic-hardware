@@ -213,6 +213,14 @@ and a small relation grammar are token-counted with their legends included;
 failed or unhelpful transformations pass through unchanged. Scheduling modes
 remain independent of encoding.
 
+The controller can also turn shorthand into an explicit experiment knob with
+`controller_priority_demotion_admission_shorthand`. That mode keeps the current
+priority + demotion + admission behavior, then asks the gateway to apply
+dictionary shorthand only when the codec proves net token savings for the
+configured scope. The encoder remains request-local and portable: it does not
+require SGLang changes, harness changes, fine-tuning, or remembered dictionaries
+across requests.
+
 See [the prompt codec guide](sglang_direct_kv/docs/prompt_codec.md) for library
 usage, the streaming proxy, token/quality evaluation, and an isolated EC2
 pressure matrix. Do not launch the matrix while another GPU experiment is active.
@@ -240,6 +248,7 @@ The current manager-facing comparisons use these modes:
 | `controller_priority_demote` | Minimal controller probe. The controller does only two active things: lower filler/background requests to priority `-100` during the tool-wait window, and raise the target replay to priority `100`. |
 | `controller_priority_demotion_admission` | Minimal three-action controller probe. The controller raises target replay priority, lowers filler/background priority, and temporarily holds filler/background admission during the replay-critical window. |
 | `controller_priority_demotion_admission_earlyprepare` | Same priority + demotion + admission path, but it opens the background hold/demotion window before the replay returns. Configure the lead time with `CONTROLLER_EARLYPREPARE_LEAD_MS`; default is `500`. |
+| `controller_priority_demotion_admission_shorthand` | Same priority + demotion + admission path, plus request-local dictionary shorthand. Configure with `CONTROLLER_SHORTHAND_CODEC_CONFIG`; default is `configs/prompt_codecs/dictionary_v1.json`. |
 | `controller_admission_control` | Portable controller phase 6. The controller admits or skips speculative warmup based on pressure limits, so overload cases get explicit skip reasons instead of unbounded background work. |
 
 The lightweight master report also includes a **System Cost Accounting** section.
@@ -502,8 +511,7 @@ HARDWARE_PROFILE=ec2_a10g \
 HARNESSES=hatcher \
 PRESSURE_LEVELS="p3_high" \
 SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demote" \
-TOOL_WAIT_PROFILE=fixed \
-TOOL_WAIT_PROFILE_SPEC=1000 \
+P3_HIGH_KNOBS="tool_wait_ms=1000 target_prompt_tokens=4096 filler_sessions=32 filler_prompt_tokens=1536 session_count=1 concurrency=8" \
 FILLER_REPLAY_DEADLINES=1 \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="priority_demote_p3_$(date +%Y%m%d_%H%M%S)" \
@@ -518,8 +526,7 @@ HARDWARE_PROFILE=ec2_a10g \
 HARNESSES=hatcher \
 PRESSURE_LEVELS="p3_high" \
 SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demote controller_priority_demotion_admission" \
-TOOL_WAIT_PROFILE=fixed \
-TOOL_WAIT_PROFILE_SPEC=1000 \
+P3_HIGH_KNOBS="tool_wait_ms=1000 target_prompt_tokens=4096 filler_sessions=32 filler_prompt_tokens=1536 session_count=1 concurrency=8" \
 FILLER_REPLAY_DEADLINES=1 \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="priority_demotion_admission_p3_$(date +%Y%m%d_%H%M%S)" \
@@ -536,13 +543,37 @@ PRESSURE_LEVELS="p3_high" \
 SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demotion_admission" \
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="controller_priority_demotion_admission controller_priority_demotion_admission_earlyprepare" \
 CONTROLLER_EARLYPREPARE_LEAD_MS=500 \
-TOOL_WAIT_PROFILE=fixed \
-TOOL_WAIT_PROFILE_SPEC=1000 \
+P3_HIGH_KNOBS="tool_wait_ms=1000 target_prompt_tokens=4096 filler_sessions=32 filler_prompt_tokens=1536 session_count=1 concurrency=8" \
 FILLER_REPLAY_DEADLINES=1 \
 REPORT_BUILDER_MODE=lightweight \
 REPORT_LABEL="earlyprepare_p3_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
+
+Shorthand controller probe:
+
+```bash
+cd sglang_direct_kv
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p3_high" \
+SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demotion_admission controller_shorthand" \
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="controller_priority_demotion_admission" \
+CONTROLLER_SHORTHAND_MODES="controller_priority_demotion_admission_shorthand" \
+CONTROLLER_SHORTHAND_CODEC_CONFIG="configs/prompt_codecs/dictionary_v1.json" \
+CONTROLLER_SHORTHAND_ENCODING_SCOPE="target_requests" \
+P3_HIGH_KNOBS="tool_wait_ms=1000 target_prompt_tokens=4096 filler_sessions=32 filler_prompt_tokens=1536 session_count=1 concurrency=8" \
+FILLER_REPLAY_DEADLINES=1 \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="shorthand_controller_p3_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+Success condition: `controller_priority_demotion_admission_shorthand` should
+show the same controller proof as `controller_priority_demotion_admission`, plus
+`gateway.prompt_encoding` events and `prompt_encoding_proof.csv` rows showing
+whether shorthand was applied, skipped, or failed. Interpret latency only after
+checking that net prompt tokens fell after including the shorthand legend.
 
 Focused validation of the chunked-prefill controller variant:
 
