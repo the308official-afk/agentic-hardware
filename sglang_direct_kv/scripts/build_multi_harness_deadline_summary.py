@@ -1181,7 +1181,6 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                         or not str(row.get("tool_wait_step") or "")
                         or str(row.get("tool_wait_step") or "") == tool_wait_step
                     )
-                    and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
                 ),
                 {},
             )
@@ -1260,10 +1259,10 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                 or is_truthy_text(restore.get("backend_acted"))
             )
             replay_raised = replay_priority is not None and replay_priority >= 100
-            if demote_acted and filler_before_replay and not filler_not_demoted_in_window and replay_raised and restore_acted:
-                verdict = "filler traffic in the replay window was demoted, replay was raised, and restore was recorded"
-            elif demote_acted and admission_gate_open and gate_blocked_rows and admission_gate_close and replay_raised and restore_acted:
+            if demote_acted and admission_gate_open and gate_blocked_rows and admission_gate_close and replay_raised and restore_acted:
                 verdict = "background admission was held during the replay window, replay was raised, and restore was recorded"
+            elif demote_acted and filler_before_replay and not filler_not_demoted_in_window and replay_raised and restore_acted:
+                verdict = "filler traffic in the replay window was demoted, replay was raised, and restore was recorded"
             elif demote_acted and not filler_rows and replay_raised and restore_acted:
                 verdict = "demote/restore acted, but this pressure level had no filler requests"
             elif demote_acted and not filler_before_replay and replay_raised and restore_acted:
