@@ -1338,11 +1338,248 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
     return proof_rows
 
 
+def nested_get(mapping: dict[str, Any], path: tuple[str, ...], default: Any = "") -> Any:
+    current: Any = mapping
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    return default if current in (None, {}) else current
+
+
+def first_matching_event(
+    rows: list[dict[str, Any]],
+    event: str,
+    *,
+    session_id: str,
+    tool_wait_step: str = "",
+) -> dict[str, Any]:
+    for row in rows:
+        if str(row.get("event") or "") != event:
+            continue
+        if str(row.get("session_id") or "") != session_id:
+            continue
+        if tool_wait_step and str(row.get("tool_wait_step") or "") not in {"", tool_wait_step}:
+            continue
+        return row
+    return {}
+
+
+def collect_controller_harness_exposure(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_by_case = defaultdict(list)
+    for row in replay_rows:
+        mode = str(row.get("mode") or "")
+        if not mode.startswith("controller_"):
+            continue
+        if str(row.get("request_group") or "") != "target":
+            continue
+        replay_by_case[str(row.get("case_dir") or "")].append(row)
+
+    exposure_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        case_replays = replay_by_case.get(str(case_dir), [])
+        if not case_replays:
+            continue
+        trace_rows = read_jsonl(case_dir / "m27_trace.jsonl")
+        if not trace_rows:
+            continue
+        workload_start = next((row for row in trace_rows if str(row.get("event") or "") == "m27.workload_start"), {})
+        controller_decisions = [
+            row for row in trace_rows if str(row.get("event") or "") == "m27.controller.decision"
+        ]
+        admission_gate_blocked = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_admission_gate.background_request_blocked"
+        ]
+        admission_gate_released = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_admission_gate.background_request_released"
+        ]
+        background_lowered = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_traffic_reshape.background_request_lowered"
+        ]
+        for replay_row in case_replays:
+            session_id = str(replay_row.get("session_id") or "")
+            tool_wait_step = str(replay_row.get("tool_wait_step") or "")
+            decision_rows = [
+                row
+                for row in controller_decisions
+                if str(row.get("session_id") or "") == session_id
+                and (not tool_wait_step or str(row.get("tool_wait_step") or "") in {"", tool_wait_step})
+            ]
+            signal_rows = [
+                row for row in decision_rows if isinstance(row.get("harness_controller_signal"), dict)
+            ]
+            signal = signal_rows[-1].get("harness_controller_signal", {}) if signal_rows else {}
+            if not isinstance(signal, dict):
+                signal = {}
+            tool_wait_start = first_matching_event(
+                trace_rows,
+                "m27.tool_wait.start",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            replay_due = first_matching_event(
+                trace_rows,
+                "m27.replay.due",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            demote_start = first_matching_event(
+                trace_rows,
+                "m27.controller_demote_restore.demote_start",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            reshape_open = first_matching_event(
+                trace_rows,
+                "m27.controller_traffic_reshape.window_open",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            target_enter = first_matching_event(
+                trace_rows,
+                "m27.controller_traffic_reshape.target_replay_entering",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            gate_open = first_matching_event(
+                trace_rows,
+                "m27.controller_admission_gate.window_open",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            gate_close = first_matching_event(
+                trace_rows,
+                "m27.controller_admission_gate.window_close",
+                session_id=session_id,
+                tool_wait_step=tool_wait_step,
+            )
+            gate_blocked_rows = [
+                row
+                for row in admission_gate_blocked
+                if str(row.get("gate_owner_session_id") or "") == session_id
+                and (not tool_wait_step or str(row.get("gate_tool_wait_step") or "") == tool_wait_step)
+            ]
+            gate_released_rows = [
+                row
+                for row in admission_gate_released
+                if str(row.get("gate_owner_session_id") or "") == session_id
+                and (not tool_wait_step or str(row.get("gate_tool_wait_step") or "") == tool_wait_step)
+            ]
+            lowered_rows = [
+                row
+                for row in background_lowered
+                if str(row.get("session_id") or "").startswith(f"{session_id}_pressure_")
+                and (not tool_wait_step or str(row.get("tool_wait_step") or "") in {"", tool_wait_step})
+            ]
+
+            exposed_tool_wait_ms = (
+                nested_get(signal, ("tool_wait", "duration_ms"))
+                or nested_get(signal, ("tool", "estimated_duration_ms"))
+                or tool_wait_start.get("tool_wait_ms")
+                or replay_row.get("tool_wait_ms")
+            )
+            replay_eta = (
+                nested_get(signal, ("tool", "expected_done_at_ms"))
+                or tool_wait_start.get("replay_due_offset_ms")
+                or replay_due.get("replay_due_offset_ms")
+                or replay_row.get("replay_due_ts_ns")
+            )
+            demotable_count = (
+                nested_get(signal, ("competition", "demotable_background_requests"))
+                or demote_start.get("demotable_background_requests")
+                or reshape_open.get("demotable_background_requests")
+                or workload_start.get("filler_sessions")
+            )
+            active_background = (
+                nested_get(signal, ("competition", "active_background_requests"))
+                or workload_start.get("filler_sessions")
+            )
+            safe_to_demote = (
+                nested_get(signal, ("competition", "background_safe_to_demote"))
+                or demote_start.get("background_safe_to_demote")
+                or reshape_open.get("background_safe_to_demote")
+            )
+            target_priority = (
+                nested_get(signal, ("scheduling", "priority"))
+                or target_enter.get("controller_sglang_priority")
+                or replay_row.get("sglang_priority")
+            )
+            target_urgency = nested_get(signal, ("scheduling", "urgency")) or replay_row.get("priority_label", "")
+            facts = []
+            if has_value(exposed_tool_wait_ms):
+                facts.append(f"tool wait {exposed_tool_wait_ms} ms")
+            if has_value(replay_eta):
+                facts.append("replay ETA known")
+            if has_value(target_priority):
+                facts.append(f"target priority {target_priority}")
+            elif str(target_urgency).lower() in {"urgent", "high", "priority"}:
+                facts.append(f"target urgency {target_urgency}")
+            if has_value(demotable_count):
+                facts.append(f"{demotable_count} demotable background requests")
+            if is_truthy_text(safe_to_demote):
+                facts.append("background safe to demote")
+
+            actions = []
+            if demote_start:
+                actions.append("demote fillers")
+            if target_enter or has_value(replay_row.get("sglang_priority")):
+                actions.append("raise replay priority")
+            if gate_open:
+                actions.append("hold filler admission")
+            if gate_close:
+                actions.append("release fillers")
+
+            exposure_rows.append(
+                {
+                    "harness_label": replay_row.get("harness_label", ""),
+                    "pressure_level_label": replay_row.get("pressure_level_label", ""),
+                    "mode_label": replay_row.get("mode_label", ""),
+                    "session_id": session_id,
+                    "request_id": replay_row.get("request_id", ""),
+                    "tool_wait_known": "yes" if has_value(exposed_tool_wait_ms) else "no",
+                    "tool_wait_ms": exposed_tool_wait_ms,
+                    "replay_eta_known": "yes" if has_value(replay_eta) else "no",
+                    "target_priority_known": "yes" if has_value(target_priority) or has_value(target_urgency) else "no",
+                    "target_priority_or_urgency": target_priority or target_urgency,
+                    "background_request_count_known": "yes" if has_value(active_background) else "no",
+                    "active_background_requests": active_background,
+                    "background_safe_to_demote": "yes" if is_truthy_text(safe_to_demote) else "no",
+                    "demotable_background_count": demotable_count,
+                    "filler_replay_deadlines_enabled": "yes" if is_truthy_text(workload_start.get("filler_replay_deadlines")) else "no",
+                    "filler_replay_deadline_ms": workload_start.get("filler_replay_deadline_ms", ""),
+                    "controller_action_summary": "; ".join(actions) if actions else "observe only",
+                    "demotion_window_opened": "yes" if reshape_open else "no",
+                    "background_lowered_signals": len(lowered_rows),
+                    "admission_gate_opened": "yes" if gate_open else "no",
+                    "background_requests_blocked": len(gate_blocked_rows),
+                    "background_requests_released": len(gate_released_rows),
+                    "admission_gate_closed": "yes" if gate_close else "no",
+                    "replay_sglang_priority": replay_row.get("sglang_priority", ""),
+                    "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
+                    "source_of_facts": "harness_controller_signal.v1 + workload trace",
+                    "exposed_fact_summary": "; ".join(facts) if facts else "no controller-facing facts found",
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                }
+            )
+    return exposure_rows
+
+
 def collect_controller_admission_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") in {"controller_admission_control", "controller_full"}
+        if row.get("mode") in {
+            "controller_admission_control",
+            "controller_priority_demotion_admission",
+            "controller_full",
+        }
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -2381,6 +2618,39 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "replay_to_restore_ms",
     "first_token_lateness_ms",
     "verdict",
+    "case_id",
+    "case_dir",
+]
+
+
+CONTROLLER_HARNESS_EXPOSURE_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "session_id",
+    "request_id",
+    "tool_wait_known",
+    "tool_wait_ms",
+    "replay_eta_known",
+    "target_priority_known",
+    "target_priority_or_urgency",
+    "background_request_count_known",
+    "active_background_requests",
+    "background_safe_to_demote",
+    "demotable_background_count",
+    "filler_replay_deadlines_enabled",
+    "filler_replay_deadline_ms",
+    "controller_action_summary",
+    "demotion_window_opened",
+    "background_lowered_signals",
+    "admission_gate_opened",
+    "background_requests_blocked",
+    "background_requests_released",
+    "admission_gate_closed",
+    "replay_sglang_priority",
+    "first_token_lateness_ms",
+    "source_of_facts",
+    "exposed_fact_summary",
     "case_id",
     "case_dir",
 ]
@@ -3512,6 +3782,109 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
     )
 
 
+def render_controller_harness_exposure_section(exposure_rows: list[dict[str, Any]]) -> str:
+    if not exposure_rows:
+        return (
+            "<h2>Controller Harness Exposure</h2>"
+            "<p>No controller harness-exposure rows found in this run.</p>"
+        )
+    compact_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "mode_label",
+        "tool_wait_ms",
+        "replay_eta_known",
+        "target_priority_or_urgency",
+        "active_background_requests",
+        "background_safe_to_demote",
+        "demotable_background_count",
+        "controller_action_summary",
+        "background_lowered_signals",
+        "background_requests_blocked",
+        "background_requests_released",
+        "replay_sglang_priority",
+        "first_token_lateness_ms",
+        "exposed_fact_summary",
+    ]
+    action_rows: list[dict[str, Any]] = []
+    for row in exposure_rows:
+        common = {
+            "harness_label": row.get("harness_label", ""),
+            "pressure_level_label": row.get("pressure_level_label", ""),
+            "mode_label": row.get("mode_label", ""),
+        }
+        if has_value(row.get("tool_wait_ms")):
+            action_rows.append(
+                {
+                    **common,
+                    "harness/controller fact": "tool wait duration",
+                    "value": f"{row.get('tool_wait_ms')} ms",
+                    "controller use": "starts the prepare window before replay returns",
+                }
+            )
+        if str(row.get("replay_eta_known") or "").lower() == "yes":
+            action_rows.append(
+                {
+                    **common,
+                    "harness/controller fact": "replay ETA",
+                    "value": "known",
+                    "controller use": "times demotion/admission around replay readiness",
+                }
+            )
+        if has_value(row.get("target_priority_or_urgency")):
+            action_rows.append(
+                {
+                    **common,
+                    "harness/controller fact": "target priority or urgency",
+                    "value": row.get("target_priority_or_urgency", ""),
+                    "controller use": "lowers replay to SGLang priority",
+                }
+            )
+        if has_value(row.get("active_background_requests")) or has_value(row.get("demotable_background_count")):
+            action_rows.append(
+                {
+                    **common,
+                    "harness/controller fact": "background pressure",
+                    "value": (
+                        f"active={row.get('active_background_requests', '')}; "
+                        f"demotable={row.get('demotable_background_count', '')}"
+                    ),
+                    "controller use": "decides whether to demote or hold filler traffic",
+                }
+            )
+        if str(row.get("background_safe_to_demote") or "").lower() == "yes":
+            action_rows.append(
+                {
+                    **common,
+                    "harness/controller fact": "background safe to demote",
+                    "value": "yes",
+                    "controller use": "allows filler/background priority lowering",
+                }
+            )
+
+    action_table = render_table(
+        action_rows,
+        [
+            "harness_label",
+            "pressure_level_label",
+            "mode_label",
+            "harness/controller fact",
+            "value",
+            "controller use",
+        ],
+    )
+    compact_table = render_table(exposure_rows, compact_columns)
+    return (
+        "<h2>Controller Harness Exposure</h2>"
+        "<p>This section shows the facts the harness/workload exposed to the controller, and the actions the controller took from those facts. "
+        "It is the manager-facing proof that the controller is using more than a plain priority number.</p>"
+        f'<div class="card">{action_table if action_rows else "<p>No controller-facing facts were summarized.</p>"}</div>'
+        "<details><summary>Open compact controller exposure table</summary>"
+        f'<div class="card">{compact_table}</div>'
+        "</details>"
+    )
+
+
 def render_table(rows: list[dict[str, Any]], columns: list[str]) -> str:
     header = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
     body_lines = []
@@ -3948,6 +4321,7 @@ def render_html(
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
+    controller_harness_exposure_rows: list[dict[str, Any]],
     controller_admission_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
@@ -3966,6 +4340,7 @@ def render_html(
     chart_controls = render_chart_controls(rows)
     chart_interaction_script = render_chart_interaction_script()
     cost_accounting_section = render_cost_accounting_section(cost_accounting_rows)
+    controller_harness_exposure_section = render_controller_harness_exposure_section(controller_harness_exposure_rows)
     signal_family_definition_table = render_signal_family_definition_table()
     harness_cache_decision_table = render_harness_cache_decision_table()
     pressure_definition_table = render_pressure_definition_table(rows, run_config)
@@ -4097,6 +4472,7 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 	<p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
 	<div class="card">{pressure_definition_table}</div>
 <div class="card">{chart_controls}{chart}</div>
+{controller_harness_exposure_section}
 {cost_accounting_section}
  	<h2>Evidence Tables</h2>
  	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
@@ -4115,6 +4491,7 @@ def render_evidence_html(
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
+    controller_harness_exposure_rows: list[dict[str, Any]],
     controller_admission_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
@@ -4164,6 +4541,10 @@ def render_evidence_html(
     controller_demote_restore_table = render_table(
         controller_demote_restore_rows,
         CONTROLLER_DEMOTE_RESTORE_COLUMNS,
+    )
+    controller_harness_exposure_table = render_table(
+        controller_harness_exposure_rows,
+        CONTROLLER_HARNESS_EXPOSURE_COLUMNS,
     )
     controller_admission_table = render_table(controller_admission_rows, CONTROLLER_ADMISSION_COLUMNS)
     harness_priority_table = render_table(harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
@@ -4266,6 +4647,9 @@ a {{ color: #2563eb; }}
 <h2>Controller Demote/Restore Proof</h2>
 <p>This table appears when the run includes <code>controller_demote_restore</code>. It proves whether background/filler traffic was lowered during the target replay window, whether the replay itself was raised to SGLang priority, and whether normal behavior was restored afterward.</p>
 <div class="card">{controller_demote_restore_table if controller_demote_restore_rows else "<p>No controller demote/restore rows found in this run.</p>"}</div>
+<h2>Controller Harness Exposure</h2>
+<p>This table shows the controller-facing facts exposed by the harness/workload trace, then records which controller actions were observed: demotion window, lowered background signals, admission blocking/release, and replay priority lowering.</p>
+<div class="card">{controller_harness_exposure_table if controller_harness_exposure_rows else "<p>No controller harness exposure rows found in this run.</p>"}</div>
 <h2>Controller Admission Proof</h2>
 <p>This table appears when the run includes <code>controller_admission_control</code>. It proves whether controller speculative warmup was admitted or skipped, why it was skipped, and whether replay priority was still lowered into SGLang.</p>
 <div class="card">{controller_admission_table if controller_admission_rows else "<p>No controller admission rows found in this run.</p>"}</div>
@@ -4294,6 +4678,7 @@ def write_manifest(
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
+    controller_harness_exposure_rows: list[dict[str, Any]],
     controller_admission_rows: list[dict[str, Any]],
     harness_priority_rows: list[dict[str, Any]],
     nat_service_priority_rows: list[dict[str, Any]],
@@ -4317,6 +4702,7 @@ def write_manifest(
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "targeted_kv_prefetch_row_count": len(targeted_kv_prefetch_rows),
         "controller_demote_restore_row_count": len(controller_demote_restore_rows),
+        "controller_harness_exposure_row_count": len(controller_harness_exposure_rows),
         "controller_admission_row_count": len(controller_admission_rows),
         "harness_priority_row_count": len(harness_priority_rows),
         "nat_service_priority_row_count": len(nat_service_priority_rows),
@@ -4360,6 +4746,7 @@ def main() -> None:
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
         targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
         controller_demote_restore_rows = read_csv_table(args.out_dir / "controller_demote_restore_proof.csv")
+        controller_harness_exposure_rows = read_csv_table(args.out_dir / "controller_harness_exposure.csv")
         controller_admission_rows = read_csv_table(args.out_dir / "controller_admission_proof.csv")
         harness_priority_rows = read_csv_table(args.out_dir / "harness_priority_preservation_proof.csv")
         nat_service_priority_rows = read_csv_table(args.out_dir / "nat_service_priority_probe.csv")
@@ -4374,6 +4761,7 @@ def main() -> None:
         speculative_prefill_rows = collect_speculative_prefill_proof(args.root, target_rows)
         targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, target_rows)
         controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, target_rows)
+        controller_harness_exposure_rows = collect_controller_harness_exposure(args.root, target_rows)
         controller_admission_rows = collect_controller_admission_proof(args.root, target_rows)
         harness_priority_rows = collect_harness_priority_proof(args.root, target_rows)
         nat_service_priority_rows = collect_nat_service_priority_probe(args.root)
@@ -4397,6 +4785,11 @@ def main() -> None:
         controller_demote_restore_rows,
         CONTROLLER_DEMOTE_RESTORE_COLUMNS,
     )
+    write_csv(
+        args.out_dir / "controller_harness_exposure.csv",
+        controller_harness_exposure_rows,
+        CONTROLLER_HARNESS_EXPOSURE_COLUMNS,
+    )
     write_csv(args.out_dir / "controller_admission_proof.csv", controller_admission_rows, CONTROLLER_ADMISSION_COLUMNS)
     write_csv(args.out_dir / "harness_priority_preservation_proof.csv", harness_priority_rows, HARNESS_PRIORITY_COLUMNS)
     write_csv(args.out_dir / "nat_service_priority_probe.csv", nat_service_priority_rows, NAT_SERVICE_PRIORITY_COLUMNS)
@@ -4411,6 +4804,7 @@ def main() -> None:
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
+        controller_harness_exposure_rows,
         controller_admission_rows,
         harness_priority_rows,
         nat_service_priority_rows,
@@ -4429,6 +4823,7 @@ def main() -> None:
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
+        controller_harness_exposure_rows,
         controller_admission_rows,
         harness_priority_rows,
         nat_service_priority_rows,
@@ -4457,6 +4852,7 @@ def main() -> None:
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
+        controller_harness_exposure_rows,
         controller_admission_rows,
         harness_priority_rows,
         nat_service_priority_rows,
@@ -4473,6 +4869,11 @@ def main() -> None:
         atomic_write_text(args.latest_root / "evidence_tables.html", evidence_html_text)
         atomic_write_text(args.latest_root / "latest_evidence_tables.html", evidence_html_text)
         write_csv(args.latest_root / "latest_cost_accounting_summary.csv", cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
+        write_csv(
+            args.latest_root / "latest_controller_harness_exposure.csv",
+            controller_harness_exposure_rows,
+            CONTROLLER_HARNESS_EXPOSURE_COLUMNS,
+        )
         write_manifest(
             args.latest_root / "latest_manifest.json",
             args,
@@ -4482,6 +4883,7 @@ def main() -> None:
             speculative_prefill_rows,
             targeted_kv_prefetch_rows,
             controller_demote_restore_rows,
+            controller_harness_exposure_rows,
             controller_admission_rows,
             harness_priority_rows,
             nat_service_priority_rows,
