@@ -31,6 +31,7 @@ PRIORITY_ENABLED_MODES = {
     "controller_priority_demotion_admission_soft",
     "controller_priority_demotion_admission_medium",
     "controller_priority_demotion_admission_hard",
+    "controller_priority_demotion_admission_earlyprepare",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -46,11 +47,13 @@ CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admi
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE = "controller_priority_demotion_admission_soft"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE = "controller_priority_demotion_admission_medium"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE = "controller_priority_demotion_admission_hard"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE = "controller_priority_demotion_admission_earlyprepare"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES = {
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE,
 }
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"

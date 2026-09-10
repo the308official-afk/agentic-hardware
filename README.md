@@ -239,6 +239,7 @@ The current manager-facing comparisons use these modes:
 | `controller_demote_restore` | Portable controller phase 5. The controller lowers matching background/filler traffic during the replay-critical window, raises replay priority, and records restore/release afterward. |
 | `controller_priority_demote` | Minimal controller probe. The controller does only two active things: lower filler/background requests to priority `-100` during the tool-wait window, and raise the target replay to priority `100`. |
 | `controller_priority_demotion_admission` | Minimal three-action controller probe. The controller raises target replay priority, lowers filler/background priority, and temporarily holds filler/background admission during the replay-critical window. |
+| `controller_priority_demotion_admission_earlyprepare` | Same priority + demotion + admission path, but it opens the background hold/demotion window before the replay returns. Configure the lead time with `CONTROLLER_EARLYPREPARE_LEAD_MS`; default is `500`. |
 | `controller_admission_control` | Portable controller phase 6. The controller admits or skips speculative warmup based on pressure limits, so overload cases get explicit skip reasons instead of unbounded background work. |
 
 The lightweight master report also includes a **System Cost Accounting** section.
@@ -525,6 +526,24 @@ REPORT_LABEL="priority_demotion_admission_p3_$(date +%Y%m%d_%H%M%S)" \
 bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
+EarlyPrepare controller probe:
+
+```bash
+cd sglang_direct_kv
+HARDWARE_PROFILE=ec2_a10g \
+HARNESSES=hatcher \
+PRESSURE_LEVELS="p3_high" \
+SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demotion_admission" \
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="controller_priority_demotion_admission controller_priority_demotion_admission_earlyprepare" \
+CONTROLLER_EARLYPREPARE_LEAD_MS=500 \
+TOOL_WAIT_PROFILE=fixed \
+TOOL_WAIT_PROFILE_SPEC=1000 \
+FILLER_REPLAY_DEADLINES=1 \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="earlyprepare_p3_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 Focused validation of the chunked-prefill controller variant:
 
 ```bash
@@ -588,6 +607,7 @@ smallest possible boundary adapter.
 | Phase 6.6: Chunked-prefill full-controller scheduling | Implemented; EC2 performance run pending | Keep `controller_full` policy unchanged, but launch SGLang with smaller prefill chunks so the controller has more safe scheduling boundaries to insert urgent replay work. | Run `controller_full_chunked_prefill` against `controller_full` and `e2e_priority_hints` on DeepAgents/Hatcher at `p3_high` and `p5_boss_queue`; proof should show the mode, chunked-prefill launch knobs, controller traffic-reshape events, and replay lateness/TTFT deltas. |
 | Phase 6.7: Minimal priority-plus-demotion probe | Implemented; EC2 run pending | Strip the controller back to the two highest-value actions: raise target replay priority and aggressively demote filler/background work. | Run `controller_priority_demote` against baseline and front-end priority on DeepAgents/Hatcher at `p3_high` with a 1000 ms fixed tool wait. Success requires proof that filler requests entering during the replay window were lowered to priority `-100`, the target replay reached SGLang with priority `100`, and the target replay improved without hiding filler cost. |
 | Phase 6.8: Minimal priority-plus-demotion-plus-admission probe | Implemented; EC2 run pending | Add direct gateway admission control to the minimal controller: hold filler/background requests at the gateway boundary during the replay-critical window. | Run `controller_priority_demotion_admission` against baseline, front-end priority, and `controller_priority_demote` on DeepAgents/Hatcher at `p3_high` with a 1000 ms fixed tool wait. Success requires proof that filler/background requests were blocked before entering SGLang, released after target replay, and cost accounting shows where the delay moved. |
+| Phase 6.9: EarlyPrepare admission window | Implemented; EC2 run pending | Start demotion/admission before the target replay returns, using the expected tool-wait completion time exposed by the harness. | Run `controller_priority_demotion_admission_earlyprepare` against baseline, front-end priority, and the prior admission modes on DeepAgents/Hatcher at `p3_high`. Success requires proof that the hold/demotion window opened before `m27.replay.due`, replay priority still reached SGLang, and target replay lateness moves closer to zero without excessive total TTFT cost. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 For Phase 6.5, the demote/restore proof is window-aware. Earlier filler

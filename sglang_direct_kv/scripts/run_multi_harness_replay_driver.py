@@ -68,6 +68,7 @@ SUPPORTED_MODES = (
     "controller_priority_demotion_admission_soft",
     "controller_priority_demotion_admission_medium",
     "controller_priority_demotion_admission_hard",
+    "controller_priority_demotion_admission_earlyprepare",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -86,11 +87,13 @@ CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admi
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE = "controller_priority_demotion_admission_soft"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE = "controller_priority_demotion_admission_medium"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE = "controller_priority_demotion_admission_hard"
+CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE = "controller_priority_demotion_admission_earlyprepare"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES = {
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE,
 }
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
@@ -332,6 +335,8 @@ def controller_priority_demotion_admission_mode(mode: str) -> bool:
 
 
 def controller_admission_aggressiveness(mode: str) -> str:
+    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE:
+        return "earlyprepare"
     if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE:
         return "soft"
     if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE:
@@ -344,6 +349,9 @@ def controller_admission_aggressiveness(mode: str) -> str:
 
 def controller_admission_lead_ms(mode: str, wait_ms: int) -> float:
     aggressiveness = controller_admission_aggressiveness(mode)
+    if aggressiveness == "earlyprepare":
+        configured = int(os.environ.get("CONTROLLER_EARLYPREPARE_LEAD_MS", "500") or "500")
+        return float(min(wait_ms, max(0, configured)))
     if aggressiveness == "hard":
         return float(wait_ms)
     if aggressiveness == "medium":
@@ -2228,6 +2236,9 @@ async def main_async() -> None:
                         "tool_wait_ms": wait_spec.wait_ms,
                         "demote_trigger": trigger,
                         "controller_admission_aggressiveness": admission_aggressiveness,
+                        "controller_earlyprepare_lead_ms": controller_admission_lead_ms(args.mode, wait_spec.wait_ms)
+                        if admission_aggressiveness == "earlyprepare"
+                        else "",
                         "admission_action": "hold_background_until_target_replay_completes",
                         "demotable_background_requests": args.filler_sessions,
                         "tool_start_offset_ms": round(tool_start_ms, 3),
@@ -2264,6 +2275,9 @@ async def main_async() -> None:
                     "controller_admission_aggressiveness": admission_aggressiveness
                     if controller_active_priority_demotion_admission
                     else "",
+                    "controller_earlyprepare_lead_ms": controller_admission_lead_ms(args.mode, wait_spec.wait_ms)
+                    if admission_aggressiveness == "earlyprepare"
+                    else "",
                     "demotable_background_requests": args.filler_sessions,
                     "background_safe_to_demote": args.filler_sessions > 0,
                     "tool_start_offset_ms": round(tool_start_ms, 3),
@@ -2289,6 +2303,9 @@ async def main_async() -> None:
                     "demote_trigger": trigger,
                     "controller_admission_aggressiveness": admission_aggressiveness
                     if controller_active_priority_demotion_admission
+                    else "",
+                    "controller_earlyprepare_lead_ms": controller_admission_lead_ms(args.mode, wait_spec.wait_ms)
+                    if admission_aggressiveness == "earlyprepare"
                     else "",
                     "demotable_background_requests": args.filler_sessions,
                     "background_safe_to_demote": args.filler_sessions > 0,
@@ -2372,7 +2389,7 @@ async def main_async() -> None:
             defer_admission_demote = (
                 controller_active_priority_demotion_admission
                 and controller_demote_command is not None
-                and admission_aggressiveness in {"soft", "medium"}
+                and admission_aggressiveness in {"soft", "medium", "earlyprepare"}
             )
             if step_demote_restore_active and not defer_admission_demote:
                 activate_controller_demote(
