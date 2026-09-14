@@ -1,6 +1,6 @@
 # Hint Benchmark Runbook
 
-Compact command table for the Agentic Hint Benchmark Suite.
+Compact scenario runbook for the Agentic Hint Benchmark Suite.
 
 Run these commands on the EC2 machine from the repo root:
 
@@ -28,62 +28,21 @@ cd ~/agentic_hardware
 | Session / Request | A session setting causes the signal, and it appears on outgoing requests. |
 | Configuration / Request | A config setting causes the signal, and it appears on outgoing requests. |
 
-<style>
-.hint-benchmark-table {
-  table-layout: fixed;
-  width: 100%;
-}
-.hint-benchmark-table pre,
-.hint-benchmark-table code {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.hint-benchmark-table .command-row td {
-  background: #f8fafc;
-  border-top: 0;
-}
-.hint-benchmark-table .command-label {
-  display: block;
-  margin-bottom: 0.4rem;
-  font-weight: 600;
-}
-</style>
 
 ## Claude Code
 
-<table class="hint-benchmark-table">
-<colgroup>
-<col width="14%" style="width: 14%;">
-<col width="32%" style="width: 32%;">
-<col width="22%" style="width: 22%;">
-<col width="14%" style="width: 14%;">
-<col width="18%" style="width: 18%;">
-</colgroup>
-<thead>
-<tr>
-<th>Run</th>
-<th>Plain Purpose</th>
-<th>Signals Observed Today</th>
-<th>Where Attached</th>
-<th>Evidence</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Claude native baseline</td>
-<td>Confirm Claude emits no benchmark hints when knobs are off.</td>
-<td>
-<ul>
-<li>none</li>
-</ul>
-</td>
-<td>Request</td>
-<td>Native Claude Code request-boundary control case.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+### Claude native baseline
 
+**Plain Purpose:** Confirm Claude emits no benchmark hints when knobs are off.
+
+**Signals Observed Today:**
+- none
+
+**Where Attached:** Request
+
+**Evidence:** Native Claude Code request-boundary control case.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_baseline_$(date +%Y%m%d_%H%M%S)"
@@ -95,26 +54,21 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### All Claude native request-boundary probes
 
-</td>
-</tr>
-<tr>
-<td>All Claude native request-boundary probes</td>
-<td>Produce all Claude Code signals observed today in one run.</td>
-<td>
-<ul>
-<li><code>system.*.cache_control.type="ephemeral"</code></li>
-<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
-<li><code>cache_control.ttl="1h"</code></li>
-<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce all Claude Code signals observed today in one run.
 
+**Signals Observed Today:**
+- `system.*.cache_control.type="ephemeral"`
+- `messages.*.content.*.cache_control.type="ephemeral"`
+- `cache_control.ttl="1h"`
+- `anthropic-beta: fast-mode-2026-02-01`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native Claude Code request-boundary capture.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
@@ -126,23 +80,18 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Claude native QoS probes
 
-</td>
-</tr>
-<tr>
-<td>Claude native QoS probes</td>
-<td>Produce the Claude fast-mode header.</td>
-<td>
-<ul>
-<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce the Claude fast-mode header.
 
+**Signals Observed Today:**
+- `anthropic-beta: fast-mode-2026-02-01`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native Claude Code request-boundary capture.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_qos_only_$(date +%Y%m%d_%H%M%S)"
@@ -154,25 +103,20 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Claude native cache probes
 
-</td>
-</tr>
-<tr>
-<td>Claude native cache probes</td>
-<td>Produce Claude prompt-cache markers and TTL.</td>
-<td>
-<ul>
-<li><code>system.*.cache_control.type="ephemeral"</code></li>
-<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
-<li><code>cache_control.ttl="1h"</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce Claude prompt-cache markers and TTL.
 
+**Signals Observed Today:**
+- `system.*.cache_control.type="ephemeral"`
+- `messages.*.content.*.cache_control.type="ephemeral"`
+- `cache_control.ttl="1h"`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native Claude Code request-boundary capture.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_cache_only_$(date +%Y%m%d_%H%M%S)"
@@ -184,23 +128,18 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Claude native prewarm probe
 
-</td>
-</tr>
-<tr>
-<td>Claude native prewarm probe</td>
-<td>Send a request that warms a cacheable prompt block.</td>
-<td>
-<ul>
-<li><code>system.*.cache_control.type="ephemeral"</code></li>
-</ul>
-</td>
-<td>Request</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Send a request that warms a cacheable prompt block.
 
+**Signals Observed Today:**
+- `system.*.cache_control.type="ephemeral"`
+
+**Where Attached:** Request
+
+**Evidence:** Native Claude Code request-boundary capture.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_prewarm_only_$(date +%Y%m%d_%H%M%S)"
@@ -212,23 +151,18 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Claude native fast mode only
 
-</td>
-</tr>
-<tr>
-<td>Claude native fast mode only</td>
-<td>Produce only the Claude fast-mode header.</td>
-<td>
-<ul>
-<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce only the Claude fast-mode header.
 
+**Signals Observed Today:**
+- `anthropic-beta: fast-mode-2026-02-01`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native Claude Code request-boundary capture.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_fast_mode_setting_$(date +%Y%m%d_%H%M%S)"
@@ -240,24 +174,19 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Claude native 1h cache TTL
 
-</td>
-</tr>
-<tr>
-<td>Claude native 1h cache TTL</td>
-<td>Produce Claude cache control with a 1-hour TTL.</td>
-<td>
-<ul>
-<li><code>cache_control.type="ephemeral"</code></li>
-<li><code>cache_control.ttl="1h"</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce Claude cache control with a 1-hour TTL.
 
+**Signals Observed Today:**
+- `cache_control.type="ephemeral"`
+- `cache_control.ttl="1h"`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_provider_retention_1h_$(date +%Y%m%d_%H%M%S)"
@@ -269,23 +198,18 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Claude native 5m cache control
 
-</td>
-</tr>
-<tr>
-<td>Claude native 5m cache control</td>
-<td>Produce Claude cache control with default 5-minute retention.</td>
-<td>
-<ul>
-<li><code>cache_control.type="ephemeral"</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce Claude cache control with default 5-minute retention.
 
+**Signals Observed Today:**
+- `cache_control.type="ephemeral"`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.
+
+**Command:**
 
 ```bash
 RUN_ID="claude_provider_retention_5m_$(date +%Y%m%d_%H%M%S)"
@@ -297,46 +221,20 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-
-</td>
-</tr>
-</tbody>
-</table>
-
 ## NeMo Agent Toolkit / NAT
 
-<table class="hint-benchmark-table">
-<colgroup>
-<col width="14%" style="width: 14%;">
-<col width="32%" style="width: 32%;">
-<col width="22%" style="width: 22%;">
-<col width="14%" style="width: 14%;">
-<col width="18%" style="width: 18%;">
-</colgroup>
-<thead>
-<tr>
-<th>Run</th>
-<th>Plain Purpose</th>
-<th>Signals Observed Today</th>
-<th>Where Attached</th>
-<th>Evidence</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>NAT baseline</td>
-<td>Confirm NAT emits no hints when knobs are off.</td>
-<td>
-<ul>
-<li>none</li>
-</ul>
-</td>
-<td>Request</td>
-<td>Native NAT transport capture control case.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+### NAT baseline
 
+**Plain Purpose:** Confirm NAT emits no hints when knobs are off.
+
+**Signals Observed Today:**
+- none
+
+**Where Attached:** Request
+
+**Evidence:** Native NAT transport capture control case.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
@@ -348,32 +246,27 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### All NAT request-boundary signals
 
-</td>
-</tr>
-<tr>
-<td>All NAT request-boundary signals</td>
-<td>Produce every NAT signal we can observe today in one run.</td>
-<td>
-<ul>
-<li><code>priority</code></li>
-<li><code>latency_sensitivity</code></li>
-<li><code>osl</code></li>
-<li><code>iat</code></li>
-<li><code>total_requests</code></li>
-<li><code>prefix_id</code></li>
-<li><code>nvext.cache_control.ttl</code></li>
-<li><code>nvext.cache_control.type</code></li>
-<li><code>nvext.cache_salt</code></li>
-<li><code>provider.qos_tier</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native NAT `_DynamoTransport` request-boundary capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce every NAT signal we can observe today in one run.
 
+**Signals Observed Today:**
+- `priority`
+- `latency_sensitivity`
+- `osl`
+- `iat`
+- `total_requests`
+- `prefix_id`
+- `nvext.cache_control.ttl`
+- `nvext.cache_control.type`
+- `nvext.cache_salt`
+- `provider.qos_tier`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native NAT `_DynamoTransport` request-boundary capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
@@ -385,27 +278,22 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Scheduling signals only
 
-</td>
-</tr>
-<tr>
-<td>Scheduling signals only</td>
-<td>Produce NAT priority and request-planning signals.</td>
-<td>
-<ul>
-<li><code>priority</code></li>
-<li><code>latency_sensitivity</code></li>
-<li><code>osl</code></li>
-<li><code>iat</code></li>
-<li><code>total_requests</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce NAT priority and request-planning signals.
 
+**Signals Observed Today:**
+- `priority`
+- `latency_sensitivity`
+- `osl`
+- `iat`
+- `total_requests`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
@@ -417,26 +305,21 @@ RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Cache signals only
 
-</td>
-</tr>
-<tr>
-<td>Cache signals only</td>
-<td>Produce NAT cache reuse and cache-control signals.</td>
-<td>
-<ul>
-<li><code>prefix_id</code></li>
-<li><code>nvext.cache_control.ttl</code></li>
-<li><code>nvext.cache_control.type</code></li>
-<li><code>priority</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce NAT cache reuse and cache-control signals.
 
+**Signals Observed Today:**
+- `prefix_id`
+- `nvext.cache_control.ttl`
+- `nvext.cache_control.type`
+- `priority`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
@@ -448,24 +331,19 @@ RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Pass-through signals only
 
-</td>
-</tr>
-<tr>
-<td>Pass-through signals only</td>
-<td>Preserve provider and session metadata through NAT.</td>
-<td>
-<ul>
-<li><code>nvext.cache_salt</code></li>
-<li><code>provider.qos_tier</code></li>
-</ul>
-</td>
-<td>Session / Request</td>
-<td>Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Preserve provider and session metadata through NAT.
 
+**Signals Observed Today:**
+- `nvext.cache_salt`
+- `provider.qos_tier`
+
+**Where Attached:** Session / Request
+
+**Evidence:** Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
@@ -477,23 +355,18 @@ RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Priority high
 
-</td>
-</tr>
-<tr>
-<td>Priority high</td>
-<td>Produce a high-priority NAT request.</td>
-<td>
-<ul>
-<li><code>priority=100</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce a high-priority NAT request.
 
+**Signals Observed Today:**
+- `priority=100`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
@@ -505,23 +378,18 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Priority low
 
-</td>
-</tr>
-<tr>
-<td>Priority low</td>
-<td>Produce a low-priority NAT request.</td>
-<td>
-<ul>
-<li><code>priority=2</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce a low-priority NAT request.
 
+**Signals Observed Today:**
+- `priority=2`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
@@ -533,24 +401,19 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Latency sensitive
 
-</td>
-</tr>
-<tr>
-<td>Latency sensitive</td>
-<td>Produce a latency-sensitive NAT request.</td>
-<td>
-<ul>
-<li><code>latency_sensitivity</code></li>
-<li><code>priority</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce a latency-sensitive NAT request.
 
+**Signals Observed Today:**
+- `latency_sensitivity`
+- `priority`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
@@ -562,23 +425,18 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Expected output length
 
-</td>
-</tr>
-<tr>
-<td>Expected output length</td>
-<td>Produce the expected output length hint.</td>
-<td>
-<ul>
-<li><code>osl</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture from configured workload metadata.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce the expected output length hint.
 
+**Signals Observed Today:**
+- `osl`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture from configured workload metadata.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
@@ -590,23 +448,18 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Expected interarrival time
 
-</td>
-</tr>
-<tr>
-<td>Expected interarrival time</td>
-<td>Produce the expected request spacing hint.</td>
-<td>
-<ul>
-<li><code>iat</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture from configured workload metadata.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce the expected request spacing hint.
 
+**Signals Observed Today:**
+- `iat`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture from configured workload metadata.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
@@ -618,23 +471,18 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Planned request count
 
-</td>
-</tr>
-<tr>
-<td>Planned request count</td>
-<td>Produce the planned request count hint.</td>
-<td>
-<ul>
-<li><code>total_requests</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce the planned request count hint.
 
+**Signals Observed Today:**
+- `total_requests`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
@@ -646,23 +494,18 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Prefix reuse ID
 
-</td>
-</tr>
-<tr>
-<td>Prefix reuse ID</td>
-<td>Produce the reusable prefix/session ID hint.</td>
-<td>
-<ul>
-<li><code>prefix_id</code></li>
-</ul>
-</td>
-<td>Session / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce the reusable prefix/session ID hint.
 
+**Signals Observed Today:**
+- `prefix_id`
+
+**Where Attached:** Session / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
@@ -674,23 +517,18 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Cache TTL
 
-</td>
-</tr>
-<tr>
-<td>Cache TTL</td>
-<td>Produce a cache lifetime hint.</td>
-<td>
-<ul>
-<li><code>nvext.cache_control.ttl</code></li>
-</ul>
-</td>
-<td>Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce a cache lifetime hint.
 
+**Signals Observed Today:**
+- `nvext.cache_control.ttl`
+
+**Where Attached:** Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
@@ -702,23 +540,18 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Ephemeral cache entry
 
-</td>
-</tr>
-<tr>
-<td>Ephemeral cache entry</td>
-<td>Produce an ephemeral cache-control hint.</td>
-<td>
-<ul>
-<li><code>nvext.cache_control.type="ephemeral"</code></li>
-</ul>
-</td>
-<td>Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce an ephemeral cache-control hint.
 
+**Signals Observed Today:**
+- `nvext.cache_control.type="ephemeral"`
+
+**Where Attached:** Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
@@ -730,23 +563,18 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### First-only cache control
 
-</td>
-</tr>
-<tr>
-<td>First-only cache control</td>
-<td>Produce cache control only on the first repeated request.</td>
-<td>
-<ul>
-<li><code>nvext.cache_control</code></li>
-</ul>
-</td>
-<td>Task / Request</td>
-<td>Native NAT transport capture.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce cache control only on the first repeated request.
 
+**Signals Observed Today:**
+- `nvext.cache_control`
+
+**Where Attached:** Task / Request
+
+**Evidence:** Native NAT transport capture.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
@@ -758,23 +586,18 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Cache namespace
 
-</td>
-</tr>
-<tr>
-<td>Cache namespace</td>
-<td>Produce a cache namespace hint.</td>
-<td>
-<ul>
-<li><code>nvext.cache_salt</code></li>
-</ul>
-</td>
-<td>Session / Request</td>
-<td>Pass-through preserved by NAT transport.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Produce a cache namespace hint.
 
+**Signals Observed Today:**
+- `nvext.cache_salt`
+
+**Where Attached:** Session / Request
+
+**Evidence:** Pass-through preserved by NAT transport.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
@@ -786,23 +609,18 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+### Provider QoS pass-through
 
-</td>
-</tr>
-<tr>
-<td>Provider QoS pass-through</td>
-<td>Preserve provider QoS metadata through NAT.</td>
-<td>
-<ul>
-<li><code>provider.qos_tier</code></li>
-</ul>
-</td>
-<td>Configuration / Request</td>
-<td>Pass-through preserved by NAT transport; not NAT-invented.</td>
-</tr>
-<tr class="command-row">
-<td colspan="5"><span class="command-label">Command</span>
+**Plain Purpose:** Preserve provider QoS metadata through NAT.
 
+**Signals Observed Today:**
+- `provider.qos_tier`
+
+**Where Attached:** Configuration / Request
+
+**Evidence:** Pass-through preserved by NAT transport; not NAT-invented.
+
+**Command:**
 
 ```bash
 RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
@@ -813,12 +631,6 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
-
-
-</td>
-</tr>
-</tbody>
-</table>
 
 ## Missing Or Blocked Today
 
