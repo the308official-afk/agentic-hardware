@@ -24,9 +24,6 @@ cd ~/agentic_hardware
 | Task | Applies to one task or workflow run. |
 | Session | Applies to a session, so many requests in that session may carry it. |
 | Configuration | Comes from a client/profile setting, so any run using that setting may carry it. |
-| Task / Request | A task setting causes the signal, and it appears on outgoing requests. |
-| Session / Request | A session setting causes the signal, and it appears on outgoing requests. |
-| Configuration / Request | A config setting causes the signal, and it appears on outgoing requests. |
 
 ## Source Lane Legend
 
@@ -34,6 +31,9 @@ cd ~/agentic_hardware
 | --- | --- |
 | Native Claude Code | The real Claude Code CLI emitted the signal. |
 | Claude Code + Provider | Claude Code was used, but provider routing/config may have produced the signal. |
+| Native NAT Workflow | The real NeMo/NAT transport emitted the signal from workflow or transport settings. |
+| NAT Pass-through | The signal was supplied before or around NAT, and NAT preserved it at the boundary. |
+| Mixed NAT | The run intentionally combines NAT workflow signals and NAT pass-through signals. |
 
 ## Claude Code
 
@@ -109,7 +109,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -134,7 +134,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -161,7 +161,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.ttl="1h"</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -211,7 +211,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -237,7 +237,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.ttl="1h"</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
 </tr>
 <tr>
@@ -262,7 +262,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
 </tr>
 </tbody>
@@ -272,17 +272,19 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 
 <table>
 <colgroup>
-<col width="13%" style="width: 13%;">
-<col width="22%" style="width: 22%;">
+<col width="12%" style="width: 12%;">
+<col width="18%" style="width: 18%;">
+<col width="12%" style="width: 12%;">
 <col>
-<col width="20%" style="width: 20%;">
-<col width="13%" style="width: 13%;">
-<col width="16%" style="width: 16%;">
+<col width="18%" style="width: 18%;">
+<col width="12%" style="width: 12%;">
+<col width="14%" style="width: 14%;">
 </colgroup>
 <thead>
 <tr>
 <th>Run</th>
 <th>Plain Purpose</th>
+<th>Source Lane</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
 <th>Where Attached</th>
@@ -293,6 +295,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>NAT baseline</td>
 <td>Confirm NAT emits no hints when knobs are off.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -317,6 +320,7 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
 <tr>
 <td>All NAT request-boundary signals</td>
 <td>Produce every NAT signal we can observe today in one run.</td>
+<td>Mixed NAT</td>
 <td>
 
 ```bash
@@ -344,12 +348,13 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native NAT `_DynamoTransport` request-boundary capture.</td>
 </tr>
 <tr>
 <td>Scheduling signals only</td>
 <td>Produce NAT priority and request-planning signals.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -372,12 +377,13 @@ RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>total_requests</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Cache signals only</td>
 <td>Produce NAT cache reuse and cache-control signals.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -399,12 +405,13 @@ RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Pass-through signals only</td>
 <td>Preserve provider and session metadata through NAT.</td>
+<td>NAT Pass-through</td>
 <td>
 
 ```bash
@@ -424,12 +431,13 @@ RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
-<td>Session / Request</td>
+<td>Session</td>
 <td>Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.</td>
 </tr>
 <tr>
 <td>Priority high</td>
 <td>Produce a high-priority NAT request.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -448,12 +456,13 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority=100</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Priority low</td>
 <td>Produce a low-priority NAT request.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -472,12 +481,13 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority=2</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Latency sensitive</td>
 <td>Produce a latency-sensitive NAT request.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -497,12 +507,13 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Expected output length</td>
 <td>Produce the expected output length hint.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -521,12 +532,13 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
 <li><code>osl</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
 <tr>
 <td>Expected interarrival time</td>
 <td>Produce the expected request spacing hint.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -545,12 +557,13 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
 <li><code>iat</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
 <tr>
 <td>Planned request count</td>
 <td>Produce the planned request count hint.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -569,12 +582,13 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
 <li><code>total_requests</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Prefix reuse ID</td>
 <td>Produce the reusable prefix/session ID hint.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -593,12 +607,13 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
 <li><code>prefix_id</code></li>
 </ul>
 </td>
-<td>Session / Request</td>
+<td>Session</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Cache TTL</td>
 <td>Produce a cache lifetime hint.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -623,6 +638,7 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
 <tr>
 <td>Ephemeral cache entry</td>
 <td>Produce an ephemeral cache-control hint.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -647,6 +663,7 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
 <tr>
 <td>First-only cache control</td>
 <td>Produce cache control only on the first repeated request.</td>
+<td>Native NAT Workflow</td>
 <td>
 
 ```bash
@@ -665,12 +682,13 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control</code></li>
 </ul>
 </td>
-<td>Task / Request</td>
+<td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
 <td>Cache namespace</td>
 <td>Produce a cache namespace hint.</td>
+<td>NAT Pass-through</td>
 <td>
 
 ```bash
@@ -689,12 +707,13 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_salt</code></li>
 </ul>
 </td>
-<td>Session / Request</td>
+<td>Session</td>
 <td>Pass-through preserved by NAT transport.</td>
 </tr>
 <tr>
 <td>Provider QoS pass-through</td>
 <td>Preserve provider QoS metadata through NAT.</td>
+<td>NAT Pass-through</td>
 <td>
 
 ```bash
@@ -713,7 +732,7 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
-<td>Configuration / Request</td>
+<td>Configuration</td>
 <td>Pass-through preserved by NAT transport; not NAT-invented.</td>
 </tr>
 </tbody>
