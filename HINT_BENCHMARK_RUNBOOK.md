@@ -44,7 +44,11 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>No intentional NAT hint fields expected</td>
+<td>
+<ul>
+<li>none</li>
+</ul>
+</td>
 <td>request level</td>
 <td>Native NAT transport capture control case.</td>
 </tr>
@@ -63,7 +67,20 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`priority`, `latency_sensitivity`, `osl`, `iat`, `total_requests`, `prefix_id`, `nvext.cache_control.ttl`, `nvext.cache_control.type`, first-only cache control, `nvext.cache_salt`, provider QoS pass-through</td>
+<td>
+<ul>
+<li><code>priority</code></li>
+<li><code>latency_sensitivity</code></li>
+<li><code>osl</code></li>
+<li><code>iat</code></li>
+<li><code>total_requests</code></li>
+<li><code>prefix_id</code></li>
+<li><code>nvext.cache_control.ttl</code></li>
+<li><code>nvext.cache_control.type</code></li>
+<li><code>nvext.cache_salt</code></li>
+<li><code>provider.qos_tier</code></li>
+</ul>
+</td>
 <td>workflow, session, request/cache-entry, provider pass-through</td>
 <td>Native NAT `_DynamoTransport` request-boundary capture.</td>
 </tr>
@@ -82,7 +99,15 @@ RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`priority`, `latency_sensitivity`, `osl`, `iat`, `total_requests`</td>
+<td>
+<ul>
+<li><code>priority</code></li>
+<li><code>latency_sensitivity</code></li>
+<li><code>osl</code></li>
+<li><code>iat</code></li>
+<li><code>total_requests</code></li>
+</ul>
+</td>
 <td>workflow/request-stream level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -101,7 +126,14 @@ RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`prefix_id`, `nvext.cache_control.ttl`, `nvext.cache_control.type`, first-only cache control, priority-derived eviction intent</td>
+<td>
+<ul>
+<li><code>prefix_id</code></li>
+<li><code>nvext.cache_control.ttl</code></li>
+<li><code>nvext.cache_control.type</code></li>
+<li><code>priority</code></li>
+</ul>
+</td>
 <td>workflow and cache-entry level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -120,7 +152,12 @@ RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`nvext.cache_salt`, provider QoS metadata pass-through</td>
+<td>
+<ul>
+<li><code>nvext.cache_salt</code></li>
+<li><code>provider.qos_tier</code></li>
+</ul>
+</td>
 <td>session/provider level</td>
 <td>Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.</td>
 </tr>
@@ -139,7 +176,11 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`priority=100`</td>
+<td>
+<ul>
+<li><code>priority=100</code></li>
+</ul>
+</td>
 <td>workflow level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -158,7 +199,11 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`priority=2`</td>
+<td>
+<ul>
+<li><code>priority=2</code></li>
+</ul>
+</td>
 <td>workflow level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -177,7 +222,12 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`latency_sensitivity`, derived `priority`</td>
+<td>
+<ul>
+<li><code>latency_sensitivity</code></li>
+<li><code>priority</code></li>
+</ul>
+</td>
 <td>workflow level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -196,7 +246,11 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`osl`</td>
+<td>
+<ul>
+<li><code>osl</code></li>
+</ul>
+</td>
 <td>workflow/request estimate level</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
@@ -215,7 +269,11 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`iat`</td>
+<td>
+<ul>
+<li><code>iat</code></li>
+</ul>
+</td>
 <td>workflow/request-stream level</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
@@ -234,7 +292,11 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`total_requests`</td>
+<td>
+<ul>
+<li><code>total_requests</code></li>
+</ul>
+</td>
 <td>workflow/request-stream level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -253,7 +315,11 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`prefix_id`</td>
+<td>
+<ul>
+<li><code>prefix_id</code></li>
+</ul>
+</td>
 <td>workflow/session reuse level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -272,7 +338,11 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`nvext.cache_control.ttl`</td>
+<td>
+<ul>
+<li><code>nvext.cache_control.ttl</code></li>
+</ul>
+</td>
 <td>cache-entry/request level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -291,7 +361,11 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`nvext.cache_control.type="ephemeral"`</td>
+<td>
+<ul>
+<li><code>nvext.cache_control.type="ephemeral"</code></li>
+</ul>
+</td>
 <td>cache-entry level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -310,7 +384,11 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>request 1 has `nvext.cache_control`; request 2 omits it</td>
+<td>
+<ul>
+<li><code>nvext.cache_control</code></li>
+</ul>
+</td>
 <td>cache-entry/request sequence level</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -329,7 +407,11 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`nvext.cache_salt`</td>
+<td>
+<ul>
+<li><code>nvext.cache_salt</code></li>
+</ul>
+</td>
 <td>session/request namespace level</td>
 <td>Pass-through preserved by NAT transport.</td>
 </tr>
@@ -348,7 +430,11 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 ```
 
 </td>
-<td>`provider.qos_tier`</td>
+<td>
+<ul>
+<li><code>provider.qos_tier</code></li>
+</ul>
+</td>
 <td>provider level</td>
 <td>Pass-through preserved by NAT transport; not NAT-invented.</td>
 </tr>
@@ -383,7 +469,11 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>No intentional provider QoS or cache-control fields expected</td>
+<td>
+<ul>
+<li>none</li>
+</ul>
+</td>
 <td>request level</td>
 <td>Native Claude Code request-boundary control case.</td>
 </tr>
@@ -402,7 +492,14 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>`cache_control.type="ephemeral"` on system/message blocks, `cache_control.ttl="1h"` with 1h knob, fast-mode marker in `anthropic-beta`; not observed natively: `service_tier`, literal cache key, tool-level cache control, true `max_tokens=0` prewarm</td>
+<td>
+<ul>
+<li><code>system.*.cache_control.type="ephemeral"</code></li>
+<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
+<li><code>cache_control.ttl="1h"</code></li>
+<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
+</ul>
+</td>
 <td>session, request, content-block, cache-entry</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -421,7 +518,11 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>fast-mode marker in `anthropic-beta`; not observed natively: `service_tier=auto`, `service_tier=standard_only`</td>
+<td>
+<ul>
+<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
+</ul>
+</td>
 <td>session/provider request header</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -440,7 +541,13 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>`cache_control.type="ephemeral"` on system/message blocks; `cache_control.ttl="1h"` with `ENABLE_PROMPT_CACHING_1H=1`; 5m knob shows cache control but no literal `ttl` field</td>
+<td>
+<ul>
+<li><code>system.*.cache_control.type="ephemeral"</code></li>
+<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
+<li><code>cache_control.ttl="1h"</code></li>
+</ul>
+</td>
 <td>content-block and cache-entry level</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -459,7 +566,11 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>`cache_control.type="ephemeral"` observed; true native `max_tokens=0` not observed</td>
+<td>
+<ul>
+<li><code>system.*.cache_control.type="ephemeral"</code></li>
+</ul>
+</td>
 <td>request and content-block level</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -478,7 +589,11 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>`anthropic-beta` contains `fast-mode-2026-02-01`</td>
+<td>
+<ul>
+<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
+</ul>
+</td>
 <td>session/provider request header</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -497,7 +612,12 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>`cache_control.type="ephemeral"`, `cache_control.ttl="1h"`</td>
+<td>
+<ul>
+<li><code>cache_control.type="ephemeral"</code></li>
+<li><code>cache_control.ttl="1h"</code></li>
+</ul>
+</td>
 <td>content-block/cache-entry level</td>
 <td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
 </tr>
@@ -516,66 +636,13 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 ```
 
 </td>
-<td>`cache_control.type="ephemeral"`; no literal `ttl` field observed</td>
+<td>
+<ul>
+<li><code>cache_control.type="ephemeral"</code></li>
+</ul>
+</td>
 <td>content-block/cache-entry level</td>
 <td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
-</tr>
-<tr>
-<td>Claude real-provider feedback</td>
-<td>
-
-```bash
-RUN_ID="claude_real_provider_feedback_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile real_provider_feedback \
-  --claude-real-provider-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>blocked today on EC2: Claude CLI returned `Not logged in`; cache usage counters stayed zero</td>
-<td>runtime feedback level</td>
-<td>Implemented, but needs logged-in Claude provider execution before it can show cache read/write usage.</td>
-</tr>
-<tr>
-<td>Direct Anthropic API capability coverage</td>
-<td>
-
-```bash
-RUN_ID="claude_direct_api_capabilities_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile direct_api_capabilities \
-  --anthropic-api-payload-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>direct API `speed="fast"`, explicit `cache_control.ttl="1h"`, `max_tokens=0`, cache feedback response shape</td>
-<td>request, cache-entry, runtime feedback</td>
-<td>Documented direct API payloads only; not proof that Claude Code CLI emitted these organically.</td>
-</tr>
-<tr>
-<td>Bedrock provider-config service tier</td>
-<td>
-
-```bash
-RUN_ID="claude_bedrock_service_tier_priority_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile bedrock_provider_config \
-  --anthropic-api-payload-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>`x-amzn-bedrock-service-tier="priority"`</td>
-<td>provider header level</td>
-<td>Provider-config payload evidence; not normal Claude Code CLI native emission.</td>
 </tr>
 </tbody>
 </table>
@@ -589,7 +656,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 | Claude Code | native `service_tier=auto` / `standard_only` body field | Not observed through tested Claude Code env-var path. |
 | Claude Code | literal cache key | Not observed; Claude appears to use provider-derived exact-prefix matching. |
 | Claude Code | tool-level `cache_control` | Not observed in the tested tool-heavy request. |
-| Claude Code | native `max_tokens=0` prewarm | Not observed; direct API recipe supports it, Claude Code CLI did not emit it in our capture. |
+| Claude Code | native `max_tokens=0` prewarm | Not observed from Claude Code CLI in our capture. |
 | Claude Code | real cache-hit usage counters | Implemented runner path, but EC2 Claude CLI is not logged in today. |
 
 ## Inspect Results
