@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from agentic_kv.hint_benchmark import (
     HintBenchmarkConfigError,
+    build_direct_api_payloads,
     build_dry_run,
     build_fixture_observations,
     build_nat_payload_observations,
@@ -381,6 +382,14 @@ def main() -> None:
         help="Run the real Claude CLI/client against a local capture endpoint and validate emitted request fields.",
     )
     parser.add_argument(
+        "--anthropic-api-payload-capture",
+        action="store_true",
+        help=(
+            "Generate documented direct Anthropic API request/response payloads for Claude capability probes. "
+            "This does not count as native Claude Code CLI emission."
+        ),
+    )
+    parser.add_argument(
         "--claude-command",
         default=os.environ.get("CLAUDE_CODE_BIN", "claude"),
         help="Claude CLI command to execute for --claude-native-capture. Default: claude.",
@@ -413,17 +422,21 @@ def main() -> None:
             args.fixture_observations,
             args.nat_dynamo_transport_capture,
             args.claude_native_capture,
+            args.anthropic_api_payload_capture,
         )
     )
     if mode_count != 1:
         parser.error(
             "Choose exactly one of --dry-run, --fixture-observations, "
-            "--nat-dynamo-transport-capture, or --claude-native-capture."
+            "--nat-dynamo-transport-capture, --claude-native-capture, "
+            "or --anthropic-api-payload-capture."
         )
     if args.nat_dynamo_transport_capture and args.harness != "nemo_agent_toolkit":
         parser.error("--nat-dynamo-transport-capture requires --harness nemo_agent_toolkit.")
     if args.claude_native_capture and args.harness != "claude_code":
         parser.error("--claude-native-capture requires --harness claude_code.")
+    if args.anthropic_api_payload_capture and args.harness != "claude_code":
+        parser.error("--anthropic-api-payload-capture requires --harness claude_code.")
 
     defaults = DEFAULT_CONFIGS[args.harness]
     manifest_path = args.manifest or defaults["manifest"]
@@ -448,6 +461,8 @@ def main() -> None:
             if args.nat_dynamo_transport_capture
             else "claude_native_capture"
             if args.claude_native_capture
+            else "anthropic_api_payload_capture"
+            if args.anthropic_api_payload_capture
             else "fixture_smoke"
             if args.fixture_observations
             else "dry_run"
@@ -461,6 +476,7 @@ def main() -> None:
             args.fixture_observations,
             args.nat_dynamo_transport_capture,
             args.claude_native_capture,
+            args.anthropic_api_payload_capture,
         ]
         if any(generated_observation_modes) and args.observed_jsonl:
             raise HintBenchmarkConfigError("Generated observation modes cannot be combined with --observed-jsonl")
@@ -485,6 +501,17 @@ def main() -> None:
                 evidence_source="claude_native_capture",
             )
             result["client_runs"] = client_runs
+            result["captured_payload_counts"] = {
+                scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
+            }
+        elif args.anthropic_api_payload_capture:
+            captured_payloads = build_direct_api_payloads(selected)
+            observations = build_payload_observations(
+                manifest,
+                result["scenario_records"],
+                captured_payloads,
+                evidence_source="anthropic_api_payload_capture",
+            )
             result["captured_payload_counts"] = {
                 scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
             }

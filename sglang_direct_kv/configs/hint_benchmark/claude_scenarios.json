@@ -22,6 +22,34 @@
       "claude_provider_cache_feedback_probe",
       "claude_provider_retention_1h",
       "claude_cache_pinning_negative_probe"
+    ],
+    "all_claude_signal_recipes": [
+      "claude_no_hints_baseline",
+      "claude_service_tier_auto",
+      "claude_service_tier_standard_only",
+      "claude_repeated_session_prefix",
+      "claude_long_running_cache_session",
+      "claude_tool_heavy_request",
+      "claude_stable_system_context",
+      "claude_stable_message_context",
+      "claude_prewarm_like_probe",
+      "claude_provider_cache_feedback_probe",
+      "claude_provider_retention_1h",
+      "claude_cache_pinning_negative_probe",
+      "claude_api_fast_mode",
+      "claude_bedrock_service_tier_priority",
+      "claude_api_cache_ttl_1h",
+      "claude_api_prewarm_max_tokens_zero",
+      "claude_api_cache_feedback_fixture"
+    ],
+    "direct_anthropic_api_coverage": [
+      "claude_api_fast_mode",
+      "claude_api_cache_ttl_1h",
+      "claude_api_prewarm_max_tokens_zero",
+      "claude_api_cache_feedback_fixture"
+    ],
+    "bedrock_config_coverage": [
+      "claude_bedrock_service_tier_priority"
     ]
   },
   "injection_levels": {
@@ -310,6 +338,194 @@
         {"hint_id": "cache_pinning", "raw_field": "cache_pinning", "expected_value": "present"}
       ],
       "notes": "This should normally pass by absence; Claude documents TTL/cache_control, not cache_pinning=true."
+    },
+    {
+      "id": "claude_api_fast_mode",
+      "display_name": "Claude direct API fast mode",
+      "status": "direct_api_payload_supported",
+      "source_class": "direct_api_client_supplied",
+      "injection_level": "request_level",
+      "scope": "provider",
+      "trigger_type": "direct_api_fast_speed_request",
+      "target_hint_ids": ["provider_qos"],
+      "benchmark_question": "Can the benchmark represent Anthropic API fast mode as request speed plus beta header and response speed feedback?",
+      "workload_shape": {"request_count": 1, "client": "anthropic_messages_api"},
+      "client_setup": {
+        "api_headers": {
+          "anthropic-beta": "fast-mode-2026-02-01"
+        },
+        "api_payload": {
+          "model": "claude-opus-5",
+          "max_tokens": 8,
+          "speed": "fast",
+          "messages": [{"role": "user", "content": "Direct API fast-mode benchmark probe."}]
+        },
+        "api_response_payload": {
+          "usage": {
+            "input_tokens": 8,
+            "output_tokens": 4,
+            "speed": "fast"
+          }
+        }
+      },
+      "expected_emissions": [
+        {"hint_id": "provider_qos", "raw_field": "speed", "expected_value": "fast", "required": true},
+        {"hint_id": "provider_qos", "raw_field": "_capture.headers.anthropic-beta", "expected_value": "fast-mode-2026-02-01", "required": true},
+        {"hint_id": "provider_qos", "raw_field": "usage.speed", "expected_value": "fast", "required": true}
+      ],
+      "notes": "This is a direct API capability probe, not proof that Claude Code CLI organically emitted fast mode."
+    },
+    {
+      "id": "claude_bedrock_service_tier_priority",
+      "display_name": "Claude Bedrock service-tier priority",
+      "status": "provider_config_payload_supported",
+      "source_class": "provider_config",
+      "injection_level": "provider_level",
+      "scope": "provider",
+      "trigger_type": "bedrock_service_tier_config",
+      "target_hint_ids": ["provider_qos"],
+      "benchmark_question": "Can the benchmark represent Bedrock service-tier priority as a provider-level request header?",
+      "workload_shape": {"request_count": 1, "client": "bedrock_provider_config"},
+      "client_setup": {
+        "api_headers": {
+          "x-amzn-bedrock-service-tier": "priority"
+        },
+        "api_payload": {
+          "model": "anthropic.claude-opus-5",
+          "max_tokens": 8,
+          "messages": [{"role": "user", "content": "Bedrock service-tier benchmark probe."}]
+        }
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "provider_qos",
+          "raw_field": "_capture.headers.x-amzn-bedrock-service-tier",
+          "expected_value": "priority",
+          "required": true
+        }
+      ],
+      "notes": "This is a provider-config lane. It should not be counted as native Anthropic API or native Claude Code CLI emission."
+    },
+    {
+      "id": "claude_api_cache_ttl_1h",
+      "display_name": "Claude direct API explicit cache TTL",
+      "status": "direct_api_payload_supported",
+      "source_class": "direct_api_client_supplied",
+      "injection_level": "cache_entry_level",
+      "scope": "cache_entry",
+      "trigger_type": "direct_api_explicit_cache_ttl",
+      "target_hint_ids": ["cache_control", "cache_ttl", "cache_pinning"],
+      "benchmark_question": "Can the benchmark represent explicit Anthropic API cache TTL on reusable prompt blocks?",
+      "workload_shape": {"request_count": 1, "client": "anthropic_messages_api", "stable_prefix": true},
+      "client_setup": {
+        "api_payload": {
+          "model": "claude-opus-5",
+          "max_tokens": 8,
+          "system": [
+            {
+              "type": "text",
+              "text": "Stable system context for direct API TTL probe.",
+              "cache_control": {"type": "ephemeral", "ttl": "1h"}
+            }
+          ],
+          "messages": [{"role": "user", "content": "Use the cached system prefix."}]
+        }
+      },
+      "expected_emissions": [
+        {"hint_id": "cache_control", "raw_field": "system.*.cache_control.type", "expected_value": "ephemeral", "required": true},
+        {"hint_id": "cache_ttl", "raw_field": "system.*.cache_control.ttl", "expected_value": "1h", "required": true},
+        {"hint_id": "cache_pinning", "raw_field": "system.*.cache_control.ttl", "expected_value": "1h", "required": true}
+      ],
+      "notes": "This models long-retention cache behavior through TTL. It does not use or expect a literal cache_pinning=true field."
+    },
+    {
+      "id": "claude_api_prewarm_max_tokens_zero",
+      "display_name": "Claude direct API max_tokens=0 prewarm",
+      "status": "direct_api_payload_supported",
+      "source_class": "direct_api_client_supplied",
+      "injection_level": "request_level",
+      "scope": "request_or_cache_entry",
+      "trigger_type": "direct_api_prewarm_request",
+      "target_hint_ids": ["speculative_prewarm", "cache_control", "cache_hit_feedback"],
+      "benchmark_question": "Can the benchmark represent a true Anthropic API prompt-cache prewarm using max_tokens=0?",
+      "workload_shape": {"request_count": 1, "client": "anthropic_messages_api", "stable_prefix": true},
+      "client_setup": {
+        "api_payload": {
+          "model": "claude-opus-5",
+          "max_tokens": 0,
+          "system": [
+            {
+              "type": "text",
+              "text": "Large stable context that should be written to prompt cache.",
+              "cache_control": {"type": "ephemeral"}
+            }
+          ],
+          "messages": [{"role": "user", "content": "Prewarm this prefix."}]
+        },
+        "api_response_payload": {
+          "content": [],
+          "usage": {
+            "input_tokens": 8,
+            "cache_creation_input_tokens": 5120,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      },
+      "expected_emissions": [
+        {"hint_id": "speculative_prewarm", "raw_field": "max_tokens", "expected_value": 0, "required": true},
+        {"hint_id": "cache_control", "raw_field": "system.*.cache_control.type", "expected_value": "ephemeral", "required": true},
+        {
+          "hint_id": "cache_hit_feedback",
+          "raw_field": "usage.cache_creation_input_tokens",
+          "expected_value": {"numeric_range": [1, 1000000]},
+          "required": true
+        }
+      ],
+      "notes": "This is direct API prewarm evidence. Native Claude Code CLI did not emit max_tokens=0 in the earlier capture."
+    },
+    {
+      "id": "claude_api_cache_feedback_fixture",
+      "display_name": "Claude direct API cache feedback",
+      "status": "direct_api_response_fixture",
+      "source_class": "direct_api_response_fixture",
+      "injection_level": "runtime_feedback_level",
+      "scope": "usage",
+      "trigger_type": "documented_provider_usage_feedback",
+      "target_hint_ids": ["cache_hit_feedback", "provider_qos"],
+      "benchmark_question": "Can the benchmark represent provider response fields for cache reads, cache writes, and speed?",
+      "workload_shape": {"request_count": 1, "client": "anthropic_messages_api", "real_provider_response_required": false},
+      "client_setup": {
+        "api_response_payload": {
+          "usage": {
+            "input_tokens": 50,
+            "cache_creation_input_tokens": 248,
+            "cache_read_input_tokens": 1800,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 148,
+              "ephemeral_1h_input_tokens": 100
+            },
+            "output_tokens": 12,
+            "speed": "fast"
+          }
+        }
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_hit_feedback",
+          "raw_field": "usage.cache_creation_input_tokens",
+          "expected_value": {"numeric_range": [1, 1000000]},
+          "required": true
+        },
+        {
+          "hint_id": "cache_hit_feedback",
+          "raw_field": "usage.cache_read_input_tokens",
+          "expected_value": {"numeric_range": [1, 1000000]},
+          "required": true
+        },
+        {"hint_id": "provider_qos", "raw_field": "usage.speed", "expected_value": "fast", "required": true}
+      ],
+      "notes": "This validates the report path for documented provider feedback fields. Real provider proof still requires a real response capture."
     }
   ]
 }

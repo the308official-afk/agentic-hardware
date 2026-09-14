@@ -238,6 +238,8 @@ def build_dry_run(
 def evidence_tier_for_mode(execution_mode: str) -> str:
     if execution_mode in {"nat_dynamo_transport_capture", "claude_native_capture"}:
         return "native_client_or_transport_capture"
+    if execution_mode == "anthropic_api_payload_capture":
+        return "documented_direct_api_payload"
     if execution_mode == "observed_file":
         return "external_observed_file"
     if execution_mode == "fixture_smoke":
@@ -478,6 +480,72 @@ def build_payload_observations(
                     }
                 )
     return observations
+
+
+def replace_placeholders(value: Any, *, scenario_id: str, invocation_index: int) -> Any:
+    if isinstance(value, str):
+        return value.replace("{scenario_id}", scenario_id).replace("{invocation_index}", str(invocation_index))
+    if isinstance(value, list):
+        return [replace_placeholders(item, scenario_id=scenario_id, invocation_index=invocation_index) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: replace_placeholders(item, scenario_id=scenario_id, invocation_index=invocation_index)
+            for key, item in value.items()
+        }
+    return value
+
+
+def build_direct_api_payloads(scenarios: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Build documented direct Anthropic API request/response payload examples.
+
+    These rows are deliberately separate from Claude Code native capture. They
+    prove the benchmark can represent lower-level API fields, not that the
+    Claude Code CLI emitted them organically.
+    """
+    captured: dict[str, list[dict[str, Any]]] = {}
+    for scenario in scenarios:
+        setup = scenario.get("client_setup") or scenario.get("synthetic_setup", {})
+        request_count = max(1, int(scenario.get("workload_shape", {}).get("request_count") or 1))
+        api_payloads = setup.get("api_payloads")
+        api_payload = setup.get("api_payload")
+        api_response = setup.get("api_response_payload")
+        api_headers = setup.get("api_headers", {})
+        if not isinstance(api_headers, dict):
+            api_headers = {}
+
+        payloads: list[dict[str, Any]] = []
+        for invocation_index in range(request_count):
+            if isinstance(api_payloads, list) and api_payloads:
+                template = api_payloads[min(invocation_index, len(api_payloads) - 1)]
+            elif isinstance(api_payload, dict):
+                template = api_payload
+            else:
+                template = {
+                    "model": "claude-opus-5",
+                    "max_tokens": 8,
+                    "messages": [{"role": "user", "content": f"Direct API benchmark {scenario['id']}"}],
+                }
+            payload = replace_placeholders(template, scenario_id=scenario["id"], invocation_index=invocation_index)
+            if not isinstance(payload, dict):
+                payload = {"body": payload}
+            payload = dict(payload)
+            if api_headers:
+                payload["_capture"] = {
+                    "kind": "request",
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "headers": {str(key).lower(): value for key, value in api_headers.items()},
+                }
+            payloads.append(payload)
+
+        if isinstance(api_response, dict):
+            response_payload = replace_placeholders(api_response, scenario_id=scenario["id"], invocation_index=0)
+            response_payload = dict(response_payload)
+            response_payload.setdefault("_capture", {"kind": "response", "path": "/v1/messages"})
+            payloads.append(response_payload)
+
+        captured[scenario["id"]] = payloads
+    return captured
 
 
 def load_observations_jsonl(path: Path) -> list[dict[str, Any]]:

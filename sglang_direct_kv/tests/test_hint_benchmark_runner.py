@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from agentic_kv.hint_benchmark import (
+    build_direct_api_payloads,
     build_nat_payload_observations,
     build_payload_observations,
     build_dry_run,
@@ -192,6 +193,10 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
             evidence_tier_for_mode("nat_dynamo_transport_capture"),
             "native_client_or_transport_capture",
         )
+        self.assertEqual(
+            evidence_tier_for_mode("anthropic_api_payload_capture"),
+            "documented_direct_api_payload",
+        )
 
     def test_payload_index_expectations_can_check_first_only_cache_control(self):
         manifest, scenarios = load_benchmark_inputs(MANIFEST, SCENARIOS)
@@ -248,7 +253,7 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
         self.assertEqual(manifest["harness"]["id"], "claude_code")
         self.assertEqual(len(manifest["hints"]), 8)
-        self.assertEqual(len(scenarios["scenarios"]), 12)
+        self.assertEqual(len(scenarios["scenarios"]), 17)
 
     def test_selects_claude_knob_profile_scenarios(self):
         _, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
@@ -356,6 +361,31 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(by_scenario["claude_service_tier_auto"]["result"], "pass")
         self.assertEqual(by_scenario["claude_repeated_session_prefix"]["result"], "pass")
         self.assertEqual(by_scenario["claude_long_running_cache_session"]["result"], "pass")
+
+    def test_direct_anthropic_api_payloads_cover_missing_claude_signals(self):
+        manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
+        selected = select_scenarios(scenarios, "direct_anthropic_api_coverage")
+        result = build_dry_run(
+            manifest,
+            selected,
+            run_id="unit_test",
+            created_at=1.0,
+            execution_mode="anthropic_api_payload_capture",
+        )
+        captured_payloads = build_direct_api_payloads(selected)
+        observations = build_payload_observations(
+            manifest,
+            result["scenario_records"],
+            captured_payloads,
+            evidence_source="anthropic_api_payload_capture",
+        )
+        validation = validate_hint_evidence(
+            manifest,
+            result["scenario_records"],
+            observations,
+            execution_mode="anthropic_api_payload_capture",
+        )
+        self.assertTrue(all(row["result"] == "pass" for row in validation["scenario_summaries"]))
 
 
 if __name__ == "__main__":

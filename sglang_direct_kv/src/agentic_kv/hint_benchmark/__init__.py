@@ -3,6 +3,7 @@
 from .runner import (
     HintBenchmarkConfigError,
     build_hint_support_matrix,
+    build_direct_api_payloads,
     build_nat_payload_observations,
     build_payload_observations,
     build_dry_run,
@@ -21,6 +22,7 @@ from .runner import (
 __all__ = [
     "HintBenchmarkConfigError",
     "build_hint_support_matrix",
+    "build_direct_api_payloads",
     "build_nat_payload_observations",
     "build_payload_observations",
     "build_dry_run",

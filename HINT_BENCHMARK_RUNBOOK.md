@@ -345,7 +345,7 @@ cd ~/agentic_hardware
 RUN_ID="nat_priority_spread_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --scenarios nat_priority_high nat_priority_low nat_latency_sensitive \
+  --scenarios nat_priority_high,nat_priority_low,nat_latency_sensitive \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -358,7 +358,7 @@ cd ~/agentic_hardware
 RUN_ID="nat_workload_shape_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --scenarios nat_expected_output_length nat_expected_interarrival_time nat_remaining_calls \
+  --scenarios nat_expected_output_length,nat_expected_interarrival_time,nat_remaining_calls \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -371,7 +371,7 @@ cd ~/agentic_hardware
 RUN_ID="nat_reuse_and_cache_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --scenarios nat_prefix_reuse_id nat_cache_control_ttl nat_cache_ephemeral nat_cache_control_first_only \
+  --scenarios nat_prefix_reuse_id,nat_cache_control_ttl,nat_cache_ephemeral,nat_cache_control_first_only \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -384,7 +384,7 @@ cd ~/agentic_hardware
 RUN_ID="nat_boundary_passthrough_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --scenarios nat_cache_namespace nat_provider_qos \
+  --scenarios nat_cache_namespace,nat_provider_qos \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -519,7 +519,7 @@ cd ~/agentic_hardware
 RUN_ID="claude_full_claude_coverage_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios full_claude_coverage \
+  --knob-profile native_client_boundary \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -692,7 +692,7 @@ cd ~/agentic_hardware
 RUN_ID="claude_qos_variants_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_service_tier_auto claude_service_tier_standard_only \
+  --scenarios claude_service_tier_auto,claude_service_tier_standard_only \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -705,7 +705,7 @@ cd ~/agentic_hardware
 RUN_ID="claude_cache_control_locations_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_long_running_cache_session claude_tool_heavy_request claude_stable_system_context claude_stable_message_context \
+  --scenarios claude_long_running_cache_session,claude_tool_heavy_request,claude_stable_system_context,claude_stable_message_context \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -718,8 +718,105 @@ cd ~/agentic_hardware
 RUN_ID="claude_cache_ttl_and_feedback_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_provider_retention_1h claude_provider_cache_feedback_probe \
+  --scenarios claude_provider_retention_1h,claude_provider_cache_feedback_probe \
   --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+## Claude Direct API Capability Runs
+
+These runs show lower-level Anthropic API shapes. They are useful for the
+benchmark and glue layer, but they are not proof that Claude Code CLI emitted
+the fields natively.
+
+All Claude signal recipes:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_all_signal_recipes_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile all_signal_recipes \
+  --dry-run \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Direct API capability coverage:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_direct_api_capabilities_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile direct_api_capabilities \
+  --anthropic-api-payload-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Direct API fast mode:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_api_fast_mode_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_api_fast_mode \
+  --anthropic-api-payload-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Direct API explicit cache TTL:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_api_cache_ttl_1h_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_api_cache_ttl_1h \
+  --anthropic-api-payload-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Direct API prewarm:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_api_prewarm_max_tokens_zero_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_api_prewarm_max_tokens_zero \
+  --anthropic-api-payload-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Direct API cache feedback:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_api_cache_feedback_fixture_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_api_cache_feedback_fixture \
+  --anthropic-api-payload-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Bedrock service-tier header:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_bedrock_service_tier_priority_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_bedrock_service_tier_priority \
+  --anthropic-api-payload-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```

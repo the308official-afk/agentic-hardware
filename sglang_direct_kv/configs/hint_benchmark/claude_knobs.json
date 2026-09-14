@@ -8,7 +8,7 @@
       "expected_signal_visibility": []
     },
     "qos_only": {
-      "display_name": "Provider QoS only",
+      "display_name": "Claude Code native provider QoS probes",
       "scenario_selectors": ["claude_service_tier_auto", "claude_service_tier_standard_only"],
       "expected_signal_visibility": ["service_tier"]
     },
@@ -25,15 +25,15 @@
       "expected_signal_visibility": [
         "cache_control.type",
         "cache_control.ttl",
-        "tools.0.cache_control.type",
-        "system.0.cache_control.type",
-        "messages.0.content.0.cache_control.type"
+        "tools.*.cache_control.type",
+        "system.*.cache_control.type",
+        "messages.*.content.*.cache_control.type"
       ]
     },
     "prewarm_only": {
       "display_name": "Prompt cache prewarm only",
       "scenario_selectors": ["claude_prewarm_like_probe"],
-      "expected_signal_visibility": ["max_tokens", "cache_control.type"]
+      "expected_signal_visibility": ["max_tokens", "system.*.cache_control.type"]
     },
     "feedback_only": {
       "display_name": "Cache usage feedback only",
@@ -43,10 +43,43 @@
         "usage.cache_read_input_tokens"
       ]
     },
+    "native_client_boundary": {
+      "display_name": "Claude Code native-client boundary probes",
+      "scenario_selectors": [
+        "claude_no_hints_baseline",
+        "claude_service_tier_auto",
+        "claude_service_tier_standard_only",
+        "claude_repeated_session_prefix",
+        "claude_long_running_cache_session",
+        "claude_tool_heavy_request",
+        "claude_stable_system_context",
+        "claude_stable_message_context",
+        "claude_prewarm_like_probe",
+        "claude_provider_cache_feedback_probe",
+        "claude_provider_retention_1h",
+        "claude_cache_pinning_negative_probe"
+      ],
+      "expected_signal_visibility": ["Claude Code native-client probe targets only"]
+    },
+    "direct_api_capabilities": {
+      "display_name": "Direct Anthropic API capability probes",
+      "scenario_selectors": ["direct_anthropic_api_coverage"],
+      "expected_signal_visibility": ["speed", "cache_control.ttl", "max_tokens", "usage.cache_read_input_tokens"]
+    },
+    "bedrock_provider_config": {
+      "display_name": "Bedrock provider-config probes",
+      "scenario_selectors": ["bedrock_config_coverage"],
+      "expected_signal_visibility": ["_capture.headers.x-amzn-bedrock-service-tier"]
+    },
     "all_request_boundary": {
-      "display_name": "All Claude native-client boundary probes",
+      "display_name": "All Claude Code native-client boundary probes",
       "scenario_selectors": ["full_claude_coverage"],
-      "expected_signal_visibility": ["all Claude native-client probe targets"]
+      "expected_signal_visibility": ["Claude Code native-client probe targets only"]
+    },
+    "all_signal_recipes": {
+      "display_name": "All Claude signal recipes",
+      "scenario_selectors": ["all_claude_signal_recipes"],
+      "expected_signal_visibility": ["Claude Code native, direct Anthropic API, and Bedrock provider-config recipes"]
     }
   }
 }

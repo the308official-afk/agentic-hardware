@@ -12,6 +12,7 @@
   },
   "docs_sources": [
     "https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
+    "https://platform.claude.com/docs/en/build-with-claude/fast-mode",
     "https://docs.anthropic.com/en/api/messages"
   ],
   "injection_levels": {
@@ -28,6 +29,8 @@
     "client_supplied": "The client supplied the hint before the request boundary.",
     "prompt_builder_policy": "The prompt builder placed the hint on stable prompt blocks.",
     "provider_automatic": "The provider derives the behavior without a client-visible field.",
+    "direct_api_client_supplied": "A direct Anthropic API request intentionally supplied the field.",
+    "direct_api_response_fixture": "A documented Anthropic API response shape was generated for benchmark validation.",
     "metrics_feedback": "The value appears after execution as usage or metrics feedback."
   },
   "required_smoke_scenarios": [
@@ -40,12 +43,23 @@
     {
       "id": "provider_qos",
       "canonical_signal": "Provider speed/QoS tier",
-      "meaning": "Selects provider service behavior such as automatic priority-capacity use or standard-only capacity.",
-      "raw_fields": ["service_tier"],
+      "meaning": "Selects provider service behavior such as fast speed, priority capacity, or standard-only capacity.",
+      "raw_fields": [
+        "service_tier",
+        "speed",
+        "usage.speed",
+        "_capture.headers.anthropic-beta",
+        "_capture.headers.x-amzn-bedrock-service-tier"
+      ],
       "default_injection_level": "session_level",
       "expected_source_class": "provider_config",
       "supported_consumer": "Claude API provider",
-      "scenario_ids": ["claude_service_tier_auto", "claude_service_tier_standard_only"],
+      "scenario_ids": [
+        "claude_service_tier_auto",
+        "claude_service_tier_standard_only",
+        "claude_api_fast_mode",
+        "claude_bedrock_service_tier_priority"
+      ],
       "status": "targeted_native_capture"
     },
     {
@@ -89,7 +103,7 @@
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_provider_retention_1h"],
+      "scenario_ids": ["claude_provider_retention_1h", "claude_api_cache_ttl_1h"],
       "status": "targeted_native_capture"
     },
     {
@@ -117,11 +131,11 @@
       "id": "speculative_prewarm",
       "canonical_signal": "Prompt cache prewarm",
       "meaning": "Uses max_tokens=0 to write prompt cache before a later user request needs the cached prefix.",
-      "raw_fields": ["max_tokens", "cache_control.type"],
+      "raw_fields": ["max_tokens", "cache_control.type", "system.*.cache_control.type"],
       "default_injection_level": "request_level",
       "expected_source_class": "client_supplied",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_prewarm_like_probe"],
+      "scenario_ids": ["claude_prewarm_like_probe", "claude_api_prewarm_max_tokens_zero"],
       "status": "targeted_native_capture"
     },
     {
@@ -132,7 +146,7 @@
       "default_injection_level": "runtime_feedback_level",
       "expected_source_class": "metrics_feedback",
       "supported_consumer": "Benchmark report and cache validation tooling",
-      "scenario_ids": ["claude_provider_cache_feedback_probe"],
+      "scenario_ids": ["claude_provider_cache_feedback_probe", "claude_api_cache_feedback_fixture"],
       "status": "real_provider_response_required"
     },
     {
@@ -143,7 +157,11 @@
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_provider_retention_1h", "claude_cache_pinning_negative_probe"],
+      "scenario_ids": [
+        "claude_provider_retention_1h",
+        "claude_api_cache_ttl_1h",
+        "claude_cache_pinning_negative_probe"
+      ],
       "status": "provider_managed_retention_only"
     }
   ]

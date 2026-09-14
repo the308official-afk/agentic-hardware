@@ -1,8 +1,8 @@
 # Hint Benchmarking Suite
 
 This document is the source of truth for the hint benchmarking workstream.
-The first implementation target is NeMo Agent Toolkit / NAT. Claude comes
-later, after the benchmark shape is stable.
+The first implementation target was NeMo Agent Toolkit / NAT. Claude Code is
+now the second target.
 
 ## Core Objective
 
@@ -40,12 +40,27 @@ use to answer:
 
 ## Initial Scope
 
-Start with NAT only.
+Start with NAT, then Claude Code.
 
 Do not start by benchmarking every harness. NAT is the best first target because
 the signal table lists many explicit scheduling and cache-related hints for it.
-Once NAT is solid, reuse the same suite structure for Claude, then the remaining
+Claude Code is the second target because it gives a useful split between native
+CLI-emitted prompt cache markers and lower-level Anthropic API capabilities.
+Once NAT and Claude are solid, reuse the same suite structure for the remaining
 harnesses.
+
+## Claude Evidence Lanes
+
+Claude signal evidence must stay split by layer:
+
+| Lane | What it proves | Example signals |
+| --- | --- | --- |
+| Claude Code native capture | What the real Claude Code CLI emits at the request boundary. | `cache_control` on system/message blocks, session headers, context management. |
+| Direct Anthropic API payload capture | What the lower Anthropic Messages API can express when a client supplies the fields. | `speed: "fast"`, explicit cache TTL, `max_tokens: 0`, cache usage response fields. |
+| Provider-config payload capture | What a provider integration can carry outside the normal request body. | Bedrock service-tier header. |
+
+Never count a direct API or provider-config payload as proof that Claude Code
+CLI organically emitted that signal.
 
 ## Out Of Scope For The First Version
 
