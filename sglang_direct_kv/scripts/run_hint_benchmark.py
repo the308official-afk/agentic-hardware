@@ -18,6 +18,7 @@ from agentic_kv.hint_benchmark import (
     build_dry_run,
     build_fixture_observations,
     build_nat_payload_observations,
+    build_payload_observations,
     load_knob_profiles,
     load_observations_jsonl,
     load_benchmark_inputs,
@@ -28,9 +29,18 @@ from agentic_kv.hint_benchmark import (
 )
 
 
-DEFAULT_MANIFEST = REPO_ROOT / "configs" / "hint_benchmark" / "nat_hints.json"
-DEFAULT_SCENARIOS = REPO_ROOT / "configs" / "hint_benchmark" / "nat_scenarios.json"
-DEFAULT_KNOBS = REPO_ROOT / "configs" / "hint_benchmark" / "nat_knobs.json"
+DEFAULT_CONFIGS = {
+    "nemo_agent_toolkit": {
+        "manifest": REPO_ROOT / "configs" / "hint_benchmark" / "nat_hints.json",
+        "scenarios": REPO_ROOT / "configs" / "hint_benchmark" / "nat_scenarios.json",
+        "knobs": REPO_ROOT / "configs" / "hint_benchmark" / "nat_knobs.json",
+    },
+    "claude_code": {
+        "manifest": REPO_ROOT / "configs" / "hint_benchmark" / "claude_hints.json",
+        "scenarios": REPO_ROOT / "configs" / "hint_benchmark" / "claude_scenarios.json",
+        "knobs": REPO_ROOT / "configs" / "hint_benchmark" / "claude_knobs.json",
+    },
+}
 DEFAULT_OUT_ROOT = REPO_ROOT / "artifacts" / "results" / "hint_benchmark"
 
 
@@ -173,12 +183,24 @@ async def capture_nat_dynamo_payloads(scenarios: list[dict[str, Any]]) -> dict[s
     return captured
 
 
+def capture_claude_synthetic_payloads(scenarios: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Return Claude-style boundary payloads declared by each synthetic scenario."""
+    captured: dict[str, list[dict[str, Any]]] = {}
+    for scenario in scenarios:
+        setup = scenario.get("synthetic_setup", {})
+        payloads = setup.get("boundary_payloads", [])
+        if not isinstance(payloads, list):
+            raise HintBenchmarkConfigError(f"scenario {scenario['id']} synthetic_setup.boundary_payloads must be a list")
+        captured[scenario["id"]] = [payload for payload in payloads if isinstance(payload, dict)]
+    return captured
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--harness", default="nemo_agent_toolkit", choices=("nemo_agent_toolkit",))
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--scenario-file", type=Path, default=DEFAULT_SCENARIOS)
-    parser.add_argument("--knob-file", type=Path, default=DEFAULT_KNOBS)
+    parser.add_argument("--harness", default="nemo_agent_toolkit", choices=tuple(DEFAULT_CONFIGS))
+    parser.add_argument("--manifest", type=Path, default=None)
+    parser.add_argument("--scenario-file", type=Path, default=None)
+    parser.add_argument("--knob-file", type=Path, default=None)
     parser.add_argument(
         "--knob-profile",
         default=None,
@@ -205,6 +227,11 @@ def main() -> None:
         help="Capture real NAT _DynamoTransport hint emission without forwarding to SGLang.",
     )
     parser.add_argument(
+        "--claude-synthetic-boundary-capture",
+        action="store_true",
+        help="Capture synthetic Claude-style request/response payloads from scenario recipes.",
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         default=None,
@@ -221,20 +248,37 @@ def main() -> None:
 
     mode_count = sum(
         bool(mode)
-        for mode in (args.dry_run, args.fixture_observations, args.nat_dynamo_transport_capture)
+        for mode in (
+            args.dry_run,
+            args.fixture_observations,
+            args.nat_dynamo_transport_capture,
+            args.claude_synthetic_boundary_capture,
+        )
     )
     if mode_count != 1:
-        parser.error("Choose exactly one of --dry-run, --fixture-observations, or --nat-dynamo-transport-capture.")
+        parser.error(
+            "Choose exactly one of --dry-run, --fixture-observations, "
+            "--nat-dynamo-transport-capture, or --claude-synthetic-boundary-capture."
+        )
+    if args.nat_dynamo_transport_capture and args.harness != "nemo_agent_toolkit":
+        parser.error("--nat-dynamo-transport-capture requires --harness nemo_agent_toolkit.")
+    if args.claude_synthetic_boundary_capture and args.harness != "claude_code":
+        parser.error("--claude-synthetic-boundary-capture requires --harness claude_code.")
+
+    defaults = DEFAULT_CONFIGS[args.harness]
+    manifest_path = args.manifest or defaults["manifest"]
+    scenario_path = args.scenario_file or defaults["scenarios"]
+    knob_path = args.knob_file or defaults["knobs"]
 
     try:
-        manifest, scenario_file = load_benchmark_inputs(args.manifest, args.scenario_file)
+        manifest, scenario_file = load_benchmark_inputs(manifest_path, scenario_path)
         if manifest["harness"]["id"] != args.harness:
             raise HintBenchmarkConfigError(
                 f"--harness {args.harness!r} does not match manifest harness {manifest['harness']['id']!r}"
             )
         knob_profile = None
         if args.knob_profile:
-            knobs = load_knob_profiles(args.knob_file)
+            knobs = load_knob_profiles(knob_path)
             knob_profile = select_knob_profile(knobs, args.knob_profile)
             selected = select_scenarios(scenario_file, knob_profile["scenario_selectors"])
         else:
@@ -242,14 +286,22 @@ def main() -> None:
         execution_mode = (
             "nat_dynamo_transport_capture"
             if args.nat_dynamo_transport_capture
-            else "fixture_smoke" if args.fixture_observations else "dry_run"
+            else "claude_synthetic_boundary_capture"
+            if args.claude_synthetic_boundary_capture
+            else "fixture_smoke"
+            if args.fixture_observations
+            else "dry_run"
         )
         result = build_dry_run(manifest, selected, run_id=args.run_id, execution_mode=execution_mode)
         if knob_profile:
             result["run"]["knob_profile"] = knob_profile["id"]
             result["run"]["knob_profile_name"] = knob_profile.get("display_name", knob_profile["id"])
             result["knob_profile"] = knob_profile
-        generated_observation_modes = [args.fixture_observations, args.nat_dynamo_transport_capture]
+        generated_observation_modes = [
+            args.fixture_observations,
+            args.nat_dynamo_transport_capture,
+            args.claude_synthetic_boundary_capture,
+        ]
         if any(generated_observation_modes) and args.observed_jsonl:
             raise HintBenchmarkConfigError("Generated observation modes cannot be combined with --observed-jsonl")
         if args.fixture_observations:
@@ -257,6 +309,17 @@ def main() -> None:
         elif args.nat_dynamo_transport_capture:
             captured_payloads = asyncio.run(capture_nat_dynamo_payloads(selected))
             observations = build_nat_payload_observations(manifest, result["scenario_records"], captured_payloads)
+            result["captured_payload_counts"] = {
+                scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
+            }
+        elif args.claude_synthetic_boundary_capture:
+            captured_payloads = capture_claude_synthetic_payloads(selected)
+            observations = build_payload_observations(
+                manifest,
+                result["scenario_records"],
+                captured_payloads,
+                evidence_source="claude_synthetic_boundary_capture",
+            )
             result["captured_payload_counts"] = {
                 scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
             }

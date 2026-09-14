@@ -1,0 +1,53 @@
+{
+  "schema_version": "hint_benchmark_knobs_v1",
+  "harness": "claude_code",
+  "profiles": {
+    "baseline": {
+      "display_name": "Baseline",
+      "scenario_selectors": ["claude_no_hints_baseline"],
+      "expected_signal_visibility": []
+    },
+    "qos_only": {
+      "display_name": "Provider QoS only",
+      "scenario_selectors": ["claude_service_tier_auto", "claude_service_tier_standard_only"],
+      "expected_signal_visibility": ["service_tier"]
+    },
+    "cache_only": {
+      "display_name": "Prompt cache only",
+      "scenario_selectors": [
+        "claude_exact_prefix_cache_policy",
+        "claude_top_level_cache_control_5m",
+        "claude_top_level_cache_control_1h",
+        "claude_tools_cache_control",
+        "claude_system_cache_control",
+        "claude_messages_cache_control",
+        "claude_provider_retention_1h"
+      ],
+      "expected_signal_visibility": [
+        "cache_control.type",
+        "cache_control.ttl",
+        "tools.0.cache_control.type",
+        "system.0.cache_control.type",
+        "messages.0.content.0.cache_control.type"
+      ]
+    },
+    "prewarm_only": {
+      "display_name": "Prompt cache prewarm only",
+      "scenario_selectors": ["claude_prewarm_cache"],
+      "expected_signal_visibility": ["max_tokens", "cache_control.type"]
+    },
+    "feedback_only": {
+      "display_name": "Cache usage feedback only",
+      "scenario_selectors": ["claude_cache_usage_feedback"],
+      "expected_signal_visibility": [
+        "usage.cache_creation_input_tokens",
+        "usage.cache_read_input_tokens"
+      ]
+    },
+    "all_request_boundary": {
+      "display_name": "All Claude synthetic boundary hints",
+      "scenario_selectors": ["full_claude_coverage"],
+      "expected_signal_visibility": ["all synthetic Claude boundary signals"]
+    }
+  }
+}

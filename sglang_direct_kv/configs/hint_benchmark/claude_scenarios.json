@@ -1,0 +1,406 @@
+{
+  "schema_version": "hint_benchmark_scenarios_v1",
+  "harness": "claude_code",
+  "manifest_path": "sglang_direct_kv/configs/hint_benchmark/claude_hints.json",
+  "scenario_groups": {
+    "smoke": [
+      "claude_no_hints_baseline",
+      "claude_service_tier_auto",
+      "claude_top_level_cache_control_5m",
+      "claude_cache_usage_feedback"
+    ],
+    "full_claude_coverage": [
+      "claude_no_hints_baseline",
+      "claude_service_tier_auto",
+      "claude_service_tier_standard_only",
+      "claude_exact_prefix_cache_policy",
+      "claude_top_level_cache_control_5m",
+      "claude_top_level_cache_control_1h",
+      "claude_tools_cache_control",
+      "claude_system_cache_control",
+      "claude_messages_cache_control",
+      "claude_prewarm_cache",
+      "claude_cache_usage_feedback",
+      "claude_provider_retention_1h"
+    ]
+  },
+  "injection_levels": {
+    "provider_level": "Provider or client setting attached outside the task body.",
+    "session_level": "Attached to a whole client/session configuration.",
+    "workflow_level": "Attached to a workflow or multi-step agent path.",
+    "request_level": "Attached to one model request body.",
+    "content_block_level": "Attached to a tool, system, message, or content block.",
+    "cache_entry_level": "Attached to a cache-control breakpoint or cache entry.",
+    "runtime_feedback_level": "Reported after backend/provider execution."
+  },
+  "scenarios": [
+    {
+      "id": "claude_no_hints_baseline",
+      "display_name": "Claude no-hints baseline",
+      "status": "ready",
+      "source_class": "client_supplied",
+      "injection_level": "request_level",
+      "scope": "request",
+      "trigger_type": "control",
+      "target_hint_ids": [],
+      "benchmark_question": "What appears when the synthetic Claude request has no hint-bearing fields?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Baseline Claude hint benchmark request."}]
+          }
+        ]
+      },
+      "expected_emissions": [],
+      "negative_expectations": [
+        {"hint_id": "provider_qos", "raw_field": "service_tier", "expected_value": "present"},
+        {"hint_id": "cache_control", "raw_field": "cache_control.type", "expected_value": "present"}
+      ]
+    },
+    {
+      "id": "claude_service_tier_auto",
+      "display_name": "Claude service tier auto",
+      "status": "ready",
+      "source_class": "provider_config",
+      "injection_level": "session_level",
+      "scope": "provider",
+      "trigger_type": "configured_provider_qos",
+      "target_hint_ids": ["provider_qos"],
+      "benchmark_question": "Does a configured Claude service tier appear at the request boundary?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "service_tier": "auto",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "QoS tier benchmark request."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {"hint_id": "provider_qos", "raw_field": "service_tier", "expected_value": "auto", "required": true}
+      ]
+    },
+    {
+      "id": "claude_service_tier_standard_only",
+      "display_name": "Claude service tier standard-only",
+      "status": "ready",
+      "source_class": "provider_config",
+      "injection_level": "session_level",
+      "scope": "provider",
+      "trigger_type": "configured_provider_qos",
+      "target_hint_ids": ["provider_qos"],
+      "benchmark_question": "Can the benchmark produce the standard-only service tier variant?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "service_tier": "standard_only",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Standard-only tier benchmark request."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {"hint_id": "provider_qos", "raw_field": "service_tier", "expected_value": "standard_only", "required": true}
+      ]
+    },
+    {
+      "id": "claude_exact_prefix_cache_policy",
+      "display_name": "Claude exact-prefix cache policy",
+      "status": "ready",
+      "source_class": "provider_automatic",
+      "injection_level": "cache_entry_level",
+      "scope": "cache",
+      "trigger_type": "documented_provider_behavior",
+      "target_hint_ids": ["cache_key_bucket"],
+      "benchmark_question": "Can the benchmark record that Claude cache keys are provider-derived exact-prefix matches?",
+      "workload_shape": {"request_count": 2},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {"cache_key_policy": "provider_exact_prefix_hash"},
+          {"cache_key_policy": "provider_exact_prefix_hash"}
+        ]
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_key_bucket",
+          "raw_field": "cache_key_policy",
+          "expected_value": "provider_exact_prefix_hash",
+          "required": false
+        }
+      ],
+      "notes": "This records documented provider behavior, not a client-visible cache key field."
+    },
+    {
+      "id": "claude_top_level_cache_control_5m",
+      "display_name": "Claude top-level cache-control default TTL",
+      "status": "ready",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "request_level",
+      "scope": "request_or_cache_entry",
+      "trigger_type": "cache_control_enabled",
+      "target_hint_ids": ["cache_control", "cache_entry_type"],
+      "benchmark_question": "Does a top-level cache_control marker appear when prompt caching is enabled?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "cache_control": {"type": "ephemeral"},
+            "messages": [{"role": "user", "content": "Cache-control benchmark request."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {"hint_id": "cache_control", "raw_field": "cache_control.type", "expected_value": "ephemeral", "required": true},
+        {"hint_id": "cache_entry_type", "raw_field": "cache_control.type", "expected_value": "ephemeral", "required": true}
+      ]
+    },
+    {
+      "id": "claude_top_level_cache_control_1h",
+      "display_name": "Claude top-level cache-control 1h TTL",
+      "status": "ready",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "request_level",
+      "scope": "request_or_cache_entry",
+      "trigger_type": "long_ttl_cache_control",
+      "target_hint_ids": ["cache_control", "cache_entry_type", "cache_ttl"],
+      "benchmark_question": "Can the benchmark produce explicit 1-hour Claude cache retention?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            "messages": [{"role": "user", "content": "One-hour cache-control benchmark request."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {"hint_id": "cache_control", "raw_field": "cache_control.type", "expected_value": "ephemeral", "required": true},
+        {"hint_id": "cache_ttl", "raw_field": "cache_control.ttl", "expected_value": "1h", "required": true}
+      ]
+    },
+    {
+      "id": "claude_tools_cache_control",
+      "display_name": "Claude tool cache-control",
+      "status": "ready",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "content_block_level",
+      "scope": "tools",
+      "trigger_type": "stable_tool_definition",
+      "target_hint_ids": ["cache_control", "cache_entry_type"],
+      "benchmark_question": "Can cache_control be attached to stable tool definitions?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "tools": [
+              {
+                "name": "repo_search",
+                "description": "Search the repository.",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "cache_control": {"type": "ephemeral"}
+              }
+            ],
+            "messages": [{"role": "user", "content": "Use the cached tool definition."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_control",
+          "raw_field": "tools.0.cache_control.type",
+          "expected_value": "ephemeral",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "claude_system_cache_control",
+      "display_name": "Claude system block cache-control",
+      "status": "ready",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "content_block_level",
+      "scope": "system",
+      "trigger_type": "stable_system_block",
+      "target_hint_ids": ["cache_control", "cache_entry_type"],
+      "benchmark_question": "Can cache_control be attached to stable system content?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "system": [
+              {
+                "type": "text",
+                "text": "Stable system instructions for the benchmark.",
+                "cache_control": {"type": "ephemeral"}
+              }
+            ],
+            "messages": [{"role": "user", "content": "Use the cached system block."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_control",
+          "raw_field": "system.0.cache_control.type",
+          "expected_value": "ephemeral",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "claude_messages_cache_control",
+      "display_name": "Claude message block cache-control",
+      "status": "ready",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "content_block_level",
+      "scope": "messages",
+      "trigger_type": "stable_message_block",
+      "target_hint_ids": ["cache_control", "cache_entry_type"],
+      "benchmark_question": "Can cache_control be attached to a stable message content block?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "messages": [
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Stable reusable context.",
+                    "cache_control": {"type": "ephemeral"}
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_control",
+          "raw_field": "messages.0.content.0.cache_control.type",
+          "expected_value": "ephemeral",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "claude_prewarm_cache",
+      "display_name": "Claude prompt cache prewarm",
+      "status": "ready",
+      "source_class": "client_supplied",
+      "injection_level": "request_level",
+      "scope": "request_or_cache_entry",
+      "trigger_type": "prewarm_request",
+      "target_hint_ids": ["speculative_prewarm", "cache_control"],
+      "benchmark_question": "Can the benchmark produce a max_tokens=0 cache prewarm request?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 0,
+            "cache_control": {"type": "ephemeral"},
+            "system": [{"type": "text", "text": "Stable prewarm prefix."}],
+            "messages": [{"role": "user", "content": "Prewarm placeholder."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {"hint_id": "speculative_prewarm", "raw_field": "max_tokens", "expected_value": 0, "required": true},
+        {"hint_id": "cache_control", "raw_field": "cache_control.type", "expected_value": "ephemeral", "required": true}
+      ]
+    },
+    {
+      "id": "claude_cache_usage_feedback",
+      "display_name": "Claude cache usage feedback",
+      "status": "synthetic_response_only",
+      "source_class": "metrics_feedback",
+      "injection_level": "runtime_feedback_level",
+      "scope": "usage",
+      "trigger_type": "post_execution_usage",
+      "target_hint_ids": ["cache_hit_feedback"],
+      "benchmark_question": "Can the benchmark validate Claude-style cache read/write usage fields?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "usage": {
+              "input_tokens": 25,
+              "cache_creation_input_tokens": 1200,
+              "cache_read_input_tokens": 800,
+              "output_tokens": 12
+            }
+          }
+        ]
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_hit_feedback",
+          "raw_field": "usage.cache_creation_input_tokens",
+          "expected_value": {"numeric_range": [1, 1000000]},
+          "required": true
+        },
+        {
+          "hint_id": "cache_hit_feedback",
+          "raw_field": "usage.cache_read_input_tokens",
+          "expected_value": {"numeric_range": [1, 1000000]},
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "claude_provider_retention_1h",
+      "display_name": "Claude provider-managed 1h retention",
+      "status": "ready",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "cache_entry_level",
+      "scope": "cache_entry",
+      "trigger_type": "long_running_session_cache_retention",
+      "target_hint_ids": ["cache_pinning", "cache_ttl"],
+      "benchmark_question": "Can the benchmark represent provider-managed retention instead of a literal pin flag?",
+      "workload_shape": {"request_count": 1},
+      "synthetic_setup": {
+        "boundary_payloads": [
+          {
+            "model": "claude-sonnet-5",
+            "max_tokens": 32,
+            "system": [
+              {
+                "type": "text",
+                "text": "Stable long-running session prefix.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"}
+              }
+            ],
+            "messages": [{"role": "user", "content": "Long-retention cache benchmark."}]
+          }
+        ]
+      },
+      "expected_emissions": [
+        {"hint_id": "cache_ttl", "raw_field": "system.0.cache_control.ttl", "expected_value": "1h", "required": true}
+      ],
+      "negative_expectations": [
+        {"hint_id": "cache_pinning", "raw_field": "cache_pinning", "expected_value": "present"}
+      ],
+      "notes": "Claude retention is provider-managed TTL behavior, not a separate cache_pinning=true request field."
+    }
+  ]
+}

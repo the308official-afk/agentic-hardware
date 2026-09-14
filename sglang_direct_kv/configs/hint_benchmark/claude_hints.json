@@ -1,0 +1,152 @@
+{
+  "schema_version": "hint_benchmark_manifest_v1",
+  "harness": {
+    "id": "claude_code",
+    "display_name": "Claude Code",
+    "initial_status": "synthetic_boundary_first"
+  },
+  "baseline_scenario_id": "claude_no_hints_baseline",
+  "source_deck": {
+    "path": "presentation/Harness Signal Tables As-Is.pptx",
+    "slides": [5, 10]
+  },
+  "docs_sources": [
+    "https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
+    "https://docs.anthropic.com/en/api/messages"
+  ],
+  "injection_levels": {
+    "provider_level": "Provider or client setting attached outside the task body.",
+    "session_level": "Attached to a whole client/session configuration.",
+    "workflow_level": "Attached to a workflow or multi-step agent path.",
+    "request_level": "Attached to one model request body.",
+    "content_block_level": "Attached to a tool, system, message, or content block.",
+    "cache_entry_level": "Attached to a cache-control breakpoint or cache entry.",
+    "runtime_feedback_level": "Reported after backend/provider execution."
+  },
+  "source_classes": {
+    "provider_config": "A provider or client setting caused or carried the hint.",
+    "client_supplied": "The client supplied the hint before the request boundary.",
+    "prompt_builder_policy": "The prompt builder placed the hint on stable prompt blocks.",
+    "provider_automatic": "The provider derives the behavior without a client-visible field.",
+    "metrics_feedback": "The value appears after execution as usage or metrics feedback."
+  },
+  "required_smoke_scenarios": [
+    "claude_no_hints_baseline",
+    "claude_service_tier_auto",
+    "claude_top_level_cache_control_5m",
+    "claude_cache_usage_feedback"
+  ],
+  "hints": [
+    {
+      "id": "provider_qos",
+      "canonical_signal": "Provider speed/QoS tier",
+      "meaning": "Selects provider service behavior such as automatic priority-capacity use or standard-only capacity.",
+      "raw_fields": ["service_tier"],
+      "default_injection_level": "session_level",
+      "expected_source_class": "provider_config",
+      "supported_consumer": "Claude API provider",
+      "scenario_ids": ["claude_service_tier_auto", "claude_service_tier_standard_only"],
+      "status": "synthetic_boundary_supported"
+    },
+    {
+      "id": "cache_key_bucket",
+      "canonical_signal": "Cache key/bucket",
+      "meaning": "Claude uses exact prompt-prefix matching; the cache key is provider-derived rather than a client-supplied key.",
+      "raw_fields": ["cache_key_policy"],
+      "default_injection_level": "cache_entry_level",
+      "expected_source_class": "provider_automatic",
+      "supported_consumer": "Claude prompt cache",
+      "scenario_ids": ["claude_exact_prefix_cache_policy"],
+      "status": "documented_provider_behavior"
+    },
+    {
+      "id": "cache_control",
+      "canonical_signal": "Prompt cache control",
+      "meaning": "Marks reusable prompt content for Claude prompt caching.",
+      "raw_fields": [
+        "cache_control.type",
+        "tools.0.cache_control.type",
+        "system.0.cache_control.type",
+        "messages.0.content.0.cache_control.type"
+      ],
+      "default_injection_level": "content_block_level",
+      "expected_source_class": "prompt_builder_policy",
+      "supported_consumer": "Claude prompt cache",
+      "scenario_ids": [
+        "claude_top_level_cache_control_5m",
+        "claude_top_level_cache_control_1h",
+        "claude_tools_cache_control",
+        "claude_system_cache_control",
+        "claude_messages_cache_control",
+        "claude_prewarm_cache"
+      ],
+      "status": "synthetic_boundary_supported"
+    },
+    {
+      "id": "cache_ttl",
+      "canonical_signal": "Cache TTL",
+      "meaning": "Controls whether Claude prompt cache retention is default 5 minutes or explicit 1 hour.",
+      "raw_fields": ["cache_control.ttl", "system.0.cache_control.ttl"],
+      "default_injection_level": "cache_entry_level",
+      "expected_source_class": "prompt_builder_policy",
+      "supported_consumer": "Claude prompt cache",
+      "scenario_ids": ["claude_top_level_cache_control_1h", "claude_provider_retention_1h"],
+      "status": "synthetic_boundary_supported"
+    },
+    {
+      "id": "cache_entry_type",
+      "canonical_signal": "Cache entry type",
+      "meaning": "Claude prompt caching uses ephemeral cache-control entries.",
+      "raw_fields": [
+        "cache_control.type",
+        "tools.0.cache_control.type",
+        "system.0.cache_control.type",
+        "messages.0.content.0.cache_control.type"
+      ],
+      "default_injection_level": "cache_entry_level",
+      "expected_source_class": "prompt_builder_policy",
+      "supported_consumer": "Claude prompt cache",
+      "scenario_ids": [
+        "claude_top_level_cache_control_5m",
+        "claude_top_level_cache_control_1h",
+        "claude_tools_cache_control",
+        "claude_system_cache_control",
+        "claude_messages_cache_control"
+      ],
+      "status": "synthetic_boundary_supported"
+    },
+    {
+      "id": "speculative_prewarm",
+      "canonical_signal": "Prompt cache prewarm",
+      "meaning": "Uses max_tokens=0 to write prompt cache before a later user request needs the cached prefix.",
+      "raw_fields": ["max_tokens", "cache_control.type"],
+      "default_injection_level": "request_level",
+      "expected_source_class": "client_supplied",
+      "supported_consumer": "Claude prompt cache",
+      "scenario_ids": ["claude_prewarm_cache"],
+      "status": "synthetic_boundary_supported"
+    },
+    {
+      "id": "cache_hit_feedback",
+      "canonical_signal": "Cache-hit feedback",
+      "meaning": "Reports cache creation and cache read tokens after Claude processes a request.",
+      "raw_fields": ["usage.cache_creation_input_tokens", "usage.cache_read_input_tokens"],
+      "default_injection_level": "runtime_feedback_level",
+      "expected_source_class": "metrics_feedback",
+      "supported_consumer": "Benchmark report and cache validation tooling",
+      "scenario_ids": ["claude_cache_usage_feedback"],
+      "status": "synthetic_response_supported"
+    },
+    {
+      "id": "cache_pinning",
+      "canonical_signal": "Cache pinning / retention",
+      "meaning": "Claude does not expose a literal pin flag; longer retention is represented by provider-managed 1-hour TTL.",
+      "raw_fields": ["cache_control.ttl"],
+      "default_injection_level": "cache_entry_level",
+      "expected_source_class": "prompt_builder_policy",
+      "supported_consumer": "Claude prompt cache",
+      "scenario_ids": ["claude_provider_retention_1h"],
+      "status": "provider_managed_retention_only"
+    }
+  ]
+}

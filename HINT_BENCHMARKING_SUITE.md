@@ -510,6 +510,28 @@ report structure.
 Claude should not force us to rewrite the benchmark suite. It should only add a
 new harness manifest and new scenario definitions.
 
+Current Claude synthetic boundary implementation:
+
+```text
+manifest: sglang_direct_kv/configs/hint_benchmark/claude_hints.json
+scenarios: sglang_direct_kv/configs/hint_benchmark/claude_scenarios.json
+knobs: sglang_direct_kv/configs/hint_benchmark/claude_knobs.json
+runner mode: --claude-synthetic-boundary-capture
+```
+
+Current EC2 smoke:
+
+```text
+run_id: claude_all_request_boundary_ec2_20260914_195103
+scenario_count: 12
+validation_rows: 18
+unknown_hint_rows: 0
+```
+
+Important wording: this first Claude path is synthetic boundary capture. It
+generates Claude-style request and response payloads from benchmark scenarios.
+It does not yet prove that the Claude Code CLI organically emits each field.
+
 ## Success Criteria
 
 The NAT-first benchmark succeeds when:

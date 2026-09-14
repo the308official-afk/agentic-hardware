@@ -109,12 +109,10 @@ def validate_benchmark_inputs(manifest: dict[str, Any], scenarios: dict[str, Any
             if hint_id not in hint_ids:
                 raise HintBenchmarkConfigError(f"scenario {scenario_id} references unknown hint {hint_id}")
 
-    manifest_refs = {
-        scenario_id
-        for hint in hints
-        for scenario_id in hint.get("scenario_ids", [])
-    }
-    manifest_refs.add("nat_no_hints_baseline")
+    manifest_refs = {scenario_id for hint in hints for scenario_id in hint.get("scenario_ids", [])}
+    baseline_scenario_id = manifest.get("baseline_scenario_id")
+    if baseline_scenario_id:
+        manifest_refs.add(baseline_scenario_id)
     missing = sorted(manifest_refs - scenario_ids)
     if missing:
         raise HintBenchmarkConfigError(f"manifest references missing scenarios: {missing}")
@@ -244,7 +242,7 @@ def build_fixture_observations(scenario_records: list[dict[str, Any]]) -> list[d
                     "harness": scenario.get("harness", ""),
                     "hint_id": entry.get("hint_id", ""),
                     "raw_field": entry.get("raw_field", ""),
-                    "value": entry.get("expected_value"),
+                    "value": fixture_value_for_expected(entry.get("expected_value")),
                     "source_class": scenario.get("source_class", ""),
                     "injection_level": scenario.get("injection_level", ""),
                     "scope": scenario.get("scope", ""),
@@ -261,10 +259,30 @@ def normalize_raw_value(value: Any) -> str:
 def dotted_get(payload: dict[str, Any], field: str) -> tuple[bool, Any]:
     current: Any = payload
     for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
+        if isinstance(current, list):
+            try:
+                index = int(part)
+            except ValueError:
+                return False, None
+            if index < 0 or index >= len(current):
+                return False, None
+            current = current[index]
+        elif isinstance(current, dict):
+            if part not in current:
+                return False, None
+            current = current[part]
+        else:
             return False, None
-        current = current[part]
     return True, current
+
+
+def hint_raw_fields(hint: dict[str, Any]) -> list[str]:
+    fields: list[str] = []
+    for key in ("raw_fields", "raw_nat_fields", "raw_claude_fields"):
+        for raw_field in hint.get(key, []):
+            if raw_field and raw_field not in fields:
+                fields.append(raw_field)
+    return fields
 
 
 def observed_field_value(observation: dict[str, Any], raw_field: str) -> tuple[bool, Any]:
@@ -297,6 +315,18 @@ def value_matches(observed: Any, expected: Any) -> bool:
     return observed == expected
 
 
+def fixture_value_for_expected(expected: Any) -> Any:
+    if isinstance(expected, dict):
+        if "one_of" in expected and expected["one_of"]:
+            return expected["one_of"][0]
+        if "numeric_range" in expected:
+            lo, hi = expected["numeric_range"]
+            return (float(lo) + float(hi)) / 2
+    if expected == "present":
+        return "present"
+    return expected
+
+
 def nat_payload_field_value(payload: dict[str, Any], raw_field: str) -> tuple[bool, Any]:
     """Find a NAT hint value in either its raw location or nvext.agent_hints."""
     found, value = dotted_get(payload, raw_field)
@@ -320,7 +350,7 @@ def build_nat_payload_observations(
     """Convert captured NAT-boundary request bodies into observed hint rows."""
     hint_by_field: dict[str, str] = {}
     for hint in manifest.get("hints", []):
-        for raw_field in hint.get("raw_nat_fields", []):
+        for raw_field in hint_raw_fields(hint):
             hint_by_field.setdefault(raw_field, hint["id"])
 
     observations: list[dict[str, Any]] = []
@@ -335,6 +365,52 @@ def build_nat_payload_observations(
             fields.update(hint_by_field)
             for raw_field in sorted(fields):
                 found, value = nat_payload_field_value(payload, raw_field)
+                if not found:
+                    continue
+                observations.append(
+                    {
+                        "scenario_id": scenario_id,
+                        "scenario_name": scenario.get("scenario_name", ""),
+                        "harness": scenario.get("harness", ""),
+                        "hint_id": hint_by_field.get(raw_field, "unknown"),
+                        "raw_field": raw_field,
+                        "value": value,
+                        "source_class": scenario.get("source_class", ""),
+                        "injection_level": scenario.get("injection_level", ""),
+                        "scope": scenario.get("scope", ""),
+                        "payload_index": payload_index,
+                        "evidence_source": evidence_source,
+                        "raw_emitted_value": payload,
+                    }
+                )
+    return observations
+
+
+def build_payload_observations(
+    manifest: dict[str, Any],
+    scenario_records: list[dict[str, Any]],
+    captured_payloads: dict[str, list[dict[str, Any]]],
+    *,
+    evidence_source: str,
+) -> list[dict[str, Any]]:
+    """Convert generic captured request/response bodies into observed hint rows."""
+    hint_by_field: dict[str, str] = {}
+    for hint in manifest.get("hints", []):
+        for raw_field in hint_raw_fields(hint):
+            hint_by_field.setdefault(raw_field, hint["id"])
+
+    observations: list[dict[str, Any]] = []
+    for scenario in scenario_records:
+        scenario_id = scenario["scenario_id"]
+        for payload_index, payload in enumerate(captured_payloads.get(scenario_id, []), 1):
+            fields = {
+                entry.get("raw_field", "")
+                for entry in scenario.get("expected_emissions", []) + scenario.get("negative_expectations", [])
+                if entry.get("raw_field")
+            }
+            fields.update(hint_by_field)
+            for raw_field in sorted(fields):
+                found, value = dotted_get(payload, raw_field)
                 if not found:
                     continue
                 observations.append(
@@ -381,11 +457,7 @@ def validate_hint_evidence(
     execution_mode: str = "dry_run",
 ) -> dict[str, Any]:
     observations = observations or []
-    known_fields = {
-        raw_field
-        for hint in manifest.get("hints", [])
-        for raw_field in hint.get("raw_nat_fields", [])
-    }
+    known_fields = {raw_field for hint in manifest.get("hints", []) for raw_field in hint_raw_fields(hint)}
     known_hint_ids = {hint["id"] for hint in manifest.get("hints", [])}
 
     by_scenario: dict[str, list[dict[str, Any]]] = {}

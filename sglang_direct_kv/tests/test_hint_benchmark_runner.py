@@ -7,6 +7,7 @@ import unittest
 
 from agentic_kv.hint_benchmark import (
     build_nat_payload_observations,
+    build_payload_observations,
     build_dry_run,
     build_fixture_observations,
     load_knob_profiles,
@@ -22,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "configs" / "hint_benchmark" / "nat_hints.json"
 SCENARIOS = ROOT / "configs" / "hint_benchmark" / "nat_scenarios.json"
 KNOBS = ROOT / "configs" / "hint_benchmark" / "nat_knobs.json"
+CLAUDE_MANIFEST = ROOT / "configs" / "hint_benchmark" / "claude_hints.json"
+CLAUDE_SCENARIOS = ROOT / "configs" / "hint_benchmark" / "claude_scenarios.json"
+CLAUDE_KNOBS = ROOT / "configs" / "hint_benchmark" / "claude_knobs.json"
 
 
 class HintBenchmarkRunnerTests(unittest.TestCase):
@@ -213,6 +217,73 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
             self.assertTrue((out_dir / "unknown_hints.csv").exists())
             run = json.loads((out_dir / "run.json").read_text())
             self.assertEqual(run["scenario_count"], 5)
+
+    def test_loads_claude_manifest_and_scenarios(self):
+        manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
+        self.assertEqual(manifest["harness"]["id"], "claude_code")
+        self.assertEqual(len(manifest["hints"]), 8)
+        self.assertEqual(len(scenarios["scenarios"]), 12)
+
+    def test_selects_claude_knob_profile_scenarios(self):
+        _, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
+        knobs = load_knob_profiles(CLAUDE_KNOBS)
+        profile = select_knob_profile(knobs, "qos_only")
+        selected = select_scenarios(scenarios, profile["scenario_selectors"])
+        self.assertEqual(
+            [scenario["id"] for scenario in selected],
+            ["claude_service_tier_auto", "claude_service_tier_standard_only"],
+        )
+
+    def test_generic_payload_observations_extract_claude_array_paths(self):
+        manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
+        selected = select_scenarios(scenarios, "claude_tools_cache_control")
+        result = build_dry_run(
+            manifest,
+            selected,
+            run_id="unit_test",
+            created_at=1.0,
+            execution_mode="claude_synthetic_boundary_capture",
+        )
+        observations = build_payload_observations(
+            manifest,
+            result["scenario_records"],
+            {
+                "claude_tools_cache_control": [
+                    {"tools": [{"cache_control": {"type": "ephemeral"}}]},
+                ]
+            },
+            evidence_source="claude_synthetic_boundary_capture",
+        )
+        validation = validate_hint_evidence(
+            manifest,
+            result["scenario_records"],
+            observations,
+            execution_mode="claude_synthetic_boundary_capture",
+        )
+        self.assertEqual(validation["scenario_summaries"][0]["result"], "pass")
+
+    def test_claude_fixture_smoke_passes_expected_emissions(self):
+        manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
+        selected = select_scenarios(scenarios, "smoke")
+        result = build_dry_run(
+            manifest,
+            selected,
+            run_id="unit_test",
+            created_at=1.0,
+            execution_mode="fixture_smoke",
+        )
+        observations = build_fixture_observations(result["scenario_records"])
+        validation = validate_hint_evidence(
+            manifest,
+            result["scenario_records"],
+            observations,
+            execution_mode="fixture_smoke",
+        )
+        by_scenario = {row["scenario_id"]: row for row in validation["scenario_summaries"]}
+        self.assertEqual(by_scenario["claude_no_hints_baseline"]["result"], "pass")
+        self.assertEqual(by_scenario["claude_service_tier_auto"]["result"], "pass")
+        self.assertEqual(by_scenario["claude_top_level_cache_control_5m"]["result"], "pass")
+        self.assertEqual(by_scenario["claude_cache_usage_feedback"]["result"], "pass")
 
 
 if __name__ == "__main__":

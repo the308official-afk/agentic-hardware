@@ -36,6 +36,23 @@ has injected or preserved hint metadata, but before the request would go to
 SGLang. It proves request-boundary emission/preservation. It does not prove
 SGLang acted on those hints.
 
+Current Claude evidence:
+
+```text
+run_id: claude_all_request_boundary_ec2_20260914_195103
+harness: claude_code
+execution_mode: claude_synthetic_boundary_capture
+scenario_count: 12
+validation_rows: 18
+unknown_hint_rows: 0
+artifact_dir: sglang_direct_kv/artifacts/results/hint_benchmark/claude_all_request_boundary_ec2_20260914_195103
+```
+
+Important boundary: this run uses synthetic Claude-style request and response
+payloads. It proves that the benchmark can generate and validate Claude-style
+hint surfaces. It does not yet prove that the Claude Code CLI organically
+emitted those fields.
+
 ## Signal Findings
 
 | Harness | Signal | Observed? | Injection level | Scope / affects | What produces it | Scenario ID | Example JSON shape | Native vs pass-through | Evidence source | Caveat |
@@ -55,6 +72,16 @@ SGLang acted on those hints.
 | NAT | priority-derived eviction intent | yes | workflow level | scheduling/cache-retention intent | Cacheable high-priority workflow exposes priority beside cache control | `nat_eviction_priority` | `{"nvext":{"agent_hints":{"priority":100}}}` | NAT-native priority reused as eviction intent evidence | `nat_dynamo_transport_capture` | No separate eviction-priority field was observed. |
 | NAT | cache-hit feedback | no | runtime feedback level | post-execution metrics | Requires real backend execution and cache metrics | `nat_cache_feedback_metrics` | expected future shape: metrics/profiler row | not request-boundary metadata | not observed in direct capture | Needs real SGLang runtime metrics. |
 | NAT | separate `cache_pinning=true` | no | cache entry level | cache retention behavior | Would require a NAT version/path with explicit pinning field | `nat_cache_pinning` | expected future shape: `{"cache_pinning":true}` | not observed in NAT 1.8.0 | not observed in direct capture | NAT 1.8.0 exposes FIRST_ONLY/ephemeral cache control instead. |
+| Claude Code | provider QoS / service tier | synthetic yes | session level | provider/model behavior | Client/session config sets Claude `service_tier` | `claude_service_tier_auto`, `claude_service_tier_standard_only` | `{"service_tier":"auto"}` or `{"service_tier":"standard_only"}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | Needs native Claude Code capture before claiming organic CLI emission. |
+| Claude Code | exact-prefix cache key behavior | synthetic yes | cache entry level | prompt cache matching | Repeated identical cached prefix; provider derives exact-prefix cache key | `claude_exact_prefix_cache_policy` | `{"cache_key_policy":"provider_exact_prefix_hash"}` | documented provider behavior represented in synthetic evidence | `claude_synthetic_boundary_capture` | Claude does not expose a client-supplied cache key field for this. |
+| Claude Code | top-level `cache_control` | synthetic yes | request level | prompt cache control | Prompt caching enabled at request level | `claude_top_level_cache_control_5m`, `claude_top_level_cache_control_1h` | `{"cache_control":{"type":"ephemeral"}}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | 5-minute retention is default when no `ttl` is supplied. |
+| Claude Code | 1-hour cache TTL | synthetic yes | cache entry level | cache retention | Long-running session/cache scenario sets explicit `ttl` | `claude_top_level_cache_control_1h`, `claude_provider_retention_1h` | `{"cache_control":{"type":"ephemeral","ttl":"1h"}}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | This is TTL retention, not a literal pin flag. |
+| Claude Code | tool block `cache_control` | synthetic yes | content block level | reusable tool definitions | Stable tool definition receives cache marker | `claude_tools_cache_control` | `{"tools":[{"cache_control":{"type":"ephemeral"}}]}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | Needs native prompt-builder capture to prove Claude Code places it organically. |
+| Claude Code | system block `cache_control` | synthetic yes | content block level | reusable system prompt | Stable system content receives cache marker | `claude_system_cache_control` | `{"system":[{"cache_control":{"type":"ephemeral"}}]}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | Needs native prompt-builder capture to prove Claude Code places it organically. |
+| Claude Code | message block `cache_control` | synthetic yes | content block level | reusable message prefix | Stable message content receives cache marker | `claude_messages_cache_control` | `{"messages":[{"content":[{"cache_control":{"type":"ephemeral"}}]}]}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | Needs native prompt-builder capture to prove Claude Code places it organically. |
+| Claude Code | prompt cache prewarm | synthetic yes | request level | cache warmup before real request | Prewarm scenario sends `max_tokens=0` with cache control | `claude_prewarm_cache` | `{"max_tokens":0,"cache_control":{"type":"ephemeral"}}` | synthetic Claude boundary shape | `claude_synthetic_boundary_capture` | This is a Claude API pattern, not a measured SGLang preload. |
+| Claude Code | cache-hit feedback | synthetic yes | runtime feedback level | post-execution usage metrics | Synthetic response includes Claude usage cache counters | `claude_cache_usage_feedback` | `{"usage":{"cache_creation_input_tokens":1200,"cache_read_input_tokens":800}}` | synthetic response shape | `claude_synthetic_boundary_capture` | Real proof needs a provider/backend response capture. |
+| Claude Code | separate `cache_pinning=true` | no | cache entry level | cache retention behavior | Not exposed as a literal Claude field; represented through provider-managed TTL | `claude_provider_retention_1h` | no `cache_pinning` field; uses `ttl:"1h"` | negative evidence in synthetic scenario | `claude_synthetic_boundary_capture` | Do not describe Claude 1-hour retention as true pinning. |
 
 ## Benchmark Knobs
 
@@ -83,6 +110,10 @@ without manually listing scenario IDs.
 | `cache_namespace` | `disabled`, `client_supplied` | `nvext.cache_salt` | Adds client/session cache namespace and verifies preservation. | NAT | no |
 | `provider_qos` | `disabled`, `provider_supplied` | `provider.qos_tier` | Adds provider-level QoS metadata and verifies preservation. | NAT | no |
 | `runtime_metrics` | `disabled`, `real_backend_required` | `cache_hit_feedback` | Runs a real backend path and inspects post-execution metrics. | NAT future | yes |
+| `claude_service_tier` | `auto`, `standard_only` | Claude `service_tier` | Selects provider service tier in synthetic Claude requests. | Claude synthetic | no |
+| `claude_cache_control_location` | top-level, tools, system, messages | Claude `cache_control` | Places cache markers at different Claude prompt locations. | Claude synthetic | no |
+| `claude_cache_ttl` | default 5m, explicit 1h | Claude `cache_control.ttl` | Exercises default and long-retention cache behavior. | Claude synthetic | no |
+| `claude_cache_feedback` | synthetic response | `usage.cache_creation_input_tokens`, `usage.cache_read_input_tokens` | Exercises Claude-style cache usage feedback fields. | Claude synthetic | no |
 
 ## Knob Profiles
 
@@ -94,6 +125,12 @@ without manually listing scenario IDs.
 | `passthrough_only` | Expose client/session and provider pass-through. | namespace and QoS scenarios | `nvext.cache_salt`, `provider.qos_tier` |
 | `all_request_boundary` | Show everything visible without SGLang. | `full_nat_coverage` | all request-boundary observed signals |
 | `runtime_feedback` | Reserved for cache-hit metrics. | `nat_cache_feedback_metrics` | `cache_hit_feedback` after backend run |
+| Claude `baseline` | Hide intentional hints. | `claude_no_hints_baseline` | none |
+| Claude `qos_only` | Expose service-tier variants. | service-tier scenarios | `service_tier` |
+| Claude `cache_only` | Expose cache-control locations and TTL. | cache-control scenarios | `cache_control`, `cache_control.ttl` |
+| Claude `prewarm_only` | Expose max-token-zero cache prewarm. | prewarm scenario | `max_tokens=0`, `cache_control` |
+| Claude `feedback_only` | Expose cache usage feedback shape. | usage feedback scenario | `usage.cache_creation_input_tokens`, `usage.cache_read_input_tokens` |
+| Claude `all_request_boundary` | Show every Claude synthetic boundary scenario. | `full_claude_coverage` | all synthetic Claude boundary signals |
 
 Example:
 
@@ -121,3 +158,8 @@ Use these labels consistently:
 
 These distinctions prevent us from overclaiming as we extend the suite to
 Claude and the other harnesses.
+
+Claude source docs:
+
+- https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+- https://docs.anthropic.com/en/api/messages

@@ -3,6 +3,7 @@
 from .runner import (
     HintBenchmarkConfigError,
     build_nat_payload_observations,
+    build_payload_observations,
     build_dry_run,
     build_fixture_observations,
     load_knob_profiles,
@@ -18,6 +19,7 @@ from .runner import (
 __all__ = [
     "HintBenchmarkConfigError",
     "build_nat_payload_observations",
+    "build_payload_observations",
     "build_dry_run",
     "build_fixture_observations",
     "load_knob_profiles",
