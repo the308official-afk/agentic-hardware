@@ -403,7 +403,11 @@ RUN_ID="nat_max_signal_surface_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Synthetic Boundary Profile Runs
+## Claude Native Client Profile Runs
+
+These runs require the actual Claude Code CLI/client on the EC2 machine. If the
+binary is not named `claude`, set `CLAUDE_CODE_BIN=/path/to/claude` or pass
+`--claude-command /path/to/claude`.
 
 Claude baseline:
 
@@ -413,7 +417,7 @@ RUN_ID="claude_baseline_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --knob-profile baseline \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -426,7 +430,7 @@ RUN_ID="claude_qos_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --knob-profile qos_only \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -439,7 +443,7 @@ RUN_ID="claude_cache_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --knob-profile cache_only \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -452,7 +456,7 @@ RUN_ID="claude_prewarm_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --knob-profile prewarm_only \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -465,12 +469,12 @@ RUN_ID="claude_feedback_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --knob-profile feedback_only \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude all request-boundary:
+Claude all request-boundary probes:
 
 ```bash
 cd ~/agentic_hardware
@@ -478,12 +482,12 @@ RUN_ID="claude_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --knob-profile all_request_boundary \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Synthetic Boundary Scenario Group Runs
+## Claude Native Client Scenario Group Runs
 
 Claude smoke:
 
@@ -493,7 +497,7 @@ RUN_ID="claude_smoke_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios smoke \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -506,14 +510,14 @@ RUN_ID="claude_full_claude_coverage_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios full_claude_coverage \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Synthetic Boundary Individual Scenario Runs
+## Claude Native Client Individual Scenario Runs
 
-Claude no hints baseline:
+Claude native baseline:
 
 ```bash
 cd ~/agentic_hardware
@@ -521,7 +525,7 @@ RUN_ID="claude_no_hints_baseline_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios claude_no_hints_baseline \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -534,7 +538,7 @@ RUN_ID="claude_service_tier_auto_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios claude_service_tier_auto \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -547,111 +551,98 @@ RUN_ID="claude_service_tier_standard_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios claude_service_tier_standard_only \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude exact-prefix cache policy:
+Claude repeated session prefix:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_exact_prefix_cache_policy_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_repeated_session_prefix_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_exact_prefix_cache_policy \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_repeated_session_prefix \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude top-level cache-control default TTL:
+Claude long-running cache session:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_top_level_cache_control_5m_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_long_running_cache_session_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_top_level_cache_control_5m \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_long_running_cache_session \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude top-level cache-control 1h TTL:
+Claude tool-heavy request:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_top_level_cache_control_1h_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_tool_heavy_request_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_top_level_cache_control_1h \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_tool_heavy_request \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude tool cache-control:
+Claude stable system context:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_tools_cache_control_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_stable_system_context_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_tools_cache_control \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_stable_system_context \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude system cache-control:
+Claude stable message context:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_system_cache_control_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_stable_message_context_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_system_cache_control \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_stable_message_context \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude message cache-control:
+Claude prewarm-like probe:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_messages_cache_control_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_prewarm_like_probe_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_messages_cache_control \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_prewarm_like_probe \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude prompt cache prewarm:
+Claude provider cache feedback probe:
 
 ```bash
 cd ~/agentic_hardware
-RUN_ID="claude_prewarm_cache_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_provider_cache_feedback_probe_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_prewarm_cache \
-  --claude-synthetic-boundary-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude cache usage feedback:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_cache_usage_feedback_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_cache_usage_feedback \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_provider_cache_feedback_probe \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -664,12 +655,25 @@ RUN_ID="claude_provider_retention_1h_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios claude_provider_retention_1h \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Synthetic Boundary Useful Combined Runs
+Claude cache pinning negative probe:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_cache_pinning_negative_probe_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_cache_pinning_negative_probe \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+## Claude Native Client Useful Combined Runs
 
 Claude QoS variants:
 
@@ -679,7 +683,7 @@ RUN_ID="claude_qos_variants_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
   --scenarios claude_service_tier_auto claude_service_tier_standard_only \
-  --claude-synthetic-boundary-capture \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -691,8 +695,8 @@ cd ~/agentic_hardware
 RUN_ID="claude_cache_control_locations_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_top_level_cache_control_5m claude_tools_cache_control claude_system_cache_control claude_messages_cache_control \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_long_running_cache_session claude_tool_heavy_request claude_stable_system_context claude_stable_message_context \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
@@ -704,8 +708,8 @@ cd ~/agentic_hardware
 RUN_ID="claude_cache_ttl_and_feedback_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_top_level_cache_control_1h claude_provider_retention_1h claude_cache_usage_feedback \
-  --claude-synthetic-boundary-capture \
+  --scenarios claude_provider_retention_1h claude_provider_cache_feedback_probe \
+  --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```

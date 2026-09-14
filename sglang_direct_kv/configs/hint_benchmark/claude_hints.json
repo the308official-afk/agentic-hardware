@@ -3,7 +3,7 @@
   "harness": {
     "id": "claude_code",
     "display_name": "Claude Code",
-    "initial_status": "synthetic_boundary_first"
+    "initial_status": "native_client_capture_required"
   },
   "baseline_scenario_id": "claude_no_hints_baseline",
   "source_deck": {
@@ -33,8 +33,8 @@
   "required_smoke_scenarios": [
     "claude_no_hints_baseline",
     "claude_service_tier_auto",
-    "claude_top_level_cache_control_5m",
-    "claude_cache_usage_feedback"
+    "claude_repeated_session_prefix",
+    "claude_long_running_cache_session"
   ],
   "hints": [
     {
@@ -46,7 +46,7 @@
       "expected_source_class": "provider_config",
       "supported_consumer": "Claude API provider",
       "scenario_ids": ["claude_service_tier_auto", "claude_service_tier_standard_only"],
-      "status": "synthetic_boundary_supported"
+      "status": "targeted_native_capture"
     },
     {
       "id": "cache_key_bucket",
@@ -56,7 +56,7 @@
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "provider_automatic",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_exact_prefix_cache_policy"],
+      "scenario_ids": ["claude_repeated_session_prefix"],
       "status": "documented_provider_behavior"
     },
     {
@@ -73,14 +73,13 @@
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
       "scenario_ids": [
-        "claude_top_level_cache_control_5m",
-        "claude_top_level_cache_control_1h",
-        "claude_tools_cache_control",
-        "claude_system_cache_control",
-        "claude_messages_cache_control",
-        "claude_prewarm_cache"
+        "claude_long_running_cache_session",
+        "claude_tool_heavy_request",
+        "claude_stable_system_context",
+        "claude_stable_message_context",
+        "claude_prewarm_like_probe"
       ],
-      "status": "synthetic_boundary_supported"
+      "status": "targeted_native_capture"
     },
     {
       "id": "cache_ttl",
@@ -90,8 +89,8 @@
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_top_level_cache_control_1h", "claude_provider_retention_1h"],
-      "status": "synthetic_boundary_supported"
+      "scenario_ids": ["claude_provider_retention_1h"],
+      "status": "targeted_native_capture"
     },
     {
       "id": "cache_entry_type",
@@ -107,13 +106,12 @@
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
       "scenario_ids": [
-        "claude_top_level_cache_control_5m",
-        "claude_top_level_cache_control_1h",
-        "claude_tools_cache_control",
-        "claude_system_cache_control",
-        "claude_messages_cache_control"
+        "claude_long_running_cache_session",
+        "claude_tool_heavy_request",
+        "claude_stable_system_context",
+        "claude_stable_message_context"
       ],
-      "status": "synthetic_boundary_supported"
+      "status": "targeted_native_capture"
     },
     {
       "id": "speculative_prewarm",
@@ -123,8 +121,8 @@
       "default_injection_level": "request_level",
       "expected_source_class": "client_supplied",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_prewarm_cache"],
-      "status": "synthetic_boundary_supported"
+      "scenario_ids": ["claude_prewarm_like_probe"],
+      "status": "targeted_native_capture"
     },
     {
       "id": "cache_hit_feedback",
@@ -134,8 +132,8 @@
       "default_injection_level": "runtime_feedback_level",
       "expected_source_class": "metrics_feedback",
       "supported_consumer": "Benchmark report and cache validation tooling",
-      "scenario_ids": ["claude_cache_usage_feedback"],
-      "status": "synthetic_response_supported"
+      "scenario_ids": ["claude_provider_cache_feedback_probe"],
+      "status": "real_provider_response_required"
     },
     {
       "id": "cache_pinning",
@@ -145,7 +143,7 @@
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_provider_retention_1h"],
+      "scenario_ids": ["claude_provider_retention_1h", "claude_cache_pinning_negative_probe"],
       "status": "provider_managed_retention_only"
     }
   ]

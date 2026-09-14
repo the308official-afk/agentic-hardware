@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
+import shlex
 import sys
+import subprocess
+import threading
+import time
 from typing import Any
 
 
@@ -45,7 +52,7 @@ DEFAULT_OUT_ROOT = REPO_ROOT / "artifacts" / "results" / "hint_benchmark"
 
 
 def scenario_workflow_metadata(scenario: dict[str, Any]) -> dict[str, Any]:
-    setup = scenario.get("synthetic_setup", {})
+    setup = scenario.get("client_setup") or scenario.get("synthetic_setup", {})
     metadata = setup.get("workflow_metadata", {})
     return metadata if isinstance(metadata, dict) else {}
 
@@ -94,7 +101,7 @@ def deep_merge_dict(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
 
 
 def scenario_base_payload(scenario: dict[str, Any], index: int) -> dict[str, Any]:
-    setup = scenario.get("synthetic_setup", {})
+    setup = scenario.get("client_setup") or scenario.get("synthetic_setup", {})
     payload = {
         "model": "nat-hint-benchmark-model",
         "messages": [
@@ -183,16 +190,155 @@ async def capture_nat_dynamo_payloads(scenarios: list[dict[str, Any]]) -> dict[s
     return captured
 
 
-def capture_claude_synthetic_payloads(scenarios: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Return Claude-style boundary payloads declared by each synthetic scenario."""
+class ClaudeCaptureHandler(BaseHTTPRequestHandler):
+    server: "ClaudeCaptureServer"
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true}')
+
+    def do_POST(self) -> None:
+        content_length = int(self.headers.get("content-length", "0") or "0")
+        raw_body = self.rfile.read(content_length) if content_length else b""
+        try:
+            body = json.loads(raw_body.decode() or "{}")
+        except json.JSONDecodeError:
+            body = {"_raw_body": raw_body.decode(errors="replace")}
+        payload = dict(body) if isinstance(body, dict) else {"body": body}
+        payload["_capture"] = {
+            "method": "POST",
+            "path": self.path,
+            "headers": {key.lower(): value for key, value in self.headers.items()},
+            "received_at_unix": time.time(),
+        }
+        self.server.payloads.append(payload)
+
+        response = {
+            "id": "msg_hint_benchmark",
+            "type": "message",
+            "role": "assistant",
+            "model": body.get("model", "claude-hint-benchmark-model") if isinstance(body, dict) else "claude-hint-benchmark-model",
+            "content": [{"type": "text", "text": "hint benchmark capture ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": 1,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 1,
+            },
+        }
+        encoded = json.dumps(response).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+class ClaudeCaptureServer(ThreadingHTTPServer):
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), ClaudeCaptureHandler)
+        self.payloads: list[dict[str, Any]] = []
+
+
+def claude_cli_command(scenario: dict[str, Any], base_command: str, invocation_index: int = 0) -> list[str]:
+    setup = scenario.get("client_setup") or scenario.get("synthetic_setup", {})
+    cli_args = setup.get("cli_args")
+    command = shlex.split(base_command)
+    if isinstance(cli_args, list) and cli_args:
+        command.extend(str(arg).replace("{invocation_index}", str(invocation_index)) for arg in cli_args)
+        return command
+    prompt = setup.get("cli_prompt") or f"Claude hint benchmark scenario {scenario['id']}. Reply with one short sentence."
+    prompt = str(prompt).replace("{invocation_index}", str(invocation_index))
+    command.extend(["-p", str(prompt), "--output-format", "json"])
+    return command
+
+
+def capture_claude_native_payloads(
+    scenarios: list[dict[str, Any]],
+    *,
+    command: str,
+    timeout_seconds: float,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
     captured: dict[str, list[dict[str, Any]]] = {}
+    client_runs: list[dict[str, Any]] = []
     for scenario in scenarios:
-        setup = scenario.get("synthetic_setup", {})
-        payloads = setup.get("boundary_payloads", [])
-        if not isinstance(payloads, list):
-            raise HintBenchmarkConfigError(f"scenario {scenario['id']} synthetic_setup.boundary_payloads must be a list")
-        captured[scenario["id"]] = [payload for payload in payloads if isinstance(payload, dict)]
-    return captured
+        server = ClaudeCaptureServer()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "ANTHROPIC_BASE_URL": base_url,
+                    "ANTHROPIC_API_KEY": env.get("ANTHROPIC_API_KEY", "sk-hint-benchmark"),
+                    "ANTHROPIC_AUTH_TOKEN": env.get("ANTHROPIC_AUTH_TOKEN", "sk-hint-benchmark"),
+                }
+            )
+            setup = scenario.get("client_setup") or scenario.get("synthetic_setup", {})
+            env_overrides = setup.get("env", {}) if isinstance(setup, dict) else {}
+            if not isinstance(env_overrides, dict):
+                env_overrides = {}
+            for key, value in env_overrides.items():
+                env[str(key)] = str(value).replace("{base_url}", base_url)
+            request_count = max(1, int(scenario.get("workload_shape", {}).get("request_count") or 1))
+            for invocation_index in range(request_count):
+                cmd = claude_cli_command(scenario, command, invocation_index)
+                started_at = time.time()
+                try:
+                    completed = subprocess.run(
+                        cmd,
+                        cwd=REPO_ROOT.parent,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                        check=False,
+                    )
+                    client_runs.append(
+                        {
+                            "scenario_id": scenario["id"],
+                            "invocation_index": invocation_index,
+                            "command": cmd,
+                            "returncode": completed.returncode,
+                            "stdout_tail": completed.stdout[-2000:],
+                            "stderr_tail": completed.stderr[-2000:],
+                            "duration_seconds": time.time() - started_at,
+                            "capture_base_url": base_url,
+                            "captured_payload_count": len(server.payloads),
+                        }
+                    )
+                except FileNotFoundError as exc:
+                    raise HintBenchmarkConfigError(
+                        f"Claude native capture requires the Claude CLI command {cmd[0]!r}. "
+                        "Install/configure Claude Code or pass --claude-command."
+                    ) from exc
+                except subprocess.TimeoutExpired as exc:
+                    client_runs.append(
+                        {
+                            "scenario_id": scenario["id"],
+                            "invocation_index": invocation_index,
+                            "command": cmd,
+                            "returncode": "timeout",
+                            "stdout_tail": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
+                            "stderr_tail": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "",
+                            "duration_seconds": time.time() - started_at,
+                            "capture_base_url": base_url,
+                            "captured_payload_count": len(server.payloads),
+                        }
+                    )
+        finally:
+            captured[scenario["id"]] = list(server.payloads)
+            server.shutdown()
+            thread.join(timeout=1)
+    return captured, client_runs
 
 
 def main() -> None:
@@ -227,9 +373,20 @@ def main() -> None:
         help="Capture real NAT _DynamoTransport hint emission without forwarding to SGLang.",
     )
     parser.add_argument(
-        "--claude-synthetic-boundary-capture",
+        "--claude-native-capture",
         action="store_true",
-        help="Capture synthetic Claude-style request/response payloads from scenario recipes.",
+        help="Run the real Claude CLI/client against a local capture endpoint and validate emitted request fields.",
+    )
+    parser.add_argument(
+        "--claude-command",
+        default=os.environ.get("CLAUDE_CODE_BIN", "claude"),
+        help="Claude CLI command to execute for --claude-native-capture. Default: claude.",
+    )
+    parser.add_argument(
+        "--claude-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="Per-scenario timeout for --claude-native-capture.",
     )
     parser.add_argument(
         "--out-dir",
@@ -252,18 +409,18 @@ def main() -> None:
             args.dry_run,
             args.fixture_observations,
             args.nat_dynamo_transport_capture,
-            args.claude_synthetic_boundary_capture,
+            args.claude_native_capture,
         )
     )
     if mode_count != 1:
         parser.error(
             "Choose exactly one of --dry-run, --fixture-observations, "
-            "--nat-dynamo-transport-capture, or --claude-synthetic-boundary-capture."
+            "--nat-dynamo-transport-capture, or --claude-native-capture."
         )
     if args.nat_dynamo_transport_capture and args.harness != "nemo_agent_toolkit":
         parser.error("--nat-dynamo-transport-capture requires --harness nemo_agent_toolkit.")
-    if args.claude_synthetic_boundary_capture and args.harness != "claude_code":
-        parser.error("--claude-synthetic-boundary-capture requires --harness claude_code.")
+    if args.claude_native_capture and args.harness != "claude_code":
+        parser.error("--claude-native-capture requires --harness claude_code.")
 
     defaults = DEFAULT_CONFIGS[args.harness]
     manifest_path = args.manifest or defaults["manifest"]
@@ -286,8 +443,8 @@ def main() -> None:
         execution_mode = (
             "nat_dynamo_transport_capture"
             if args.nat_dynamo_transport_capture
-            else "claude_synthetic_boundary_capture"
-            if args.claude_synthetic_boundary_capture
+            else "claude_native_capture"
+            if args.claude_native_capture
             else "fixture_smoke"
             if args.fixture_observations
             else "dry_run"
@@ -300,7 +457,7 @@ def main() -> None:
         generated_observation_modes = [
             args.fixture_observations,
             args.nat_dynamo_transport_capture,
-            args.claude_synthetic_boundary_capture,
+            args.claude_native_capture,
         ]
         if any(generated_observation_modes) and args.observed_jsonl:
             raise HintBenchmarkConfigError("Generated observation modes cannot be combined with --observed-jsonl")
@@ -312,14 +469,19 @@ def main() -> None:
             result["captured_payload_counts"] = {
                 scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
             }
-        elif args.claude_synthetic_boundary_capture:
-            captured_payloads = capture_claude_synthetic_payloads(selected)
+        elif args.claude_native_capture:
+            captured_payloads, client_runs = capture_claude_native_payloads(
+                selected,
+                command=args.claude_command,
+                timeout_seconds=args.claude_timeout_seconds,
+            )
             observations = build_payload_observations(
                 manifest,
                 result["scenario_records"],
                 captured_payloads,
-                evidence_source="claude_synthetic_boundary_capture",
+                evidence_source="claude_native_capture",
             )
+            result["client_runs"] = client_runs
             result["captured_payload_counts"] = {
                 scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
             }

@@ -185,6 +185,7 @@ def build_dry_run(
                 **base,
                 "target_hint_ids": scenario.get("target_hint_ids", []),
                 "workload_shape": scenario.get("workload_shape", {}),
+                "client_setup": scenario.get("client_setup", {}),
                 "synthetic_setup": scenario.get("synthetic_setup", {}),
                 "expected_emissions": scenario.get("expected_emissions", []),
                 "negative_expectations": scenario.get("negative_expectations", []),

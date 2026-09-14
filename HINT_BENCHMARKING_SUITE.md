@@ -510,27 +510,26 @@ report structure.
 Claude should not force us to rewrite the benchmark suite. It should only add a
 new harness manifest and new scenario definitions.
 
-Current Claude synthetic boundary implementation:
+Current Claude native-client capture implementation:
 
 ```text
 manifest: sglang_direct_kv/configs/hint_benchmark/claude_hints.json
 scenarios: sglang_direct_kv/configs/hint_benchmark/claude_scenarios.json
 knobs: sglang_direct_kv/configs/hint_benchmark/claude_knobs.json
-runner mode: --claude-synthetic-boundary-capture
+runner mode: --claude-native-capture
 ```
 
-Current EC2 smoke:
+Current EC2 status:
 
 ```text
-run_id: claude_all_request_boundary_ec2_20260914_195103
-scenario_count: 12
-validation_rows: 18
-unknown_hint_rows: 0
+native capture adapter: implemented
+native Claude CLI/client: required on EC2 before Claude evidence can be claimed
+previous synthetic payload smoke: parser/plumbing only; not native harness evidence
 ```
 
-Important wording: this first Claude path is synthetic boundary capture. It
-generates Claude-style request and response payloads from benchmark scenarios.
-It does not yet prove that the Claude Code CLI organically emits each field.
+Important wording: Claude benchmark claims must come from the real Claude
+client. Fixture or parser-only runs may test the benchmark plumbing, but must
+not be counted as evidence that Claude Code organically emitted a signal.
 
 ## Success Criteria
 

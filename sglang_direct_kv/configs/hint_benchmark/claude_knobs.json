@@ -15,12 +15,11 @@
     "cache_only": {
       "display_name": "Prompt cache only",
       "scenario_selectors": [
-        "claude_exact_prefix_cache_policy",
-        "claude_top_level_cache_control_5m",
-        "claude_top_level_cache_control_1h",
-        "claude_tools_cache_control",
-        "claude_system_cache_control",
-        "claude_messages_cache_control",
+        "claude_repeated_session_prefix",
+        "claude_long_running_cache_session",
+        "claude_tool_heavy_request",
+        "claude_stable_system_context",
+        "claude_stable_message_context",
         "claude_provider_retention_1h"
       ],
       "expected_signal_visibility": [
@@ -33,21 +32,21 @@
     },
     "prewarm_only": {
       "display_name": "Prompt cache prewarm only",
-      "scenario_selectors": ["claude_prewarm_cache"],
+      "scenario_selectors": ["claude_prewarm_like_probe"],
       "expected_signal_visibility": ["max_tokens", "cache_control.type"]
     },
     "feedback_only": {
       "display_name": "Cache usage feedback only",
-      "scenario_selectors": ["claude_cache_usage_feedback"],
+      "scenario_selectors": ["claude_provider_cache_feedback_probe"],
       "expected_signal_visibility": [
         "usage.cache_creation_input_tokens",
         "usage.cache_read_input_tokens"
       ]
     },
     "all_request_boundary": {
-      "display_name": "All Claude synthetic boundary hints",
+      "display_name": "All Claude native-client boundary probes",
       "scenario_selectors": ["full_claude_coverage"],
-      "expected_signal_visibility": ["all synthetic Claude boundary signals"]
+      "expected_signal_visibility": ["all Claude native-client probe targets"]
     }
   }
 }

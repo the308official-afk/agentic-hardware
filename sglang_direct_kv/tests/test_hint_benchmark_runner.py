@@ -236,29 +236,29 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
 
     def test_generic_payload_observations_extract_claude_array_paths(self):
         manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
-        selected = select_scenarios(scenarios, "claude_tools_cache_control")
+        selected = select_scenarios(scenarios, "claude_tool_heavy_request")
         result = build_dry_run(
             manifest,
             selected,
             run_id="unit_test",
             created_at=1.0,
-            execution_mode="claude_synthetic_boundary_capture",
+            execution_mode="claude_native_capture",
         )
         observations = build_payload_observations(
             manifest,
             result["scenario_records"],
             {
-                "claude_tools_cache_control": [
+                "claude_tool_heavy_request": [
                     {"tools": [{"cache_control": {"type": "ephemeral"}}]},
                 ]
             },
-            evidence_source="claude_synthetic_boundary_capture",
+            evidence_source="claude_native_capture",
         )
         validation = validate_hint_evidence(
             manifest,
             result["scenario_records"],
             observations,
-            execution_mode="claude_synthetic_boundary_capture",
+            execution_mode="claude_native_capture",
         )
         self.assertEqual(validation["scenario_summaries"][0]["result"], "pass")
 
@@ -282,8 +282,8 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         by_scenario = {row["scenario_id"]: row for row in validation["scenario_summaries"]}
         self.assertEqual(by_scenario["claude_no_hints_baseline"]["result"], "pass")
         self.assertEqual(by_scenario["claude_service_tier_auto"]["result"], "pass")
-        self.assertEqual(by_scenario["claude_top_level_cache_control_5m"]["result"], "pass")
-        self.assertEqual(by_scenario["claude_cache_usage_feedback"]["result"], "pass")
+        self.assertEqual(by_scenario["claude_repeated_session_prefix"]["result"], "pass")
+        self.assertEqual(by_scenario["claude_long_running_cache_session"]["result"], "pass")
 
 
 if __name__ == "__main__":
