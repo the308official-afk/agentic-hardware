@@ -1,16 +1,14 @@
 # Hint Benchmark Runbook
 
-Minimal command list for running the Agentic Hint Benchmark Suite.
+Compact command table for the Agentic Hint Benchmark Suite.
 
-## Setup
-
-Run from the top-level repo:
+Run these commands on the EC2 machine from the repo root:
 
 ```bash
 cd ~/agentic_hardware
 ```
 
-If running from the Mac against EC2, SSH first:
+From the Mac, SSH with the configured EC2 host:
 
 ```bash
 cd /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware
@@ -18,12 +16,24 @@ bash -lc 'source aws/config.sh && ssh $(ssh_opts hintbench) "$EC2_USER@${SERVERS
 cd ~/agentic_hardware
 ```
 
-## Profile Runs
+## NeMo Agent Toolkit / NAT
 
-Baseline:
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Command</th>
+<th>Signals Observed Today</th>
+<th>Attachment Level</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NAT baseline</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -33,49 +43,16 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Scheduling only:
+</td>
+<td>No intentional NAT hint fields expected</td>
+<td>request level</td>
+<td>Native NAT transport capture control case.</td>
+</tr>
+<tr>
+<td>All NAT request-boundary signals</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --knob-profile scheduling_only \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Cache only:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --knob-profile cache_only \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Pass-through only:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --knob-profile passthrough_only \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-All request-boundary:
-
-```bash
-cd ~/agentic_hardware
 RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -85,66 +62,73 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Runtime feedback placeholder:
+</td>
+<td>`priority`, `latency_sensitivity`, `osl`, `iat`, `total_requests`, `prefix_id`, `nvext.cache_control.ttl`, `nvext.cache_control.type`, first-only cache control, `nvext.cache_salt`, provider QoS pass-through</td>
+<td>workflow, session, request/cache-entry, provider pass-through</td>
+<td>Native NAT `_DynamoTransport` request-boundary capture.</td>
+</tr>
+<tr>
+<td>Scheduling signals only</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="nat_runtime_feedback_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --knob-profile runtime_feedback \
+  --knob-profile scheduling_only \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Scenario Group Runs
-
-Smoke:
+</td>
+<td>`priority`, `latency_sensitivity`, `osl`, `iat`, `total_requests`</td>
+<td>workflow/request-stream level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Cache signals only</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="nat_smoke_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --scenarios smoke \
+  --knob-profile cache_only \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Full NAT coverage:
+</td>
+<td>`prefix_id`, `nvext.cache_control.ttl`, `nvext.cache_control.type`, first-only cache control, priority-derived eviction intent</td>
+<td>workflow and cache-entry level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Pass-through signals only</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="nat_full_nat_coverage_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
-  --scenarios full_nat_coverage \
+  --knob-profile passthrough_only \
   --nat-dynamo-transport-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Individual Scenario Runs
-
-No hints baseline:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_no_hints_baseline_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_no_hints_baseline \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-High priority:
+</td>
+<td>`nvext.cache_salt`, provider QoS metadata pass-through</td>
+<td>session/provider level</td>
+<td>Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.</td>
+</tr>
+<tr>
+<td>Priority high</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -154,10 +138,16 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Low priority:
+</td>
+<td>`priority=100`</td>
+<td>workflow level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Priority low</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -167,10 +157,16 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Latency sensitivity:
+</td>
+<td>`priority=2`</td>
+<td>workflow level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Latency sensitive</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -180,10 +176,16 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Expected output length:
+</td>
+<td>`latency_sensitivity`, derived `priority`</td>
+<td>workflow level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Expected output length</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -193,10 +195,16 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Expected interarrival time:
+</td>
+<td>`osl`</td>
+<td>workflow/request estimate level</td>
+<td>Native NAT transport capture from configured workload metadata.</td>
+</tr>
+<tr>
+<td>Expected interarrival time</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -206,10 +214,16 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Planned request count:
+</td>
+<td>`iat`</td>
+<td>workflow/request-stream level</td>
+<td>Native NAT transport capture from configured workload metadata.</td>
+</tr>
+<tr>
+<td>Planned request count</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -219,10 +233,16 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Prefix reuse ID:
+</td>
+<td>`total_requests`</td>
+<td>workflow/request-stream level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Prefix reuse ID</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -232,10 +252,16 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Cache-control TTL:
+</td>
+<td>`prefix_id`</td>
+<td>workflow/session reuse level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Cache TTL</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -245,10 +271,16 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Ephemeral cache entry:
+</td>
+<td>`nvext.cache_control.ttl`</td>
+<td>cache-entry/request level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Ephemeral cache entry</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -258,10 +290,16 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-First-only cache control:
+</td>
+<td>`nvext.cache_control.type="ephemeral"`</td>
+<td>cache-entry level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>First-only cache control</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -271,10 +309,16 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Cache namespace:
+</td>
+<td>request 1 has `nvext.cache_control`; request 2 omits it</td>
+<td>cache-entry/request sequence level</td>
+<td>Native NAT transport capture.</td>
+</tr>
+<tr>
+<td>Cache namespace</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -284,10 +328,16 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Provider QoS:
+</td>
+<td>`nvext.cache_salt`</td>
+<td>session/request namespace level</td>
+<td>Pass-through preserved by NAT transport.</td>
+</tr>
+<tr>
+<td>Provider QoS pass-through</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness nemo_agent_toolkit \
@@ -297,132 +347,32 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Priority-derived eviction intent:
+</td>
+<td>`provider.qos_tier`</td>
+<td>provider level</td>
+<td>Pass-through preserved by NAT transport; not NAT-invented.</td>
+</tr>
+</tbody>
+</table>
+
+## Claude Code
+
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Command</th>
+<th>Signals Observed Today</th>
+<th>Attachment Level</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Claude native baseline</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="nat_eviction_priority_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_eviction_priority \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Cache feedback metrics placeholder:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_cache_feedback_metrics_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_cache_feedback_metrics \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Cache pinning placeholder:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_cache_pinning_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_cache_pinning \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-## Useful Combined Runs
-
-Priority spread:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_priority_spread_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_priority_high,nat_priority_low,nat_latency_sensitive \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Workload shape:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_workload_shape_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_expected_output_length,nat_expected_interarrival_time,nat_remaining_calls \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Reuse and cache:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_reuse_and_cache_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_prefix_reuse_id,nat_cache_control_ttl,nat_cache_ephemeral,nat_cache_control_first_only \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Boundary pass-through:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_boundary_passthrough_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios nat_cache_namespace,nat_provider_qos \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Maximum current NAT signal surface:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_max_signal_surface_$(date +%Y%m%d_%H%M%S)"
-.venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --knob-profile all_request_boundary \
-  --nat-dynamo-transport-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-## Claude Native Client Profile Runs
-
-These runs require the actual Claude Code CLI/client on the EC2 machine. If the
-binary is not named `claude`, set `CLAUDE_CODE_BIN=/path/to/claude` or pass
-`--claude-command /path/to/claude`.
-
-The existing multi-harness SGLang experiments already prove that our
-adapter/glue/backend path can run Claude-shaped traffic. These commands are for
-one narrower claim: whether the real Claude Code client itself emits the hint at
-the request boundary. Do not reinstall the whole SGLang testbed for this; only
-verify/install the missing `claude` client when native Claude evidence is needed.
-
-Every output table includes `evidence_tier`. Treat
-`native_client_or_transport_capture` as claimable native evidence. Treat
-`fixture_plumbing_only` as a parser/report smoke test only.
-
-Claude baseline:
-
-```bash
-cd ~/agentic_hardware
 RUN_ID="claude_baseline_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
@@ -432,62 +382,16 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude QoS only:
+</td>
+<td>No intentional provider QoS or cache-control fields expected</td>
+<td>request level</td>
+<td>Native Claude Code request-boundary control case.</td>
+</tr>
+<tr>
+<td>All Claude native request-boundary probes</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_qos_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile qos_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude cache only:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_cache_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile cache_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude prewarm only:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_prewarm_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile prewarm_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude feedback only:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_feedback_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile feedback_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude all request-boundary probes:
-
-```bash
-cd ~/agentic_hardware
 RUN_ID="claude_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
@@ -497,196 +401,73 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Native Client Scenario Group Runs
-
-Claude smoke:
+</td>
+<td>`cache_control.type="ephemeral"` on system/message blocks, `cache_control.ttl="1h"` with 1h knob, fast-mode marker in `anthropic-beta`; not observed natively: `service_tier`, literal cache key, tool-level cache control, true `max_tokens=0` prewarm</td>
+<td>session, request, content-block, cache-entry</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native QoS probes</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_smoke_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_qos_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios smoke \
+  --knob-profile qos_only \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude full coverage:
+</td>
+<td>fast-mode marker in `anthropic-beta`; not observed natively: `service_tier=auto`, `service_tier=standard_only`</td>
+<td>session/provider request header</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native cache probes</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_full_claude_coverage_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_cache_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --knob-profile native_client_boundary \
+  --knob-profile cache_only \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Native Client Individual Scenario Runs
-
-Claude native baseline:
+</td>
+<td>`cache_control.type="ephemeral"` on system/message blocks; `cache_control.ttl="1h"` with `ENABLE_PROMPT_CACHING_1H=1`; 5m knob shows cache control but no literal `ttl` field</td>
+<td>content-block and cache-entry level</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native prewarm probe</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_no_hints_baseline_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_prewarm_only_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_no_hints_baseline \
+  --knob-profile prewarm_only \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude service tier auto:
+</td>
+<td>`cache_control.type="ephemeral"` observed; true native `max_tokens=0` not observed</td>
+<td>request and content-block level</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native fast mode only</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_service_tier_auto_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_service_tier_auto \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude service tier standard-only:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_service_tier_standard_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_service_tier_standard_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude repeated session prefix:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_repeated_session_prefix_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_repeated_session_prefix \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude long-running cache session:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_long_running_cache_session_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_long_running_cache_session \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude tool-heavy request:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_tool_heavy_request_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_tool_heavy_request \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude stable system context:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_stable_system_context_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_stable_system_context \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude stable message context:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_stable_message_context_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_stable_message_context \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude prewarm-like probe:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_prewarm_like_probe_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_prewarm_like_probe \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude provider cache feedback probe:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_provider_cache_feedback_probe_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_provider_cache_feedback_probe \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude provider-managed 1h retention:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_provider_retention_1h_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_provider_retention_1h \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude provider-managed 5m retention:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_provider_retention_5m_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_provider_retention_5m \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude native fast mode:
-
-```bash
-cd ~/agentic_hardware
 RUN_ID="claude_fast_mode_setting_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
@@ -696,64 +477,54 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude cache pinning negative probe:
+</td>
+<td>`anthropic-beta` contains `fast-mode-2026-02-01`</td>
+<td>session/provider request header</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native 1h cache TTL</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_cache_pinning_negative_probe_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_provider_retention_1h_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_cache_pinning_negative_probe \
+  --scenarios claude_provider_retention_1h \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Native Client Useful Combined Runs
-
-Claude QoS variants:
+</td>
+<td>`cache_control.type="ephemeral"`, `cache_control.ttl="1h"`</td>
+<td>content-block/cache-entry level</td>
+<td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
+</tr>
+<tr>
+<td>Claude native 5m cache control</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_qos_variants_$(date +%Y%m%d_%H%M%S)"
+RUN_ID="claude_provider_retention_5m_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_service_tier_auto,claude_service_tier_standard_only,claude_fast_mode_setting \
+  --scenarios claude_provider_retention_5m \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Claude cache-control locations:
+</td>
+<td>`cache_control.type="ephemeral"`; no literal `ttl` field observed</td>
+<td>content-block/cache-entry level</td>
+<td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
+</tr>
+<tr>
+<td>Claude real-provider feedback</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_cache_control_locations_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_long_running_cache_session,claude_tool_heavy_request,claude_stable_system_context,claude_stable_message_context \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude cache TTL and feedback:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_cache_ttl_and_feedback_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_provider_retention_1h,claude_provider_retention_5m,claude_provider_cache_feedback_probe \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Claude real-provider cache feedback:
-
-```bash
-cd ~/agentic_hardware
 RUN_ID="claude_real_provider_feedback_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
@@ -763,29 +534,16 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Claude Direct API Capability Runs
-
-These runs show lower-level Anthropic API shapes. They are useful for the
-benchmark and glue layer, but they are not proof that Claude Code CLI emitted
-the fields natively.
-
-All Claude signal recipes:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_all_signal_recipes_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile all_signal_recipes \
-  --dry-run \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Direct API capability coverage:
+</td>
+<td>blocked today on EC2: Claude CLI returned `Not logged in`; cache usage counters stayed zero</td>
+<td>runtime feedback level</td>
+<td>Implemented, but needs logged-in Claude provider execution before it can show cache read/write usage.</td>
+</tr>
+<tr>
+<td>Direct Anthropic API capability coverage</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
 RUN_ID="claude_direct_api_capabilities_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
@@ -795,197 +553,64 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-Direct API fast mode:
+</td>
+<td>direct API `speed="fast"`, explicit `cache_control.ttl="1h"`, `max_tokens=0`, cache feedback response shape</td>
+<td>request, cache-entry, runtime feedback</td>
+<td>Documented direct API payloads only; not proof that Claude Code CLI emitted these organically.</td>
+</tr>
+<tr>
+<td>Bedrock provider-config service tier</td>
+<td>
 
 ```bash
-cd ~/agentic_hardware
-RUN_ID="claude_api_fast_mode_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_api_fast_mode \
-  --anthropic-api-payload-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Direct API explicit cache TTL:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_api_cache_ttl_1h_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_api_cache_ttl_1h \
-  --anthropic-api-payload-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Direct API prewarm:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_api_prewarm_max_tokens_zero_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_api_prewarm_max_tokens_zero \
-  --anthropic-api-payload-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Direct API cache feedback:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="claude_api_cache_feedback_fixture_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_api_cache_feedback_fixture \
-  --anthropic-api-payload-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Bedrock service-tier header:
-
-```bash
-cd ~/agentic_hardware
 RUN_ID="claude_bedrock_service_tier_priority_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_bedrock_service_tier_priority \
+  --knob-profile bedrock_provider_config \
   --anthropic-api-payload-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
-## Runner Checks
+</td>
+<td>`x-amzn-bedrock-service-tier="priority"`</td>
+<td>provider header level</td>
+<td>Provider-config payload evidence; not normal Claude Code CLI native emission.</td>
+</tr>
+</tbody>
+</table>
 
-Dry run:
+## Missing Or Blocked Today
 
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_dry_run_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --knob-profile scheduling_only \
-  --dry-run \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Fixture observations:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_fixture_observations_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --knob-profile cache_only \
-  --fixture-observations \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-Validate existing observations:
-
-```bash
-cd ~/agentic_hardware
-RUN_ID="nat_validate_existing_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness nemo_agent_toolkit \
-  --scenarios full_nat_coverage \
-  --observed-jsonl path/to/observed_hint_evidence.jsonl \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-## Optional Shortcuts
-
-```bash
-run_nat_profile() {
-  PROFILE="$1"
-  RUN_ID="nat_${PROFILE}_$(date +%Y%m%d_%H%M%S)"
-  .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-    --harness nemo_agent_toolkit \
-    --knob-profile "$PROFILE" \
-    --nat-dynamo-transport-capture \
-    --run-id "$RUN_ID" \
-    --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-}
-
-run_nat_scenario() {
-  SCENARIO="$1"
-  RUN_ID="${SCENARIO}_$(date +%Y%m%d_%H%M%S)"
-  .venvs/nat_py311/bin/python sglang_direct_kv/scripts/run_hint_benchmark.py \
-    --harness nemo_agent_toolkit \
-    --scenarios "$SCENARIO" \
-    --nat-dynamo-transport-capture \
-    --run-id "$RUN_ID" \
-    --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-}
-```
+| Harness | Signal | Current State |
+| --- | --- | --- |
+| NAT | cache-hit runtime feedback | Not request-boundary metadata; needs backend/runtime cache metrics. |
+| NAT | literal `cache_pinning=true` | Not observed in NAT 1.8.0; NAT exposes ephemeral/first-only cache control instead. |
+| Claude Code | native `service_tier=auto` / `standard_only` body field | Not observed through tested Claude Code env-var path. |
+| Claude Code | literal cache key | Not observed; Claude appears to use provider-derived exact-prefix matching. |
+| Claude Code | tool-level `cache_control` | Not observed in the tested tool-heavy request. |
+| Claude Code | native `max_tokens=0` prewarm | Not observed; direct API recipe supports it, Claude Code CLI did not emit it in our capture. |
+| Claude Code | real cache-hit usage counters | Implemented runner path, but EC2 Claude CLI is not logged in today. |
 
 ## Inspect Results
 
-Set the run directory:
-
 ```bash
 export RUN_DIR="sglang_direct_kv/artifacts/results/hint_benchmark/<run_id>"
-```
-
-Scenario summary:
-
-```bash
 column -s, -t "$RUN_DIR/scenario_validation_summary.csv" | less -S
-```
-
-Signal support matrix:
-
-```bash
 column -s, -t "$RUN_DIR/hint_support_matrix.csv" | less -S
-```
-
-Unknown hints:
-
-```bash
 column -s, -t "$RUN_DIR/unknown_hints.csv" | less -S
 ```
 
-Observed signal values:
-
-```bash
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ["RUN_DIR"]) / "observed_hint_evidence.jsonl"
-for line in path.read_text().splitlines():
-    row = json.loads(line)
-    print(row.get("scenario_id"), row.get("hint_id"), row.get("observed_value"))
-PY
-```
-
-## Key Output Files
+Key files:
 
 ```text
 run.json
 knob_profile.json
 scenario_records.jsonl
 observed_hint_evidence.jsonl
-expected_hint_evidence.jsonl
+expected_hint_evidence.csv
 hint_validation.csv
 scenario_validation_summary.csv
 hint_support_matrix.csv
 unknown_hints.csv
 ```
-
-## Notes
-
-- `--nat-dynamo-transport-capture` is the real NAT request-boundary capture mode.
-- `--dry-run` only checks benchmark setup.
-- `--fixture-observations` only checks validation/reporting machinery.
-- Injected or fixture hints do not prove native harness emission.
-- Update `HINT_SIGNAL_FINDINGS.md` after any meaningful run.
