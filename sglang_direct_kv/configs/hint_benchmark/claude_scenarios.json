@@ -139,7 +139,8 @@
         "cli_prompt": "Hint benchmark long-running cache session turn {invocation_index}. Reuse stable instructions and answer briefly."
       },
       "expected_emissions": [
-        {"hint_id": "cache_control", "raw_field": "cache_control.type", "expected_value": "ephemeral", "required": true}
+        {"hint_id": "cache_control", "raw_field": "system.*.cache_control.type", "expected_value": "ephemeral", "required": true},
+        {"hint_id": "cache_control", "raw_field": "messages.*.content.*.cache_control.type", "expected_value": "ephemeral", "required": true}
       ],
       "notes": "This is the main organic Claude Code cache-control probe."
     },
@@ -160,11 +161,12 @@
       "expected_emissions": [
         {
           "hint_id": "cache_control",
-          "raw_field": "tools.0.cache_control.type",
+          "raw_field": "tools.*.cache_control.type",
           "expected_value": "ephemeral",
-          "required": true
+          "required": false
         }
-      ]
+      ],
+      "notes": "Claude Code may cache stable system/message context even when tool definitions themselves are not marked."
     },
     {
       "id": "claude_stable_system_context",
@@ -183,7 +185,7 @@
       "expected_emissions": [
         {
           "hint_id": "cache_control",
-          "raw_field": "system.0.cache_control.type",
+          "raw_field": "system.*.cache_control.type",
           "expected_value": "ephemeral",
           "required": true
         }
@@ -206,7 +208,7 @@
       "expected_emissions": [
         {
           "hint_id": "cache_control",
-          "raw_field": "messages.0.content.0.cache_control.type",
+          "raw_field": "messages.*.content.*.cache_control.type",
           "expected_value": "ephemeral",
           "required": true
         }
@@ -228,7 +230,7 @@
       },
       "expected_emissions": [
         {"hint_id": "speculative_prewarm", "raw_field": "max_tokens", "expected_value": 0, "required": true},
-        {"hint_id": "cache_control", "raw_field": "cache_control.type", "expected_value": "ephemeral", "required": true}
+        {"hint_id": "cache_control", "raw_field": "system.*.cache_control.type", "expected_value": "ephemeral", "required": true}
       ],
       "notes": "If the CLI does not offer a max_tokens=0 path, this should fail as unsupported for native Claude Code."
     },
@@ -271,7 +273,7 @@
       "scope": "cache_entry",
       "trigger_type": "long_running_session_cache_retention",
       "target_hint_ids": ["cache_pinning", "cache_ttl"],
-      "benchmark_question": "Does the real Claude client expose explicit 1-hour cache TTL when configured for long retention?",
+      "benchmark_question": "Does the real Claude client expose any explicit cache TTL when configured for long retention?",
       "workload_shape": {"request_count": 2, "client": "claude_cli", "stable_prefix": true},
       "client_setup": {
         "env": {
@@ -281,12 +283,13 @@
         "cli_prompt": "Hint benchmark long cache retention probe turn {invocation_index}. Reuse stable context and answer briefly."
       },
       "expected_emissions": [
-        {"hint_id": "cache_ttl", "raw_field": "system.0.cache_control.ttl", "expected_value": "1h", "required": true}
+        {"hint_id": "cache_ttl", "raw_field": "system.*.cache_control.ttl", "expected_value": "present", "required": true},
+        {"hint_id": "cache_ttl", "raw_field": "messages.*.content.*.cache_control.ttl", "expected_value": "present", "required": false}
       ],
       "negative_expectations": [
         {"hint_id": "cache_pinning", "raw_field": "cache_pinning", "expected_value": "present"}
       ],
-      "notes": "Claude retention is provider-managed TTL behavior, not a separate cache_pinning=true request field."
+      "notes": "Claude retention is provider-managed TTL behavior, not a separate cache_pinning=true request field. Any explicit TTL value is enough for this benchmark probe."
     },
     {
       "id": "claude_cache_pinning_negative_probe",

@@ -65,9 +65,9 @@
       "meaning": "Marks reusable prompt content for Claude prompt caching.",
       "raw_fields": [
         "cache_control.type",
-        "tools.0.cache_control.type",
-        "system.0.cache_control.type",
-        "messages.0.content.0.cache_control.type"
+        "tools.*.cache_control.type",
+        "system.*.cache_control.type",
+        "messages.*.content.*.cache_control.type"
       ],
       "default_injection_level": "content_block_level",
       "expected_source_class": "prompt_builder_policy",
@@ -84,8 +84,8 @@
     {
       "id": "cache_ttl",
       "canonical_signal": "Cache TTL",
-      "meaning": "Controls whether Claude prompt cache retention is default 5 minutes or explicit 1 hour.",
-      "raw_fields": ["cache_control.ttl", "system.0.cache_control.ttl"],
+      "meaning": "Controls prompt cache retention duration when the request exposes a TTL.",
+      "raw_fields": ["cache_control.ttl", "system.*.cache_control.ttl", "messages.*.content.*.cache_control.ttl"],
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
@@ -98,9 +98,9 @@
       "meaning": "Claude prompt caching uses ephemeral cache-control entries.",
       "raw_fields": [
         "cache_control.type",
-        "tools.0.cache_control.type",
-        "system.0.cache_control.type",
-        "messages.0.content.0.cache_control.type"
+        "tools.*.cache_control.type",
+        "system.*.cache_control.type",
+        "messages.*.content.*.cache_control.type"
       ],
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
@@ -138,8 +138,8 @@
     {
       "id": "cache_pinning",
       "canonical_signal": "Cache pinning / retention",
-      "meaning": "Claude does not expose a literal pin flag; longer retention is represented by provider-managed 1-hour TTL.",
-      "raw_fields": ["cache_control.ttl"],
+      "meaning": "Claude does not expose a literal pin flag; longer retention is represented by provider-managed cache TTL.",
+      "raw_fields": ["cache_control.ttl", "system.*.cache_control.ttl", "messages.*.content.*.cache_control.ttl"],
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",

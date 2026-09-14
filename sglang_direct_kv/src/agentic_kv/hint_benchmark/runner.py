@@ -273,24 +273,53 @@ def normalize_raw_value(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
 
-def dotted_get(payload: dict[str, Any], field: str) -> tuple[bool, Any]:
-    current: Any = payload
-    for part in field.split("."):
+def dotted_values(payload: Any, field: str) -> list[Any]:
+    """Return all values matching a dotted path.
+
+    The path language is intentionally small: `*` matches every item in a list
+    or every value in a dict. Numeric components still address list indexes.
+    """
+    parts = [part for part in field.split(".") if part]
+
+    def visit(current: Any, remaining: list[str]) -> list[Any]:
+        if not remaining:
+            return [current]
+        part = remaining[0]
+        rest = remaining[1:]
+        if part == "*":
+            if isinstance(current, list):
+                values: list[Any] = []
+                for item in current:
+                    values.extend(visit(item, rest))
+                return values
+            if isinstance(current, dict):
+                values = []
+                for item in current.values():
+                    values.extend(visit(item, rest))
+                return values
+            return []
         if isinstance(current, list):
             try:
                 index = int(part)
             except ValueError:
-                return False, None
+                return []
             if index < 0 or index >= len(current):
-                return False, None
-            current = current[index]
-        elif isinstance(current, dict):
+                return []
+            return visit(current[index], rest)
+        if isinstance(current, dict):
             if part not in current:
-                return False, None
-            current = current[part]
-        else:
-            return False, None
-    return True, current
+                return []
+            return visit(current[part], rest)
+        return []
+
+    return visit(payload, parts)
+
+
+def dotted_get(payload: dict[str, Any], field: str) -> tuple[bool, Any]:
+    values = dotted_values(payload, field)
+    if not values:
+        return False, None
+    return True, values[0]
 
 
 def hint_raw_fields(hint: dict[str, Any]) -> list[str]:

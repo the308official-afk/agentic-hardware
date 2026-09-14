@@ -288,6 +288,52 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         )
         self.assertEqual(validation["scenario_summaries"][0]["result"], "pass")
 
+    def test_wildcard_paths_find_claude_cache_control_at_nonzero_indexes(self):
+        manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
+        selected = select_scenarios(scenarios, "claude_long_running_cache_session")
+        result = build_dry_run(
+            manifest,
+            selected,
+            run_id="unit_test",
+            created_at=1.0,
+            execution_mode="claude_native_capture",
+        )
+        observations = build_payload_observations(
+            manifest,
+            result["scenario_records"],
+            {
+                "claude_long_running_cache_session": [
+                    {
+                        "system": [
+                            {"type": "text", "text": "not cached"},
+                            {"type": "text", "cache_control": {"type": "ephemeral"}, "text": "cached"},
+                        ],
+                        "messages": [
+                            {"role": "user", "content": [{"type": "text", "text": "not cached"}]},
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "cache_control": {"type": "ephemeral"},
+                                        "text": "cached context",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ]
+            },
+            evidence_source="claude_native_capture",
+        )
+        validation = validate_hint_evidence(
+            manifest,
+            result["scenario_records"],
+            observations,
+            execution_mode="claude_native_capture",
+        )
+        self.assertEqual(validation["scenario_summaries"][0]["result"], "pass")
+
     def test_claude_fixture_smoke_passes_expected_emissions(self):
         manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
         selected = select_scenarios(scenarios, "smoke")
