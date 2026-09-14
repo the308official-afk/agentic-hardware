@@ -28,21 +28,30 @@ cd ~/agentic_hardware
 | Session / Request | A session setting causes the signal, and it appears on outgoing requests. |
 | Configuration / Request | A config setting causes the signal, and it appears on outgoing requests. |
 
+## Source Lane Legend
+
+| Value | Meaning |
+| --- | --- |
+| Native Claude Code | The real Claude Code CLI emitted the signal. |
+| Claude Code + Provider | Claude Code was used, but provider routing/config may have produced the signal. |
+
 ## Claude Code
 
 <table>
 <colgroup>
-<col width="13%" style="width: 13%;">
-<col width="22%" style="width: 22%;">
+<col width="12%" style="width: 12%;">
+<col width="18%" style="width: 18%;">
+<col width="12%" style="width: 12%;">
 <col>
-<col width="20%" style="width: 20%;">
-<col width="13%" style="width: 13%;">
-<col width="16%" style="width: 16%;">
+<col width="18%" style="width: 18%;">
+<col width="12%" style="width: 12%;">
+<col width="14%" style="width: 14%;">
 </colgroup>
 <thead>
 <tr>
 <th>Run</th>
 <th>Plain Purpose</th>
+<th>Source Lane</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
 <th>Where Attached</th>
@@ -53,6 +62,7 @@ cd ~/agentic_hardware
 <tr>
 <td>Claude native baseline</td>
 <td>Confirm Claude emits no benchmark hints when knobs are off.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -77,6 +87,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>All Claude native request-boundary probes</td>
 <td>Produce all Claude Code signals observed today in one run.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -104,6 +115,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>Claude native QoS probes</td>
 <td>Produce the Claude fast-mode header.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -128,6 +140,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>Claude native cache probes</td>
 <td>Produce Claude prompt-cache markers and TTL.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -154,6 +167,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>Claude native prewarm probe</td>
 <td>Send a request that warms a cacheable prompt block.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -178,6 +192,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>Claude native fast mode only</td>
 <td>Produce only the Claude fast-mode header.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -202,6 +217,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>Claude native 1h cache TTL</td>
 <td>Produce Claude cache control with a 1-hour TTL.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
@@ -227,6 +243,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <tr>
 <td>Claude native 5m cache control</td>
 <td>Produce Claude cache control with default 5-minute retention.</td>
+<td>Native Claude Code</td>
 <td>
 
 ```bash
