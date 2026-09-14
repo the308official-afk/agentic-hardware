@@ -32,11 +32,12 @@ class Document:
 @dataclass(frozen=True)
 class CodecConfig:
     codec: str = "identity"
+    enabled_rules: tuple[str, ...] = ()
     min_saved_tokens: int = 16
     min_saved_ratio: float = 0.05
     max_input_chars: int = 100_000
     max_encode_ms: float = 100.0
-    max_dictionary_entries: int = 8
+    max_shorthand_rules: int = 8
     max_candidates: int = 48
     min_phrase_words: int = 4
     max_phrase_words: int = 12
@@ -44,7 +45,7 @@ class CodecConfig:
     def __post_init__(self) -> None:
         if self.min_saved_tokens < 0 or not 0 <= self.min_saved_ratio < 1:
             raise ValueError("invalid savings threshold")
-        if min(self.max_input_chars, self.max_encode_ms, self.max_dictionary_entries,
+        if min(self.max_input_chars, self.max_encode_ms, self.max_shorthand_rules,
                self.max_candidates, self.min_phrase_words) <= 0:
             raise ValueError("encoding limits must be positive")
         if self.max_phrase_words < self.min_phrase_words:
@@ -59,9 +60,10 @@ class CodecConfig:
 class EncodedSegment:
     text: str
     body: str
-    dictionary: tuple[tuple[str, str], ...] = ()
+    expansions: tuple[tuple[str, str], ...] = ()
     legend: str = ""
     reversible: bool = True
+    rule_counts: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,7 @@ class EncodingResult:
     legend_tokens: int | None = None
     changed_segments: int = 0
     validation: str = "not_run"
+    rule_counts: dict[str, int] = field(default_factory=dict)
     schema_version: str = VERSION
 
     def evidence(self) -> dict[str, Any]:

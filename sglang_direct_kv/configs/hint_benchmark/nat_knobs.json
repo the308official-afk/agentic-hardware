@@ -1,0 +1,181 @@
+{
+  "schema_version": "hint_benchmark_knobs_v1",
+  "harness": "nemo_agent_toolkit",
+  "purpose": "Named NAT benchmark knob profiles. Profiles select reproducible scenario sets that expose or hide hint families.",
+  "knobs": [
+    {
+      "id": "priority_level",
+      "display_name": "Priority level",
+      "values": ["unset", "low", "high"],
+      "default": "unset",
+      "signals_exposed": ["priority", "latency_sensitivity"],
+      "what_it_changes": "Sets NAT workflow latency/priority context before the request leaves the harness.",
+      "direction": "Moving from low to high increases the emitted numeric priority value."
+    },
+    {
+      "id": "expected_output_length",
+      "display_name": "Expected output length",
+      "values": ["unset", "configured"],
+      "default": "unset",
+      "signals_exposed": ["osl"],
+      "what_it_changes": "Sets the expected output length used by NAT's Dynamo transport.",
+      "direction": "Larger configured values produce larger emitted osl values."
+    },
+    {
+      "id": "request_cadence",
+      "display_name": "Request cadence",
+      "values": ["unset", "configured"],
+      "default": "unset",
+      "signals_exposed": ["iat", "total_requests"],
+      "what_it_changes": "Sets expected interarrival time and planned request count for workflow-like request streams.",
+      "direction": "Larger iat or total_requests values increase the cache TTL derived by NAT."
+    },
+    {
+      "id": "prefix_reuse",
+      "display_name": "Prefix reuse",
+      "values": ["false", "true"],
+      "default": "false",
+      "signals_exposed": ["prefix_id"],
+      "what_it_changes": "Runs related requests under a shared prefix/workflow identity.",
+      "direction": "Turning it on makes related requests emit the same prefix_id."
+    },
+    {
+      "id": "cache_control_mode",
+      "display_name": "Cache-control mode",
+      "values": ["disabled", "always", "first_only"],
+      "default": "disabled",
+      "signals_exposed": ["nvext.cache_control.ttl", "nvext.cache_control.type"],
+      "what_it_changes": "Controls whether NAT emits cache-control metadata on no requests, every request, or only the first request for a prefix.",
+      "direction": "always exposes cache-control more often than first_only; disabled hides it."
+    },
+    {
+      "id": "cache_namespace",
+      "display_name": "Cache namespace",
+      "values": ["disabled", "client_supplied"],
+      "default": "disabled",
+      "signals_exposed": ["nvext.cache_salt"],
+      "what_it_changes": "Adds a client/session cache namespace before NAT and verifies NAT preserves it.",
+      "direction": "Enabling it exposes cache namespace pass-through."
+    },
+    {
+      "id": "provider_qos",
+      "display_name": "Provider QoS",
+      "values": ["disabled", "provider_supplied"],
+      "default": "disabled",
+      "signals_exposed": ["provider.qos_tier"],
+      "what_it_changes": "Adds provider-level QoS metadata and verifies NAT preserves it.",
+      "direction": "Enabling it exposes provider QoS pass-through."
+    },
+    {
+      "id": "runtime_metrics",
+      "display_name": "Runtime metrics",
+      "values": ["disabled", "real_backend_required"],
+      "default": "disabled",
+      "signals_exposed": ["cache_hit_feedback"],
+      "what_it_changes": "Requires a real backend run and post-execution metrics collection.",
+      "direction": "This is intentionally not exposed by direct request-boundary capture."
+    }
+  ],
+  "profiles": {
+    "baseline": {
+      "display_name": "Baseline",
+      "description": "Run only the no-hints baseline.",
+      "scenario_selectors": ["nat_no_hints_baseline"],
+      "knob_values": {
+        "priority_level": "unset",
+        "cache_control_mode": "disabled",
+        "prefix_reuse": "false",
+        "cache_namespace": "disabled",
+        "provider_qos": "disabled",
+        "runtime_metrics": "disabled"
+      },
+      "expected_signal_visibility": []
+    },
+    "scheduling_only": {
+      "display_name": "Scheduling Only",
+      "description": "Expose scheduling and workload-shape hints without cache-control or provider pass-through.",
+      "scenario_selectors": [
+        "nat_priority_high",
+        "nat_priority_low",
+        "nat_latency_sensitive",
+        "nat_expected_output_length",
+        "nat_expected_interarrival_time",
+        "nat_remaining_calls"
+      ],
+      "knob_values": {
+        "priority_level": "high_and_low",
+        "expected_output_length": "configured",
+        "request_cadence": "configured",
+        "cache_control_mode": "disabled",
+        "runtime_metrics": "disabled"
+      },
+      "expected_signal_visibility": ["priority", "latency_sensitivity", "osl", "iat", "total_requests"]
+    },
+    "cache_only": {
+      "display_name": "Cache Only",
+      "description": "Expose prefix reuse and request-boundary cache-control behavior.",
+      "scenario_selectors": [
+        "nat_prefix_reuse_id",
+        "nat_cache_control_ttl",
+        "nat_cache_ephemeral",
+        "nat_cache_control_first_only",
+        "nat_eviction_priority"
+      ],
+      "knob_values": {
+        "prefix_reuse": "true",
+        "cache_control_mode": "always_and_first_only",
+        "priority_level": "high_for_eviction_intent",
+        "runtime_metrics": "disabled"
+      },
+      "expected_signal_visibility": ["prefix_id", "nvext.cache_control.ttl", "nvext.cache_control.type", "priority"]
+    },
+    "passthrough_only": {
+      "display_name": "Pass-through Only",
+      "description": "Expose client/session and provider-supplied metadata that NAT preserves.",
+      "scenario_selectors": ["nat_cache_namespace", "nat_provider_qos"],
+      "knob_values": {
+        "cache_namespace": "client_supplied",
+        "provider_qos": "provider_supplied",
+        "runtime_metrics": "disabled"
+      },
+      "expected_signal_visibility": ["nvext.cache_salt", "provider.qos_tier"]
+    },
+    "all_request_boundary": {
+      "display_name": "All Request-Boundary Signals",
+      "description": "Expose every signal currently visible without running a real SGLang backend.",
+      "scenario_selectors": ["full_nat_coverage"],
+      "knob_values": {
+        "priority_level": "high_and_low",
+        "expected_output_length": "configured",
+        "request_cadence": "configured",
+        "prefix_reuse": "true",
+        "cache_control_mode": "always_and_first_only",
+        "cache_namespace": "client_supplied",
+        "provider_qos": "provider_supplied",
+        "runtime_metrics": "disabled"
+      },
+      "expected_signal_visibility": [
+        "priority",
+        "latency_sensitivity",
+        "osl",
+        "iat",
+        "total_requests",
+        "prefix_id",
+        "nvext.cache_control.ttl",
+        "nvext.cache_control.type",
+        "nvext.cache_salt",
+        "provider.qos_tier"
+      ]
+    },
+    "runtime_feedback": {
+      "display_name": "Runtime Feedback",
+      "description": "Reserved for real SGLang backend metrics that cannot appear in direct transport capture.",
+      "scenario_selectors": ["nat_cache_feedback_metrics"],
+      "knob_values": {
+        "runtime_metrics": "real_backend_required"
+      },
+      "expected_signal_visibility": ["cache_hit_feedback"],
+      "status": "requires_real_backend"
+    }
+  }
+}

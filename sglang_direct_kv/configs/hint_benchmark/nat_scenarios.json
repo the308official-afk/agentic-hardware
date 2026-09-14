@@ -1,0 +1,739 @@
+{
+  "schema_version": "hint_benchmark_scenarios_v1",
+  "harness": "nemo_agent_toolkit",
+  "manifest_path": "sglang_direct_kv/configs/hint_benchmark/nat_hints.json",
+  "purpose": "Synthetic NAT scenarios that describe how to trigger and observe harness-emitted hints. These scenarios stop at harness/boundary evidence and do not test SGLang lowering.",
+  "scenario_groups": {
+    "smoke": [
+      "nat_no_hints_baseline",
+      "nat_priority_high",
+      "nat_priority_low",
+      "nat_prefix_reuse_id",
+      "nat_cache_control_ttl"
+    ],
+    "full_nat_coverage": [
+      "nat_no_hints_baseline",
+      "nat_priority_high",
+      "nat_priority_low",
+      "nat_prefix_reuse_id",
+      "nat_cache_control_ttl",
+      "nat_latency_sensitive",
+      "nat_expected_output_length",
+      "nat_expected_interarrival_time",
+      "nat_remaining_calls",
+      "nat_cache_namespace",
+      "nat_cache_ephemeral",
+      "nat_eviction_priority",
+      "nat_cache_feedback_metrics",
+      "nat_cache_pinning",
+      "nat_cache_control_first_only",
+      "nat_provider_qos"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "nat_no_hints_baseline",
+      "display_name": "NAT no-hints baseline",
+      "status": "ready_for_runner",
+      "required_for_smoke": true,
+      "trigger_type": "baseline",
+      "source_class": "organic",
+      "scope": "request",
+      "target_hint_ids": [],
+      "workload_shape": {
+        "task": "single simple coding-agent turn",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run one ordinary NAT request with all benchmark hint knobs unset.",
+        "client_metadata": {},
+        "workflow_metadata": {},
+        "provider_metadata": {}
+      },
+      "expected_emissions": [],
+      "negative_expectations": [
+        {
+          "hint_id": "priority",
+          "raw_field": "priority"
+        },
+        {
+          "hint_id": "prefix_id",
+          "raw_field": "prefix_id"
+        },
+        {
+          "hint_id": "cache_ttl",
+          "raw_field": "nvext.cache_control.ttl"
+        }
+      ],
+      "benchmark_question": "What hint metadata, if any, does NAT emit with no special hint setup?",
+      "notes": "This scenario is important because it tells us whether later hints were caused by the scenario or were always present.",
+      "injection_level": "none"
+    },
+    {
+      "id": "nat_priority_high",
+      "display_name": "NAT high-priority request",
+      "status": "ready_for_runner",
+      "required_for_smoke": true,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "request",
+      "target_hint_ids": [
+        "priority"
+      ],
+      "workload_shape": {
+        "task": "single urgent replay-like request",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "high"
+      },
+      "synthetic_setup": {
+        "description": "Run one NAT request through a workflow path that marks it high priority.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "priority": "high",
+          "priority_reason": "synthetic_high_priority_scenario"
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "priority",
+          "raw_field": "priority",
+          "expected_value": 100,
+          "required": true
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Does NAT emit priority metadata when the workflow explicitly marks a request high priority?",
+      "notes": "This is configured behavior, not proof that NAT independently inferred urgency from request text.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_priority_low",
+      "display_name": "NAT low-priority/background request",
+      "status": "ready_for_runner",
+      "required_for_smoke": true,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "request",
+      "target_hint_ids": [
+        "priority"
+      ],
+      "workload_shape": {
+        "task": "single background filler-like request",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "low"
+      },
+      "synthetic_setup": {
+        "description": "Run one NAT request through a workflow path that marks it low/background priority.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "priority": "low",
+          "priority_reason": "synthetic_background_priority_scenario"
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "priority",
+          "raw_field": "priority",
+          "expected_value": 2,
+          "required": true
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Does NAT emit priority metadata when the workflow explicitly marks a request low or background priority?",
+      "notes": "This pairs with nat_priority_high so the benchmark can prove more than one priority value.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_prefix_reuse_id",
+      "display_name": "NAT prefix/workflow reuse ID",
+      "status": "ready_for_runner",
+      "required_for_smoke": true,
+      "trigger_type": "configured_repeated_workflow",
+      "source_class": "workflow_config",
+      "scope": "workflow",
+      "target_hint_ids": [
+        "prefix_id"
+      ],
+      "workload_shape": {
+        "task": "two related requests in one reusable workflow/session",
+        "request_count": 2,
+        "tool_waits": 1,
+        "shared_prefix": true,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run two NAT requests with the same synthetic workflow prefix ID so we can verify stable reuse metadata.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "prefix_id": "nat_bench_shared_prefix_001",
+          "workflow_id": "nat_bench_reuse_workflow_001"
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "prefix_id",
+          "raw_field": "prefix_id",
+          "expected_value": "nat_bench_shared_prefix_001",
+          "required": true
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT attach the same prefix/workflow reuse ID across related requests?",
+      "notes": "The deck says prefix_id can be cache-related, but it is not a true cache key. The report must keep that distinction.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_cache_control_ttl",
+      "display_name": "NAT cache-control TTL",
+      "status": "ready_for_runner",
+      "required_for_smoke": true,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "request_or_cache_entry",
+      "target_hint_ids": [
+        "cache_ttl"
+      ],
+      "workload_shape": {
+        "task": "single cacheable request with explicit TTL",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": true,
+        "cache_control": "ttl",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run one NAT request through a cache-control path with a short explicit TTL.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "cache_control": {
+            "ttl": "1s"
+          },
+          "iat": 300,
+          "total_requests": 1,
+          "prefix_id": "nat_bench_cache_ttl_prefix_001"
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_ttl",
+          "raw_field": "nvext.cache_control.ttl",
+          "expected_value": "1s",
+          "required": true
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT emit cache-control TTL metadata when the benchmark workflow configures a TTL?",
+      "notes": "The deck labels this experimental. If the installed NAT path cannot emit it, the runner should mark the scenario unsupported rather than silently passing.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_latency_sensitive",
+      "display_name": "NAT latency-sensitive request",
+      "status": "ready_for_runner",
+      "required_for_smoke": false,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "request",
+      "target_hint_ids": [
+        "latency_sensitivity"
+      ],
+      "workload_shape": {
+        "task": "single latency-sensitive request",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run one request with latency sensitivity explicitly enabled in the NAT workflow metadata.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "latency_sensitivity": 100
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "latency_sensitivity",
+          "raw_field": "latency_sensitivity",
+          "expected_value": 100.0,
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT emit latency sensitivity metadata when configured?",
+      "notes": "Planned because the deck calls this experimental.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_expected_output_length",
+      "display_name": "NAT expected output length",
+      "status": "ready_for_runner",
+      "required_for_smoke": false,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "request",
+      "target_hint_ids": [
+        "expected_output_length"
+      ],
+      "workload_shape": {
+        "task": "single request with bounded answer length",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run one request with an explicit expected output length.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "osl": 128
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "expected_output_length",
+          "raw_field": "osl",
+          "expected_value": 128,
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT emit expected output length metadata?",
+      "notes": "This first version supplies the expected length. Later versions can test whether NAT estimates it.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_expected_interarrival_time",
+      "display_name": "NAT expected interarrival time",
+      "status": "planned",
+      "required_for_smoke": false,
+      "trigger_type": "configured_cadence",
+      "source_class": "workflow_config",
+      "scope": "workflow",
+      "target_hint_ids": [
+        "expected_interarrival_time"
+      ],
+      "workload_shape": {
+        "task": "short request stream with fixed cadence",
+        "request_count": 3,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run a small request stream with a configured expected interarrival interval.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "iat": 750
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "expected_interarrival_time",
+          "raw_field": "iat",
+          "expected_value": 750,
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT emit expected interarrival timing metadata?",
+      "notes": "Treat as configured cadence unless later evidence shows NAT estimates arrival time organically.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_remaining_calls",
+      "display_name": "NAT remaining/total calls",
+      "status": "planned",
+      "required_for_smoke": false,
+      "trigger_type": "configured_multistep_workflow",
+      "source_class": "workflow_config",
+      "scope": "workflow",
+      "target_hint_ids": [
+        "predicted_remaining_calls"
+      ],
+      "workload_shape": {
+        "task": "multi-step agent workflow",
+        "request_count": 4,
+        "tool_waits": 2,
+        "shared_prefix": true,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run a synthetic four-request workflow that declares the total request count.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "total_requests": 4,
+          "workflow_id": "nat_bench_multistep_001"
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "predicted_remaining_calls",
+          "raw_field": "total_requests",
+          "expected_value": 4,
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT emit total-request or remaining-call metadata for a multi-step workflow?",
+      "notes": "The report should say whether the field represents total planned calls or remaining calls at each step.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_cache_namespace",
+      "display_name": "NAT cache namespace",
+      "status": "ready_for_runner",
+      "required_for_smoke": false,
+      "trigger_type": "configured",
+      "source_class": "client_supplied",
+      "scope": "request_or_session",
+      "target_hint_ids": [
+        "cache_namespace"
+      ],
+      "workload_shape": {
+        "task": "two sessions with same prompt and different namespace",
+        "request_count": 2,
+        "tool_waits": 0,
+        "shared_prefix": true,
+        "cache_control": "namespace",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run equivalent requests with a client/session cache namespace already attached and verify NAT preserves it.",
+        "client_metadata": {
+          "nvext": {
+            "cache_salt": "nat_bench_tenant_a"
+          }
+        },
+        "workflow_metadata": {},
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_namespace",
+          "raw_field": "nvext.cache_salt",
+          "expected_value": "nat_bench_tenant_a",
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT preserve client/session cache namespace or salt metadata at the outgoing request boundary?",
+      "notes": "NAT 1.8.0 _DynamoTransport does not create cache_salt itself; this scenario verifies pass-through preservation.",
+      "injection_level": "session_level"
+    },
+    {
+      "id": "nat_cache_ephemeral",
+      "display_name": "NAT ephemeral cache entry",
+      "status": "planned",
+      "required_for_smoke": false,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "request_or_cache_entry",
+      "target_hint_ids": [
+        "cache_entry_type"
+      ],
+      "workload_shape": {
+        "task": "single cacheable request with ephemeral cache type",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": true,
+        "cache_control": "ephemeral",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run one request with ephemeral cache-control type.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_entry_type",
+          "raw_field": "nvext.cache_control.type",
+          "expected_value": "ephemeral",
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT emit ephemeral cache entry metadata?",
+      "notes": "The deck labels this experimental.",
+      "injection_level": "cache_entry_level"
+    },
+    {
+      "id": "nat_eviction_priority",
+      "display_name": "NAT cache eviction priority",
+      "status": "planned",
+      "required_for_smoke": false,
+      "trigger_type": "derived_from_priority",
+      "source_class": "workflow_config",
+      "scope": "request_or_cache_entry",
+      "target_hint_ids": [
+        "eviction_priority",
+        "priority"
+      ],
+      "workload_shape": {
+        "task": "cacheable high-priority request",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": true,
+        "cache_control": "ttl",
+        "priority": "high"
+      },
+      "synthetic_setup": {
+        "description": "Run one cacheable high-priority request and inspect whether priority is visible as eviction-priority intent.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "priority": "high",
+          "cache_control": {
+            "ttl": 300
+          }
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "priority",
+          "raw_field": "priority",
+          "expected_value": 100,
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Does priority metadata also serve as cache eviction priority intent in NAT evidence?",
+      "notes": "This should not be counted as a separate field unless a separate eviction-priority field is observed.",
+      "injection_level": "workflow_level"
+    },
+    {
+      "id": "nat_cache_feedback_metrics",
+      "display_name": "NAT cache feedback metrics",
+      "status": "planned",
+      "required_for_smoke": false,
+      "trigger_type": "post_execution_metrics",
+      "source_class": "metrics_feedback",
+      "scope": "metrics",
+      "target_hint_ids": [
+        "cache_hit_feedback"
+      ],
+      "workload_shape": {
+        "task": "two cacheable requests with repeated prefix",
+        "request_count": 2,
+        "tool_waits": 0,
+        "shared_prefix": true,
+        "cache_control": "ttl",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run a repeated-prefix cache scenario and capture NAT profiler/metrics output after execution.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "cache_control": {
+            "ttl": 300
+          },
+          "prefix_id": "nat_bench_cache_feedback_prefix_001"
+        },
+        "provider_metadata": {},
+        "metrics_capture": {
+          "enabled": true,
+          "expected_channels": [
+            "profiler",
+            "metrics"
+          ]
+        }
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_hit_feedback",
+          "raw_field": "metrics",
+          "expected_value": "present",
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT expose cache-hit feedback through profiler or metrics?",
+      "notes": "This is feedback after execution, not a request-boundary hint.",
+      "injection_level": "runtime_feedback_level"
+    },
+    {
+      "id": "nat_cache_pinning",
+      "display_name": "NAT cache pinning",
+      "status": "version_bound_optional",
+      "required_for_smoke": false,
+      "trigger_type": "configured",
+      "source_class": "workflow_config",
+      "scope": "cache_entry",
+      "target_hint_ids": [
+        "cache_pinning"
+      ],
+      "workload_shape": {
+        "task": "single cacheable request with pinning requested",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": true,
+        "cache_control": "pinning",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Try a cache-pinning scenario only if the installed NAT version exposes a concrete pinning knob.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "cache_pinning": true
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_pinning",
+          "raw_field": "cache_pinning",
+          "expected_value": true,
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Does this NAT version expose cache pinning or pin-like retention metadata?",
+      "notes": "The runner should allow this to report unsupported without failing the whole suite.",
+      "injection_level": "cache_entry_level"
+    },
+    {
+      "id": "nat_cache_control_first_only",
+      "display_name": "NAT first-request cache control",
+      "status": "ready_for_runner",
+      "required_for_smoke": false,
+      "trigger_type": "configured_first_only_cache_control",
+      "source_class": "workflow_config",
+      "scope": "cache_entry",
+      "target_hint_ids": [
+        "cache_ttl",
+        "cache_entry_type",
+        "cache_pinning"
+      ],
+      "workload_shape": {
+        "task": "two related cacheable requests sharing one prefix",
+        "request_count": 2,
+        "tool_waits": 1,
+        "shared_prefix": true,
+        "cache_control": "ttl",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run two requests with the same prefix and CacheControlMode.FIRST_ONLY. The first request should carry cache_control; the second should not.",
+        "client_metadata": {},
+        "workflow_metadata": {
+          "cache_control": {
+            "mode": "first_only",
+            "ttl": "1s"
+          },
+          "iat": 300,
+          "total_requests": 1,
+          "prefix_id": "nat_bench_first_only_prefix_001"
+        },
+        "provider_metadata": {}
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "cache_entry_type",
+          "raw_field": "nvext.cache_control.type",
+          "expected_value": "ephemeral",
+          "payload_index": 1,
+          "required": false
+        },
+        {
+          "hint_id": "cache_ttl",
+          "raw_field": "nvext.cache_control.ttl",
+          "expected_value": "1s",
+          "payload_index": 1,
+          "required": false
+        }
+      ],
+      "negative_expectations": [
+        {
+          "hint_id": "cache_ttl",
+          "raw_field": "nvext.cache_control.ttl",
+          "payload_index": 2
+        }
+      ],
+      "benchmark_question": "Can NAT emit cache-control only on the first request for a shared prefix?",
+      "notes": "NAT 1.8.0 has no separate cache_pinning=true field. FIRST_ONLY is the closest observable pin-like policy: pin/retain the first established prefix entry, then omit cache_control on later calls.",
+      "injection_level": "cache_entry_level"
+    },
+    {
+      "id": "nat_provider_qos",
+      "display_name": "NAT provider QoS pass-through",
+      "status": "ready_for_runner",
+      "required_for_smoke": false,
+      "trigger_type": "provider_config_passthrough",
+      "source_class": "provider_config",
+      "scope": "provider",
+      "target_hint_ids": [
+        "provider_qos"
+      ],
+      "workload_shape": {
+        "task": "single request through provider configured with QoS",
+        "request_count": 1,
+        "tool_waits": 0,
+        "shared_prefix": false,
+        "cache_control": "disabled",
+        "priority": "unset"
+      },
+      "synthetic_setup": {
+        "description": "Run one request with provider-specific QoS metadata configured, if the selected provider supports it.",
+        "client_metadata": {},
+        "workflow_metadata": {},
+        "provider_metadata": {
+          "qos_tier": "provider_specific_fast_or_priority"
+        }
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "provider_qos",
+          "raw_field": "provider.qos_tier",
+          "expected_value": "provider_specific_fast_or_priority",
+          "required": false
+        }
+      ],
+      "negative_expectations": [],
+      "benchmark_question": "Can NAT preserve provider-dependent QoS metadata already attached to the provider request?",
+      "notes": "This is a provider/config pass-through scenario, not an organic NAT decision.",
+      "injection_level": "provider_level"
+    }
+  ],
+  "injection_levels": {
+    "none": "No hint is intentionally injected for this scenario.",
+    "provider_level": "The hint comes from provider or model configuration before the harness builds the request.",
+    "client_level": "The client supplies the hint before the harness processes the task.",
+    "session_level": "The hint is attached to an entire conversation/session.",
+    "task_level": "The hint is attached to one agent task.",
+    "workflow_level": "The hint is attached to a workflow, workflow step, or workflow path.",
+    "request_level": "The hint is attached to one model request.",
+    "prompt_block_level": "The hint is attached to a specific prompt, message, system, or tool block.",
+    "cache_entry_level": "The hint is attached to a cache entry or cache retention policy.",
+    "runtime_feedback_level": "The value appears after execution as metrics, usage, or profiler feedback.",
+    "unknown": "The benchmark observed a hint but cannot yet classify where it entered the path."
+  }
+}

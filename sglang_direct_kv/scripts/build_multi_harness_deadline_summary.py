@@ -75,9 +75,18 @@ MODE_LABELS = {
     "controller_priority_demotion_admission_hard": "PDA-H = Controller priority + demotion + admission / hard",
     "controller_priority_demotion_admission_earlyprepare": "PDA-EP = Controller priority + demotion + admission + EarlyPrepare",
     "controller_priority_demotion_admission_shorthand": "PDA-SH = Controller priority + demotion + admission + shorthand",
+    "controller_oracle_timeline": "TA = Controller timeline admission",
+    "controller_oracle_safe_sjf": "SFA = Controller priority + demotion + short-filler admission",
+    "controller_oracle_safe_sjf_balanced": "BFA = Controller priority + demotion + balanced filler admission",
+    "controller_oracle_safe_sjf_aggressive": "AFA = Controller priority + demotion + aggressive filler admission",
+    "controller_oracle_safe_sjf_maxfill": "MFA = Controller priority + demotion + max filler admission",
+    "controller_priority_demotion_calibrated_admission": "CFA = Controller priority + demotion + calibrated filler admission",
+    "controller_oracle_exact_runtime_admission": "OEA = Controller priority + demotion + oracle exact-runtime admission",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
+    "storage_hicache_baseline": "SB = Storage HiCache baseline",
+    "storage_hicache_controller_prefetch": "SCP = Storage controller prefetch",
 }
 
 MODE_COLORS = {
@@ -101,9 +110,18 @@ MODE_COLORS = {
     "controller_priority_demotion_admission_hard": "#1d4ed8",
     "controller_priority_demotion_admission_earlyprepare": "#4338ca",
     "controller_priority_demotion_admission_shorthand": "#be185d",
+    "controller_oracle_timeline": "#059669",
+    "controller_oracle_safe_sjf": "#0e7490",
+    "controller_oracle_safe_sjf_balanced": "#0891b2",
+    "controller_oracle_safe_sjf_aggressive": "#0284c7",
+    "controller_oracle_safe_sjf_maxfill": "#2563eb",
+    "controller_priority_demotion_calibrated_admission": "#166534",
+    "controller_oracle_exact_runtime_admission": "#14b8a6",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
+    "storage_hicache_baseline": "#92400e",
+    "storage_hicache_controller_prefetch": "#0f766e",
 }
 
 MODE_ORDER = tuple(MODE_LABELS)
@@ -229,6 +247,48 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#be185d",
         "modes": {"controller_priority_demotion_admission_shorthand"},
     },
+    "controller_oracle_timeline": {
+        "label": "Controller Timeline Admission",
+        "description": "Controller uses known replay-ready time and estimated filler runtime to admit only background work expected to fit before replay",
+        "color": "#059669",
+        "modes": {"controller_oracle_timeline"},
+    },
+    "controller_oracle_safe_sjf": {
+        "label": "Controller Priority + Demotion + Short-Filler Admission",
+        "description": "Controller raises replay priority, demotes background work, and admits only the shortest filler work expected to fit before replay",
+        "color": "#0e7490",
+        "modes": {"controller_oracle_safe_sjf"},
+    },
+    "controller_oracle_safe_sjf_balanced": {
+        "label": "Controller Priority + Demotion + Balanced Filler Admission",
+        "description": "Controller raises replay priority, demotes background work, and allows a modest number of short filler requests when they look safe",
+        "color": "#0891b2",
+        "modes": {"controller_oracle_safe_sjf_balanced"},
+    },
+    "controller_oracle_safe_sjf_aggressive": {
+        "label": "Controller Priority + Demotion + Aggressive Filler Admission",
+        "description": "Controller raises replay priority, demotes background work, and admits more short filler requests while accepting more collision risk",
+        "color": "#0284c7",
+        "modes": {"controller_oracle_safe_sjf_aggressive"},
+    },
+    "controller_oracle_safe_sjf_maxfill": {
+        "label": "Controller Priority + Demotion + Max Filler Admission",
+        "description": "Controller raises replay priority, demotes background work, and prioritizes keeping the backend full with short filler work",
+        "color": "#2563eb",
+        "modes": {"controller_oracle_safe_sjf_maxfill"},
+    },
+    "controller_priority_demotion_calibrated_admission": {
+        "label": "Controller Priority + Demotion + Calibrated Filler Admission",
+        "description": "Controller raises replay priority, demotes background work, and admits filler only when conservative calibrated runtime estimates fit before replay",
+        "color": "#166534",
+        "modes": {"controller_priority_demotion_calibrated_admission"},
+    },
+    "controller_oracle_exact_runtime_admission": {
+        "label": "Controller Priority + Demotion + Oracle Exact-Runtime Admission",
+        "description": "Controller raises replay priority, demotes background work, and admits filler using a prior-run exact runtime truth table",
+        "color": "#14b8a6",
+        "modes": {"controller_oracle_exact_runtime_admission"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
@@ -246,6 +306,18 @@ CHART_SIGNAL_BUCKETS = {
         "description": "Full controller plus smaller SGLang prefill chunks, giving urgent replays more scheduler boundaries between background chunks",
         "color": "#be185d",
         "modes": {"controller_full_chunked_prefill"},
+    },
+    "storage_baseline": {
+        "label": "Storage HiCache Baseline",
+        "description": "Real SGLang HiCache storage backend enabled, with no priority or controller mutation",
+        "color": "#92400e",
+        "modes": {"storage_hicache_baseline"},
+    },
+    "storage_controller_prefetch": {
+        "label": "Storage Controller Prefetch",
+        "description": "Real SGLang HiCache storage backend enabled plus controller-authorized gateway speculative KV preload",
+        "color": "#0f766e",
+        "modes": {"storage_hicache_controller_prefetch"},
     },
 }
 
@@ -270,9 +342,18 @@ CHART_SIGNAL_ORDER = (
     "controller_priority_demotion_admission_hard",
     "controller_priority_demotion_admission_earlyprepare",
     "controller_priority_demotion_admission_shorthand",
+    "controller_oracle_timeline",
+    "controller_oracle_safe_sjf",
+    "controller_oracle_safe_sjf_balanced",
+    "controller_oracle_safe_sjf_aggressive",
+    "controller_oracle_safe_sjf_maxfill",
+    "controller_priority_demotion_calibrated_admission",
+    "controller_oracle_exact_runtime_admission",
     "controller_admission",
     "controller_full",
     "controller_full_chunked",
+    "storage_baseline",
+    "storage_controller_prefetch",
 )
 
 MANAGER_SIGNAL_BUCKETS = (
@@ -294,6 +375,13 @@ COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "controller_priority_demotion_admission_hard",
     "controller_priority_demotion_admission_earlyprepare",
     "controller_priority_demotion_admission_shorthand",
+    "controller_oracle_timeline",
+    "controller_oracle_safe_sjf",
+    "controller_oracle_safe_sjf_balanced",
+    "controller_oracle_safe_sjf_aggressive",
+    "controller_oracle_safe_sjf_maxfill",
+    "controller_priority_demotion_calibrated_admission",
+    "controller_oracle_exact_runtime_admission",
     "controller_full",
     "controller_full_chunked",
 )
@@ -343,6 +431,34 @@ COST_ACCOUNTING_COLORS = {
         "target": "#be185d",
         "filler": "#fbcfe8",
     },
+    "controller_oracle_timeline": {
+        "target": "#059669",
+        "filler": "#a7f3d0",
+    },
+    "controller_oracle_safe_sjf": {
+        "target": "#0e7490",
+        "filler": "#cffafe",
+    },
+    "controller_oracle_safe_sjf_balanced": {
+        "target": "#0891b2",
+        "filler": "#bae6fd",
+    },
+    "controller_oracle_safe_sjf_aggressive": {
+        "target": "#0284c7",
+        "filler": "#bfdbfe",
+    },
+    "controller_oracle_safe_sjf_maxfill": {
+        "target": "#2563eb",
+        "filler": "#dbeafe",
+    },
+    "controller_priority_demotion_calibrated_admission": {
+        "target": "#166534",
+        "filler": "#bbf7d0",
+    },
+    "controller_oracle_exact_runtime_admission": {
+        "target": "#0f766e",
+        "filler": "#99f6e4",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -382,6 +498,34 @@ COST_ACCOUNTING_DELTA_COLORS = {
     },
     "controller_priority_demotion_admission_earlyprepare": {
         "better": "#4338ca",
+        "worse": "#dc2626",
+    },
+    "controller_oracle_timeline": {
+        "better": "#059669",
+        "worse": "#dc2626",
+    },
+    "controller_oracle_safe_sjf": {
+        "better": "#0e7490",
+        "worse": "#dc2626",
+    },
+    "controller_oracle_safe_sjf_balanced": {
+        "better": "#0891b2",
+        "worse": "#dc2626",
+    },
+    "controller_oracle_safe_sjf_aggressive": {
+        "better": "#0284c7",
+        "worse": "#dc2626",
+    },
+    "controller_oracle_safe_sjf_maxfill": {
+        "better": "#2563eb",
+        "worse": "#dc2626",
+    },
+    "controller_priority_demotion_calibrated_admission": {
+        "better": "#166534",
+        "worse": "#dc2626",
+    },
+    "controller_oracle_exact_runtime_admission": {
+        "better": "#0f766e",
         "worse": "#dc2626",
     },
 }
@@ -500,6 +644,24 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "raw_modes": "controller_targeted_kv_prefetch",
     },
     {
+        "family": "Controller oracle timeline",
+        "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
+        "what_it_means": "The controller receives an upper-bound timeline view: expected replay-ready time and estimated filler runtime. It admits filler only when that filler is expected to finish before the replay-critical window.",
+        "raw_modes": "controller_oracle_timeline",
+    },
+    {
+        "family": "Controller calibrated filler admission",
+        "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
+        "what_it_means": "The controller receives the replay-ready time and filler metadata, then replaces raw runtime guesses with conservative calibrated estimates before deciding whether filler can run safely.",
+        "raw_modes": "controller_priority_demotion_calibrated_admission",
+    },
+    {
+        "family": "Controller oracle exact-runtime admission",
+        "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
+        "what_it_means": "The controller receives the replay-ready time and a prior-run exact filler runtime table, then admits only filler that the truth table says should fit before replay.",
+        "raw_modes": "controller_oracle_exact_runtime_admission",
+    },
+    {
         "family": "Full controller",
         "where_signal_is_added": "Portable controller sidecar, lowered by gateway",
         "what_it_means": "The controller combines the useful EC2 pieces: demote background traffic, priority-raise replay, skip speculative preload by policy, restore after replay, and rank tied urgent replays by deadline.",
@@ -510,6 +672,18 @@ SIGNAL_FAMILY_DEFINITIONS = [
         "where_signal_is_added": "Portable controller sidecar plus SGLang launch-time chunking",
         "what_it_means": "Same full-controller request decisions, with smaller SGLang prefill chunks so urgent replays have more scheduler boundaries between background chunks.",
         "raw_modes": "controller_full_chunked_prefill",
+    },
+    {
+        "family": "Storage HiCache baseline",
+        "where_signal_is_added": "SGLang launch-time storage backend",
+        "what_it_means": "Runs the same request workload with real SGLang HiCache storage enabled, but without priority or controller mutation.",
+        "raw_modes": "storage_hicache_baseline",
+    },
+    {
+        "family": "Storage controller prefetch",
+        "where_signal_is_added": "SGLang launch-time storage backend plus portable controller sidecar",
+        "what_it_means": "Runs with real SGLang HiCache storage enabled while the controller authorizes a gateway speculative KV preload during the tool-wait window.",
+        "raw_modes": "storage_hicache_controller_prefetch",
     },
 ]
 
@@ -522,6 +696,21 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
         for line in handle:
             line = line.strip()
             if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def read_jsonl_matching(path: Path, patterns: tuple[str, ...]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not any(pattern in line for pattern in patterns):
                 continue
             try:
                 rows.append(json.loads(line))
@@ -1132,6 +1321,9 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             "controller_priority_demotion_admission_medium",
             "controller_priority_demotion_admission_hard",
             "controller_priority_demotion_admission_earlyprepare",
+            "controller_oracle_timeline",
+            "controller_priority_demotion_calibrated_admission",
+            "controller_oracle_exact_runtime_admission",
             "controller_full",
         }
     }
@@ -1183,6 +1375,11 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
             row
             for row in trace_rows
             if str(row.get("event") or "") == "m27.controller_admission_gate.background_request_released"
+        ]
+        oracle_admission_decisions = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_oracle_timeline.admission_decision"
         ]
         for demote in demote_events:
             session_id = str(demote.get("session_id") or "")
@@ -1310,6 +1507,38 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                 )
                 and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
             ]
+            oracle_decision_rows = [
+                row
+                for row in oracle_admission_decisions
+                if str(row.get("gate_owner_session_id") or "") == session_id
+                and (
+                    not tool_wait_step
+                    or not str(row.get("gate_tool_wait_step") or "")
+                    or str(row.get("gate_tool_wait_step") or "") == tool_wait_step
+                )
+                and int(float_value(row.get("ts_ns"))) >= demote_ts_ns
+            ]
+            oracle_admit_rows = [row for row in oracle_decision_rows if str(row.get("decision") or "") == "admit"]
+            oracle_hold_rows = [row for row in oracle_decision_rows if str(row.get("decision") or "") == "hold"]
+            oracle_runtime_values = [
+                float_value(row.get("estimated_runtime_ms"))
+                for row in oracle_decision_rows
+                if optional_float(row.get("estimated_runtime_ms")) is not None
+            ]
+            oracle_time_until_values = [
+                float_value(row.get("time_until_next_replay_ms"))
+                for row in oracle_decision_rows
+                if optional_float(row.get("time_until_next_replay_ms")) is not None
+            ]
+            oracle_examples = []
+            for row in oracle_decision_rows[:3]:
+                oracle_examples.append(
+                    (
+                        f"{row.get('request_id', '')}: {row.get('decision', '')}; "
+                        f"est={row.get('estimated_runtime_ms', '')}ms; "
+                        f"until_replay={row.get('time_until_next_replay_ms', '')}ms"
+                    ).strip()
+                )
             filler_rows = [
                 row
                 for row in request_starts
@@ -1390,6 +1619,19 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                     "admission_gate_background_blocked": len(gate_blocked_rows),
                     "admission_gate_background_released": len(gate_released_rows),
                     "admission_gate_closed": "yes" if admission_gate_close else "no",
+                    "oracle_timeline_decisions": len(oracle_decision_rows),
+                    "oracle_timeline_admit_count": len(oracle_admit_rows),
+                    "oracle_timeline_hold_count": len(oracle_hold_rows),
+                    "oracle_timeline_min_estimated_runtime_ms": (
+                        round(min(oracle_runtime_values), 3) if oracle_runtime_values else ""
+                    ),
+                    "oracle_timeline_min_time_until_next_replay_ms": (
+                        round(min(oracle_time_until_values), 3) if oracle_time_until_values else ""
+                    ),
+                    "oracle_timeline_safety_margin_ms": (
+                        oracle_decision_rows[0].get("safety_margin_ms", "") if oracle_decision_rows else ""
+                    ),
+                    "oracle_timeline_examples": " | ".join(oracle_examples),
                     "filler_requests_seen": len(filler_rows),
                     "filler_requests_between_demote_and_replay": len(filler_before_replay),
                     "filler_demoted_count": len(filler_demoted),
@@ -1426,6 +1668,337 @@ def collect_controller_demote_restore_proof(root: Path, replay_rows: list[dict[s
                 }
             )
     return proof_rows
+
+
+def offset_from_workload_start_ms(workload_start_ns: int, event_ns: int) -> float | None:
+    if not workload_start_ns or not event_ns:
+        return None
+    return (event_ns - workload_start_ns) / 1_000_000.0
+
+
+def collect_controller_decision_quality(
+    root: Path,
+    rows: list[dict[str, Any]],
+    idle_gap_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        rows_by_case[str(row.get("case_dir") or "")].append(row)
+    idle_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in idle_gap_rows:
+        idle_by_case[str(row.get("case_dir") or "")].append(row)
+
+    quality_rows: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        case_rows = rows_by_case.get(str(case_dir), [])
+        if not case_rows:
+            continue
+        trace_rows = read_jsonl_matching(
+            case_dir / "m27_trace.jsonl",
+            (
+                "m27.workload_start",
+                "m27.controller_oracle_safe_sjf.",
+                "m27.controller_completion_linkage",
+                "m27.controller_oracle_timeline.admission_decision",
+                "m27.controller_admission_gate.background_request_blocked",
+            ),
+        )
+        if not trace_rows:
+            continue
+        workload_start = next((row for row in trace_rows if str(row.get("event") or "") == "m27.workload_start"), {})
+        workload_start_ns = timestamp_ns(workload_start.get("ts_ns"))
+        request_by_id = {
+            str(row.get("request_id") or ""): row
+            for row in case_rows
+            if str(row.get("request_id") or "")
+        }
+        target_by_session_step: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in case_rows:
+            if str(row.get("request_group") or "") != "target":
+                continue
+            target_by_session_step[
+                (str(row.get("session_id") or ""), str(row.get("tool_wait_step") or ""))
+            ] = row
+        seen_decisions: set[tuple[str, str, str]] = set()
+        decision_events = [
+            row
+            for row in trace_rows
+            if str(row.get("event") or "")
+            in {
+                "m27.controller_oracle_safe_sjf.decision",
+                "m27.controller_oracle_timeline.admission_decision",
+                "m27.controller_admission_gate.background_request_blocked",
+            }
+        ]
+        completion_by_decision_id = {
+            str(row.get("decision_id") or ""): row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_completion_linkage"
+            and str(row.get("decision_id") or "")
+        }
+        completion_by_request_id = {
+            str(row.get("request_id") or row.get("label") or ""): row
+            for row in trace_rows
+            if str(row.get("event") or "") == "m27.controller_completion_linkage"
+            and str(row.get("request_id") or row.get("label") or "")
+        }
+        for event in decision_events:
+            event_name = str(event.get("event") or "")
+            request_id = str(event.get("request_id") or event.get("label") or "")
+            decision = str(event.get("decision") or ("hold" if event_name.endswith("background_request_blocked") else ""))
+            target_session_id = str(
+                event.get("target_session_id")
+                or event.get("gate_owner_session_id")
+                or event.get("session_id")
+                or ""
+            )
+            target_step = str(
+                event.get("target_tool_wait_step")
+                or event.get("gate_tool_wait_step")
+                or event.get("tool_wait_step")
+                or ""
+            )
+            decision_id = str(event.get("decision_id") or "")
+            if not decision_id:
+                decision_id = f"{event_name}:{target_session_id}:{target_step}:{request_id}:{timestamp_ns(event.get('ts_ns'))}"
+            dedupe_key = (decision_id, decision, request_id)
+            if dedupe_key in seen_decisions:
+                continue
+            seen_decisions.add(dedupe_key)
+
+            request_row = request_by_id.get(request_id, {})
+            completion_row = completion_by_decision_id.get(decision_id) or completion_by_request_id.get(request_id) or {}
+            target_row = target_by_session_step.get((target_session_id, target_step), {})
+            decision_offset_ms = optional_float(event.get("offset_ms"))
+            if decision_offset_ms is None:
+                decision_offset_ms = offset_from_workload_start_ms(workload_start_ns, timestamp_ns(event.get("ts_ns")))
+            target_due_offset_ms = optional_float(
+                event.get("target_replay_due_offset_ms")
+                or event.get("next_replay_due_offset_ms")
+            )
+            if target_due_offset_ms is None and target_row:
+                target_due_offset_ms = offset_from_workload_start_ms(
+                    workload_start_ns,
+                    timestamp_ns(target_row.get("replay_due_ts_ns")),
+                )
+
+            actual_start_offset_ms = optional_float(completion_row.get("actual_start_offset_ms"))
+            if actual_start_offset_ms is None:
+                actual_start_offset_ms = offset_from_workload_start_ms(
+                    workload_start_ns,
+                    timestamp_ns(request_row.get("request_start_ts_ns")),
+                )
+            actual_finish_offset_ms = optional_float(completion_row.get("actual_finish_offset_ms"))
+            if actual_finish_offset_ms is None:
+                actual_finish_offset_ms = offset_from_workload_start_ms(
+                    workload_start_ns,
+                    timestamp_ns(request_row.get("request_end_ts_ns")),
+                )
+            actual_runtime_ms: float | None = None
+            if actual_start_offset_ms is not None and actual_finish_offset_ms is not None:
+                actual_runtime_ms = actual_finish_offset_ms - actual_start_offset_ms
+            estimated_runtime_ms = optional_float(event.get("estimated_runtime_ms"))
+            estimation_error_ms: float | None = None
+            if optional_float(completion_row.get("estimation_error_ms")) is not None:
+                estimation_error_ms = optional_float(completion_row.get("estimation_error_ms"))
+            elif actual_runtime_ms is not None and estimated_runtime_ms is not None:
+                estimation_error_ms = actual_runtime_ms - estimated_runtime_ms
+            actual_overshoot_ms: float | None = None
+            if optional_float(completion_row.get("actual_overshoot_ms")) is not None:
+                actual_overshoot_ms = optional_float(completion_row.get("actual_overshoot_ms"))
+            elif actual_finish_offset_ms is not None and target_due_offset_ms is not None:
+                actual_overshoot_ms = actual_finish_offset_ms - target_due_offset_ms
+
+            matching_idle = {}
+            idle_overlap_ms = 0.0
+            if decision_offset_ms is not None:
+                for idle in idle_by_case.get(str(case_dir), []):
+                    gap_start = optional_float(idle.get("gap_start_ms"))
+                    gap_end = optional_float(idle.get("gap_end_ms"))
+                    if gap_start is None or gap_end is None:
+                        continue
+                    inside = gap_start <= decision_offset_ms <= gap_end
+                    soon_before = 0 <= gap_start - decision_offset_ms <= 250
+                    if not inside and not soon_before:
+                        continue
+                    matching_idle = idle
+                    if inside:
+                        idle_overlap_ms = max(0.0, gap_end - decision_offset_ms)
+                    break
+
+            if decision == "admit":
+                if actual_overshoot_ms is None:
+                    verdict = "unknown_admit_no_finish_trace"
+                elif actual_overshoot_ms > 0:
+                    verdict = "bad_admit_overshot_replay"
+                else:
+                    verdict = "good_admit_finished_before_replay_due"
+            elif decision == "hold":
+                idle_reason = str(matching_idle.get("idle_reason") or "")
+                if matching_idle and idle_reason in {
+                    "no_pending_work",
+                    "pending_filler_unclassified",
+                    "admission_gate_blocked",
+                    "replay_too_close",
+                }:
+                    verdict = "possible_bad_hold_near_idle_gap"
+                else:
+                    verdict = "hold_protected_replay_window_or_needs_counterfactual"
+            else:
+                verdict = "unknown_decision"
+
+            row_harness = str(event.get("harness") or (case_rows[0].get("harness") if case_rows else ""))
+            row_pressure = str(event.get("pressure_level") or (case_rows[0].get("pressure_level") if case_rows else ""))
+            row_mode = str(event.get("mode") or (case_rows[0].get("mode") if case_rows else ""))
+            bucket = next(
+                (
+                    bucket_name
+                    for bucket_name, config in CHART_SIGNAL_BUCKETS.items()
+                    if row_mode in config["modes"]
+                ),
+                chart_signal_bucket({"mode": row_mode}),
+            )
+            quality_rows.append(
+                {
+                    "harness": row_harness,
+                    "harness_label": HARNESS_LABELS.get(row_harness, row_harness),
+                    "pressure_level": row_pressure,
+                    "pressure_level_label": PRESSURE_LABELS.get(row_pressure, row_pressure),
+                    "mode": row_mode,
+                    "mode_label": MODE_LABELS.get(row_mode, row_mode),
+                    "signal_bucket": bucket,
+                    "signal_bucket_label": CHART_SIGNAL_BUCKETS.get(bucket, {}).get("label", bucket),
+                    "case_id": case_dir.name,
+                    "case_dir": str(case_dir),
+                    "decision_id": decision_id,
+                    "controller_event": event_name,
+                    "target_session_id": target_session_id,
+                    "target_request_id": target_row.get("request_id", ""),
+                    "target_tool_wait_step": target_step,
+                    "target_replay_due_offset_ms": round(target_due_offset_ms, 3)
+                    if target_due_offset_ms is not None
+                    else "",
+                    "target_first_token_lateness_ms": target_row.get("first_token_lateness_ms", ""),
+                    "target_ttft_ms": target_row.get("ttft_ms", ""),
+                    "filler_request_id": request_id,
+                    "filler_stage": event.get("stage", ""),
+                    "filler_phase": event.get("phase", request_row.get("phase", "")),
+                    "decision": decision,
+                    "reason": event.get("reason") or event.get("gate_reason", ""),
+                    "decision_offset_ms": round(decision_offset_ms, 3) if decision_offset_ms is not None else "",
+                    "raw_estimated_runtime_ms": event.get("raw_estimated_runtime_ms", ""),
+                    "estimated_runtime_ms": round(estimated_runtime_ms, 3)
+                    if estimated_runtime_ms is not None
+                    else "",
+                    "calibrated_runtime_ms": event.get("calibrated_runtime_ms", ""),
+                    "runtime_class": event.get("runtime_class", ""),
+                    "calibration_source": event.get("calibration_source", ""),
+                    "calibration_sample_count": event.get("calibration_sample_count", ""),
+                    "calibration_quantile": event.get("calibration_quantile", ""),
+                    "calibration_floor_ms": event.get("calibration_floor_ms", ""),
+                    "available_window_ms": event.get("available_window_ms", ""),
+                    "safety_margin_ms": event.get("safety_margin_ms", ""),
+                    "time_until_next_replay_ms": event.get("time_until_next_replay_ms", ""),
+                    "expected_finish_offset_ms": event.get("expected_finish_offset_ms", ""),
+                    "expected_overshoot_ms": event.get("expected_overshoot_ms", ""),
+                    "expected_fit_before_replay": event.get("expected_fit_before_replay", ""),
+                    "actual_start_offset_ms": round(actual_start_offset_ms, 3)
+                    if actual_start_offset_ms is not None
+                    else "",
+                    "actual_finish_offset_ms": round(actual_finish_offset_ms, 3)
+                    if actual_finish_offset_ms is not None
+                    else "",
+                    "actual_runtime_ms": round(actual_runtime_ms, 3) if actual_runtime_ms is not None else "",
+                    "estimation_error_ms": round(estimation_error_ms, 3)
+                    if estimation_error_ms is not None
+                    else "",
+                    "actual_overshoot_ms": round(actual_overshoot_ms, 3)
+                    if actual_overshoot_ms is not None
+                    else "",
+                    "idle_gap_overlap_ms": round(idle_overlap_ms, 3) if idle_overlap_ms else "",
+                    "idle_gap_reason": matching_idle.get("idle_reason", ""),
+                    "verdict": verdict,
+                }
+            )
+    return quality_rows
+
+
+def summarize_controller_decision_quality(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[
+            (
+                str(row.get("harness_label") or ""),
+                str(row.get("pressure_level_label") or ""),
+                str(row.get("mode_label") or ""),
+                str(row.get("case_id") or ""),
+            )
+        ].append(row)
+    summary_rows: list[dict[str, Any]] = []
+    for (harness_label, pressure_label, mode_label, case_id), group_rows in sorted(grouped.items()):
+        admits = [row for row in group_rows if str(row.get("decision") or "") == "admit"]
+        holds = [row for row in group_rows if str(row.get("decision") or "") == "hold"]
+        bad_admits = [row for row in admits if str(row.get("verdict") or "") == "bad_admit_overshot_replay"]
+        good_admits = [row for row in admits if str(row.get("verdict") or "").startswith("good_admit")]
+        unknown_admits = [row for row in admits if str(row.get("verdict") or "").startswith("unknown_admit")]
+        possible_bad_holds = [
+            row for row in holds if str(row.get("verdict") or "") == "possible_bad_hold_near_idle_gap"
+        ]
+        overshoots = [
+            float_value(row.get("actual_overshoot_ms"))
+            for row in bad_admits
+            if optional_float(row.get("actual_overshoot_ms")) is not None
+        ]
+        estimation_errors = [
+            float_value(row.get("estimation_error_ms"))
+            for row in group_rows
+            if optional_float(row.get("estimation_error_ms")) is not None
+        ]
+        target_lateness = [
+            float_value(row.get("target_first_token_lateness_ms"))
+            for row in group_rows
+            if optional_float(row.get("target_first_token_lateness_ms")) is not None
+        ]
+        target_ttft = [
+            float_value(row.get("target_ttft_ms"))
+            for row in group_rows
+            if optional_float(row.get("target_ttft_ms")) is not None
+        ]
+        if bad_admits:
+            verdict = "admitted filler ran past replay due time"
+        elif possible_bad_holds:
+            verdict = "some holds align with idle gaps; inspect raw rows"
+        elif good_admits and not bad_admits:
+            verdict = "admitted filler fit before replay due time"
+        else:
+            verdict = "no decisive admit outcome"
+        summary_rows.append(
+            {
+                "harness_label": harness_label,
+                "pressure_level_label": pressure_label,
+                "mode_label": mode_label,
+                "case_id": case_id,
+                "decisions": len(group_rows),
+                "admit_decisions": len(admits),
+                "hold_decisions": len(holds),
+                "good_admits": len(good_admits),
+                "bad_admits": len(bad_admits),
+                "unknown_admits": len(unknown_admits),
+                "possible_bad_holds_near_idle": len(possible_bad_holds),
+                "total_bad_admit_overshoot_ms": round(sum(overshoots), 3) if overshoots else 0,
+                "max_bad_admit_overshoot_ms": round(max(overshoots), 3) if overshoots else 0,
+                "median_estimation_error_ms": round(statistics.median(estimation_errors), 3)
+                if estimation_errors
+                else "",
+                "target_replay_samples": len(set(str(row.get("target_request_id") or "") for row in group_rows)),
+                "median_target_first_token_lateness_ms": round(statistics.median(target_lateness), 3)
+                if target_lateness
+                else "",
+                "median_target_ttft_ms": round(statistics.median(target_ttft), 3) if target_ttft else "",
+                "verdict": verdict,
+            }
+        )
+    return summary_rows
 
 
 def nested_get(mapping: dict[str, Any], path: tuple[str, ...], default: Any = "") -> Any:
@@ -2164,7 +2737,13 @@ def matching_request_attributions(row: dict[str, Any], request_id: str) -> list[
 
 def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     proof_rows: list[dict[str, Any]] = []
-    cache_modes = {"no_cache_signal", "harness_native_cache_lowered", "harness_emitted_signals"}
+    cache_modes = {
+        "no_cache_signal",
+        "harness_native_cache_lowered",
+        "harness_emitted_signals",
+        "storage_hicache_baseline",
+        "storage_hicache_controller_prefetch",
+    }
     for replay_row in replay_rows:
         mode = str(replay_row.get("mode") or "")
         if mode not in cache_modes:
@@ -2183,9 +2762,19 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
         h2d_copy_events = 0
         cache_finished_events = 0
         prefill_events = 0
+        storage_prefetch_events = 0
+        storage_to_host_events = 0
+        case_storage_prefetch_events = 0
+        case_storage_to_host_events = 0
+        first_storage_action_ts_ns = 0
+        first_case_storage_action_ts_ns = 0
         runtime_cache_namespace_seen = False
         effective_extra_key = ""
         radix_key_extra_key = ""
+        kv_storage_enabled = replay_row.get("kv_storage_enabled", "")
+        kv_storage_backend = replay_row.get("kv_storage_backend", "")
+        kv_storage_prefetch_policy = replay_row.get("kv_storage_prefetch_policy", "")
+        kv_storage_path = replay_row.get("kv_storage_path", "")
         first_cache_action_ts_ns = 0
         sglang_receive_ts_ns = int(float_value(replay_row.get("sglang_receive_ts_ns")))
         max_values: dict[str, float] = defaultdict(float)
@@ -2203,13 +2792,35 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
             update_max(output_key, token_stats.get(key))
 
         for trace_row in trace_rows:
-            if not row_matches_request(trace_row, request_id):
-                continue
             event = str(trace_row.get("event") or "")
             category = str(trace_row.get("category") or "")
             method = str(trace_row.get("method") or "")
             source_event = str(trace_row.get("source_event") or "")
+            stage = str(trace_row.get("stage") or "")
+            direction = str(trace_row.get("direction") or "")
+            kv_context = trace_row.get("kv_context")
+            if isinstance(kv_context, dict) and not direction:
+                direction = str(kv_context.get("direction") or "")
             action_text = " ".join((event, category, method, source_event)).lower()
+            is_storage_prefetch = category == "hicache_storage_prefetch" or stage == "hicache_storage_prefetch" or method == "prefetch"
+            is_storage_to_host = direction == "storage_to_host"
+            if is_truthy_text(trace_row.get("kv_storage_enabled")):
+                kv_storage_enabled = kv_storage_enabled or trace_row.get("kv_storage_enabled", "")
+                kv_storage_backend = kv_storage_backend or trace_row.get("kv_storage_backend", "")
+                kv_storage_prefetch_policy = kv_storage_prefetch_policy or trace_row.get("kv_storage_prefetch_policy", "")
+                kv_storage_path = kv_storage_path or trace_row.get("kv_storage_path", "")
+            if is_storage_prefetch:
+                case_storage_prefetch_events += 1
+            if is_storage_to_host:
+                case_storage_to_host_events += 1
+            if is_storage_prefetch or is_storage_to_host:
+                ts_ns = int(float_value(trace_row.get("ts_ns")))
+                if ts_ns and sglang_receive_ts_ns and ts_ns >= sglang_receive_ts_ns:
+                    if not first_case_storage_action_ts_ns or ts_ns < first_case_storage_action_ts_ns:
+                        first_case_storage_action_ts_ns = ts_ns
+
+            if not row_matches_request(trace_row, request_id):
+                continue
             if "match_prefix" in action_text:
                 cache_match_events += 1
             if category in {"init_load_back", "load_back", "hicache_load"} or method in {
@@ -2222,6 +2833,10 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 h2d_copy_events += 1
             if category == "cache_finished_req" or "cache_finished_req" in action_text:
                 cache_finished_events += 1
+            if is_storage_prefetch:
+                storage_prefetch_events += 1
+            if is_storage_to_host:
+                storage_to_host_events += 1
             if event.startswith("kv_telemetry.prefill") or any(
                 key in trace_row for key in ("prefill_full_input_tokens", "batch_request_prefill_attribution")
             ):
@@ -2247,12 +2862,19 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                     "match_prefix" in action_text,
                     category in {"init_load_back", "load_back", "hicache_load", "host_to_device_copy", "cache_finished_req"},
                     event.startswith("kv_telemetry.prefill"),
+                    is_storage_prefetch,
+                    is_storage_to_host,
                 )
             ):
                 ts_ns = int(float_value(trace_row.get("ts_ns")))
                 if ts_ns and sglang_receive_ts_ns and ts_ns >= sglang_receive_ts_ns:
                     if not first_cache_action_ts_ns or ts_ns < first_cache_action_ts_ns:
                         first_cache_action_ts_ns = ts_ns
+                    if (
+                        is_storage_prefetch
+                        or is_storage_to_host
+                    ) and (not first_storage_action_ts_ns or ts_ns < first_storage_action_ts_ns):
+                        first_storage_action_ts_ns = ts_ns
 
             for attribution in matching_request_attributions(trace_row, request_id):
                 update_max("cached_prefix_tokens", attribution.get("cached_prefix_tokens"))
@@ -2278,6 +2900,10 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 h2d_copy_events,
                 cache_finished_events,
                 prefill_events,
+                storage_prefetch_events,
+                storage_to_host_events,
+                case_storage_prefetch_events,
+                case_storage_to_host_events,
                 max_values.get("cached_prefix_tokens", 0) > 0,
                 max_values.get("host_hit_tokens", 0) > 0,
             )
@@ -2312,6 +2938,16 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
             if ns_to_ms_delta(sglang_receive_ts_ns, first_cache_action_ts_ns) is not None
             else ""
         )
+        first_storage_action_after_receive_ms = (
+            round(ns_to_ms_delta(sglang_receive_ts_ns, first_storage_action_ts_ns), 3)
+            if ns_to_ms_delta(sglang_receive_ts_ns, first_storage_action_ts_ns) is not None
+            else ""
+        )
+        first_case_storage_action_after_receive_ms = (
+            round(ns_to_ms_delta(sglang_receive_ts_ns, first_case_storage_action_ts_ns), 3)
+            if ns_to_ms_delta(sglang_receive_ts_ns, first_case_storage_action_ts_ns) is not None
+            else ""
+        )
         proof_rows.append(
             {
                 "harness_label": replay_row.get("harness_label", ""),
@@ -2322,6 +2958,10 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 "native_cache_signal_seen": "yes" if native_cache_signal_seen else "no",
                 "gateway_cache_lowered": "yes" if gateway_cache_lowered else "no",
                 "gateway_cache_salt": replay_row.get("gateway_cache_salt", ""),
+                "kv_storage_enabled": kv_storage_enabled,
+                "kv_storage_backend": kv_storage_backend,
+                "kv_storage_prefetch_policy": kv_storage_prefetch_policy,
+                "kv_storage_path": kv_storage_path,
                 "sglang_payload_cache_metadata_sent": "yes" if sglang_payload_cache_metadata_sent else "no",
                 "runtime_cache_namespace_seen": "yes" if runtime_cache_namespace_seen else "no",
                 "effective_extra_key": effective_extra_key,
@@ -2331,6 +2971,10 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 "h2d_copy_events": h2d_copy_events,
                 "cache_finished_events": cache_finished_events,
                 "prefill_attribution_events": prefill_events,
+                "storage_prefetch_events": storage_prefetch_events,
+                "storage_to_host_events": storage_to_host_events,
+                "case_storage_prefetch_events": case_storage_prefetch_events,
+                "case_storage_to_host_events": case_storage_to_host_events,
                 "max_cached_prefix_tokens": int(max_values["cached_prefix_tokens"]) if max_values["cached_prefix_tokens"] else "",
                 "max_uncached_tokens": int(max_values["uncached_tokens"]) if max_values["uncached_tokens"] else "",
                 "max_host_hit_tokens": int(max_values["host_hit_tokens"]) if max_values["host_hit_tokens"] else "",
@@ -2339,6 +2983,8 @@ def collect_cache_action_proof(root: Path, replay_rows: list[dict[str, Any]]) ->
                 "max_cache_protected_tokens": int(max_values["cache_protected_tokens"]) if max_values["cache_protected_tokens"] else "",
                 "max_kv_committed_tokens": int(max_values["kv_committed_tokens"]) if max_values["kv_committed_tokens"] else "",
                 "first_cache_action_after_sglang_receive_ms": first_cache_action_after_receive_ms,
+                "first_storage_action_after_sglang_receive_ms": first_storage_action_after_receive_ms,
+                "first_case_storage_action_after_sglang_receive_ms": first_case_storage_action_after_receive_ms,
                 "first_token_lateness_ms": replay_row.get("first_token_lateness_ms", ""),
                 "sglang_receive_to_first_token_ms": replay_row.get("sglang_receive_to_first_token_ms", ""),
                 "verdict": verdict,
@@ -2355,7 +3001,7 @@ ENCODING_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scope", 
                     "encoding_reason", "encoding_original_tokens", "encoding_encoded_tokens",
                     "encoding_candidate_tokens", "encoding_saved_tokens", "encoding_elapsed_ms",
                     "encoding_legend_tokens", "encoding_validation", "encoding_original_hash",
-                    "encoding_encoded_hash", "encoding_tokenizer_id"]
+                    "encoding_encoded_hash", "encoding_tokenizer_id", "encoding_rule_counts"]
 
 RAW_COLUMNS = ENCODING_COLUMNS + ["prefill_full_input_tokens", "prefill_cached_prefix_tokens", "prefill_uncached_token_count"] + [
     "harness",
@@ -2462,6 +3108,199 @@ COST_ACCOUNTING_COLUMNS = [
     "sum_target_replay_debt_ms",
     "sum_filler_replay_debt_ms",
     "sum_total_replay_debt_ms",
+]
+
+GPU_IDLE_COLUMNS = [
+    "encoding_codec",
+    "encoding_config_hash",
+    "encoding_scope",
+    "harness",
+    "harness_label",
+    "pressure_level",
+    "pressure_level_label",
+    "mode",
+    "mode_label",
+    "signal_bucket",
+    "signal_bucket_label",
+    "case_id",
+    "case_dir",
+    "workload_window_ms",
+    "gpu_sample_count",
+    "gpu_sample_period_ms",
+    "gpu_sampled_window_ms",
+    "gpu_idle_zero_ms",
+    "gpu_idle_under_5pct_ms",
+    "gpu_busy_over_50pct_ms",
+    "gpu_idle_under_5pct_fraction",
+    "gpu_avg_util_pct",
+    "gpu_median_util_pct",
+    "gpu_max_util_pct",
+    "sglang_batch_count",
+    "sglang_batch_window_ms",
+    "sglang_run_batch_busy_ms",
+    "sglang_batch_duty_fraction",
+    "sglang_inter_batch_gap_ms",
+    "sglang_gap_after_nonempty_queue_ms",
+    "sglang_gap_after_empty_queue_ms",
+    "sglang_gap_after_nonempty_queue_fraction",
+    "sglang_single_request_batch_fraction",
+    "sglang_batch_request_count_median",
+    "sglang_batch_request_count_max",
+    "sglang_extend_tokens_median",
+    "sglang_extend_tokens_max",
+    "gpu_avg_util_during_run_batch_pct",
+    "gpu_median_util_during_run_batch_pct",
+    "gpu_avg_util_outside_run_batch_pct",
+    "gpu_median_util_outside_run_batch_pct",
+    "gpu_idle_measurement_status",
+]
+
+CONTROLLER_IDLE_GAP_AUDIT_COLUMNS = [
+    "harness",
+    "harness_label",
+    "pressure_level",
+    "pressure_level_label",
+    "mode",
+    "mode_label",
+    "signal_bucket",
+    "signal_bucket_label",
+    "case_id",
+    "case_dir",
+    "gap_index",
+    "gap_start_ms",
+    "gap_end_ms",
+    "gap_duration_ms",
+    "gap_location",
+    "idle_reason",
+    "reason_detail",
+    "pending_sjf_candidates_before_gap",
+    "sjf_hold_events_near_gap",
+    "sjf_admit_events_near_gap",
+    "admission_gate_blocks_near_gap",
+    "request_starts_inside_gap",
+    "request_ends_inside_gap",
+    "next_replay_due_in_ms",
+    "shortest_filler_estimated_runtime_ms",
+    "safety_margin_ms",
+    "max_in_flight",
+    "require_fit_before_replay",
+    "idle_override",
+    "gpu_avg_util_pct_in_gap",
+    "gpu_samples_in_gap",
+]
+
+IDLE_GAP_CASE_STUDY_COLUMNS = [
+    "harness",
+    "harness_label",
+    "pressure_level",
+    "pressure_level_label",
+    "mode",
+    "mode_label",
+    "signal_bucket",
+    "signal_bucket_label",
+    "case_id",
+    "case_dir",
+    "gap_index",
+    "gap_rank_in_case",
+    "gap_start_ms",
+    "gap_end_ms",
+    "gap_duration_ms",
+    "gap_location",
+    "idle_reason",
+    "plain_english_summary",
+    "active_tool_wait_count",
+    "active_tool_wait_labels",
+    "active_tool_wait_classes",
+    "next_tool_wait_end_in_ms",
+    "request_starts_inside_gap",
+    "request_start_labels",
+    "request_start_phases",
+    "request_start_groups",
+    "request_ends_inside_gap",
+    "request_end_labels",
+    "gateway_receives_inside_gap",
+    "gateway_receive_labels",
+    "gateway_forwards_inside_gap",
+    "gateway_forward_labels",
+    "batch_before_request_count",
+    "batch_before_waiting_queue_len",
+    "batch_before_extend_tokens",
+    "batch_after_starts_in_ms",
+    "batch_after_request_count",
+    "batch_after_waiting_queue_len",
+    "batch_after_extend_tokens",
+    "gpu_avg_util_pct_in_gap",
+    "gpu_samples_in_gap",
+]
+
+CONTROLLER_DECISION_QUALITY_COLUMNS = [
+    "harness",
+    "harness_label",
+    "pressure_level",
+    "pressure_level_label",
+    "mode",
+    "mode_label",
+    "signal_bucket",
+    "signal_bucket_label",
+    "case_id",
+    "case_dir",
+    "decision_id",
+    "controller_event",
+    "target_session_id",
+    "target_request_id",
+    "target_tool_wait_step",
+    "target_replay_due_offset_ms",
+    "target_first_token_lateness_ms",
+    "target_ttft_ms",
+    "filler_request_id",
+    "filler_stage",
+    "filler_phase",
+    "decision",
+    "reason",
+    "decision_offset_ms",
+    "raw_estimated_runtime_ms",
+    "estimated_runtime_ms",
+    "calibrated_runtime_ms",
+    "runtime_class",
+    "calibration_source",
+    "calibration_sample_count",
+    "calibration_quantile",
+    "calibration_floor_ms",
+    "available_window_ms",
+    "safety_margin_ms",
+    "time_until_next_replay_ms",
+    "expected_finish_offset_ms",
+    "expected_overshoot_ms",
+    "expected_fit_before_replay",
+    "actual_start_offset_ms",
+    "actual_finish_offset_ms",
+    "actual_runtime_ms",
+    "estimation_error_ms",
+    "actual_overshoot_ms",
+    "idle_gap_overlap_ms",
+    "idle_gap_reason",
+    "verdict",
+]
+
+CONTROLLER_DECISION_QUALITY_SUMMARY_COLUMNS = [
+    "harness_label",
+    "pressure_level_label",
+    "mode_label",
+    "case_id",
+    "decisions",
+    "admit_decisions",
+    "hold_decisions",
+    "good_admits",
+    "bad_admits",
+    "unknown_admits",
+    "possible_bad_holds_near_idle",
+    "total_bad_admit_overshoot_ms",
+    "max_bad_admit_overshoot_ms",
+    "median_estimation_error_ms",
+    "target_replay_samples",
+    "median_target_first_token_lateness_ms",
+    "median_target_ttft_ms",
+    "verdict",
 ]
 
 SPECULATIVE_PREFILL_COLUMNS = [
@@ -2587,6 +3426,10 @@ CACHE_ACTION_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scop
     "native_cache_signal_seen",
     "gateway_cache_lowered",
     "gateway_cache_salt",
+    "kv_storage_enabled",
+    "kv_storage_backend",
+    "kv_storage_prefetch_policy",
+    "kv_storage_path",
     "sglang_payload_cache_metadata_sent",
     "runtime_cache_namespace_seen",
     "effective_extra_key",
@@ -2596,6 +3439,10 @@ CACHE_ACTION_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scop
     "h2d_copy_events",
     "cache_finished_events",
     "prefill_attribution_events",
+    "storage_prefetch_events",
+    "storage_to_host_events",
+    "case_storage_prefetch_events",
+    "case_storage_to_host_events",
     "max_cached_prefix_tokens",
     "max_uncached_tokens",
     "max_host_hit_tokens",
@@ -2604,6 +3451,8 @@ CACHE_ACTION_COLUMNS = ["encoding_codec", "encoding_config_hash", "encoding_scop
     "max_cache_protected_tokens",
     "max_kv_committed_tokens",
     "first_cache_action_after_sglang_receive_ms",
+    "first_storage_action_after_sglang_receive_ms",
+    "first_case_storage_action_after_sglang_receive_ms",
     "first_token_lateness_ms",
     "sglang_receive_to_first_token_ms",
     "verdict",
@@ -2693,6 +3542,13 @@ CONTROLLER_DEMOTE_RESTORE_COLUMNS = [
     "admission_gate_background_blocked",
     "admission_gate_background_released",
     "admission_gate_closed",
+    "oracle_timeline_decisions",
+    "oracle_timeline_admit_count",
+    "oracle_timeline_hold_count",
+    "oracle_timeline_min_estimated_runtime_ms",
+    "oracle_timeline_min_time_until_next_replay_ms",
+    "oracle_timeline_safety_margin_ms",
+    "oracle_timeline_examples",
     "filler_requests_seen",
     "filler_requests_between_demote_and_replay",
     "filler_demoted_count",
@@ -2859,7 +3715,9 @@ def cost_signal_bucket(group_rows: list[dict[str, Any]], mode: str) -> str:
         bucket = chart_signal_bucket(row)
         if bucket != "baseline" or mode in {"no_prefetch", "no_cache_signal"}:
             return bucket
-    return CHART_SIGNAL_BUCKETS.get(mode, {}).get("label", "") or chart_signal_bucket({"mode": mode})
+    if mode in CHART_SIGNAL_BUCKETS:
+        return mode
+    return chart_signal_bucket({"mode": mode})
 
 
 def collect_cost_accounting_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2938,6 +3796,705 @@ def collect_cost_accounting_summary(rows: list[dict[str, Any]]) -> list[dict[str
                 "sum_total_replay_debt_ms": round(sum_target_debt + sum_filler_debt, 3),
             }
         )
+    return out
+
+
+def collect_gpu_idle_summary(root: Path, rows: list[dict[str, Any]], fallback_gpu_csv: Path | None = None) -> list[dict[str, Any]]:
+    row_by_case: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        case_id = str(row.get("case_id") or "")
+        if not case_id:
+            continue
+        is_target_replay = (
+            str(row.get("request_group") or "target") == "target"
+            and str(row.get("phase") or "") == "replay"
+        )
+        if case_id not in row_by_case or is_target_replay:
+            row_by_case[case_id] = row
+
+    fallback_gpu_rows = read_csv_table(fallback_gpu_csv) if fallback_gpu_csv else []
+    out: list[dict[str, Any]] = []
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        case_id = case_dir.name
+        metadata = row_by_case.get(case_id, {})
+        mode = str(metadata.get("mode") or "")
+        bucket = chart_signal_bucket(metadata) if metadata else ""
+        if bucket == "baseline" and mode in {
+            "controller_observe_only",
+            "controller_scheduler_priority",
+            "controller_speculative_preload",
+            "controller_targeted_kv_prefetch",
+            "controller_demote_restore",
+            "controller_priority_demote",
+            "controller_priority_demotion_admission",
+            "controller_priority_demotion_admission_soft",
+            "controller_priority_demotion_admission_medium",
+            "controller_priority_demotion_admission_hard",
+            "controller_priority_demotion_admission_earlyprepare",
+            "controller_priority_demotion_admission_shorthand",
+            "controller_oracle_timeline",
+            "controller_priority_demotion_calibrated_admission",
+            "controller_oracle_exact_runtime_admission",
+            "controller_admission_control",
+            "controller_full",
+            "controller_full_chunked_prefill",
+        }:
+            bucket = {
+                "controller_full_chunked_prefill": "controller_full_chunked",
+            }.get(mode, mode)
+        gpu_path = case_dir / "gpu_utilization_samples.csv"
+        gateway_events = read_jsonl(case_dir / "harness_gateway_events.jsonl")
+        request_ts = [
+            int(event.get("ts_ns"))
+            for event in gateway_events
+            if event.get("event") == "gateway.request_received" and str(event.get("ts_ns") or "").isdigit()
+        ]
+        response_ts = [
+            int(event.get("ts_ns"))
+            for event in gateway_events
+            if event.get("event") == "gateway.forwarded_request" and str(event.get("ts_ns") or "").isdigit()
+        ]
+        start_ts = min(request_ts) if request_ts else None
+        end_ts = max(response_ts) if response_ts else None
+        gpu_rows = read_csv_table(gpu_path)
+        sample_source = "case"
+        if not gpu_rows and fallback_gpu_rows:
+            gpu_rows = fallback_gpu_rows
+            sample_source = "shared_report"
+        parsed_samples: list[tuple[int, float]] = []
+        for sample in gpu_rows:
+            ts_raw = str(sample.get("ts_ns") or "")
+            util = optional_float(sample.get("utilization_gpu_pct"))
+            if not ts_raw.isdigit() or util is None:
+                continue
+            parsed_samples.append((int(ts_raw), util))
+        parsed_samples.sort(key=lambda item: item[0])
+        sample_period_ms = 0.0
+        if len(parsed_samples) > 1:
+            gaps = [
+                (parsed_samples[index + 1][0] - parsed_samples[index][0]) / 1_000_000
+                for index in range(len(parsed_samples) - 1)
+                if parsed_samples[index + 1][0] > parsed_samples[index][0]
+            ]
+            if gaps:
+                sample_period_ms = statistics.median(gaps)
+        if sample_period_ms <= 0:
+            sample_period_ms = 100.0
+        window_samples = [
+            (ts, util)
+            for ts, util in parsed_samples
+            if start_ts is not None and end_ts is not None and start_ts <= ts <= end_ts
+        ]
+        total_window_ms = ((end_ts - start_ts) / 1_000_000) if start_ts is not None and end_ts is not None else None
+        sampled_window_ms = len(window_samples) * sample_period_ms
+        idle_zero_ms = sum(sample_period_ms for _, util in window_samples if util == 0.0)
+        idle_under_5_ms = sum(sample_period_ms for _, util in window_samples if util < 5.0)
+        busy_over_50_ms = sum(sample_period_ms for _, util in window_samples if util >= 50.0)
+        avg_util = statistics.mean([util for _, util in window_samples]) if window_samples else None
+        median_util = statistics.median([util for _, util in window_samples]) if window_samples else None
+        max_util = max([util for _, util in window_samples], default=None)
+        measured = bool(start_ts is not None and end_ts is not None and window_samples)
+        status = "measured" if measured else "missing_samples"
+        if measured and sample_source == "shared_report":
+            status = "measured_from_shared_report_sampler"
+        batch_intervals: list[tuple[int, int, dict[str, Any]]] = []
+        for event in read_jsonl(case_dir / "m27_trace.jsonl"):
+            if event.get("event") != "scheduler.run_batch.end":
+                continue
+            ts_ns = event.get("ts_ns")
+            duration_ms = optional_float(event.get("duration_ms"))
+            if not isinstance(ts_ns, int) or duration_ms is None:
+                continue
+            end_ns = ts_ns
+            start_ns = end_ns - int(duration_ms * 1_000_000)
+            batch = ((event.get("kv_context") or {}).get("batch") or {})
+            scheduler_state = ((event.get("kv_context") or {}).get("scheduler_state") or {})
+            batch_intervals.append(
+                (
+                    start_ns,
+                    end_ns,
+                    {
+                        "duration_ms": duration_ms,
+                        "request_count": optional_float(batch.get("request_count")),
+                        "extend_num_tokens": optional_float(batch.get("extend_num_tokens")),
+                        "waiting_queue_len": optional_float(scheduler_state.get("waiting_queue_len")),
+                    },
+                )
+            )
+        batch_intervals.sort(key=lambda item: item[0])
+        batch_count = len(batch_intervals)
+        batch_window_ms: float | None = None
+        batch_busy_ms = sum(item[2]["duration_ms"] for item in batch_intervals)
+        inter_batch_gap_ms = 0.0
+        gap_after_nonempty_queue_ms = 0.0
+        gap_after_empty_queue_ms = 0.0
+        if batch_intervals:
+            batch_window_ms = (batch_intervals[-1][1] - batch_intervals[0][0]) / 1_000_000
+            for previous, current in zip(batch_intervals, batch_intervals[1:]):
+                gap_ms = (current[0] - previous[1]) / 1_000_000
+                if gap_ms <= 100:
+                    continue
+                inter_batch_gap_ms += gap_ms
+                previous_waiting = previous[2].get("waiting_queue_len")
+                if previous_waiting is not None and previous_waiting > 0:
+                    gap_after_nonempty_queue_ms += gap_ms
+                else:
+                    gap_after_empty_queue_ms += gap_ms
+        request_counts = [
+            value
+            for _, _, batch in batch_intervals
+            if (value := batch.get("request_count")) is not None
+        ]
+        extend_tokens = [
+            value
+            for _, _, batch in batch_intervals
+            if (value := batch.get("extend_num_tokens")) is not None
+        ]
+        samples_during_batch: list[float] = []
+        samples_outside_batch: list[float] = []
+        interval_index = 0
+        for ts, util in window_samples:
+            while interval_index < len(batch_intervals) and batch_intervals[interval_index][1] < ts:
+                interval_index += 1
+            if (
+                interval_index < len(batch_intervals)
+                and batch_intervals[interval_index][0] <= ts <= batch_intervals[interval_index][1]
+            ):
+                samples_during_batch.append(util)
+            else:
+                samples_outside_batch.append(util)
+        out.append(
+            {
+                "encoding_codec": metadata.get("encoding_codec", "identity"),
+                "encoding_config_hash": metadata.get("encoding_config_hash", ""),
+                "encoding_scope": metadata.get("encoding_scope", ""),
+                "harness": metadata.get("harness", ""),
+                "harness_label": metadata.get("harness_label", ""),
+                "pressure_level": metadata.get("pressure_level", ""),
+                "pressure_level_label": metadata.get("pressure_level_label", ""),
+                "mode": mode,
+                "mode_label": metadata.get("mode_label", ""),
+                "signal_bucket": bucket,
+                "signal_bucket_label": chart_signal_label(bucket) if bucket else "",
+                "case_id": case_id,
+                "case_dir": str(case_dir),
+                "workload_window_ms": round(total_window_ms, 3) if total_window_ms is not None else "",
+                "gpu_sample_count": len(window_samples),
+                "gpu_sample_period_ms": round(sample_period_ms, 3),
+                "gpu_sampled_window_ms": round(sampled_window_ms, 3),
+                "gpu_idle_zero_ms": round(idle_zero_ms, 3),
+                "gpu_idle_under_5pct_ms": round(idle_under_5_ms, 3),
+                "gpu_busy_over_50pct_ms": round(busy_over_50_ms, 3),
+                "gpu_idle_under_5pct_fraction": (
+                    round(idle_under_5_ms / sampled_window_ms, 6) if sampled_window_ms else ""
+                ),
+                "gpu_avg_util_pct": round(avg_util, 3) if avg_util is not None else "",
+                "gpu_median_util_pct": round(median_util, 3) if median_util is not None else "",
+                "gpu_max_util_pct": round(max_util, 3) if max_util is not None else "",
+                "sglang_batch_count": batch_count,
+                "sglang_batch_window_ms": round(batch_window_ms, 3) if batch_window_ms is not None else "",
+                "sglang_run_batch_busy_ms": round(batch_busy_ms, 3) if batch_count else "",
+                "sglang_batch_duty_fraction": (
+                    round(batch_busy_ms / batch_window_ms, 6) if batch_window_ms else ""
+                ),
+                "sglang_inter_batch_gap_ms": round(inter_batch_gap_ms, 3) if batch_count else "",
+                "sglang_gap_after_nonempty_queue_ms": round(gap_after_nonempty_queue_ms, 3) if batch_count else "",
+                "sglang_gap_after_empty_queue_ms": round(gap_after_empty_queue_ms, 3) if batch_count else "",
+                "sglang_gap_after_nonempty_queue_fraction": (
+                    round(gap_after_nonempty_queue_ms / inter_batch_gap_ms, 6) if inter_batch_gap_ms else ""
+                ),
+                "sglang_single_request_batch_fraction": (
+                    round(sum(1 for value in request_counts if value == 1) / len(request_counts), 6)
+                    if request_counts
+                    else ""
+                ),
+                "sglang_batch_request_count_median": (
+                    round(statistics.median(request_counts), 3) if request_counts else ""
+                ),
+                "sglang_batch_request_count_max": round(max(request_counts), 3) if request_counts else "",
+                "sglang_extend_tokens_median": (
+                    round(statistics.median(extend_tokens), 3) if extend_tokens else ""
+                ),
+                "sglang_extend_tokens_max": round(max(extend_tokens), 3) if extend_tokens else "",
+                "gpu_avg_util_during_run_batch_pct": (
+                    round(statistics.mean(samples_during_batch), 3) if samples_during_batch else ""
+                ),
+                "gpu_median_util_during_run_batch_pct": (
+                    round(statistics.median(samples_during_batch), 3) if samples_during_batch else ""
+                ),
+                "gpu_avg_util_outside_run_batch_pct": (
+                    round(statistics.mean(samples_outside_batch), 3) if samples_outside_batch else ""
+                ),
+                "gpu_median_util_outside_run_batch_pct": (
+                    round(statistics.median(samples_outside_batch), 3) if samples_outside_batch else ""
+                ),
+                "gpu_idle_measurement_status": status,
+            }
+        )
+    return out
+
+
+def event_offset_ms(event: dict[str, Any], workload_start_ns: int) -> float | None:
+    ts_ns = timestamp_ns(event.get("ts_ns"))
+    if not ts_ns or not workload_start_ns:
+        return None
+    return (ts_ns - workload_start_ns) / 1_000_000.0
+
+
+def collect_controller_idle_gap_audit(root: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    row_by_case: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        case_id = str(row.get("case_id") or "")
+        if not case_id:
+            continue
+        is_target_replay = str(row.get("request_group") or "target") == "target" and str(row.get("phase") or "") == "replay"
+        if case_id not in row_by_case or is_target_replay:
+            row_by_case[case_id] = row
+
+    out: list[dict[str, Any]] = []
+    min_gap_ms = float(os.environ.get("CONTROLLER_IDLE_AUDIT_MIN_GAP_MS", "25") or "25")
+    near_ms = float(os.environ.get("CONTROLLER_IDLE_AUDIT_NEAR_MS", "25") or "25")
+    trace_patterns = (
+        '"event": "m27.workload_start"',
+        '"event": "m27.request.start"',
+        '"event": "m27.request.end"',
+        '"event": "scheduler.run_batch.end"',
+        '"event": "m27.controller_oracle_safe_sjf.candidate_queued"',
+        '"event": "m27.controller_oracle_safe_sjf.decision"',
+        '"event": "m27.controller_admission_gate.background_request_blocked"',
+    )
+    for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        case_id = case_dir.name
+        metadata = row_by_case.get(case_id, {})
+        trace_rows = read_jsonl_matching(case_dir / "m27_trace.jsonl", trace_patterns)
+        gateway_events = read_jsonl(case_dir / "harness_gateway_events.jsonl")
+        if not trace_rows and not gateway_events:
+            continue
+
+        workload_start = next((row for row in trace_rows if row.get("event") == "m27.workload_start"), {})
+        workload_start_ns = timestamp_ns(workload_start.get("ts_ns"))
+        request_starts = [
+            row
+            for row in trace_rows
+            if row.get("event") == "m27.request.start"
+            and timestamp_ns(row.get("ts_ns"))
+            and str(row.get("phase") or "") in {"initial_turn", "replay", "pressure_filler", "speculative_prefill"}
+        ]
+        request_ends = [
+            row
+            for row in trace_rows
+            if row.get("event") == "m27.request.end"
+            and timestamp_ns(row.get("ts_ns"))
+            and str(row.get("phase") or "") in {"initial_turn", "replay", "pressure_filler", "speculative_prefill"}
+        ]
+        gateway_request_ts = [
+            timestamp_ns(row.get("ts_ns"))
+            for row in gateway_events
+            if row.get("event") == "gateway.request_received" and timestamp_ns(row.get("ts_ns"))
+        ]
+        gateway_done_ts = [
+            timestamp_ns(row.get("ts_ns"))
+            for row in gateway_events
+            if row.get("event") == "gateway.forwarded_request" and timestamp_ns(row.get("ts_ns"))
+        ]
+        trace_request_ts = [timestamp_ns(row.get("ts_ns")) for row in request_starts if timestamp_ns(row.get("ts_ns"))]
+        trace_done_ts = [timestamp_ns(row.get("ts_ns")) for row in request_ends if timestamp_ns(row.get("ts_ns"))]
+        start_ts = min(gateway_request_ts or trace_request_ts or [0])
+        end_ts = max(gateway_done_ts or trace_done_ts or [0])
+        if not start_ts or not end_ts or end_ts <= start_ts:
+            continue
+        if not workload_start_ns:
+            workload_start_ns = start_ts
+
+        batch_intervals: list[tuple[int, int, dict[str, Any]]] = []
+        for row in trace_rows:
+            if row.get("event") != "scheduler.run_batch.end":
+                continue
+            end_ns = timestamp_ns(row.get("ts_ns"))
+            duration_ms = optional_float(row.get("duration_ms"))
+            if not end_ns or duration_ms is None:
+                continue
+            start_ns = end_ns - int(duration_ms * 1_000_000)
+            batch_intervals.append((start_ns, end_ns, row))
+        batch_intervals.sort(key=lambda item: item[0])
+
+        boundaries: list[tuple[int, int, str]] = []
+        if batch_intervals:
+            if batch_intervals[0][0] > start_ts:
+                boundaries.append((start_ts, batch_intervals[0][0], "before_first_sglang_batch"))
+            for previous, current in zip(batch_intervals, batch_intervals[1:]):
+                boundaries.append((previous[1], current[0], "between_sglang_batches"))
+            if end_ts > batch_intervals[-1][1]:
+                boundaries.append((batch_intervals[-1][1], end_ts, "after_last_sglang_batch"))
+        else:
+            boundaries.append((start_ts, end_ts, "no_sglang_batch_observed"))
+
+        gpu_samples = read_csv_table(case_dir / "gpu_utilization_samples.csv")
+        parsed_gpu_samples = [
+            (timestamp_ns(row.get("ts_ns")), optional_float(row.get("utilization_gpu_pct")))
+            for row in gpu_samples
+        ]
+        parsed_gpu_samples = [(ts, util) for ts, util in parsed_gpu_samples if ts and util is not None]
+
+        def events_between(events: list[dict[str, Any]], gap_start: int, gap_end: int, padding_ms: float = 0.0) -> list[dict[str, Any]]:
+            pad_ns = int(padding_ms * 1_000_000)
+            return [
+                row
+                for row in events
+                if (ts := timestamp_ns(row.get("ts_ns"))) and gap_start - pad_ns <= ts <= gap_end + pad_ns
+            ]
+
+        sjf_candidates = [
+            row for row in trace_rows if row.get("event") == "m27.controller_oracle_safe_sjf.candidate_queued"
+        ]
+        sjf_decisions = [
+            row for row in trace_rows if row.get("event") == "m27.controller_oracle_safe_sjf.decision"
+        ]
+        admission_blocks = [
+            row for row in trace_rows if row.get("event") == "m27.controller_admission_gate.background_request_blocked"
+        ]
+
+        for index, (gap_start, gap_end, location) in enumerate(boundaries, start=1):
+            if gap_end <= gap_start:
+                continue
+            gap_ms = (gap_end - gap_start) / 1_000_000.0
+            if gap_ms < min_gap_ms:
+                continue
+            starts_inside = events_between(request_starts, gap_start, gap_end)
+            ends_inside = events_between(request_ends, gap_start, gap_end)
+            holds_near = [
+                row
+                for row in events_between(sjf_decisions, gap_start, gap_end, near_ms)
+                if str(row.get("decision") or "") == "hold"
+            ]
+            admits_near = [
+                row
+                for row in events_between(sjf_decisions, gap_start, gap_end, near_ms)
+                if str(row.get("decision") or "") == "admit"
+            ]
+            blocks_near = events_between(admission_blocks, gap_start, gap_end, near_ms)
+            candidates_before = [
+                row for row in sjf_candidates if timestamp_ns(row.get("ts_ns")) and timestamp_ns(row.get("ts_ns")) <= gap_end
+            ]
+            decided_before_ids = {
+                str(row.get("request_id") or "")
+                for row in sjf_decisions
+                if timestamp_ns(row.get("ts_ns")) and timestamp_ns(row.get("ts_ns")) <= gap_end
+            }
+            active_pending = [
+                row
+                for row in candidates_before
+                if str(row.get("request_id") or "") not in decided_before_ids
+            ]
+            gpu_utils = [util for ts, util in parsed_gpu_samples if gap_start <= ts <= gap_end]
+            reason_detail = ""
+            next_replay_due = ""
+            shortest_estimate = ""
+            safety_margin = ""
+            max_in_flight = ""
+            require_fit = ""
+            idle_override = ""
+            representative_hold = holds_near[-1] if holds_near else {}
+            representative_admit = admits_near[-1] if admits_near else {}
+            representative_candidate = active_pending[0] if active_pending else (candidates_before[-1] if candidates_before else {})
+            facts = representative_hold or representative_admit or representative_candidate
+            if facts:
+                next_replay_due = facts.get("time_until_next_replay_ms", "")
+                shortest_estimate = facts.get("estimated_runtime_ms", "")
+                safety_margin = facts.get("safety_margin_ms", "")
+                max_in_flight = facts.get("max_in_flight", "")
+                require_fit = facts.get("require_fit_before_replay", "")
+                idle_override = facts.get("idle_override", "")
+
+            if holds_near:
+                idle_reason = "replay_too_close"
+                reason_detail = str(representative_hold.get("reason") or "SJF held filler because no pending filler fit before next replay")
+            elif blocks_near:
+                idle_reason = "admission_gate_blocked"
+                reason_detail = "controller admission gate blocked background work during replay-critical window"
+            elif admits_near:
+                idle_reason = "backend_submit_or_batching_gap"
+                reason_detail = str(representative_admit.get("reason") or "controller admitted filler, but no SGLang batch was active yet")
+            elif starts_inside:
+                idle_reason = "backend_submit_gap"
+                reason_detail = "request entered the gateway during the gap, but SGLang batch activity was not observed until later"
+            elif active_pending:
+                idle_reason = "pending_filler_unclassified"
+                reason_detail = "filler candidate existed, but no nearby SJF hold/admit decision explained this exact gap"
+            else:
+                idle_reason = "no_pending_work"
+                reason_detail = "no pending SJF filler candidate or request submission was visible during this idle gap"
+
+            out.append(
+                {
+                    "harness": metadata.get("harness", ""),
+                    "harness_label": metadata.get("harness_label", ""),
+                    "pressure_level": metadata.get("pressure_level", ""),
+                    "pressure_level_label": metadata.get("pressure_level_label", ""),
+                    "mode": metadata.get("mode", ""),
+                    "mode_label": metadata.get("mode_label", ""),
+                    "signal_bucket": chart_signal_bucket(metadata) if metadata else "",
+                    "signal_bucket_label": chart_signal_label(chart_signal_bucket(metadata)) if metadata else "",
+                    "case_id": case_id,
+                    "case_dir": str(case_dir),
+                    "gap_index": index,
+                    "gap_start_ms": round((gap_start - workload_start_ns) / 1_000_000.0, 3),
+                    "gap_end_ms": round((gap_end - workload_start_ns) / 1_000_000.0, 3),
+                    "gap_duration_ms": round(gap_ms, 3),
+                    "gap_location": location,
+                    "idle_reason": idle_reason,
+                    "reason_detail": reason_detail,
+                    "pending_sjf_candidates_before_gap": len(active_pending),
+                    "sjf_hold_events_near_gap": len(holds_near),
+                    "sjf_admit_events_near_gap": len(admits_near),
+                    "admission_gate_blocks_near_gap": len(blocks_near),
+                    "request_starts_inside_gap": len(starts_inside),
+                    "request_ends_inside_gap": len(ends_inside),
+                    "next_replay_due_in_ms": next_replay_due,
+                    "shortest_filler_estimated_runtime_ms": shortest_estimate,
+                    "safety_margin_ms": safety_margin,
+                    "max_in_flight": max_in_flight,
+                    "require_fit_before_replay": require_fit,
+                    "idle_override": idle_override,
+                    "gpu_avg_util_pct_in_gap": round(statistics.mean(gpu_utils), 3) if gpu_utils else "",
+                    "gpu_samples_in_gap": len(gpu_utils),
+                }
+            )
+    return out
+
+
+def _join_limited(values: list[Any], limit: int = 8) -> str:
+    text_values = [str(value) for value in values if str(value or "")]
+    if len(text_values) <= limit:
+        return ";".join(text_values)
+    return ";".join(text_values[:limit] + [f"...+{len(text_values) - limit} more"])
+
+
+def _event_label(row: dict[str, Any]) -> str:
+    return str(row.get("label") or row.get("request_id") or row.get("agent_request_id") or "")
+
+
+def collect_idle_gap_case_studies(
+    root: Path,
+    rows: list[dict[str, Any]],
+    audit_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    row_by_case: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        case_id = str(row.get("case_id") or "")
+        if not case_id:
+            continue
+        is_target_replay = str(row.get("request_group") or "target") == "target" and str(row.get("phase") or "") == "replay"
+        if case_id not in row_by_case or is_target_replay:
+            row_by_case[case_id] = row
+
+    max_gaps_per_case = int(os.environ.get("IDLE_GAP_CASE_STUDY_MAX_GAPS_PER_CASE", "8") or "8")
+    min_gap_ms = float(os.environ.get("IDLE_GAP_CASE_STUDY_MIN_GAP_MS", "250") or "250")
+    trace_patterns = (
+        '"event": "m27.workload_start"',
+        '"event": "m27.request.start"',
+        '"event": "m27.request.end"',
+        '"event": "m27.tool_wait.start"',
+        '"event": "m27.tool_wait.end"',
+        '"event": "scheduler.run_batch.end"',
+    )
+
+    audits_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in audit_rows:
+        case_id = str(row.get("case_id") or "")
+        if case_id:
+            audits_by_case[case_id].append(row)
+
+    out: list[dict[str, Any]] = []
+    for case_id, case_audits in sorted(audits_by_case.items()):
+        selected_audits = sorted(
+            [row for row in case_audits if float_value(row.get("gap_duration_ms")) >= min_gap_ms],
+            key=lambda row: float_value(row.get("gap_duration_ms")),
+            reverse=True,
+        )[:max_gaps_per_case]
+        if not selected_audits:
+            continue
+
+        case_dir = root / case_id
+        trace_rows = read_jsonl_matching(case_dir / "m27_trace.jsonl", trace_patterns)
+        gateway_events = read_jsonl(case_dir / "harness_gateway_events.jsonl")
+        if not trace_rows and not gateway_events:
+            continue
+
+        workload_start = next((row for row in trace_rows if row.get("event") == "m27.workload_start"), {})
+        workload_start_ns = timestamp_ns(workload_start.get("ts_ns"))
+        if not workload_start_ns:
+            all_ts = [
+                timestamp_ns(row.get("ts_ns"))
+                for row in [*trace_rows, *gateway_events]
+                if timestamp_ns(row.get("ts_ns"))
+            ]
+            workload_start_ns = min(all_ts) if all_ts else 0
+        if not workload_start_ns:
+            continue
+
+        def absolute_from_offset_ms(value: Any) -> int:
+            return workload_start_ns + int(float_value(value) * 1_000_000)
+
+        def between(events: list[dict[str, Any]], start_ns: int, end_ns: int) -> list[dict[str, Any]]:
+            return [
+                row
+                for row in events
+                if (ts := timestamp_ns(row.get("ts_ns"))) and start_ns <= ts <= end_ns
+            ]
+
+        request_starts = [row for row in trace_rows if row.get("event") == "m27.request.start"]
+        request_ends = [row for row in trace_rows if row.get("event") == "m27.request.end"]
+        tool_wait_starts = [row for row in trace_rows if row.get("event") == "m27.tool_wait.start"]
+        tool_wait_ends = [row for row in trace_rows if row.get("event") == "m27.tool_wait.end"]
+        gateway_receives = [row for row in gateway_events if row.get("event") == "gateway.request_received"]
+        gateway_forwards = [row for row in gateway_events if row.get("event") == "gateway.forwarded_request"]
+
+        tool_wait_end_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in tool_wait_ends:
+            key = (str(row.get("session_id") or ""), str(row.get("tool_wait_step") or ""))
+            tool_wait_end_by_key[key] = row
+
+        tool_wait_intervals: list[tuple[int, int, dict[str, Any]]] = []
+        for row in tool_wait_starts:
+            start_ns = timestamp_ns(row.get("ts_ns"))
+            if not start_ns:
+                continue
+            key = (str(row.get("session_id") or ""), str(row.get("tool_wait_step") or ""))
+            end_row = tool_wait_end_by_key.get(key, {})
+            end_ns = timestamp_ns(end_row.get("ts_ns"))
+            if not end_ns:
+                due_offset_ms = optional_float(row.get("replay_due_offset_ms"))
+                duration_ms = optional_float(row.get("tool_wait_ms"))
+                if due_offset_ms is not None:
+                    end_ns = absolute_from_offset_ms(due_offset_ms)
+                elif duration_ms is not None:
+                    end_ns = start_ns + int(duration_ms * 1_000_000)
+            if end_ns and end_ns > start_ns:
+                tool_wait_intervals.append((start_ns, end_ns, row))
+
+        batch_intervals: list[tuple[int, int, dict[str, Any]]] = []
+        for row in trace_rows:
+            if row.get("event") != "scheduler.run_batch.end":
+                continue
+            end_ns = timestamp_ns(row.get("ts_ns"))
+            duration_ms = optional_float(row.get("duration_ms"))
+            if not end_ns or duration_ms is None:
+                continue
+            start_ns = end_ns - int(duration_ms * 1_000_000)
+            batch_intervals.append((start_ns, end_ns, row))
+        batch_intervals.sort(key=lambda item: item[0])
+
+        def batch_summary(row: dict[str, Any]) -> tuple[str, str, str]:
+            batch = ((row.get("kv_context") or {}).get("batch") or {})
+            scheduler_state = ((row.get("kv_context") or {}).get("scheduler_state") or {})
+            return (
+                str(batch.get("request_count") or ""),
+                str(scheduler_state.get("waiting_queue_len") or ""),
+                str(batch.get("extend_num_tokens") or ""),
+            )
+
+        metadata = row_by_case.get(case_id, {})
+        for rank, audit in enumerate(selected_audits, start=1):
+            gap_start_ns = absolute_from_offset_ms(audit.get("gap_start_ms"))
+            gap_end_ns = absolute_from_offset_ms(audit.get("gap_end_ms"))
+            if gap_end_ns <= gap_start_ns:
+                continue
+            starts_inside = between(request_starts, gap_start_ns, gap_end_ns)
+            ends_inside = between(request_ends, gap_start_ns, gap_end_ns)
+            receives_inside = between(gateway_receives, gap_start_ns, gap_end_ns)
+            forwards_inside = between(gateway_forwards, gap_start_ns, gap_end_ns)
+            active_waits = [
+                row for start_ns, end_ns, row in tool_wait_intervals
+                if start_ns <= gap_end_ns and end_ns >= gap_start_ns
+            ]
+            wait_ends_after_start = [
+                end_ns for start_ns, end_ns, _ in tool_wait_intervals if gap_start_ns <= end_ns
+            ]
+            next_tool_wait_end_in_ms = (
+                round((min(wait_ends_after_start) - gap_start_ns) / 1_000_000.0, 3)
+                if wait_ends_after_start
+                else ""
+            )
+
+            before_batches = [batch for batch in batch_intervals if batch[1] <= gap_start_ns]
+            after_batches = [batch for batch in batch_intervals if batch[0] >= gap_end_ns]
+            before_batch = before_batches[-1] if before_batches else None
+            after_batch = after_batches[0] if after_batches else None
+            before_request_count = before_waiting = before_tokens = ""
+            after_request_count = after_waiting = after_tokens = ""
+            batch_after_starts_in_ms: str | float = ""
+            if before_batch:
+                before_request_count, before_waiting, before_tokens = batch_summary(before_batch[2])
+            if after_batch:
+                after_request_count, after_waiting, after_tokens = batch_summary(after_batch[2])
+                batch_after_starts_in_ms = round((after_batch[0] - gap_end_ns) / 1_000_000.0, 3)
+
+            reason = str(audit.get("idle_reason") or "unknown_gap")
+            if reason == "no_pending_work" and active_waits:
+                summary = (
+                    f"GPU gap overlapped {len(active_waits)} active tool wait(s); no ready request was visible "
+                    "until a later request resumed."
+                )
+            elif starts_inside:
+                summary = (
+                    f"{len(starts_inside)} request(s) became ready inside the gap, but visible SGLang batch work "
+                    "started later."
+                )
+            elif reason == "replay_too_close":
+                summary = "Controller held filler because the next replay deadline was too close for the estimated filler runtime."
+            elif reason == "admission_gate_blocked":
+                summary = "Controller admission gate intentionally blocked background work during the replay-critical window."
+            elif reason == "no_pending_work":
+                summary = "No ready request or active tool-wait explanation was visible in the collected trace for this gap."
+            else:
+                summary = str(audit.get("reason_detail") or reason.replace("_", " "))
+
+            out.append(
+                {
+                    "harness": metadata.get("harness", audit.get("harness", "")),
+                    "harness_label": metadata.get("harness_label", audit.get("harness_label", "")),
+                    "pressure_level": metadata.get("pressure_level", audit.get("pressure_level", "")),
+                    "pressure_level_label": metadata.get("pressure_level_label", audit.get("pressure_level_label", "")),
+                    "mode": metadata.get("mode", audit.get("mode", "")),
+                    "mode_label": metadata.get("mode_label", audit.get("mode_label", "")),
+                    "signal_bucket": audit.get("signal_bucket", chart_signal_bucket(metadata) if metadata else ""),
+                    "signal_bucket_label": audit.get("signal_bucket_label", chart_signal_label(chart_signal_bucket(metadata)) if metadata else ""),
+                    "case_id": case_id,
+                    "case_dir": str(case_dir),
+                    "gap_index": audit.get("gap_index", ""),
+                    "gap_rank_in_case": rank,
+                    "gap_start_ms": audit.get("gap_start_ms", ""),
+                    "gap_end_ms": audit.get("gap_end_ms", ""),
+                    "gap_duration_ms": audit.get("gap_duration_ms", ""),
+                    "gap_location": audit.get("gap_location", ""),
+                    "idle_reason": reason,
+                    "plain_english_summary": summary,
+                    "active_tool_wait_count": len(active_waits),
+                    "active_tool_wait_labels": _join_limited([_event_label(row) for row in active_waits]),
+                    "active_tool_wait_classes": _join_limited([row.get("tool_wait_class") for row in active_waits]),
+                    "next_tool_wait_end_in_ms": next_tool_wait_end_in_ms,
+                    "request_starts_inside_gap": len(starts_inside),
+                    "request_start_labels": _join_limited([_event_label(row) for row in starts_inside]),
+                    "request_start_phases": _join_limited([row.get("phase") for row in starts_inside]),
+                    "request_start_groups": _join_limited([row.get("request_group") for row in starts_inside]),
+                    "request_ends_inside_gap": len(ends_inside),
+                    "request_end_labels": _join_limited([_event_label(row) for row in ends_inside]),
+                    "gateway_receives_inside_gap": len(receives_inside),
+                    "gateway_receive_labels": _join_limited([_event_label(row) for row in receives_inside]),
+                    "gateway_forwards_inside_gap": len(forwards_inside),
+                    "gateway_forward_labels": _join_limited([_event_label(row) for row in forwards_inside]),
+                    "batch_before_request_count": before_request_count,
+                    "batch_before_waiting_queue_len": before_waiting,
+                    "batch_before_extend_tokens": before_tokens,
+                    "batch_after_starts_in_ms": batch_after_starts_in_ms,
+                    "batch_after_request_count": after_request_count,
+                    "batch_after_waiting_queue_len": after_waiting,
+                    "batch_after_extend_tokens": after_tokens,
+                    "gpu_avg_util_pct_in_gap": audit.get("gpu_avg_util_pct_in_gap", ""),
+                    "gpu_samples_in_gap": audit.get("gpu_samples_in_gap", ""),
+                }
+            )
     return out
 
 
@@ -3246,6 +4803,13 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         "controller_priority_demotion_admission_medium",
         "controller_priority_demotion_admission_hard",
         "controller_priority_demotion_admission_earlyprepare",
+        "controller_oracle_timeline",
+        "controller_oracle_safe_sjf",
+        "controller_oracle_safe_sjf_balanced",
+        "controller_oracle_safe_sjf_aggressive",
+        "controller_oracle_safe_sjf_maxfill",
+        "controller_priority_demotion_calibrated_admission",
+        "controller_oracle_exact_runtime_admission",
         "controller_priority_demotion_admission_shorthand",
     }:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
@@ -3261,6 +4825,10 @@ def chart_signal_bucket(row: dict[str, Any]) -> str:
         if has_value(row.get("sglang_priority")) and str(row.get("gateway_priority_translation_source") or "").startswith("controller_"):
             return "controller_full_chunked"
         return "baseline"
+    if mode == "storage_hicache_baseline":
+        return "storage_baseline"
+    if mode == "storage_hicache_controller_prefetch":
+        return "storage_controller_prefetch"
     for bucket, config in CHART_SIGNAL_BUCKETS.items():
         if mode in config["modes"]:
             return bucket
@@ -3620,6 +5188,9 @@ def render_cost_accounting_chart(
             "controller_priority_demotion_admission_medium",
             "controller_priority_demotion_admission_hard",
             "controller_priority_demotion_admission_earlyprepare",
+            "controller_oracle_timeline",
+            "controller_priority_demotion_calibrated_admission",
+            "controller_oracle_exact_runtime_admission",
             "controller_full",
             "controller_full_chunked",
         )
@@ -3796,6 +5367,12 @@ def render_cost_accounting_chart(
                     if bucket == "controller_priority_demotion_admission_hard"
                     else "PDA earlyprepare"
                     if bucket == "controller_priority_demotion_admission_earlyprepare"
+                    else "oracle timeline"
+                    if bucket == "controller_oracle_timeline"
+                    else "calibrated admission"
+                    if bucket == "controller_priority_demotion_calibrated_admission"
+                    else "oracle exact runtime"
+                    if bucket == "controller_oracle_exact_runtime_admission"
                     else "chunked controller"
                     if bucket == "controller_full_chunked"
                     else "controller"
@@ -4133,6 +5710,408 @@ def render_cost_accounting_section(cost_rows: list[dict[str, Any]]) -> str:
         f'<div class="card">{debt_delta_chart}</div>'
         "<details><summary>Open cost accounting summary table</summary>"
         f'<div class="card">{cost_table}</div>'
+        "</details>"
+    )
+
+
+def render_gpu_idle_section(gpu_idle_rows: list[dict[str, Any]]) -> str:
+    if not gpu_idle_rows:
+        return (
+            "<h2>GPU Idle Accounting</h2>"
+            "<p>No per-case GPU idle rows found. Re-run after per-case GPU sampling is enabled.</p>"
+        )
+    compact_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "signal_bucket_label",
+        "workload_window_ms",
+        "gpu_sample_count",
+        "gpu_idle_under_5pct_ms",
+        "gpu_idle_under_5pct_fraction",
+        "gpu_busy_over_50pct_ms",
+        "gpu_avg_util_pct",
+        "gpu_median_util_pct",
+        "gpu_max_util_pct",
+        "gpu_idle_measurement_status",
+    ]
+    root_cause_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "signal_bucket_label",
+        "sglang_batch_count",
+        "sglang_batch_window_ms",
+        "sglang_run_batch_busy_ms",
+        "sglang_batch_duty_fraction",
+        "sglang_inter_batch_gap_ms",
+        "sglang_gap_after_nonempty_queue_ms",
+        "sglang_gap_after_nonempty_queue_fraction",
+        "sglang_single_request_batch_fraction",
+        "sglang_batch_request_count_median",
+        "sglang_batch_request_count_max",
+        "sglang_extend_tokens_median",
+        "gpu_avg_util_pct",
+        "gpu_avg_util_during_run_batch_pct",
+        "gpu_avg_util_outside_run_batch_pct",
+    ]
+    root_cause_table = render_table(gpu_idle_rows, root_cause_columns)
+    table = render_table(gpu_idle_rows, compact_columns)
+    return (
+        "<h2>GPU Idle Accounting</h2>"
+        "<p>This estimates whether a mode protected replay latency by leaving GPU capacity unused. "
+        "Idle means sampled whole-GPU compute utilization was below 5% during that case's workload window.</p>"
+        "<p>The root-cause table separates hardware samples from SGLang scheduler activity. "
+        "If utilization is high during <code>run_batch</code> but low outside it, the bottleneck is idle time between launched batches, not weak GPU use inside each batch.</p>"
+        f'<div class="card"><h3>GPU Utilization Root Cause</h3>{root_cause_table}</div>'
+        "<details><summary>Open compact GPU idle summary</summary>"
+        f'<div class="card">{table}</div>'
+        "</details>"
+    )
+
+
+def render_controller_idle_gap_audit_chart(audit_rows: list[dict[str, Any]]) -> str:
+    grouped: dict[tuple[str, str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    reasons: list[str] = []
+    for row in audit_rows:
+        key = (
+            str(row.get("pressure_level") or ""),
+            str(row.get("harness") or ""),
+            str(row.get("mode") or ""),
+        )
+        reason = str(row.get("idle_reason") or "unknown_gap")
+        if reason not in reasons:
+            reasons.append(reason)
+        grouped[key][reason] += float_value(row.get("gap_duration_ms"))
+    if not grouped:
+        return "<p>No classified idle gaps found.</p>"
+
+    reason_colors = {
+        "no_pending_work": "#94a3b8",
+        "replay_too_close": "#dc2626",
+        "admission_gate_blocked": "#f97316",
+        "backend_submit_or_batching_gap": "#7c3aed",
+        "backend_submit_gap": "#9333ea",
+        "pending_filler_unclassified": "#0d9488",
+        "unknown_gap": "#64748b",
+    }
+    ordered_reasons = [
+        reason
+        for reason in (
+            "replay_too_close",
+            "admission_gate_blocked",
+            "backend_submit_or_batching_gap",
+            "backend_submit_gap",
+            "pending_filler_unclassified",
+            "no_pending_work",
+            "unknown_gap",
+        )
+        if reason in reasons
+    ]
+    pressures = [pressure for pressure in PRESSURE_ORDER if any(key[0] == pressure for key in grouped)]
+    group_keys = sorted(
+        grouped,
+        key=lambda key: (
+            PRESSURE_ORDER.index(key[0]) if key[0] in PRESSURE_ORDER else 999,
+            HARNESS_LABELS.get(key[1], key[1]),
+            MODE_ORDER.index(key[2]) if key[2] in MODE_ORDER else 999,
+        ),
+    )
+    max_total = max(sum(reason_map.values()) for reason_map in grouped.values())
+    width = max(980, len(group_keys) * 88 + 180)
+    height = 420
+    left = 96
+    right = 36
+    top = 62
+    bottom = 280
+    chart_h = bottom - top
+    plot_w = width - left - right
+    bar_w = min(34.0, max(12.0, plot_w / max(1, len(group_keys)) * 0.52))
+
+    def y_pos(value: float) -> float:
+        if max_total <= 0:
+            return bottom
+        return bottom - (value / max_total) * chart_h
+
+    lines = [
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Controller idle gap reason chart">',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        '<text x="0" y="22" font-size="18" font-weight="800" fill="#111827">Controller Idle Gap Reasons</text>',
+        '<text x="0" y="44" font-size="12" fill="#64748b">Stacked bars show classified idle time between observed SGLang batches. Lower is better.</text>',
+        f'<line x1="{left}" x2="{width-right}" y1="{bottom}" y2="{bottom}" stroke="#111827" stroke-width="1.5"/>',
+    ]
+    for frac in (0.25, 0.5, 0.75, 1.0):
+        value = max_total * frac
+        y = y_pos(value)
+        lines.append(f'<line x1="{left}" x2="{width-right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        lines.append(f'<text x="{left-8}" y="{y+4:.1f}" text-anchor="end" font-size="10" fill="#475569">{html.escape(compact_ms(value))}</text>')
+    pressure_bounds: dict[str, list[float]] = defaultdict(list)
+    for index, key in enumerate(group_keys):
+        pressure, harness, mode = key
+        cx = left + (index + 0.5) * (plot_w / max(1, len(group_keys)))
+        pressure_bounds[pressure].append(cx)
+        y_cursor = bottom
+        title_parts = [
+            PRESSURE_LABELS.get(pressure, pressure),
+            HARNESS_SHORT_LABELS.get(harness, HARNESS_LABELS.get(harness, harness)),
+            MODE_LABELS.get(mode, mode),
+        ]
+        lines.append(f'<g><title>{html.escape(" | ".join(title_parts))}</title>')
+        for reason in ordered_reasons:
+            value = grouped[key].get(reason, 0.0)
+            if value <= 0:
+                continue
+            y = y_pos(sum(grouped[key].get(r, 0.0) for r in ordered_reasons[: ordered_reasons.index(reason) + 1]))
+            h = y_cursor - y
+            lines.append(
+                f'<rect x="{cx - bar_w/2:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(1.0, h):.1f}" '
+                f'fill="{reason_colors.get(reason, "#64748b")}" rx="2"/>'
+            )
+            y_cursor = y
+        total = sum(grouped[key].values())
+        lines.append(svg_text_label(compact_ms(total), cx, y_cursor - 6, "#334155"))
+        label = f"{HARNESS_SHORT_LABELS.get(harness, harness)}\n{chart_signal_label(chart_signal_bucket({'mode': mode}))}"
+        lines.append(
+            f'<text x="{cx:.1f}" y="{bottom+18:.1f}" text-anchor="middle" font-size="9" font-weight="700" fill="#334155">'
+            f'{html.escape(HARNESS_SHORT_LABELS.get(harness, harness))}</text>'
+        )
+        lines.append(
+            f'<text x="{cx:.1f}" y="{bottom+32:.1f}" text-anchor="middle" font-size="8" fill="#64748b">'
+            f'{html.escape(MODE_LABELS.get(mode, mode).split(" = ")[0])}</text>'
+        )
+        lines.append("</g>")
+    for pressure in pressures:
+        xs = pressure_bounds.get(pressure, [])
+        if not xs:
+            continue
+        lines.append(
+            f'<text x="{statistics.mean(xs):.1f}" y="{bottom+58:.1f}" text-anchor="middle" font-size="13" '
+            f'font-weight="800" fill="#111827">{html.escape(PRESSURE_LABELS.get(pressure, pressure))}</text>'
+        )
+    legend_x = left
+    legend_y = height - 48
+    cursor = legend_x
+    lines.append(f'<text x="{cursor:.1f}" y="{legend_y:.1f}" font-size="11" font-weight="800" fill="#111827">Reasons</text>')
+    cursor += 62
+    for reason in ordered_reasons:
+        label = reason.replace("_", " ")
+        color = reason_colors.get(reason, "#64748b")
+        lines.append(f'<rect x="{cursor:.1f}" y="{legend_y-10:.1f}" width="12" height="12" fill="{color}" rx="2"/>')
+        lines.append(f'<text x="{cursor+18:.1f}" y="{legend_y:.1f}" font-size="10" fill="#334155">{html.escape(label)}</text>')
+        cursor += max(118.0, len(label) * 6.0 + 32.0)
+    lines.append(f'<text transform="translate(28 {top + chart_h / 2:.1f}) rotate(-90)" text-anchor="middle" font-size="13" font-weight="700">idle gap ms</text>')
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def render_controller_idle_gap_audit_section(audit_rows: list[dict[str, Any]]) -> str:
+    if not audit_rows:
+        return (
+            "<h2>Controller Utilization Audit</h2>"
+            "<p>No controller idle-gap audit rows found. Rebuild from a run directory with trace files.</p>"
+        )
+    largest_rows = sorted(
+        audit_rows,
+        key=lambda row: float_value(row.get("gap_duration_ms")),
+        reverse=True,
+    )[:30]
+    reason_summary: list[dict[str, Any]] = []
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in audit_rows:
+        grouped[
+            (
+                str(row.get("harness") or ""),
+                str(row.get("pressure_level") or ""),
+                str(row.get("mode") or ""),
+                str(row.get("idle_reason") or "unknown_gap"),
+            )
+        ].append(row)
+    for (harness, pressure, mode, reason), group_rows in sorted(
+        grouped.items(),
+        key=lambda item: (
+            PRESSURE_ORDER.index(item[0][1]) if item[0][1] in PRESSURE_ORDER else 999,
+            HARNESS_LABELS.get(item[0][0], item[0][0]),
+            MODE_ORDER.index(item[0][2]) if item[0][2] in MODE_ORDER else 999,
+            item[0][3],
+        ),
+    ):
+        total_gap_ms = sum(float_value(row.get("gap_duration_ms")) for row in group_rows)
+        reason_summary.append(
+            {
+                "harness_label": HARNESS_LABELS.get(harness, harness),
+                "pressure_level_label": PRESSURE_LABELS.get(pressure, pressure),
+                "mode_label": MODE_LABELS.get(mode, mode),
+                "idle_reason": reason,
+                "idle_gap_count": len(group_rows),
+                "sum_idle_gap_ms": round(total_gap_ms, 3),
+                "median_idle_gap_ms": round(statistics.median([float_value(row.get("gap_duration_ms")) for row in group_rows]), 3),
+            }
+        )
+    compact_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "mode_label",
+        "idle_reason",
+        "idle_gap_count",
+        "sum_idle_gap_ms",
+        "median_idle_gap_ms",
+    ]
+    largest_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "mode_label",
+        "gap_index",
+        "gap_duration_ms",
+        "gap_location",
+        "idle_reason",
+        "reason_detail",
+        "pending_sjf_candidates_before_gap",
+        "sjf_hold_events_near_gap",
+        "sjf_admit_events_near_gap",
+        "admission_gate_blocks_near_gap",
+        "request_starts_inside_gap",
+        "next_replay_due_in_ms",
+        "shortest_filler_estimated_runtime_ms",
+        "safety_margin_ms",
+        "gpu_avg_util_pct_in_gap",
+    ]
+    return (
+        "<h2>Controller Utilization Audit</h2>"
+        "<p>This section asks: when SGLang had visible gaps between batches, why did the controller not launch more filler work? "
+        "Reasons are best-effort classifications from controller traces, gateway request timing, and SGLang batch events.</p>"
+        f'<div class="card">{render_controller_idle_gap_audit_chart(audit_rows)}</div>'
+        f'<div class="card"><h3>Idle Time By Reason</h3>{render_table(reason_summary, compact_columns)}</div>'
+        "<details><summary>Open largest idle gaps</summary>"
+        f'<div class="card">{render_table(largest_rows, largest_columns)}</div>'
+        "</details>"
+    )
+
+
+def render_controller_decision_quality_section(
+    quality_rows: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+) -> str:
+    if not quality_rows:
+        return (
+            "<h2>Controller Decision Quality Ledger</h2>"
+            "<p>No controller decision-quality rows found. Rebuild from a run that includes controller admission or SJF trace rows.</p>"
+        )
+    summary_table = render_table(summary_rows, CONTROLLER_DECISION_QUALITY_SUMMARY_COLUMNS)
+    worst_rows = sorted(
+        [
+            row
+            for row in quality_rows
+            if str(row.get("verdict") or "") == "bad_admit_overshot_replay"
+        ],
+        key=lambda row: float_value(row.get("actual_overshoot_ms")),
+        reverse=True,
+    )[:30]
+    raw_preview = sorted(
+        quality_rows,
+        key=lambda row: (
+            PRESSURE_ORDER.index(str(row.get("pressure_level") or ""))
+            if str(row.get("pressure_level") or "") in PRESSURE_ORDER
+            else 999,
+            str(row.get("harness_label") or ""),
+            str(row.get("mode_label") or ""),
+            float_value(row.get("decision_offset_ms")),
+        ),
+    )[:80]
+    important_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "mode_label",
+        "decision",
+        "filler_request_id",
+        "estimated_runtime_ms",
+        "actual_runtime_ms",
+        "time_until_next_replay_ms",
+        "safety_margin_ms",
+        "actual_overshoot_ms",
+        "idle_gap_reason",
+        "verdict",
+    ]
+    return (
+        "<h2>Controller Decision Quality Ledger</h2>"
+        "<p>This section asks whether each controller admit/hold choice was actually good after the run finished. "
+        "For admitted filler, a bad row means the filler ran past the target replay due time. For held filler, the report only marks possible over-holds when the hold lines up with visible idle time.</p>"
+        f'<div class="card"><h3>Decision Quality Summary</h3>{summary_table}</div>'
+        "<details><summary>Open worst admitted overshoots</summary>"
+        f'<div class="card">{render_table(worst_rows, important_columns) if worst_rows else "<p>No admitted filler overshot a target replay due time.</p>"}</div>'
+        "</details>"
+        "<details><summary>Open decision ledger preview</summary>"
+        f'<div class="card">{render_table(raw_preview, important_columns)}</div>'
+        "</details>"
+    )
+
+
+def render_idle_gap_case_study_section(case_study_rows: list[dict[str, Any]]) -> str:
+    if not case_study_rows:
+        return (
+            "<h2>Idle Gap Case Studies</h2>"
+            "<p>No idle-gap case-study rows found. Rebuild from a run directory with raw trace files.</p>"
+        )
+    display_rows = sorted(
+        case_study_rows,
+        key=lambda row: (
+            PRESSURE_ORDER.index(str(row.get("pressure_level") or "")) if str(row.get("pressure_level") or "") in PRESSURE_ORDER else 999,
+            HARNESS_LABELS.get(str(row.get("harness") or ""), str(row.get("harness") or "")),
+            MODE_ORDER.index(str(row.get("mode") or "")) if str(row.get("mode") or "") in MODE_ORDER else 999,
+            int(float_value(row.get("gap_rank_in_case"), 999)),
+        ),
+    )
+    compact_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "mode_label",
+        "gap_rank_in_case",
+        "gap_duration_ms",
+        "idle_reason",
+        "plain_english_summary",
+        "active_tool_wait_count",
+        "request_starts_inside_gap",
+        "gateway_receives_inside_gap",
+        "gateway_forwards_inside_gap",
+        "batch_before_request_count",
+        "batch_before_waiting_queue_len",
+        "batch_after_starts_in_ms",
+        "batch_after_request_count",
+        "gpu_avg_util_pct_in_gap",
+    ]
+    details_columns = [
+        "harness_label",
+        "pressure_level_label",
+        "mode_label",
+        "gap_index",
+        "gap_rank_in_case",
+        "gap_start_ms",
+        "gap_end_ms",
+        "gap_duration_ms",
+        "idle_reason",
+        "plain_english_summary",
+        "active_tool_wait_labels",
+        "active_tool_wait_classes",
+        "next_tool_wait_end_in_ms",
+        "request_start_labels",
+        "request_start_phases",
+        "request_start_groups",
+        "request_end_labels",
+        "gateway_receive_labels",
+        "gateway_forward_labels",
+        "batch_before_request_count",
+        "batch_before_waiting_queue_len",
+        "batch_before_extend_tokens",
+        "batch_after_starts_in_ms",
+        "batch_after_request_count",
+        "batch_after_waiting_queue_len",
+        "batch_after_extend_tokens",
+        "gpu_avg_util_pct_in_gap",
+    ]
+    return (
+        "<h2>Idle Gap Case Studies</h2>"
+        "<p>This section turns the largest idle gaps into concrete stories. It shows whether the gap overlapped tool waits, "
+        "whether requests became ready during the gap, whether the gateway forwarded them, and what the adjacent SGLang batches looked like.</p>"
+        f'<div class="card"><h3>Largest Gap Stories</h3>{render_table(display_rows[:40], compact_columns)}</div>'
+        "<details><summary>Open detailed gap context</summary>"
+        f'<div class="card">{render_table(display_rows, details_columns)}</div>'
         "</details>"
     )
 
@@ -4673,6 +6652,11 @@ def render_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     cost_accounting_rows: list[dict[str, Any]],
+    gpu_idle_rows: list[dict[str, Any]],
+    controller_idle_gap_audit_rows: list[dict[str, Any]],
+    idle_gap_case_study_rows: list[dict[str, Any]],
+    controller_decision_quality_rows: list[dict[str, Any]],
+    controller_decision_quality_summary_rows: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
@@ -4695,6 +6679,13 @@ def render_html(
     chart_controls = render_chart_controls(rows)
     chart_interaction_script = render_chart_interaction_script()
     cost_accounting_section = render_cost_accounting_section(cost_accounting_rows)
+    gpu_idle_section = render_gpu_idle_section(gpu_idle_rows)
+    controller_idle_gap_audit_section = render_controller_idle_gap_audit_section(controller_idle_gap_audit_rows)
+    idle_gap_case_study_section = render_idle_gap_case_study_section(idle_gap_case_study_rows)
+    controller_decision_quality_section = render_controller_decision_quality_section(
+        controller_decision_quality_rows,
+        controller_decision_quality_summary_rows,
+    )
     controller_harness_exposure_section = render_controller_harness_exposure_section(controller_harness_exposure_rows)
     signal_family_definition_table = render_signal_family_definition_table()
     harness_cache_decision_table = render_harness_cache_decision_table()
@@ -4829,6 +6820,10 @@ code {{ background: #eef2ff; padding: 1px 4px; border-radius: 4px; }}
 <div class="card">{chart_controls}{chart}</div>
 {controller_harness_exposure_section}
 {cost_accounting_section}
+{gpu_idle_section}
+{controller_idle_gap_audit_section}
+{controller_decision_quality_section}
+{idle_gap_case_study_section}
  	<h2>Evidence Tables</h2>
  	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
  	<p><a href="evidence_tables.html">Open the evidence tables / raw proof file</a>.</p>
@@ -4843,6 +6838,11 @@ def render_evidence_html(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     cost_accounting_rows: list[dict[str, Any]],
+    gpu_idle_rows: list[dict[str, Any]],
+    controller_idle_gap_audit_rows: list[dict[str, Any]],
+    idle_gap_case_study_rows: list[dict[str, Any]],
+    controller_decision_quality_rows: list[dict[str, Any]],
+    controller_decision_quality_summary_rows: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
@@ -4910,6 +6910,20 @@ def render_evidence_html(
     sglang_cache_path_audit_table = render_table(sglang_cache_path_audit_rows, SGLANG_CACHE_PATH_AUDIT_COLUMNS)
     nat_inferred_priority_profile_table = render_nat_inferred_priority_profile(nat_inferred_priority_profile)
     cost_accounting_table = render_table(cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
+    gpu_idle_table = render_table(gpu_idle_rows, GPU_IDLE_COLUMNS)
+    controller_idle_gap_audit_table = render_table(
+        controller_idle_gap_audit_rows,
+        CONTROLLER_IDLE_GAP_AUDIT_COLUMNS,
+    )
+    idle_gap_case_study_table = render_table(idle_gap_case_study_rows, IDLE_GAP_CASE_STUDY_COLUMNS)
+    controller_decision_quality_summary_table = render_table(
+        controller_decision_quality_summary_rows,
+        CONTROLLER_DECISION_QUALITY_SUMMARY_COLUMNS,
+    )
+    controller_decision_quality_table = render_table(
+        controller_decision_quality_rows,
+        CONTROLLER_DECISION_QUALITY_COLUMNS,
+    )
     raw_table = render_table(
         rows,
         [
@@ -4996,6 +7010,19 @@ a {{ color: #2563eb; }}
 <h2>System Cost Accounting</h2>
 <p>This table sums TTFT and positive replay debt for target versus filler/background requests. Filler debt is present only when the filler request had a replay due timestamp.</p>
 <div class="card">{cost_accounting_table if cost_accounting_rows else "<p>No system cost accounting rows found.</p>"}</div>
+<h2>GPU Idle Accounting</h2>
+<p>This table estimates per-case whole-GPU idle time from <code>nvidia-smi</code> samples. Idle means GPU utilization was below 5% during that case's gateway workload window.</p>
+<div class="card">{gpu_idle_table if gpu_idle_rows else "<p>No GPU idle accounting rows found in this run.</p>"}</div>
+<h2>Controller Idle Gap Audit</h2>
+<p>This table classifies visible gaps between SGLang batches using controller/SJF decisions, admission-gate events, and request timing. It is a best-effort explanation for why filler work was not launched in each gap.</p>
+<div class="card">{controller_idle_gap_audit_table if controller_idle_gap_audit_rows else "<p>No controller idle-gap audit rows found in this run.</p>"}</div>
+<h2>Controller Decision Quality Ledger</h2>
+<p>This table correlates controller admit/hold choices with request outcomes. It is the request-level proof for whether a filler admission fit before replay, overshot replay, or whether a hold lined up with idle time.</p>
+<div class="card">{controller_decision_quality_summary_table if controller_decision_quality_summary_rows else "<p>No controller decision-quality summary rows found in this run.</p>"}</div>
+<div class="card">{controller_decision_quality_table if controller_decision_quality_rows else "<p>No controller decision-quality rows found in this run.</p>"}</div>
+<h2>Idle Gap Case Studies</h2>
+<p>This table adds request-level context around the largest idle gaps: tool waits, request starts, gateway receive/forward events, and adjacent SGLang batch shape.</p>
+<div class="card">{idle_gap_case_study_table if idle_gap_case_study_rows else "<p>No idle-gap case-study rows found in this run.</p>"}</div>
 <h2>Targeted KV Prefetch Proof</h2>
 <p>This table appears when the run includes <code>controller_targeted_kv_prefetch</code>. It proves whether the controller requested explicit target-prefix KV movement, whether the active SGLang adapter exposed a direct hook, and whether load-back or host-to-device movement was observed before replay compute.</p>
 <div class="card">{targeted_kv_prefetch_table if targeted_kv_prefetch_rows else "<p>No targeted KV prefetch rows found in this run.</p>"}</div>
@@ -5030,6 +7057,11 @@ def write_manifest(
     rows: list[dict[str, Any]],
     summary: list[dict[str, Any]],
     cost_accounting_rows: list[dict[str, Any]],
+    gpu_idle_rows: list[dict[str, Any]],
+    controller_idle_gap_audit_rows: list[dict[str, Any]],
+    idle_gap_case_study_rows: list[dict[str, Any]],
+    controller_decision_quality_rows: list[dict[str, Any]],
+    controller_decision_quality_summary_rows: list[dict[str, Any]],
     speculative_prefill_rows: list[dict[str, Any]],
     targeted_kv_prefetch_rows: list[dict[str, Any]],
     controller_demote_restore_rows: list[dict[str, Any]],
@@ -5054,6 +7086,11 @@ def write_manifest(
         "row_count": len(rows),
         "summary_row_count": len(summary),
         "cost_accounting_row_count": len(cost_accounting_rows),
+        "gpu_idle_row_count": len(gpu_idle_rows),
+        "controller_idle_gap_audit_row_count": len(controller_idle_gap_audit_rows),
+        "idle_gap_case_study_row_count": len(idle_gap_case_study_rows),
+        "controller_decision_quality_row_count": len(controller_decision_quality_rows),
+        "controller_decision_quality_summary_row_count": len(controller_decision_quality_summary_rows),
         "speculative_prefill_row_count": len(speculative_prefill_rows),
         "targeted_kv_prefetch_row_count": len(targeted_kv_prefetch_rows),
         "controller_demote_restore_row_count": len(controller_demote_restore_rows),
@@ -5094,10 +7131,32 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     run_config = read_run_config(args.run_config or args.out_dir / "run_config.env")
     if args.rows_csv:
+        raw_root_available = args.root.exists()
         rows = read_csv_table(args.rows_csv)
         target_rows = target_replay_rows(rows)
         summary = read_csv_table(args.out_dir / "global_kv_readiness_by_mode_summary.csv") or summarize(target_rows)
         cost_accounting_rows = collect_cost_accounting_summary(rows)
+        gpu_idle_rows = read_csv_table(args.out_dir / "gpu_idle_summary.csv") or collect_gpu_idle_summary(
+            args.root,
+            rows,
+            args.out_dir / "gpu_utilization_samples.csv",
+        )
+        controller_idle_gap_audit_rows = read_csv_table(
+            args.out_dir / "controller_idle_gap_audit.csv"
+        ) or (collect_controller_idle_gap_audit(args.root, rows) if raw_root_available else [])
+        idle_gap_case_study_rows = read_csv_table(
+            args.out_dir / "idle_gap_case_studies.csv"
+        ) or (collect_idle_gap_case_studies(args.root, rows, controller_idle_gap_audit_rows) if raw_root_available else [])
+        controller_decision_quality_rows = read_csv_table(
+            args.out_dir / "controller_decision_quality.csv"
+        ) or (
+            collect_controller_decision_quality(args.root, rows, controller_idle_gap_audit_rows)
+            if raw_root_available
+            else []
+        )
+        controller_decision_quality_summary_rows = read_csv_table(
+            args.out_dir / "controller_decision_quality_summary.csv"
+        ) or summarize_controller_decision_quality(controller_decision_quality_rows)
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
         targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
         controller_demote_restore_rows = read_csv_table(args.out_dir / "controller_demote_restore_proof.csv")
@@ -5113,6 +7172,17 @@ def main() -> None:
         target_rows = target_replay_rows(rows)
         summary = summarize(target_rows)
         cost_accounting_rows = collect_cost_accounting_summary(rows)
+        gpu_idle_rows = collect_gpu_idle_summary(args.root, rows, args.out_dir / "gpu_utilization_samples.csv")
+        controller_idle_gap_audit_rows = collect_controller_idle_gap_audit(args.root, rows)
+        idle_gap_case_study_rows = collect_idle_gap_case_studies(args.root, rows, controller_idle_gap_audit_rows)
+        controller_decision_quality_rows = collect_controller_decision_quality(
+            args.root,
+            rows,
+            controller_idle_gap_audit_rows,
+        )
+        controller_decision_quality_summary_rows = summarize_controller_decision_quality(
+            controller_decision_quality_rows
+        )
         speculative_prefill_rows = collect_speculative_prefill_proof(args.root, target_rows)
         targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, target_rows)
         controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, target_rows)
@@ -5133,6 +7203,30 @@ def main() -> None:
     write_csv(args.out_dir / "global_kv_readiness_by_mode.csv", rows, RAW_COLUMNS)
     write_csv(args.out_dir / "global_kv_readiness_by_mode_summary.csv", summary, SUMMARY_COLUMNS)
     write_csv(args.out_dir / "cost_accounting_summary.csv", cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
+    write_csv(args.out_dir / "gpu_idle_summary.csv", gpu_idle_rows, GPU_IDLE_COLUMNS)
+    write_csv(
+        args.out_dir / "controller_idle_gap_audit.csv",
+        controller_idle_gap_audit_rows,
+        CONTROLLER_IDLE_GAP_AUDIT_COLUMNS,
+    )
+    atomic_write_json(args.out_dir / "controller_idle_gap_audit.json", controller_idle_gap_audit_rows)
+    write_csv(args.out_dir / "idle_gap_case_studies.csv", idle_gap_case_study_rows, IDLE_GAP_CASE_STUDY_COLUMNS)
+    atomic_write_json(args.out_dir / "idle_gap_case_studies.json", idle_gap_case_study_rows)
+    write_csv(
+        args.out_dir / "controller_decision_quality.csv",
+        controller_decision_quality_rows,
+        CONTROLLER_DECISION_QUALITY_COLUMNS,
+    )
+    atomic_write_json(args.out_dir / "controller_decision_quality.json", controller_decision_quality_rows)
+    write_csv(
+        args.out_dir / "controller_decision_quality_summary.csv",
+        controller_decision_quality_summary_rows,
+        CONTROLLER_DECISION_QUALITY_SUMMARY_COLUMNS,
+    )
+    atomic_write_json(
+        args.out_dir / "controller_decision_quality_summary.json",
+        controller_decision_quality_summary_rows,
+    )
     write_csv(args.out_dir / "speculative_prefill_proof.csv", speculative_prefill_rows, SPECULATIVE_PREFILL_COLUMNS)
     write_csv(args.out_dir / "targeted_kv_prefetch_proof.csv", targeted_kv_prefetch_rows, TARGETED_KV_PREFETCH_COLUMNS)
     write_csv(
@@ -5156,6 +7250,11 @@ def main() -> None:
         rows,
         summary,
         cost_accounting_rows,
+        gpu_idle_rows,
+        controller_idle_gap_audit_rows,
+        idle_gap_case_study_rows,
+        controller_decision_quality_rows,
+        controller_decision_quality_summary_rows,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
@@ -5175,6 +7274,11 @@ def main() -> None:
         rows,
         summary,
         cost_accounting_rows,
+        gpu_idle_rows,
+        controller_idle_gap_audit_rows,
+        idle_gap_case_study_rows,
+        controller_decision_quality_rows,
+        controller_decision_quality_summary_rows,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
@@ -5204,6 +7308,11 @@ def main() -> None:
         rows,
         summary,
         cost_accounting_rows,
+        gpu_idle_rows,
+        controller_idle_gap_audit_rows,
+        idle_gap_case_study_rows,
+        controller_decision_quality_rows,
+        controller_decision_quality_summary_rows,
         speculative_prefill_rows,
         targeted_kv_prefetch_rows,
         controller_demote_restore_rows,
@@ -5224,6 +7333,37 @@ def main() -> None:
         atomic_write_text(args.latest_root / "evidence_tables.html", evidence_html_text)
         atomic_write_text(args.latest_root / "latest_evidence_tables.html", evidence_html_text)
         write_csv(args.latest_root / "latest_cost_accounting_summary.csv", cost_accounting_rows, COST_ACCOUNTING_COLUMNS)
+        write_csv(args.latest_root / "latest_gpu_idle_summary.csv", gpu_idle_rows, GPU_IDLE_COLUMNS)
+        write_csv(
+            args.latest_root / "latest_controller_idle_gap_audit.csv",
+            controller_idle_gap_audit_rows,
+            CONTROLLER_IDLE_GAP_AUDIT_COLUMNS,
+        )
+        atomic_write_json(args.latest_root / "latest_controller_idle_gap_audit.json", controller_idle_gap_audit_rows)
+        write_csv(
+            args.latest_root / "latest_idle_gap_case_studies.csv",
+            idle_gap_case_study_rows,
+            IDLE_GAP_CASE_STUDY_COLUMNS,
+        )
+        atomic_write_json(args.latest_root / "latest_idle_gap_case_studies.json", idle_gap_case_study_rows)
+        write_csv(
+            args.latest_root / "latest_controller_decision_quality.csv",
+            controller_decision_quality_rows,
+            CONTROLLER_DECISION_QUALITY_COLUMNS,
+        )
+        atomic_write_json(
+            args.latest_root / "latest_controller_decision_quality.json",
+            controller_decision_quality_rows,
+        )
+        write_csv(
+            args.latest_root / "latest_controller_decision_quality_summary.csv",
+            controller_decision_quality_summary_rows,
+            CONTROLLER_DECISION_QUALITY_SUMMARY_COLUMNS,
+        )
+        atomic_write_json(
+            args.latest_root / "latest_controller_decision_quality_summary.json",
+            controller_decision_quality_summary_rows,
+        )
         write_csv(
             args.latest_root / "latest_controller_harness_exposure.csv",
             controller_harness_exposure_rows,
@@ -5235,6 +7375,11 @@ def main() -> None:
             rows,
             summary,
             cost_accounting_rows,
+            gpu_idle_rows,
+            controller_idle_gap_audit_rows,
+            idle_gap_case_study_rows,
+            controller_decision_quality_rows,
+            controller_decision_quality_summary_rows,
             speculative_prefill_rows,
             targeted_kv_prefetch_rows,
             controller_demote_restore_rows,

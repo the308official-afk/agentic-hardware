@@ -7,18 +7,18 @@ import base64
 import hashlib
 import json
 import os
-import random
 import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
 from agentic_kv.controller import (
+    AIConfiguratorRuntimeCalibrator,
     BackendCapabilities,
     ControllerEvent,
     ControllerPolicy,
@@ -33,6 +33,63 @@ from agentic_kv.controller import (
     PolicyConfig,
     SGLangTargetedKVPrefetchBackendAdapter,
     build_harness_controller_signal,
+)
+from agentic_kv.controller.modes import (
+    CONTROLLER_ADMISSION_CONTROL_MODE,
+    CONTROLLER_DEMOTE_RESTORE_MODE,
+    CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
+    CONTROLLER_FULL_MODE,
+    CONTROLLER_OBSERVE_ONLY_MODE,
+    CONTROLLER_ORACLE_SAFE_SJF_MODES,
+    CONTROLLER_ORACLE_SAFE_SJF_MODE,
+    CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE,
+    CONTROLLER_ORACLE_TIMELINE_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE,
+    CONTROLLER_PRIORITY_DEMOTE_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SHORTHAND_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
+    CONTROLLER_SCHEDULER_PRIORITY_MODE,
+    CONTROLLER_SPECULATIVE_PRELOAD_MODE,
+    CONTROLLER_TARGETED_KV_PREFETCH_MODE,
+    HARNESS_EMITTED_SIGNAL_MODE,
+    HARNESS_NATIVE_CACHE_MODE,
+    NAT_INFERRED_PRIORITY_MODE,
+    STORAGE_HICACHE_BASELINE_MODE,
+    STORAGE_HICACHE_CONTROLLER_PREFETCH_MODE,
+    SUPPORTED_MODES,
+    controller_admission_aggressiveness,
+    controller_admission_control_mode,
+    controller_admission_lead_ms,
+    controller_demote_restore_mode,
+    controller_full_mode,
+    controller_mode,
+    controller_observe_only_mode,
+    controller_priority_demotion_admission_mode,
+    controller_safe_sjf_degree,
+    controller_scheduler_priority_mode,
+    controller_speculative_preload_mode,
+    controller_targeted_kv_prefetch_mode,
+    storage_hicache_mode,
+)
+from agentic_kv.controller.runtime_calibration import OracleExactRuntimeTable, RuntimeCalibrator, oracle_runtime_key
+from agentic_kv.controller.sjf import SafeFillerAdmissionScheduler
+from agentic_kv.controller.workload import (
+    REALISTIC_AGENTIC_PROFILE,
+    SYNTHETIC_PRESSURE_PROFILE,
+    ToolWaitSpec,
+    WorkloadShape,
+    estimate_request_runtime_ms,
+    normalize_agentic_workload_profile,
+    realistic_initial_shape,
+    realistic_replay_shape,
+    sample_tool_wait_specs,
+    tool_wait_distribution,
+    workload_meta,
 )
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
@@ -49,58 +106,6 @@ SUPPORTED_HARNESSES = (
     "openclaw",
     "hermes_agent",
 )
-SUPPORTED_MODES = (
-    "no_prefetch",
-    "e2e_priority_hints",
-    "pre_harness_priority_hints",
-    "nat_inferred_priority_hints",
-    "e2e_priority_hints_speculative_prefill",
-    "no_cache_signal",
-    "harness_native_cache_lowered",
-    "harness_emitted_signals",
-    "controller_observe_only",
-    "controller_scheduler_priority",
-    "controller_speculative_preload",
-    "controller_targeted_kv_prefetch",
-    "controller_demote_restore",
-    "controller_priority_demote",
-    "controller_priority_demotion_admission",
-    "controller_priority_demotion_admission_soft",
-    "controller_priority_demotion_admission_medium",
-    "controller_priority_demotion_admission_hard",
-    "controller_priority_demotion_admission_earlyprepare",
-    "controller_priority_demotion_admission_shorthand",
-    "controller_admission_control",
-    "controller_full",
-    "controller_full_chunked_prefill",
-)
-
-NAT_INFERRED_PRIORITY_MODE = "nat_inferred_priority_hints"
-HARNESS_NATIVE_CACHE_MODE = "harness_native_cache_lowered"
-HARNESS_EMITTED_SIGNAL_MODE = "harness_emitted_signals"
-CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
-CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
-CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
-CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
-CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
-CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admission"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE = "controller_priority_demotion_admission_soft"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE = "controller_priority_demotion_admission_medium"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE = "controller_priority_demotion_admission_hard"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE = "controller_priority_demotion_admission_earlyprepare"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SHORTHAND_MODE = "controller_priority_demotion_admission_shorthand"
-CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES = {
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE,
-    CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SHORTHAND_MODE,
-}
-CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
-CONTROLLER_FULL_MODE = "controller_full"
-CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
 NAT_INFERRED_PRIORITY_NODES = (
     {
         "workflow_node": "initial_turn",
@@ -130,22 +135,6 @@ class HarnessPair:
     prompt_tokens: int
 
 
-@dataclass(frozen=True)
-class ToolWaitSpec:
-    step_index: int
-    wait_ms: int
-    wait_class: str
-
-
-TOOL_WAIT_PROFILE_DISTRIBUTIONS = {
-    "agentic_mixed": (
-        ("quick", 70.0, 200),
-        ("moderate", 25.0, 2_000),
-        ("slow", 5.0, 20_000),
-    ),
-}
-
-
 def write_trace(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     row.setdefault("ts_ns", time.time_ns())
@@ -161,79 +150,85 @@ def env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def parse_tool_wait_profile_spec(spec: str) -> tuple[tuple[str, float, int], ...]:
-    out: list[tuple[str, float, int]] = []
-    for item in spec.split(","):
-        raw = item.strip()
-        if not raw:
-            continue
-        parts = raw.split(":")
-        if len(parts) == 1:
-            wait_class = "fixed"
-            weight_raw = "1"
-            wait_raw = parts[0]
-        elif len(parts) == 2:
-            wait_class = f"bucket_{len(out) + 1}"
-            weight_raw, wait_raw = parts
-        elif len(parts) == 3:
-            wait_class, weight_raw, wait_raw = parts
-        else:
-            raise ValueError(
-                "TOOL_WAIT_PROFILE_SPEC entries must be wait_ms, class:weight:wait_ms, or weight:wait_ms"
-            )
-        weight = float(weight_raw)
-        wait_ms = int(float(wait_raw))
-        if weight <= 0 or wait_ms < 0:
-            raise ValueError("tool wait profile weights must be positive and waits must be non-negative")
-        out.append((wait_class.strip() or f"bucket_{len(out) + 1}", weight, wait_ms))
-    if not out:
-        raise ValueError("TOOL_WAIT_PROFILE_SPEC did not contain any buckets")
-    return tuple(out)
+def optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
 
 
-def tool_wait_distribution(profile: str, base_wait_ms: int, custom_spec: str = "") -> tuple[tuple[str, float, int], ...]:
-    normalized = profile.strip().lower() if profile else "fixed"
-    if custom_spec.strip():
-        return parse_tool_wait_profile_spec(custom_spec)
-    if normalized in {"fixed", "pressure_fixed"}:
-        return (("pressure_fixed", 1.0, int(base_wait_ms)),)
+def env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
     try:
-        return TOOL_WAIT_PROFILE_DISTRIBUTIONS[normalized]
-    except KeyError as exc:
-        supported = ", ".join(["fixed", *sorted(TOOL_WAIT_PROFILE_DISTRIBUTIONS)])
-        raise ValueError(f"unknown tool wait profile {profile!r}; supported profiles: {supported}") from exc
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def sample_tool_wait_specs(
+def make_agentic_workload_prompt(
     *,
-    profile: str,
-    base_wait_ms: int,
-    custom_spec: str,
-    steps: int,
-    seed: int,
-    stream_key: str,
-) -> list[ToolWaitSpec]:
-    if steps < 1:
-        raise ValueError("TASK_REPLAY_STEPS must be at least 1")
-    distribution = tool_wait_distribution(profile, base_wait_ms, custom_spec)
-    if len(distribution) == 1:
-        wait_class, _, wait_ms = distribution[0]
-        return [ToolWaitSpec(step_index=idx, wait_ms=wait_ms, wait_class=wait_class) for idx in range(1, steps + 1)]
-
-    rng = random.Random(f"{seed}:{stream_key}:{profile}:{custom_spec}")
-    total_weight = sum(weight for _, weight, _ in distribution)
-    specs: list[ToolWaitSpec] = []
-    for idx in range(1, steps + 1):
-        pick = rng.random() * total_weight
-        cumulative = 0.0
-        selected = distribution[-1]
-        for bucket in distribution:
-            cumulative += bucket[1]
-            if pick <= cumulative:
-                selected = bucket
-                break
-        specs.append(ToolWaitSpec(step_index=idx, wait_ms=int(selected[2]), wait_class=str(selected[0])))
-    return specs
+    session_id: str,
+    shape: WorkloadShape,
+    role: str,
+    stage: str,
+    step_index: int,
+    total_steps: int,
+    previous_prompt: str = "",
+) -> str:
+    header = (
+        "Synthetic but trajectory-shaped coding-agent request.\n"
+        f"Session: {session_id}\n"
+        f"Role: {role}\n"
+        f"Stage: {stage}\n"
+        f"Workflow phase: {shape.phase}\n"
+        f"Request kind: {shape.kind}\n"
+        f"Step: {step_index}/{total_steps}\n"
+        f"Meaning: {shape.description}.\n"
+    )
+    if shape.kind == "planning_routing":
+        body = (
+            "The user asked for a repository change. Decide which files and tools are needed, "
+            "then produce a concise plan for the next model call."
+        )
+    elif shape.kind == "file_search_inspect":
+        body = (
+            "Tool output contains file paths, snippets, and search hits. Identify the relevant "
+            "files, preserve constraints, and choose the next safe action."
+        )
+    elif shape.kind == "patch_reasoning":
+        body = (
+            "The task now includes code context, an intended patch direction, and constraints. "
+            "Reason about the edit while preserving behavior outside the requested scope."
+        )
+    elif shape.kind == "test_build_reasoning":
+        body = (
+            "A command or test returned logs. Interpret the failure, decide whether it is caused "
+            "by the patch or environment, and choose the next action."
+        )
+    elif shape.kind == "review_final":
+        body = (
+            "Review the current state, summarize what changed, mention verification, and keep the "
+            "response useful for a developer reading the final report."
+        )
+    else:
+        body = (
+            "The session resumed after a slower external step. Reconstruct the state from the "
+            "stable context and continue without losing earlier constraints."
+        )
+    context_hint = (
+        "\n\nRepresentative trace fragments:\n"
+        "- system and developer constraints stay stable across turns\n"
+        "- tools include file reads, repo search, commands, tests, patch application, and review\n"
+        "- request priority is independent from this prompt shape unless the active mode supplies it\n"
+    )
+    prefix_budget = max(128, shape.prompt_tokens - estimate_tokens(header + body + context_hint) - 64)
+    stable_prefix = make_shared_prefix(f"{session_id}:{shape.kind}:{stage}:{step_index}", prefix_budget)
+    if previous_prompt and stage == "replay":
+        previous_summary = "\n\nPrior turn summary: " + previous_prompt[:300]
+    else:
+        previous_summary = ""
+    return f"{header}\n{stable_prefix}\n\n{body}{context_hint}{previous_summary}"
 
 
 def replay_label_for(session_id: str, step_index: int, total_steps: int) -> str:
@@ -307,80 +302,6 @@ def nat_inferred_priority_enabled(mode: str) -> bool:
 
 def harness_emitted_signal_mode(mode: str) -> bool:
     return mode == HARNESS_EMITTED_SIGNAL_MODE
-
-
-def controller_observe_only_mode(mode: str) -> bool:
-    return mode == CONTROLLER_OBSERVE_ONLY_MODE
-
-
-def controller_scheduler_priority_mode(mode: str) -> bool:
-    return mode == CONTROLLER_SCHEDULER_PRIORITY_MODE
-
-
-def controller_speculative_preload_mode(mode: str) -> bool:
-    return mode == CONTROLLER_SPECULATIVE_PRELOAD_MODE
-
-
-def controller_targeted_kv_prefetch_mode(mode: str) -> bool:
-    return mode == CONTROLLER_TARGETED_KV_PREFETCH_MODE
-
-
-def controller_demote_restore_mode(mode: str) -> bool:
-    return mode in {
-        CONTROLLER_DEMOTE_RESTORE_MODE,
-        CONTROLLER_PRIORITY_DEMOTE_MODE,
-        *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
-    }
-
-
-def controller_priority_demotion_admission_mode(mode: str) -> bool:
-    return mode in CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES
-
-
-def controller_admission_aggressiveness(mode: str) -> str:
-    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE:
-        return "earlyprepare"
-    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE:
-        return "soft"
-    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE:
-        return "medium"
-    if mode == CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE:
-        return "hard"
-    configured = os.environ.get("CONTROLLER_ADMISSION_AGGRESSIVENESS", "hard").strip().lower()
-    return configured if configured in {"soft", "medium", "hard"} else "hard"
-
-
-def controller_admission_lead_ms(mode: str, wait_ms: int) -> float:
-    aggressiveness = controller_admission_aggressiveness(mode)
-    if aggressiveness == "earlyprepare":
-        configured = int(os.environ.get("CONTROLLER_EARLYPREPARE_LEAD_MS", "500") or "500")
-        return float(min(wait_ms, max(0, configured)))
-    if aggressiveness == "hard":
-        return float(wait_ms)
-    if aggressiveness == "medium":
-        return max(25.0, float(wait_ms) * 0.5)
-    return max(25.0, float(wait_ms) * 0.25)
-
-
-def controller_admission_control_mode(mode: str) -> bool:
-    return mode == CONTROLLER_ADMISSION_CONTROL_MODE
-
-
-def controller_full_mode(mode: str) -> bool:
-    return mode in {CONTROLLER_FULL_MODE, CONTROLLER_FULL_CHUNKED_PREFILL_MODE}
-
-
-def controller_mode(mode: str) -> bool:
-    return (
-        controller_observe_only_mode(mode)
-        or controller_scheduler_priority_mode(mode)
-        or controller_speculative_preload_mode(mode)
-        or controller_targeted_kv_prefetch_mode(mode)
-        or controller_demote_restore_mode(mode)
-        or controller_priority_demotion_admission_mode(mode)
-        or controller_admission_control_mode(mode)
-        or controller_full_mode(mode)
-    )
 
 
 def nat_inferred_node_for_phase(phase: str) -> dict[str, Any]:
@@ -624,9 +545,22 @@ async def run_hatcher_request(gateway_base: str, model: str, prompt: str, meta: 
         "stream": False,
     }
     payload.update(outbound_priority_fields(meta, "openai_chat"))
-    async with httpx.AsyncClient(timeout=None) as client:
-        response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
-        response.raise_for_status()
+    attempts = max(1, int(os.environ.get("HARNESS_HTTP_RETRIES", "2") or "2"))
+    retry_delay_ms = max(0, int(os.environ.get("HARNESS_HTTP_RETRY_DELAY_MS", "250") or "250"))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=None, limits=httpx.Limits(max_keepalive_connections=0)) as client:
+                response = await client.post(f"{gateway_base.rstrip('/')}/v1/chat/completions", json=payload)
+                response.raise_for_status()
+                return
+        except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            await asyncio.sleep(retry_delay_ms / 1000.0)
+    assert last_error is not None
+    raise last_error
 
 
 async def run_gateway_background_warmup(gateway_base: str, model: str, prompt: str, meta: dict[str, Any]) -> None:
@@ -1316,11 +1250,26 @@ async def run_filler(
     filler_replay_deadlines: bool = False,
     demotion_state: dict[str, Any] | None = None,
     admission_gate_state: dict[str, Any] | None = None,
+    mode: str = "",
+    oracle_safety_margin_ms: int = 150,
+    safe_filler_scheduler: SafeFillerAdmissionScheduler | None = None,
+    agentic_workload_profile: str = SYNTHETIC_PRESSURE_PROFILE,
+    tool_wait_seed: int = 42,
+    trace_controller_completion_linkage: bool = False,
+    submit_request: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> None:
     def offset_ms() -> float:
         if workload_start is None:
             return 0.0
         return (time.perf_counter() - workload_start) * 1000.0
+
+    def filler_stream_key(filler_session: str, stage: str, step_index: int | None = None) -> str:
+        mode_part = "" if env_truthy("WORKLOAD_SHAPE_MODE_INDEPENDENT") else f":{meta_base.get('mode', '')}"
+        suffix = f":{stage}" if step_index is None else f":{stage}:{step_index}"
+        return (
+            f"{meta_base.get('harness', '')}:{meta_base.get('pressure_level', '')}"
+            f"{mode_part}:{filler_session}{suffix}"
+        )
 
     def current_meta_base() -> dict[str, Any]:
         if not demotion_state or not demotion_state.get("active"):
@@ -1360,6 +1309,95 @@ async def run_filler(
             },
         )
 
+    def write_completion_linkage(
+        meta: dict[str, Any],
+        admission_result: dict[str, Any] | None,
+        *,
+        request_id: str,
+        stage: str,
+        actual_start_offset_ms: float,
+        actual_finish_offset_ms: float,
+    ) -> None:
+        if not trace_controller_completion_linkage or trace is None or not admission_result:
+            return
+        if not admission_result.get("admitted_by_safe_sjf"):
+            return
+        target_due_offset_ms = optional_float(admission_result.get("target_replay_due_offset_ms"))
+        actual_runtime_ms = actual_finish_offset_ms - actual_start_offset_ms
+        actual_overshoot_ms = (
+            actual_finish_offset_ms - target_due_offset_ms
+            if target_due_offset_ms is not None
+            else None
+        )
+        estimated_runtime_ms = optional_float(admission_result.get("estimated_runtime_ms"))
+        estimation_error_ms = (
+            actual_runtime_ms - estimated_runtime_ms
+            if estimated_runtime_ms is not None
+            else None
+        )
+        write_trace(
+            trace,
+            {
+                "event": "m27.controller_completion_linkage",
+                "session_id": meta.get("session_id", ""),
+                "mode": meta.get("mode", ""),
+                "harness": meta.get("harness", ""),
+                "pressure_level": meta.get("pressure_level", ""),
+                "phase": meta.get("phase", ""),
+                "request_id": request_id,
+                "label": request_id,
+                "request_group": "filler",
+                "task_index": meta.get("task_index", ""),
+                "tool_wait_step": meta.get("tool_wait_step", ""),
+                "task_replay_steps": meta.get("task_replay_steps", ""),
+                "stage": stage,
+                "decision": admission_result.get("decision", ""),
+                "decision_id": admission_result.get("decision_id", ""),
+                "reason": admission_result.get("reason", ""),
+                "admission_seq": admission_result.get("admission_seq", ""),
+                "target_session_id": admission_result.get("target_session_id", ""),
+                "target_tool_wait_step": admission_result.get("target_tool_wait_step", ""),
+                "target_replay_due_offset_ms": round(target_due_offset_ms, 3)
+                if target_due_offset_ms is not None
+                else "",
+                "decision_offset_ms": admission_result.get("decision_offset_ms", ""),
+                "raw_estimated_runtime_ms": admission_result.get("raw_estimated_runtime_ms", ""),
+                "estimated_runtime_ms": round(estimated_runtime_ms, 3)
+                if estimated_runtime_ms is not None
+                else "",
+                "calibrated_runtime_ms": admission_result.get("calibrated_runtime_ms", ""),
+                "runtime_class": admission_result.get("runtime_class", ""),
+                "calibration_source": admission_result.get("calibration_source", ""),
+                "calibration_sample_count": admission_result.get("calibration_sample_count", ""),
+                "calibration_quantile": admission_result.get("calibration_quantile", ""),
+                "calibration_floor_ms": admission_result.get("calibration_floor_ms", ""),
+                "available_window_ms": admission_result.get("available_window_ms", ""),
+                "time_until_next_replay_ms": admission_result.get("time_until_next_replay_ms", ""),
+                "safety_margin_ms": admission_result.get("safety_margin_ms", ""),
+                "expected_finish_offset_ms": admission_result.get("expected_finish_offset_ms", ""),
+                "expected_overshoot_ms": admission_result.get("expected_overshoot_ms", ""),
+                "actual_start_offset_ms": round(actual_start_offset_ms, 3),
+                "actual_finish_offset_ms": round(actual_finish_offset_ms, 3),
+                "actual_runtime_ms": round(actual_runtime_ms, 3),
+                "estimation_error_ms": round(estimation_error_ms, 3)
+                if estimation_error_ms is not None
+                else "",
+                "actual_overshoot_ms": round(actual_overshoot_ms, 3)
+                if actual_overshoot_ms is not None
+                else "",
+                "verdict": (
+                    "good_admit_finished_before_replay_due"
+                    if actual_overshoot_ms is not None and actual_overshoot_ms <= 0
+                    else (
+                        "bad_admit_overshot_replay"
+                        if actual_overshoot_ms is not None
+                        else "unknown_admit_no_target_due"
+                    )
+                ),
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+
     async def wait_for_admission_if_needed(meta: dict[str, Any], *, request_id: str, stage: str) -> None:
         if not admission_gate_state or not admission_gate_state.get("active"):
             return
@@ -1370,6 +1408,55 @@ async def run_filler(
         gate_meta = admission_gate_state.get("meta")
         if not isinstance(gate_meta, dict):
             gate_meta = {}
+        if safe_filler_scheduler is not None and mode in CONTROLLER_ORACLE_SAFE_SJF_MODES:
+            return await safe_filler_scheduler.request(meta, request_id=request_id, stage=stage)
+        if mode == CONTROLLER_ORACLE_TIMELINE_MODE:
+            replay_due_offset_ms = float(gate_meta.get("replay_due_offset_ms") or 0)
+            time_until_replay_ms = replay_due_offset_ms - blocked_offset
+            estimated_runtime_ms = int(
+                meta.get("estimated_runtime_ms")
+                or estimate_request_runtime_ms(
+                    int(meta.get("prompt_tokens") or 0),
+                    int(meta.get("max_tokens") or 2),
+                )
+            )
+            fits_before_replay = estimated_runtime_ms + oracle_safety_margin_ms < time_until_replay_ms
+            decision = "admit" if fits_before_replay else "hold"
+            reason = (
+                "fits_before_next_target_replay"
+                if fits_before_replay
+                else "would_overlap_next_target_replay"
+            )
+            if trace is not None:
+                write_trace(
+                    trace,
+                    {
+                        "event": "m27.controller_oracle_timeline.admission_decision",
+                        "session_id": meta.get("session_id", ""),
+                        "mode": meta.get("mode", ""),
+                        "harness": meta.get("harness", ""),
+                        "pressure_level": meta.get("pressure_level", ""),
+                        "phase": meta.get("phase", ""),
+                        "request_id": request_id,
+                        "label": request_id,
+                        "task_index": meta.get("task_index", ""),
+                        "tool_wait_step": meta.get("tool_wait_step", ""),
+                        "task_replay_steps": meta.get("task_replay_steps", ""),
+                        "stage": stage,
+                        "decision": decision,
+                        "reason": reason,
+                        "estimated_runtime_ms": estimated_runtime_ms,
+                        "time_until_next_replay_ms": round(time_until_replay_ms, 3),
+                        "safety_margin_ms": oracle_safety_margin_ms,
+                        "next_replay_due_offset_ms": round(replay_due_offset_ms, 3),
+                        "gate_owner_session_id": gate_meta.get("session_id", ""),
+                        "gate_tool_wait_step": gate_meta.get("tool_wait_step", ""),
+                        "gate_open_offset_ms": gate_meta.get("open_offset_ms", ""),
+                        "offset_ms": round(blocked_offset, 3),
+                    },
+                )
+            if fits_before_replay:
+                return {"decision": "admit", "reason": reason, "admitted_by_safe_sjf": False}
         if trace is not None:
             write_trace(
                 trace,
@@ -1416,10 +1503,36 @@ async def run_filler(
                     "offset_ms": round(offset_ms(), 3),
                 },
             )
+        return {"decision": "admit", "reason": "gate_released_after_target_replay", "admitted_by_safe_sjf": False}
 
     filler_session = f"{pair.session_id}_pressure_{idx:03d}"
-    prompt = make_pressure_filler_prompt(filler_session, tokens)
     total_steps = max(1, len(wait_specs))
+    initial_workload_meta: dict[str, Any] = {
+        "agentic_workload_profile": agentic_workload_profile,
+        "workload_request_kind": "synthetic_pressure_filler",
+        "workload_phase_family": "pressure_filler",
+        "workload_prompt_tokens_target": tokens,
+        "workload_max_tokens": 2,
+        "workload_description": "fixed synthetic background pressure request",
+    }
+    initial_max_tokens = 2
+    if agentic_workload_profile == REALISTIC_AGENTIC_PROFILE:
+        initial_shape = realistic_initial_shape(
+            seed=tool_wait_seed,
+            stream_key=filler_stream_key(filler_session, "initial"),
+        )
+        prompt = make_agentic_workload_prompt(
+            session_id=filler_session,
+            shape=initial_shape,
+            role="filler",
+            stage="initial",
+            step_index=0,
+            total_steps=total_steps,
+        )
+        initial_max_tokens = initial_shape.max_tokens
+        initial_workload_meta = workload_meta(initial_shape, agentic_workload_profile)
+    else:
+        prompt = make_pressure_filler_prompt(filler_session, tokens)
     meta = {
         **current_meta_base(),
         "session_id": filler_session,
@@ -1427,15 +1540,36 @@ async def run_filler(
         "label": f"{filler_session}_initial" if filler_replay_deadlines else f"{filler_session}_request",
         "task_index": pair.task_index,
         "prompt_hash": prompt_hash(prompt),
+        "prompt_tokens": estimate_tokens(prompt),
         "priority_label": "low",
-        "max_tokens": 2,
+        "max_tokens": initial_max_tokens,
         "tool_wait_step": 0,
         "task_replay_steps": total_steps,
+        **initial_workload_meta,
     }
+    meta["estimated_runtime_ms"] = estimate_request_runtime_ms(int(meta["prompt_tokens"]), int(meta["max_tokens"]))
+    meta["oracle_runtime_key"] = oracle_runtime_key(meta)
     meta = attach_pre_harness_priority_intent(meta)
     write_background_reshape_signal(meta, request_id=str(meta["label"]), stage="initial")
-    await wait_for_admission_if_needed(meta, request_id=str(meta["label"]), stage="initial")
-    await run_hatcher_request(gateway_base, model, prompt, meta)
+    admission_result = await wait_for_admission_if_needed(meta, request_id=str(meta["label"]), stage="initial")
+    request_start_offset_ms = offset_ms()
+    try:
+        if submit_request is not None:
+            await submit_request(prompt, meta)
+        else:
+            await run_hatcher_request(gateway_base, model, prompt, meta)
+    finally:
+        request_finish_offset_ms = offset_ms()
+        write_completion_linkage(
+            meta,
+            admission_result,
+            request_id=str(meta["label"]),
+            stage="initial",
+            actual_start_offset_ms=request_start_offset_ms,
+            actual_finish_offset_ms=request_finish_offset_ms,
+        )
+        if safe_filler_scheduler is not None and admission_result and admission_result.get("admitted_by_safe_sjf"):
+            await safe_filler_scheduler.complete(str(meta["label"]))
     if not filler_replay_deadlines:
         return
 
@@ -1498,7 +1632,34 @@ async def run_filler(
                 },
             )
 
-        replay_prompt = filler_replay_prompt_for_step(current_prompt, filler_session, spec.step_index, total_steps)
+        replay_workload_meta: dict[str, Any] = {
+            "agentic_workload_profile": agentic_workload_profile,
+            "workload_request_kind": "synthetic_pressure_filler_replay",
+            "workload_phase_family": "pressure_filler",
+            "workload_prompt_tokens_target": estimate_tokens(current_prompt),
+            "workload_max_tokens": 2,
+            "workload_description": "fixed synthetic background replay request",
+        }
+        replay_max_tokens = 2
+        if agentic_workload_profile == REALISTIC_AGENTIC_PROFILE:
+            replay_shape = realistic_replay_shape(
+                wait_class=spec.wait_class,
+                seed=tool_wait_seed,
+                stream_key=filler_stream_key(filler_session, "replay", spec.step_index),
+            )
+            replay_prompt = make_agentic_workload_prompt(
+                session_id=filler_session,
+                shape=replay_shape,
+                role="filler",
+                stage="replay",
+                step_index=spec.step_index,
+                total_steps=total_steps,
+                previous_prompt=current_prompt,
+            )
+            replay_max_tokens = replay_shape.max_tokens
+            replay_workload_meta = workload_meta(replay_shape, agentic_workload_profile)
+        else:
+            replay_prompt = filler_replay_prompt_for_step(current_prompt, filler_session, spec.step_index, total_steps)
         replay_meta = {
             **current_meta_base(),
             "session_id": filler_session,
@@ -1507,18 +1668,42 @@ async def run_filler(
             "label": replay_label,
             "task_index": pair.task_index,
             "prompt_hash": prompt_hash(replay_prompt),
+            "prompt_tokens": estimate_tokens(replay_prompt),
             "priority_label": "low",
-            "max_tokens": 2,
+            "max_tokens": replay_max_tokens,
             "deadline_offset_ms": round(replay_due_ms, 3),
             "tool_wait_ms": wait_ms,
             "tool_wait_step": spec.step_index,
             "task_replay_steps": total_steps,
             "tool_wait_class": spec.wait_class,
+            **replay_workload_meta,
         }
+        replay_meta["estimated_runtime_ms"] = estimate_request_runtime_ms(
+            int(replay_meta["prompt_tokens"]),
+            int(replay_meta["max_tokens"]),
+        )
+        replay_meta["oracle_runtime_key"] = oracle_runtime_key(replay_meta)
         replay_meta = attach_pre_harness_priority_intent(replay_meta)
         write_background_reshape_signal(replay_meta, request_id=replay_label, stage="replay")
-        await wait_for_admission_if_needed(replay_meta, request_id=replay_label, stage="replay")
-        await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
+        admission_result = await wait_for_admission_if_needed(replay_meta, request_id=replay_label, stage="replay")
+        request_start_offset_ms = offset_ms()
+        try:
+            if submit_request is not None:
+                await submit_request(replay_prompt, replay_meta)
+            else:
+                await run_hatcher_request(gateway_base, model, replay_prompt, replay_meta)
+        finally:
+            request_finish_offset_ms = offset_ms()
+            write_completion_linkage(
+                replay_meta,
+                admission_result,
+                request_id=replay_label,
+                stage="replay",
+                actual_start_offset_ms=request_start_offset_ms,
+                actual_finish_offset_ms=request_finish_offset_ms,
+            )
+            if safe_filler_scheduler is not None and admission_result and admission_result.get("admitted_by_safe_sjf"):
+                await safe_filler_scheduler.complete(replay_label)
         if trace is not None:
             write_trace(
                 trace,
@@ -1558,7 +1743,7 @@ async def main_async() -> None:
     parser.add_argument(
         "--tool-wait-profile",
         default=os.environ.get("TOOL_WAIT_PROFILE", "fixed"),
-        help="Tool-wait profile to sample per replay step. Use fixed or agentic_mixed.",
+        help="Tool-wait profile to sample per replay step. Use fixed, agentic_mixed, or realistic_agentic_mix.",
     )
     parser.add_argument(
         "--tool-wait-profile-spec",
@@ -1577,10 +1762,33 @@ async def main_async() -> None:
         default=int(os.environ.get("TASK_REPLAY_STEPS", "1") or "1"),
         help="Number of tool-wait/resume cycles per target task.",
     )
+    parser.add_argument(
+        "--agentic-workload-profile",
+        default=os.environ.get("AGENTIC_WORKLOAD_PROFILE", SYNTHETIC_PRESSURE_PROFILE),
+        help="Request-shape profile. Use synthetic_pressure or realistic_agentic_mix.",
+    )
     parser.add_argument("--target-prompt-tokens", type=int, default=4096)
     parser.add_argument("--workload-jsonl", type=Path, default=os.environ.get("PROMPT_WORKLOAD_JSONL") or None)
     parser.add_argument("--filler-sessions", type=int, default=0)
     parser.add_argument("--filler-prompt-tokens", type=int, default=1536)
+    parser.add_argument(
+        "--filler-backlog-mode",
+        choices=("once", "constant"),
+        default=os.environ.get("FILLER_BACKLOG_MODE", "once"),
+        help="once launches one fixed filler batch; constant replenishes fillers until target replays finish.",
+    )
+    parser.add_argument(
+        "--filler-backlog-target",
+        type=int,
+        default=int(os.environ.get("FILLER_BACKLOG_TARGET", "0") or "0"),
+        help="Desired active filler depth for --filler-backlog-mode=constant. Defaults to --filler-sessions.",
+    )
+    parser.add_argument(
+        "--filler-backlog-total",
+        type=int,
+        default=int(os.environ.get("FILLER_BACKLOG_TOTAL", "0") or "0"),
+        help="Maximum filler sessions to launch in constant backlog mode. Defaults to a bounded multiple of --filler-sessions.",
+    )
     parser.add_argument(
         "--filler-replay-deadlines",
         action="store_true",
@@ -1597,9 +1805,40 @@ async def main_async() -> None:
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--arrival-gap-ms", type=int, default=40)
     parser.add_argument("--nat-inferred-profile-out", type=Path)
+    parser.add_argument(
+        "--trace-profile",
+        default=os.environ.get("TRACE_PROFILE", "full_debug"),
+        help="Named instrumentation preset recorded with the run: minimal, deadline, controller_decision, idle_gap, cache_debug, or full_debug.",
+    )
+    parser.add_argument(
+        "--trace-controller-decisions",
+        default=os.environ.get("TRACE_CONTROLLER_DECISIONS", "1"),
+        help="Set to 0 to suppress detailed SJF/controller decision events.",
+    )
+    parser.add_argument(
+        "--trace-controller-completion-linkage",
+        default=os.environ.get("TRACE_CONTROLLER_COMPLETION_LINKAGE", "0"),
+        help="Set to 1 to emit compact completion rows linking SJF admit decisions to actual filler finish times.",
+    )
     args = parser.parse_args()
+    os.environ["TRACE_PROFILE"] = str(args.trace_profile)
+    os.environ["TRACE_CONTROLLER_DECISIONS"] = str(args.trace_controller_decisions)
+    os.environ["TRACE_CONTROLLER_COMPLETION_LINKAGE"] = str(args.trace_controller_completion_linkage)
     if args.task_replay_steps < 1:
         raise SystemExit("--task-replay-steps must be at least 1")
+    if args.filler_backlog_target < 0:
+        raise SystemExit("--filler-backlog-target must be non-negative")
+    if args.filler_backlog_total < 0:
+        raise SystemExit("--filler-backlog-total must be non-negative")
+    args.agentic_workload_profile = normalize_agentic_workload_profile(args.agentic_workload_profile)
+    workload_mode_part = "" if env_truthy("WORKLOAD_SHAPE_MODE_INDEPENDENT") else f":{args.mode}"
+
+    def workload_stream_key(pair: HarnessPair, role: str, stage: str, extra: str = "") -> str:
+        suffix = f":{extra}" if extra else ""
+        return (
+            f"{args.harness}:{args.pressure_level}{workload_mode_part}:"
+            f"{pair.session_id}:{role}:{stage}{suffix}"
+        )
 
     if args.harness in {"codex", "claude_code", "opencode", "qwen_code"} and shutil.which("npx") is None:
         missing_bins = {
@@ -1630,23 +1869,34 @@ async def main_async() -> None:
             custom_spec=args.tool_wait_profile_spec,
             steps=args.task_replay_steps,
             seed=args.tool_wait_seed,
-            stream_key=f"{args.harness}:{args.pressure_level}:{args.mode}:{pair.session_id}:target",
+            stream_key=workload_stream_key(pair, "target", "waits"),
         )
         for pair in pairs
     }
     filler_base_wait_ms = args.filler_replay_deadline_ms if args.filler_replay_deadline_ms > 0 else args.tool_wait_ms
-    filler_wait_specs_by_session_and_index = {
-        (pair.session_id, idx): sample_tool_wait_specs(
+    def sample_filler_wait_specs(pair: HarnessPair, idx: int) -> list[ToolWaitSpec]:
+        return sample_tool_wait_specs(
             profile=args.tool_wait_profile,
             base_wait_ms=filler_base_wait_ms,
             custom_spec=args.tool_wait_profile_spec,
             steps=args.task_replay_steps,
             seed=args.tool_wait_seed,
-            stream_key=f"{args.harness}:{args.pressure_level}:{args.mode}:{pair.session_id}:filler:{idx}",
+            stream_key=workload_stream_key(pair, "filler", "waits", str(idx)),
         )
-        for pair in pairs
-        for idx in range(args.filler_sessions)
-    }
+    filler_backlog_target = (
+        args.filler_backlog_target
+        if args.filler_backlog_target > 0
+        else args.filler_sessions
+    )
+    if args.filler_backlog_mode == "constant" and filler_backlog_target <= 0:
+        raise SystemExit("--filler-backlog-mode=constant requires --filler-sessions or --filler-backlog-target > 0")
+    if args.filler_backlog_mode == "constant" and args.filler_backlog_total > 0:
+        filler_backlog_total = args.filler_backlog_total
+    elif args.filler_backlog_mode == "constant":
+        filler_backlog_total = max(filler_backlog_target, args.filler_sessions) * max(2, args.task_replay_steps * 3)
+    else:
+        filler_backlog_total = args.filler_sessions
+    configured_background_requests = filler_backlog_target if args.filler_backlog_mode == "constant" else args.filler_sessions
     rows: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(args.concurrency)
     admission_lock = asyncio.Lock()
@@ -1655,6 +1905,22 @@ async def main_async() -> None:
     admission_min_tool_wait_ms = int(os.environ.get("CONTROLLER_ADMISSION_MIN_TOOL_WAIT_MS", "75"))
     admission_max_filler_sessions = int(os.environ.get("CONTROLLER_ADMISSION_MAX_FILLER_SESSIONS", "16"))
     admission_max_concurrency = int(os.environ.get("CONTROLLER_ADMISSION_MAX_CONCURRENCY", "8"))
+    oracle_safety_margin_ms = int(os.environ.get("CONTROLLER_ORACLE_SAFETY_MARGIN_MS", "150") or "150")
+    (
+        safe_sjf_safety_margin_ms,
+        safe_sjf_max_in_flight,
+        safe_sjf_require_fit,
+        safe_sjf_idle_override,
+    ) = controller_safe_sjf_degree(args.mode)
+    runtime_estimator_backend = os.environ.get("CONTROLLER_RUNTIME_ESTIMATOR", "").strip().lower()
+    if args.mode == CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE:
+        runtime_calibrator = OracleExactRuntimeTable.from_env()
+    elif runtime_estimator_backend in {"aiconfigurator", "ai_configurator", "aic"}:
+        runtime_calibrator = AIConfiguratorRuntimeCalibrator.from_env(fallback=RuntimeCalibrator.from_env())
+    elif args.mode == CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE:
+        runtime_calibrator = RuntimeCalibrator.from_env()
+    else:
+        runtime_calibrator = None
     workload_start = time.perf_counter()
     controller_demotion_state: dict[str, Any] = {"active": False, "meta": {}, "owners": set()}
     controller_enabled = controller_mode(args.mode)
@@ -1719,7 +1985,7 @@ async def main_async() -> None:
                 kv_release=False,
                 live_metrics=True,
                 observe_only=False,
-                backend_name=CONTROLLER_SPECULATIVE_PRELOAD_MODE,
+                backend_name=args.mode,
             )
         )
     elif controller_active_targeted_prefetch:
@@ -1817,6 +2083,22 @@ async def main_async() -> None:
 
     def offset_ms() -> float:
         return (time.perf_counter() - workload_start) * 1000.0
+
+    safe_filler_scheduler = (
+        SafeFillerAdmissionScheduler(
+            trace=args.trace,
+            now_ms=offset_ms,
+            gate_state=controller_admission_gate_state,
+            safety_margin_ms=safe_sjf_safety_margin_ms,
+            max_in_flight=safe_sjf_max_in_flight,
+            require_fit_before_replay=safe_sjf_require_fit,
+            idle_override=safe_sjf_idle_override,
+            estimate_runtime_ms=estimate_request_runtime_ms,
+            calibrate_runtime=runtime_calibrator.estimate if runtime_calibrator is not None else None,
+        )
+        if args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
+        else None
+    )
 
     async def sleep_until(target_ms: float) -> None:
         delay = workload_start + target_ms / 1000.0 - time.perf_counter()
@@ -2015,6 +2297,7 @@ async def main_async() -> None:
             "mode": args.mode,
             "pressure_level": args.pressure_level,
             "model": args.model,
+            "controller_runtime_estimator": runtime_estimator_backend,
             "pairs": len(pairs),
             "tool_wait_list_ms": [
                 spec.wait_ms
@@ -2025,6 +2308,10 @@ async def main_async() -> None:
             "tool_wait_profile_spec": args.tool_wait_profile_spec,
             "tool_wait_seed": args.tool_wait_seed,
             "task_replay_steps": args.task_replay_steps,
+            "agentic_workload_profile": args.agentic_workload_profile,
+            "trace_profile": args.trace_profile,
+            "trace_controller_decisions": args.trace_controller_decisions,
+            "trace_controller_completion_linkage": args.trace_controller_completion_linkage,
             "tool_wait_distribution": [
                 {"class": name, "weight": weight, "wait_ms": wait_ms}
                 for name, weight, wait_ms in tool_wait_distribution(
@@ -2034,6 +2321,10 @@ async def main_async() -> None:
                 )
             ],
             "filler_sessions": args.filler_sessions,
+            "concurrency": args.concurrency,
+            "filler_backlog_mode": args.filler_backlog_mode,
+            "filler_backlog_target": filler_backlog_target if args.filler_backlog_mode == "constant" else "",
+            "filler_backlog_total": filler_backlog_total if args.filler_backlog_mode == "constant" else "",
             "target_prompt_tokens": args.target_prompt_tokens,
             "filler_prompt_tokens": args.filler_prompt_tokens,
             "filler_replay_deadlines": args.filler_replay_deadlines,
@@ -2043,60 +2334,111 @@ async def main_async() -> None:
             "controller_admission_aggressiveness": admission_aggressiveness
             if controller_active_priority_demotion_admission
             else "",
+            "controller_oracle_safety_margin_ms": oracle_safety_margin_ms
+            if args.mode == CONTROLLER_ORACLE_TIMELINE_MODE or args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
+            else "",
+            "controller_safe_sjf_safety_margin_ms": safe_sjf_safety_margin_ms
+            if args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
+            else "",
+            "controller_safe_sjf_max_in_flight": safe_sjf_max_in_flight
+            if args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
+            else "",
+            "controller_safe_sjf_require_fit_before_replay": safe_sjf_require_fit
+            if args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
+            else "",
+            "controller_safe_sjf_idle_override": safe_sjf_idle_override
+            if args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
+            else "",
         },
     )
 
+    client_queue_state = {"pending": 0, "in_flight": 0, "submit_seq": 0}
+    client_queue_lock = asyncio.Lock()
+
     async def bounded_request(prompt: str, meta: dict[str, Any]) -> None:
+        queued_at_ms = offset_ms()
+        async with client_queue_lock:
+            client_queue_state["pending"] += 1
+            pending_before_acquire = client_queue_state["pending"]
+            in_flight_before_acquire = client_queue_state["in_flight"]
         async with sem:
+            acquired_at_ms = offset_ms()
+            async with client_queue_lock:
+                client_queue_state["pending"] = max(0, client_queue_state["pending"] - 1)
+                client_queue_state["in_flight"] += 1
+                client_queue_state["submit_seq"] += 1
+                submit_seq = client_queue_state["submit_seq"]
+                pending_at_submit = client_queue_state["pending"]
+                in_flight_at_submit = client_queue_state["in_flight"]
             meta = {
                 **meta,
+                "client_submit_seq": submit_seq,
+                "client_sem_capacity": args.concurrency,
+                "client_pending_before_acquire": pending_before_acquire,
+                "client_inflight_before_acquire": in_flight_before_acquire,
+                "client_pending_at_submit": pending_at_submit,
+                "client_inflight_at_submit": in_flight_at_submit,
+                "client_queue_wait_ms": round(acquired_at_ms - queued_at_ms, 3),
                 "harness_controller_signal": build_harness_controller_signal(meta),
             }
-            write_trace(
-                args.trace,
-                {
-                    "event": "m27.harness.request_input",
-                    "session_id": meta.get("session_id", ""),
-                    "phase": meta.get("phase", ""),
-                    "mode": meta.get("mode", ""),
-                    "harness": meta.get("harness", args.harness),
-                    "label": meta.get("label", ""),
-                    "request_id": meta.get("label", ""),
-                    "prompt_hash": meta.get("prompt_hash", ""),
-                    "tool_wait_step": meta.get("tool_wait_step", ""),
-                    "task_replay_steps": meta.get("task_replay_steps", ""),
-                    "tool_wait_profile": meta.get("tool_wait_profile", ""),
-                    "tool_wait_class": meta.get("tool_wait_class", ""),
-                    "harness_controller_signal": meta.get("harness_controller_signal", {}),
-                    "offset_ms": round(offset_ms(), 3),
-                    "priority_intent": meta.get("priority_intent", ""),
-                    "workflow_node": meta.get("workflow_node", ""),
-                    "workflow_node_goal": meta.get("workflow_node_goal", ""),
-                    "inference_source": meta.get("inference_source", ""),
-                    "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
-                    "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
-                    "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
-                },
-            )
-            await run_harness_request(args.harness, args.gateway_base, args.model, prompt, meta, args.log_dir)
-            write_trace(
-                args.trace,
-                {
-                    "event": "m27.harness.request_done",
-                    "session_id": meta.get("session_id", ""),
-                    "phase": meta.get("phase", ""),
-                    "mode": meta.get("mode", ""),
-                    "harness": meta.get("harness", args.harness),
-                    "label": meta.get("label", ""),
-                    "request_id": meta.get("label", ""),
-                    "tool_wait_step": meta.get("tool_wait_step", ""),
-                    "task_replay_steps": meta.get("task_replay_steps", ""),
-                    "tool_wait_profile": meta.get("tool_wait_profile", ""),
-                    "tool_wait_class": meta.get("tool_wait_class", ""),
-                    "harness_controller_signal": meta.get("harness_controller_signal", {}),
-                    "offset_ms": round(offset_ms(), 3),
-                },
-            )
+            try:
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.harness.request_input",
+                        "session_id": meta.get("session_id", ""),
+                        "phase": meta.get("phase", ""),
+                        "mode": meta.get("mode", ""),
+                        "harness": meta.get("harness", args.harness),
+                        "label": meta.get("label", ""),
+                        "request_id": meta.get("label", ""),
+                        "prompt_hash": meta.get("prompt_hash", ""),
+                        "tool_wait_step": meta.get("tool_wait_step", ""),
+                        "task_replay_steps": meta.get("task_replay_steps", ""),
+                        "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                        "tool_wait_class": meta.get("tool_wait_class", ""),
+                        "harness_controller_signal": meta.get("harness_controller_signal", {}),
+                        "offset_ms": round(offset_ms(), 3),
+                        "priority_intent": meta.get("priority_intent", ""),
+                        "workflow_node": meta.get("workflow_node", ""),
+                        "workflow_node_goal": meta.get("workflow_node_goal", ""),
+                        "inference_source": meta.get("inference_source", ""),
+                        "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
+                        "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
+                        "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
+                        "client_submit_seq": meta.get("client_submit_seq", ""),
+                        "client_sem_capacity": meta.get("client_sem_capacity", ""),
+                        "client_pending_before_acquire": meta.get("client_pending_before_acquire", ""),
+                        "client_inflight_before_acquire": meta.get("client_inflight_before_acquire", ""),
+                        "client_pending_at_submit": meta.get("client_pending_at_submit", ""),
+                        "client_inflight_at_submit": meta.get("client_inflight_at_submit", ""),
+                        "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
+                    },
+                )
+                await run_harness_request(args.harness, args.gateway_base, args.model, prompt, meta, args.log_dir)
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.harness.request_done",
+                        "session_id": meta.get("session_id", ""),
+                        "phase": meta.get("phase", ""),
+                        "mode": meta.get("mode", ""),
+                        "harness": meta.get("harness", args.harness),
+                        "label": meta.get("label", ""),
+                        "request_id": meta.get("label", ""),
+                        "tool_wait_step": meta.get("tool_wait_step", ""),
+                        "task_replay_steps": meta.get("task_replay_steps", ""),
+                        "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                        "tool_wait_class": meta.get("tool_wait_class", ""),
+                        "harness_controller_signal": meta.get("harness_controller_signal", {}),
+                        "client_submit_seq": meta.get("client_submit_seq", ""),
+                        "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+            finally:
+                async with client_queue_lock:
+                    client_queue_state["in_flight"] = max(0, client_queue_state["in_flight"] - 1)
 
     def full_controller_priority_for_pair(index: int) -> tuple[int, int, int]:
         total = max(1, len(pairs))
@@ -2110,9 +2452,52 @@ async def main_async() -> None:
     def base_meta_priority() -> int:
         return 100
 
+    def kv_storage_metadata() -> dict[str, Any]:
+        if not storage_hicache_mode(args.mode):
+            return {
+                "kv_storage_enabled": False,
+                "kv_storage_backend": "",
+                "kv_storage_prefetch_policy": "",
+                "kv_storage_path": "",
+                "kv_storage_signal_source": "",
+            }
+        return {
+            "kv_storage_enabled": True,
+            "kv_storage_backend": os.environ.get("HICACHE_STORAGE_BACKEND", ""),
+            "kv_storage_prefetch_policy": os.environ.get("HICACHE_STORAGE_PREFETCH_POLICY", ""),
+            "kv_storage_path": os.environ.get("HICACHE_STORAGE_PATH", ""),
+            "kv_storage_signal_source": "sglang_hicache_storage_backend",
+        }
+
     async def run_pair(pair: HarnessPair, index: int) -> None:
         await sleep_until(index * args.arrival_gap_ms)
         target_wait_specs = target_wait_specs_by_session[pair.session_id]
+        storage_meta = kv_storage_metadata()
+        target_initial_prompt = pair.prompt
+        target_initial_max_tokens = 8
+        target_initial_workload_meta: dict[str, Any] = {
+            "agentic_workload_profile": args.agentic_workload_profile,
+            "workload_request_kind": "synthetic_target_initial",
+            "workload_phase_family": "initial_turn",
+            "workload_prompt_tokens_target": args.target_prompt_tokens,
+            "workload_max_tokens": 8,
+            "workload_description": "fixed synthetic target initial request",
+        }
+        if args.agentic_workload_profile == REALISTIC_AGENTIC_PROFILE and not args.workload_jsonl:
+            target_initial_shape = realistic_initial_shape(
+                seed=args.tool_wait_seed,
+                stream_key=workload_stream_key(pair, "target", "initial"),
+            )
+            target_initial_prompt = make_agentic_workload_prompt(
+                session_id=pair.session_id,
+                shape=target_initial_shape,
+                role="target",
+                stage="initial",
+                step_index=0,
+                total_steps=len(target_wait_specs),
+            )
+            target_initial_max_tokens = target_initial_shape.max_tokens
+            target_initial_workload_meta = workload_meta(target_initial_shape, args.agentic_workload_profile)
         write_trace(
             args.trace,
             {
@@ -2129,13 +2514,20 @@ async def main_async() -> None:
                 "task_replay_steps": len(target_wait_specs),
                 "sampled_tool_waits_ms": [spec.wait_ms for spec in target_wait_specs],
                 "sampled_tool_wait_classes": [spec.wait_class for spec in target_wait_specs],
-                "prompt_tokens": pair.prompt_tokens,
+                "prompt_tokens": estimate_tokens(target_initial_prompt),
+                "agentic_workload_profile": args.agentic_workload_profile,
+                "workload_request_kind": target_initial_workload_meta.get("workload_request_kind", ""),
+                "workload_phase_family": target_initial_workload_meta.get("workload_phase_family", ""),
+                "workload_prompt_tokens_target": target_initial_workload_meta.get("workload_prompt_tokens_target", ""),
+                "workload_max_tokens": target_initial_workload_meta.get("workload_max_tokens", ""),
+                **storage_meta,
             },
         )
         base_meta = {
             "harness": args.harness,
             "mode": args.mode,
             "pressure_level": args.pressure_level,
+            "model": args.model,
             "session_generation": 1,
             "prefix_id": f"{pair.session_id}:prefix",
             "high_priority": 100,
@@ -2146,12 +2538,17 @@ async def main_async() -> None:
             "tool_wait_profile_spec": args.tool_wait_profile_spec,
             "tool_wait_seed": args.tool_wait_seed,
             "task_replay_steps": len(target_wait_specs),
-            "active_background_requests": args.filler_sessions,
-            "demotable_background_requests": args.filler_sessions,
-            "background_safe_to_demote": args.filler_sessions > 0,
+            "active_background_requests": configured_background_requests,
+            "demotable_background_requests": configured_background_requests,
+            "background_safe_to_demote": configured_background_requests > 0,
             "background_can_delay_ms": max(500, args.tool_wait_ms * 2),
             "concurrency": args.concurrency,
+            "filler_sessions": args.filler_sessions,
+            "filler_backlog_mode": args.filler_backlog_mode,
+            "filler_backlog_target": filler_backlog_target if args.filler_backlog_mode == "constant" else "",
+            "filler_backlog_total": filler_backlog_total if args.filler_backlog_mode == "constant" else "",
             "cost_feedback_allow_background_demote": True,
+            "agentic_workload_profile": args.agentic_workload_profile,
             "controller_admission_aggressiveness": admission_aggressiveness
             if controller_active_priority_demotion_admission
             else "",
@@ -2164,6 +2561,7 @@ async def main_async() -> None:
                 "policy": "harness_decides_gateway_translates_only",
                 "cache_key_seed": f"{args.harness}:{args.pressure_level}",
             },
+            **storage_meta,
         }
         initial_meta = {
             **base_meta,
@@ -2171,18 +2569,146 @@ async def main_async() -> None:
             "phase": "initial_turn",
             "label": f"{pair.session_id}_initial",
             "task_index": pair.task_index,
-            "prompt_hash": prompt_hash(pair.prompt),
+            "prompt_hash": prompt_hash(target_initial_prompt),
+            "prompt_tokens": estimate_tokens(target_initial_prompt),
             "priority_label": "high",
-            "max_tokens": 8,
+            "max_tokens": target_initial_max_tokens,
             "tool_wait_step": 0,
             "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
+            **target_initial_workload_meta,
         }
         initial_meta = attach_harness_priority_metadata(initial_meta)
-        await bounded_request(pair.prompt, initial_meta)
+        await bounded_request(target_initial_prompt, initial_meta)
+        target_current_prompt = target_initial_prompt
         filler_base_meta = base_meta
         filler_tasks: list[asyncio.Task[None]] = []
+        active_filler_tasks: set[asyncio.Task[None]] = set()
+        filler_backlog_stop = asyncio.Event()
+        filler_backlog_producer_task: asyncio.Task[None] | None = None
+        next_filler_index = 0
         active_demote_command: dict[str, Any] | None = None
         demote_restore_active = False
+
+        def launch_filler_task(idx: int, *, reason: str) -> asyncio.Task[None]:
+            task = asyncio.create_task(
+                run_filler(
+                    args.gateway_base,
+                    args.model,
+                    pair,
+                    idx,
+                    filler_base_meta,
+                    args.filler_prompt_tokens,
+                    wait_specs=sample_filler_wait_specs(pair, idx),
+                    trace=args.trace,
+                    workload_start=workload_start,
+                    filler_replay_deadlines=args.filler_replay_deadlines,
+                    demotion_state=controller_demotion_state,
+                    admission_gate_state=controller_admission_gate_state,
+                    mode=args.mode,
+                    oracle_safety_margin_ms=oracle_safety_margin_ms,
+                    safe_filler_scheduler=safe_filler_scheduler,
+                    agentic_workload_profile=args.agentic_workload_profile,
+                    tool_wait_seed=args.tool_wait_seed,
+                    trace_controller_completion_linkage=env_flag(
+                        "TRACE_CONTROLLER_COMPLETION_LINKAGE",
+                        False,
+                    ),
+                    submit_request=bounded_request,
+                )
+            )
+            task.set_name(f"{pair.session_id}_pressure_{idx:03d}")
+            filler_tasks.append(task)
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.filler_backlog.launch",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "filler_index": idx,
+                    "filler_task_name": task.get_name(),
+                    "filler_backlog_mode": args.filler_backlog_mode,
+                    "filler_backlog_target": filler_backlog_target if args.filler_backlog_mode == "constant" else "",
+                    "filler_backlog_total": filler_backlog_total if args.filler_backlog_mode == "constant" else "",
+                    "launch_reason": reason,
+                    "active_filler_tasks_before_launch": len(active_filler_tasks),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
+            return task
+
+        async def run_constant_filler_backlog() -> None:
+            nonlocal next_filler_index
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.filler_backlog.start",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "filler_backlog_mode": args.filler_backlog_mode,
+                    "filler_backlog_target": filler_backlog_target,
+                    "filler_backlog_total": filler_backlog_total,
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
+            while len(active_filler_tasks) < filler_backlog_target and next_filler_index < filler_backlog_total:
+                task = launch_filler_task(next_filler_index, reason="initial_backlog_fill")
+                active_filler_tasks.add(task)
+                next_filler_index += 1
+            while active_filler_tasks:
+                done, _pending = await asyncio.wait(
+                    active_filler_tasks,
+                    timeout=0.05,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    active_filler_tasks.discard(task)
+                    if not filler_backlog_stop.is_set() and next_filler_index < filler_backlog_total:
+                        replacement = launch_filler_task(next_filler_index, reason="replenish_after_completion")
+                        active_filler_tasks.add(replacement)
+                        write_trace(
+                            args.trace,
+                            {
+                                "event": "m27.filler_backlog.replenish",
+                                "session_id": pair.session_id,
+                                "mode": args.mode,
+                                "harness": args.harness,
+                                "pressure_level": args.pressure_level,
+                                "task_index": pair.task_index,
+                                "completed_filler_task_name": task.get_name(),
+                                "replacement_filler_index": next_filler_index,
+                                "active_filler_tasks_after_replenish": len(active_filler_tasks),
+                                "filler_backlog_target": filler_backlog_target,
+                                "filler_backlog_total": filler_backlog_total,
+                                "offset_ms": round(offset_ms(), 3),
+                            },
+                        )
+                        next_filler_index += 1
+                if not done and filler_backlog_stop.is_set():
+                    continue
+                if not active_filler_tasks:
+                    break
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.filler_backlog.end",
+                    "session_id": pair.session_id,
+                    "mode": args.mode,
+                    "harness": args.harness,
+                    "pressure_level": args.pressure_level,
+                    "task_index": pair.task_index,
+                    "filler_backlog_mode": args.filler_backlog_mode,
+                    "filler_tasks_launched": len(filler_tasks),
+                    "filler_backlog_target": filler_backlog_target,
+                    "filler_backlog_total": filler_backlog_total,
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
 
         def activate_controller_demote(
             controller_demote_command: dict[str, Any],
@@ -2243,7 +2769,7 @@ async def main_async() -> None:
                         if admission_aggressiveness == "earlyprepare"
                         else "",
                         "admission_action": "hold_background_until_target_replay_completes",
-                        "demotable_background_requests": args.filler_sessions,
+                        "demotable_background_requests": configured_background_requests,
                         "tool_start_offset_ms": round(tool_start_ms, 3),
                         "replay_due_offset_ms": round(replay_due_ms, 3),
                         "open_offset_ms": round(offset_ms(), 3),
@@ -2281,8 +2807,8 @@ async def main_async() -> None:
                     "controller_earlyprepare_lead_ms": controller_admission_lead_ms(args.mode, wait_spec.wait_ms)
                     if admission_aggressiveness == "earlyprepare"
                     else "",
-                    "demotable_background_requests": args.filler_sessions,
-                    "background_safe_to_demote": args.filler_sessions > 0,
+                    "demotable_background_requests": configured_background_requests,
+                    "background_safe_to_demote": configured_background_requests > 0,
                     "tool_start_offset_ms": round(tool_start_ms, 3),
                     "replay_due_offset_ms": round(replay_due_ms, 3),
                     "offset_ms": round(offset_ms(), 3),
@@ -2310,8 +2836,8 @@ async def main_async() -> None:
                     "controller_earlyprepare_lead_ms": controller_admission_lead_ms(args.mode, wait_spec.wait_ms)
                     if admission_aggressiveness == "earlyprepare"
                     else "",
-                    "demotable_background_requests": args.filler_sessions,
-                    "background_safe_to_demote": args.filler_sessions > 0,
+                    "demotable_background_requests": configured_background_requests,
+                    "background_safe_to_demote": configured_background_requests > 0,
                     "controller_decision_id": controller_demote_command.get("controller_decision_id", ""),
                     "controller_command_id": controller_demote_command.get("command_id", ""),
                     "controller_decision_reason": controller_demote_command.get("controller_decision_reason", ""),
@@ -2539,6 +3065,25 @@ async def main_async() -> None:
                     else "",
                 }
                 warmup_meta = attach_harness_priority_metadata(warmup_meta)
+                if args.mode == STORAGE_HICACHE_CONTROLLER_PREFETCH_MODE:
+                    write_trace(
+                        args.trace,
+                        {
+                            "event": "m27.storage.controller_prefetch.intent",
+                            "session_id": pair.session_id,
+                            "mode": args.mode,
+                            "harness": args.harness,
+                            "request_id": initial_meta["label"],
+                            "warmup_request_id": warmup_label,
+                            "expected_replay_request_id": replay_label,
+                            **storage_meta,
+                            "strategy": "controller_lifecycle_gateway_speculative_kv_preload_with_real_hicache_storage",
+                            "tool_wait_step": wait_spec.step_index,
+                            "tool_wait_ms": wait_ms,
+                            "tool_start_offset_ms": round(tool_start_ms, 3),
+                            "replay_due_offset_ms": round(replay_due_ms, 3),
+                        },
+                    )
                 write_trace(
                     args.trace,
                     {
@@ -2631,25 +3176,11 @@ async def main_async() -> None:
                 warmup_launch_grace_ms = max(0.0, float(os.environ.get("WARMUP_LAUNCH_GRACE_MS", "5")))
                 await asyncio.sleep(warmup_launch_grace_ms / 1000.0)
             if not filler_tasks:
-                filler_tasks = [
-                    asyncio.create_task(
-                        run_filler(
-                            args.gateway_base,
-                            args.model,
-                            pair,
-                            idx,
-                            filler_base_meta,
-                            args.filler_prompt_tokens,
-                            wait_specs=filler_wait_specs_by_session_and_index[(pair.session_id, idx)],
-                            trace=args.trace,
-                            workload_start=workload_start,
-                            filler_replay_deadlines=args.filler_replay_deadlines,
-                            demotion_state=controller_demotion_state,
-                            admission_gate_state=controller_admission_gate_state,
-                        )
-                    )
-                    for idx in range(args.filler_sessions)
-                ]
+                if args.filler_backlog_mode == "constant":
+                    filler_backlog_producer_task = asyncio.create_task(run_constant_filler_backlog())
+                else:
+                    for idx in range(args.filler_sessions):
+                        launch_filler_task(idx, reason="one_shot_pressure_fill")
             if defer_admission_demote:
                 admission_lead_ms = controller_admission_lead_ms(args.mode, wait_ms)
                 admission_open_ms = max(tool_start_ms, replay_due_ms - admission_lead_ms)
@@ -2881,7 +3412,34 @@ async def main_async() -> None:
                         "offset_ms": round(offset_ms(), 3),
                     },
                 )
-            step_replay_prompt = replay_prompt_for_step(pair, wait_spec.step_index, len(target_wait_specs))
+            replay_max_tokens = 8
+            replay_workload_meta: dict[str, Any] = {
+                "agentic_workload_profile": args.agentic_workload_profile,
+                "workload_request_kind": "synthetic_target_replay",
+                "workload_phase_family": "replay",
+                "workload_prompt_tokens_target": args.target_prompt_tokens,
+                "workload_max_tokens": 8,
+                "workload_description": "fixed synthetic target replay request",
+            }
+            if args.agentic_workload_profile == REALISTIC_AGENTIC_PROFILE and not args.workload_jsonl:
+                replay_shape = realistic_replay_shape(
+                    wait_class=wait_spec.wait_class,
+                    seed=args.tool_wait_seed,
+                    stream_key=workload_stream_key(pair, "target", "replay", str(wait_spec.step_index)),
+                )
+                step_replay_prompt = make_agentic_workload_prompt(
+                    session_id=pair.session_id,
+                    shape=replay_shape,
+                    role="target",
+                    stage="replay",
+                    step_index=wait_spec.step_index,
+                    total_steps=len(target_wait_specs),
+                    previous_prompt=target_current_prompt,
+                )
+                replay_max_tokens = replay_shape.max_tokens
+                replay_workload_meta = workload_meta(replay_shape, args.agentic_workload_profile)
+            else:
+                step_replay_prompt = replay_prompt_for_step(pair, wait_spec.step_index, len(target_wait_specs))
             replay_meta = {
                 **step_base_meta,
                 "session_id": pair.session_id,
@@ -2891,7 +3449,9 @@ async def main_async() -> None:
                 "prompt_hash": prompt_hash(step_replay_prompt),
                 "priority_label": "high",
                 "deadline_offset_ms": round(replay_due_ms, 3),
-                "max_tokens": 8,
+                "max_tokens": replay_max_tokens,
+                "prompt_tokens": estimate_tokens(step_replay_prompt),
+                **replay_workload_meta,
             }
             if controller_replay_priority is not None:
                 replay_meta.update(
@@ -2930,6 +3490,7 @@ async def main_async() -> None:
                     },
                 )
             await bounded_request(step_replay_prompt, replay_meta)
+            target_current_prompt = step_replay_prompt
             if controller_active_priority_demotion_admission and controller_admission_gate_state.get("active"):
                 controller_admission_gate_state["active"] = False
                 controller_admission_gate_event.set()
@@ -3085,7 +3646,33 @@ async def main_async() -> None:
                     "offset_ms": round(offset_ms(), 3),
                 },
             )
-        await asyncio.gather(*filler_tasks, return_exceptions=True)
+        if filler_backlog_producer_task is not None:
+            filler_backlog_stop.set()
+            await asyncio.gather(filler_backlog_producer_task, return_exceptions=True)
+        filler_results = await asyncio.gather(*filler_tasks, return_exceptions=True)
+        filler_errors = [
+            (task, result)
+            for task, result in zip(filler_tasks, filler_results, strict=False)
+            if isinstance(result, Exception)
+        ]
+        if filler_errors:
+            for task, error in filler_errors:
+                write_trace(
+                    args.trace,
+                    {
+                        "event": "m27.filler_task.error",
+                        "session_id": pair.session_id,
+                        "mode": args.mode,
+                        "harness": args.harness,
+                        "pressure_level": args.pressure_level,
+                        "task_index": pair.task_index,
+                        "filler_task_name": task.get_name(),
+                        "error_type": type(error).__name__,
+                        "error": str(error),
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+            raise RuntimeError(f"{len(filler_errors)} filler task(s) failed; first error: {filler_errors[0][1]}")
 
     await asyncio.gather(*(run_pair(pair, idx) for idx, pair in enumerate(pairs)))
     write_trace(args.trace, {"event": "m27.workload_end", "harness": args.harness, "mode": args.mode, "row_count": len(rows)})

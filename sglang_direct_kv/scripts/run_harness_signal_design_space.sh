@@ -8,7 +8,7 @@ cd "${DIRECT_ROOT}"
 
 SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_shorthand controller_admission controller_full controller_full_chunked"
+  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_oracle_timeline controller_calibrated_admission controller_oracle_exact_runtime controller_shorthand controller_admission controller_full controller_full_chunked storage_baseline storage_controller_prefetch"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -26,16 +26,31 @@ HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES:-0}"
 FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS:-}"
+FILLER_BACKLOG_MODE="${FILLER_BACKLOG_MODE:-once}"
+FILLER_BACKLOG_TARGET="${FILLER_BACKLOG_TARGET:-0}"
+FILLER_BACKLOG_TOTAL="${FILLER_BACKLOG_TOTAL:-0}"
 TOOL_WAIT_PROFILE="${TOOL_WAIT_PROFILE:-fixed}"
 TOOL_WAIT_PROFILE_SPEC="${TOOL_WAIT_PROFILE_SPEC:-}"
 TOOL_WAIT_SEED="${TOOL_WAIT_SEED:-42}"
 TASK_REPLAY_STEPS="${TASK_REPLAY_STEPS:-1}"
+AGENTIC_WORKLOAD_PROFILE="${AGENTIC_WORKLOAD_PROFILE:-synthetic_pressure}"
+TRACE_PROFILE="${TRACE_PROFILE:-full_debug}"
+TRACE_CONTROLLER_DECISIONS="${TRACE_CONTROLLER_DECISIONS:-1}"
+TRACE_CONTROLLER_COMPLETION_LINKAGE="${TRACE_CONTROLLER_COMPLETION_LINKAGE:-0}"
+TRACE_IDLE_GAP_AUDIT="${TRACE_IDLE_GAP_AUDIT:-1}"
+AGENTIC_KV_COPY_TELEMETRY_ENABLE="${AGENTIC_KV_COPY_TELEMETRY_ENABLE:-1}"
 CONTROLLER_CHUNKED_PREFILL_SIZE="${CONTROLLER_CHUNKED_PREFILL_SIZE:-512}"
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS:-4096}"
 CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS:-}"
 CONTROLLER_ADMISSION_AGGRESSIVENESS="${CONTROLLER_ADMISSION_AGGRESSIVENESS:-hard}"
-CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/dictionary_v1.json}"
+CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/agent_trace_relations_v1.json}"
 CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE:-target_requests}"
+HICACHE_IO_BACKEND="${HICACHE_IO_BACKEND:-direct}"
+HICACHE_MEM_LAYOUT="${HICACHE_MEM_LAYOUT:-layer_first}"
+HICACHE_STORAGE_BACKEND="${HICACHE_STORAGE_BACKEND:-}"
+HICACHE_STORAGE_PREFETCH_POLICY="${HICACHE_STORAGE_PREFETCH_POLICY:-timeout}"
+HICACHE_STORAGE_BACKEND_EXTRA_CONFIG="${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG:-}"
+HICACHE_STORAGE_PATH="${HICACHE_STORAGE_PATH:-}"
 
 BASELINE_MODES="${BASELINE_MODES:-no_prefetch}"
 HARNESS_EMITTED_MODES="${HARNESS_EMITTED_MODES:-harness_emitted_signals}"
@@ -48,11 +63,22 @@ CONTROLLER_TARGETED_PREFETCH_MODES="${CONTROLLER_TARGETED_PREFETCH_MODES:-contro
 CONTROLLER_DEMOTE_RESTORE_MODES="${CONTROLLER_DEMOTE_RESTORE_MODES:-controller_demote_restore}"
 CONTROLLER_PRIORITY_DEMOTE_MODES="${CONTROLLER_PRIORITY_DEMOTE_MODES:-controller_priority_demote}"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES:-controller_priority_demotion_admission}"
+CONTROLLER_ORACLE_TIMELINE_MODES="${CONTROLLER_ORACLE_TIMELINE_MODES:-controller_oracle_timeline}"
+CONTROLLER_CALIBRATED_ADMISSION_MODES="${CONTROLLER_CALIBRATED_ADMISSION_MODES:-controller_priority_demotion_calibrated_admission}"
+CONTROLLER_ORACLE_EXACT_RUNTIME_MODES="${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES:-controller_oracle_exact_runtime_admission}"
 CONTROLLER_SHORTHAND_MODES="${CONTROLLER_SHORTHAND_MODES:-controller_priority_demotion_admission_shorthand}"
 CONTROLLER_ADMISSION_MODES="${CONTROLLER_ADMISSION_MODES:-controller_admission_control}"
 CONTROLLER_FULL_MODES="${CONTROLLER_FULL_MODES:-controller_full}"
 CONTROLLER_FULL_CHUNKED_MODES="${CONTROLLER_FULL_CHUNKED_MODES:-controller_full_chunked_prefill}"
+STORAGE_BASELINE_MODES="${STORAGE_BASELINE_MODES:-storage_hicache_baseline}"
+STORAGE_CONTROLLER_PREFETCH_MODES="${STORAGE_CONTROLLER_PREFETCH_MODES:-storage_hicache_controller_prefetch}"
 DRY_RUN="${DRY_RUN:-0}"
+CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV="${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV:-}"
+CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS="${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS:-}"
+CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT="${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT:-}"
+CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE="${CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE:-}"
+CONTROLLER_ORACLE_EXACT_FALLBACK_MS="${CONTROLLER_ORACLE_EXACT_FALLBACK_MS:-}"
+WORKLOAD_SHAPE_MODE_INDEPENDENT="${WORKLOAD_SHAPE_MODE_INDEPENDENT:-0}"
 
 if [[ "${REPORT_BUILDER_MODE}" != "lightweight" ]]; then
   echo "run_harness_signal_design_space.sh currently supports REPORT_BUILDER_MODE=lightweight only." >&2
@@ -103,10 +129,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore|controller_priority_demote|controller_priority_demotion_admission|controller_shorthand|controller_admission|controller_full|controller_full_chunked) ;;
+      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore|controller_priority_demote|controller_priority_demotion_admission|controller_oracle_timeline|controller_calibrated_admission|controller_oracle_exact_runtime|controller_shorthand|controller_admission|controller_full|controller_full_chunked|storage_baseline|storage_controller_prefetch) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_shorthand controller_admission controller_full controller_full_chunked all" >&2
+        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_oracle_timeline controller_calibrated_admission controller_oracle_exact_runtime controller_shorthand controller_admission controller_full controller_full_chunked storage_baseline storage_controller_prefetch all" >&2
         exit 2
         ;;
     esac
@@ -193,14 +219,36 @@ write_combined_run_config() {
     echo "CONTROLLER_DEMOTE_RESTORE_MODES=${CONTROLLER_DEMOTE_RESTORE_MODES}"
     echo "CONTROLLER_PRIORITY_DEMOTE_MODES=${CONTROLLER_PRIORITY_DEMOTE_MODES}"
     echo "CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES=${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES}"
+    echo "CONTROLLER_ORACLE_TIMELINE_MODES=${CONTROLLER_ORACLE_TIMELINE_MODES}"
+    echo "CONTROLLER_CALIBRATED_ADMISSION_MODES=${CONTROLLER_CALIBRATED_ADMISSION_MODES}"
+    echo "CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS=${CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS:-}"
+    echo "CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS=${CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS:-}"
+    echo "CONTROLLER_CALIBRATED_MIN_SAMPLES=${CONTROLLER_CALIBRATED_MIN_SAMPLES:-}"
+    echo "CONTROLLER_CALIBRATED_QUANTILE=${CONTROLLER_CALIBRATED_QUANTILE:-}"
+    echo "CONTROLLER_CALIBRATION_HISTORY_CSV=${CONTROLLER_CALIBRATION_HISTORY_CSV:-}"
+    echo "CONTROLLER_ORACLE_EXACT_RUNTIME_MODES=${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}"
+    echo "CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV=${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV}"
+    echo "CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS=${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS}"
+    echo "CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT=${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT}"
+    echo "CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE=${CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE}"
+    echo "CONTROLLER_ORACLE_EXACT_FALLBACK_MS=${CONTROLLER_ORACLE_EXACT_FALLBACK_MS}"
+    echo "WORKLOAD_SHAPE_MODE_INDEPENDENT=${WORKLOAD_SHAPE_MODE_INDEPENDENT}"
     echo "CONTROLLER_SHORTHAND_MODES=${CONTROLLER_SHORTHAND_MODES}"
     echo "CONTROLLER_ADMISSION_MODES=${CONTROLLER_ADMISSION_MODES}"
     echo "CONTROLLER_FULL_MODES=${CONTROLLER_FULL_MODES}"
     echo "CONTROLLER_FULL_CHUNKED_MODES=${CONTROLLER_FULL_CHUNKED_MODES}"
+    echo "STORAGE_BASELINE_MODES=${STORAGE_BASELINE_MODES}"
+    echo "STORAGE_CONTROLLER_PREFETCH_MODES=${STORAGE_CONTROLLER_PREFETCH_MODES}"
     echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-}"
     echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB:-}"
+    echo "HICACHE_IO_BACKEND=${HICACHE_IO_BACKEND}"
+    echo "HICACHE_MEM_LAYOUT=${HICACHE_MEM_LAYOUT}"
+    echo "HICACHE_STORAGE_BACKEND=${HICACHE_STORAGE_BACKEND}"
+    echo "HICACHE_STORAGE_PREFETCH_POLICY=${HICACHE_STORAGE_PREFETCH_POLICY}"
+    echo "HICACHE_STORAGE_BACKEND_EXTRA_CONFIG=${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG}"
+    echo "HICACHE_STORAGE_PATH=${HICACHE_STORAGE_PATH}"
     echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-}"
     echo "P0_CONTROL=$(level_knobs_for_config p0_control | tr ' ' ',')"
     echo "P1_MILD=$(level_knobs_for_config p1_mild | tr ' ' ',')"
@@ -210,10 +258,19 @@ write_combined_run_config() {
     echo "P5_BOSS_QUEUE=$(level_knobs_for_config p5_boss_queue | tr ' ' ',')"
     echo "FILLER_REPLAY_DEADLINES=${FILLER_REPLAY_DEADLINES}"
     echo "FILLER_REPLAY_DEADLINE_MS=${FILLER_REPLAY_DEADLINE_MS}"
+    echo "FILLER_BACKLOG_MODE=${FILLER_BACKLOG_MODE}"
+    echo "FILLER_BACKLOG_TARGET=${FILLER_BACKLOG_TARGET}"
+    echo "FILLER_BACKLOG_TOTAL=${FILLER_BACKLOG_TOTAL}"
     echo "TOOL_WAIT_PROFILE=${TOOL_WAIT_PROFILE}"
     echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
     echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
     echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
+    echo "AGENTIC_WORKLOAD_PROFILE=${AGENTIC_WORKLOAD_PROFILE}"
+    echo "TRACE_PROFILE=${TRACE_PROFILE}"
+    echo "TRACE_CONTROLLER_DECISIONS=${TRACE_CONTROLLER_DECISIONS}"
+    echo "TRACE_CONTROLLER_COMPLETION_LINKAGE=${TRACE_CONTROLLER_COMPLETION_LINKAGE}"
+    echo "TRACE_IDLE_GAP_AUDIT=${TRACE_IDLE_GAP_AUDIT}"
+    echo "AGENTIC_KV_COPY_TELEMETRY_ENABLE=${AGENTIC_KV_COPY_TELEMETRY_ENABLE}"
     echo "CONTROLLER_CHUNKED_PREFILL_SIZE=${CONTROLLER_CHUNKED_PREFILL_SIZE}"
     echo "CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}"
     echo "CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS=${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}"
@@ -255,16 +312,42 @@ run_family_piece() {
   HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH}" \
   FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES}" \
   FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS}" \
+  FILLER_BACKLOG_MODE="${FILLER_BACKLOG_MODE}" \
+  FILLER_BACKLOG_TARGET="${FILLER_BACKLOG_TARGET}" \
+  FILLER_BACKLOG_TOTAL="${FILLER_BACKLOG_TOTAL}" \
   TOOL_WAIT_PROFILE="${TOOL_WAIT_PROFILE}" \
   TOOL_WAIT_PROFILE_SPEC="${TOOL_WAIT_PROFILE_SPEC}" \
   TOOL_WAIT_SEED="${TOOL_WAIT_SEED}" \
   TASK_REPLAY_STEPS="${TASK_REPLAY_STEPS}" \
+  AGENTIC_WORKLOAD_PROFILE="${AGENTIC_WORKLOAD_PROFILE}" \
+  TRACE_PROFILE="${TRACE_PROFILE}" \
+  TRACE_CONTROLLER_DECISIONS="${TRACE_CONTROLLER_DECISIONS}" \
+  TRACE_CONTROLLER_COMPLETION_LINKAGE="${TRACE_CONTROLLER_COMPLETION_LINKAGE}" \
+  TRACE_IDLE_GAP_AUDIT="${TRACE_IDLE_GAP_AUDIT}" \
+  AGENTIC_KV_COPY_TELEMETRY_ENABLE="${AGENTIC_KV_COPY_TELEMETRY_ENABLE}" \
+  CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS="${CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS:-}" \
+  CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS="${CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS:-}" \
+  CONTROLLER_CALIBRATED_MIN_SAMPLES="${CONTROLLER_CALIBRATED_MIN_SAMPLES:-}" \
+  CONTROLLER_CALIBRATED_QUANTILE="${CONTROLLER_CALIBRATED_QUANTILE:-}" \
+  CONTROLLER_CALIBRATION_HISTORY_CSV="${CONTROLLER_CALIBRATION_HISTORY_CSV:-}" \
+  CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV="${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV}" \
+  CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS="${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS}" \
+  CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT="${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT}" \
+  CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE="${CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE}" \
+  CONTROLLER_ORACLE_EXACT_FALLBACK_MS="${CONTROLLER_ORACLE_EXACT_FALLBACK_MS}" \
+  WORKLOAD_SHAPE_MODE_INDEPENDENT="${WORKLOAD_SHAPE_MODE_INDEPENDENT}" \
   CONTROLLER_CHUNKED_PREFILL_SIZE="${CONTROLLER_CHUNKED_PREFILL_SIZE}" \
   CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}" \
   CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}" \
   CONTROLLER_ADMISSION_AGGRESSIVENESS="${CONTROLLER_ADMISSION_AGGRESSIVENESS}" \
   CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG}" \
   CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE}" \
+  HICACHE_IO_BACKEND="${HICACHE_IO_BACKEND}" \
+  HICACHE_MEM_LAYOUT="${HICACHE_MEM_LAYOUT}" \
+  HICACHE_STORAGE_BACKEND="${HICACHE_STORAGE_BACKEND}" \
+  HICACHE_STORAGE_PREFETCH_POLICY="${HICACHE_STORAGE_PREFETCH_POLICY}" \
+  HICACHE_STORAGE_BACKEND_EXTRA_CONFIG="${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG}" \
+  HICACHE_STORAGE_PATH="${HICACHE_STORAGE_PATH}" \
   PYTHON_BIN="${PYTHON_BIN}" \
     bash scripts/run_harness_deadline_pressure.sh "${MODEL}"
 }
@@ -334,6 +417,21 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_priority_demotion_admission:priority_plus_demotion_plus_admission")"
+  elif [[ "${family}" == "controller_oracle_timeline" ]]; then
+    for mode in ${CONTROLLER_ORACLE_TIMELINE_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_oracle_timeline:priority_plus_timeline_admission")"
+  elif [[ "${family}" == "controller_calibrated_admission" ]]; then
+    for mode in ${CONTROLLER_CALIBRATED_ADMISSION_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_calibrated_admission:priority_plus_demotion_plus_calibrated_admission")"
+  elif [[ "${family}" == "controller_oracle_exact_runtime" ]]; then
+    for mode in ${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_oracle_exact_runtime:priority_plus_demotion_plus_exact_runtime_admission")"
   elif [[ "${family}" == "controller_shorthand" ]]; then
     for mode in ${CONTROLLER_SHORTHAND_MODES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
@@ -354,6 +452,16 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_full_chunked:demote_priority_admission_ladder_chunked_prefill")"
+  elif [[ "${family}" == "storage_baseline" ]]; then
+    for mode in ${STORAGE_BASELINE_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "storage_baseline:real_hicache_l3")"
+  elif [[ "${family}" == "storage_controller_prefetch" ]]; then
+    for mode in ${STORAGE_CONTROLLER_PREFETCH_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "storage_controller_prefetch:real_hicache_l3_controller_prefetch")"
   fi
 done
 
@@ -367,7 +475,9 @@ echo "HARNESSES=${HARNESSES}"
 echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
 echo "TOOL_WAIT_PROFILE=${TOOL_WAIT_PROFILE}"
 echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
+echo "AGENTIC_WORKLOAD_PROFILE=${AGENTIC_WORKLOAD_PROFILE}"
 echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
+echo "TRACE_PROFILE=${TRACE_PROFILE}"
 if [[ -n "${TOOL_WAIT_PROFILE_SPEC}" ]]; then
   echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
 fi
@@ -406,6 +516,15 @@ fi
 if word_in_list "controller_priority_demotion_admission" "${SIGNAL_FAMILIES}"; then
   echo "- controller_priority_demotion_admission -> ${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES}"
 fi
+if word_in_list "controller_oracle_timeline" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_oracle_timeline -> ${CONTROLLER_ORACLE_TIMELINE_MODES}"
+fi
+if word_in_list "controller_calibrated_admission" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_calibrated_admission -> ${CONTROLLER_CALIBRATED_ADMISSION_MODES}"
+fi
+if word_in_list "controller_oracle_exact_runtime" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_oracle_exact_runtime -> ${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}"
+fi
 if word_in_list "controller_shorthand" "${SIGNAL_FAMILIES}"; then
   echo "- controller_shorthand -> ${CONTROLLER_SHORTHAND_MODES}"
 fi
@@ -417,6 +536,12 @@ if word_in_list "controller_full" "${SIGNAL_FAMILIES}"; then
 fi
 if word_in_list "controller_full_chunked" "${SIGNAL_FAMILIES}"; then
   echo "- controller_full_chunked -> ${CONTROLLER_FULL_CHUNKED_MODES}"
+fi
+if word_in_list "storage_baseline" "${SIGNAL_FAMILIES}"; then
+  echo "- storage_baseline -> ${STORAGE_BASELINE_MODES}"
+fi
+if word_in_list "storage_controller_prefetch" "${SIGNAL_FAMILIES}"; then
+  echo "- storage_controller_prefetch -> ${STORAGE_CONTROLLER_PREFETCH_MODES}"
 fi
 echo "Combined mode set for final report: ${EXPANDED_MODES}"
 
@@ -464,6 +589,18 @@ if word_in_list "controller_priority_demotion_admission" "${SIGNAL_FAMILIES}"; t
   run_family_piece "controller_priority_demotion_admission" "priority_plus_demotion_plus_admission" "${CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES}" "${HARNESSES}"
 fi
 
+if word_in_list "controller_oracle_timeline" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_oracle_timeline" "priority_plus_timeline_admission" "${CONTROLLER_ORACLE_TIMELINE_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "controller_calibrated_admission" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_calibrated_admission" "priority_plus_demotion_plus_calibrated_admission" "${CONTROLLER_CALIBRATED_ADMISSION_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "controller_oracle_exact_runtime" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_oracle_exact_runtime" "priority_plus_demotion_plus_exact_runtime_admission" "${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}" "${HARNESSES}"
+fi
+
 if word_in_list "controller_shorthand" "${SIGNAL_FAMILIES}"; then
   run_family_piece "controller_shorthand" "priority_plus_demotion_plus_admission_plus_prompt_shorthand" "${CONTROLLER_SHORTHAND_MODES}" "${HARNESSES}"
 fi
@@ -478,6 +615,14 @@ fi
 
 if word_in_list "controller_full_chunked" "${SIGNAL_FAMILIES}"; then
   run_family_piece "controller_full_chunked" "demote_priority_admission_ladder_chunked_prefill" "${CONTROLLER_FULL_CHUNKED_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "storage_baseline" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "storage_baseline" "real_hicache_l3" "${STORAGE_BASELINE_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "storage_controller_prefetch" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "storage_controller_prefetch" "real_hicache_l3_controller_prefetch" "${STORAGE_CONTROLLER_PREFETCH_MODES}" "${HARNESSES}"
 fi
 
 write_combined_run_config

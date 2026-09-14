@@ -11,7 +11,10 @@ def load_encoder(path: str | Path | None, model: str = "", *, allow_tokenizer_do
     if not path:
         return PromptEncoder()
     raw = json.loads(Path(path).read_text())
-    config = CodecConfig(**raw.get("codec", {}))
+    codec_raw = dict(raw.get("codec", {}))
+    if isinstance(codec_raw.get("enabled_rules"), list):
+        codec_raw["enabled_rules"] = tuple(codec_raw["enabled_rules"])
+    config = CodecConfig(**codec_raw)
     if config.codec == "identity":
         return PromptEncoder(config)
     from .tokenizers import HuggingFaceTokenCounter

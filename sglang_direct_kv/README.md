@@ -61,6 +61,7 @@ This project intentionally starts with SGLang rather than fake KV tensors. The g
 | Milestone 38B: Dynamo Priority Hint Bridge | Ready | [Milestone 38B](#milestone-38b-dynamo-priority-hint-bridge) |
 | Milestone 39: Projected Hardware Bypass Benefit | Ready | [Milestone 39](#milestone-39-projected-hardware-bypass-benefit) |
 | Milestone 40: Dynamo Priority KV Retention Sanity | Ready | [Milestone 40](#milestone-40-dynamo-priority-kv-retention-sanity) |
+| Hint Benchmarking Suite | Active | [../HINT_BENCHMARKING_SUITE.md](../HINT_BENCHMARKING_SUITE.md) |
 
 ## Milestone Run Command Convention
 

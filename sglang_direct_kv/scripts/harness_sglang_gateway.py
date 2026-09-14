@@ -32,6 +32,12 @@ PRIORITY_ENABLED_MODES = {
     "controller_priority_demotion_admission_medium",
     "controller_priority_demotion_admission_hard",
     "controller_priority_demotion_admission_earlyprepare",
+    "controller_oracle_safe_sjf",
+    "controller_oracle_safe_sjf_balanced",
+    "controller_oracle_safe_sjf_aggressive",
+    "controller_oracle_safe_sjf_maxfill",
+    "controller_priority_demotion_calibrated_admission",
+    "controller_oracle_exact_runtime_admission",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -48,12 +54,27 @@ CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE = "controller_priority_demotion
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE = "controller_priority_demotion_admission_medium"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE = "controller_priority_demotion_admission_hard"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE = "controller_priority_demotion_admission_earlyprepare"
+CONTROLLER_ORACLE_SAFE_SJF_MODE = "controller_oracle_safe_sjf"
+CONTROLLER_ORACLE_SAFE_SJF_BALANCED_MODE = "controller_oracle_safe_sjf_balanced"
+CONTROLLER_ORACLE_SAFE_SJF_AGGRESSIVE_MODE = "controller_oracle_safe_sjf_aggressive"
+CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE = "controller_oracle_safe_sjf_maxfill"
+CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE = "controller_priority_demotion_calibrated_admission"
+CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE = "controller_oracle_exact_runtime_admission"
+CONTROLLER_ORACLE_SAFE_SJF_MODES = {
+    CONTROLLER_ORACLE_SAFE_SJF_MODE,
+    CONTROLLER_ORACLE_SAFE_SJF_BALANCED_MODE,
+    CONTROLLER_ORACLE_SAFE_SJF_AGGRESSIVE_MODE,
+    CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE,
+    CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE,
+    CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE,
+}
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES = {
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_SOFT_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MEDIUM_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_HARD_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_EARLYPREPARE_MODE,
+    *CONTROLLER_ORACLE_SAFE_SJF_MODES,
 }
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
@@ -646,6 +667,11 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "gateway_cache_lowered": cache_chain["gateway_cache_lowered"],
         "gateway_cache_salt": cache_chain["gateway_cache_salt"],
         "gateway_cache_invented_signal": cache_chain["gateway_cache_invented_signal"],
+        "kv_storage_enabled": meta.get("kv_storage_enabled", ""),
+        "kv_storage_backend": meta.get("kv_storage_backend", ""),
+        "kv_storage_prefetch_policy": meta.get("kv_storage_prefetch_policy", ""),
+        "kv_storage_path": meta.get("kv_storage_path", ""),
+        "kv_storage_signal_source": meta.get("kv_storage_signal_source", ""),
         "harness_controller_signal": harness_controller_signal,
     }
     if context["phase"] == "speculative_prefill":
@@ -689,6 +715,11 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
+            "kv_storage_enabled": meta.get("kv_storage_enabled", ""),
+            "kv_storage_backend": meta.get("kv_storage_backend", ""),
+            "kv_storage_prefetch_policy": meta.get("kv_storage_prefetch_policy", ""),
+            "kv_storage_path": meta.get("kv_storage_path", ""),
+            "kv_storage_signal_source": meta.get("kv_storage_signal_source", ""),
             **priority_chain,
             **cache_chain,
         },
@@ -979,7 +1010,39 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "harness": harness,
                 "label": label,
                 "request_id": label,
+                "pressure_level": meta.get("pressure_level", ""),
+                "task_index": meta.get("task_index", ""),
+                "request_group": meta.get("request_group", ""),
+                "prompt_tokens": meta.get("prompt_tokens", ""),
+                "max_tokens": meta.get("max_tokens", ""),
+                "tool_wait_ms": meta.get("tool_wait_ms", ""),
+                "tool_wait_step": meta.get("tool_wait_step", ""),
+                "task_replay_steps": meta.get("task_replay_steps", ""),
+                "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                "tool_wait_class": meta.get("tool_wait_class", ""),
+                "agentic_workload_profile": meta.get("agentic_workload_profile", ""),
+                "workload_phase_family": meta.get("workload_phase_family", ""),
+                "workload_request_kind": meta.get("workload_request_kind", ""),
+                "workload_prompt_tokens_target": meta.get("workload_prompt_tokens_target", ""),
+                "workload_max_tokens": meta.get("workload_max_tokens", ""),
+                "workload_description": meta.get("workload_description", ""),
+                "estimated_runtime_ms": meta.get("estimated_runtime_ms", ""),
+                "concurrency": meta.get("concurrency", ""),
+                "active_background_requests": meta.get("active_background_requests", ""),
+                "demotable_background_requests": meta.get("demotable_background_requests", ""),
+                "filler_sessions": meta.get("filler_sessions", ""),
+                "filler_backlog_mode": meta.get("filler_backlog_mode", ""),
+                "filler_backlog_target": meta.get("filler_backlog_target", ""),
+                "filler_backlog_total": meta.get("filler_backlog_total", ""),
+                "client_submit_seq": meta.get("client_submit_seq", ""),
+                "client_sem_capacity": meta.get("client_sem_capacity", ""),
+                "client_pending_before_acquire": meta.get("client_pending_before_acquire", ""),
+                "client_inflight_before_acquire": meta.get("client_inflight_before_acquire", ""),
+                "client_pending_at_submit": meta.get("client_pending_at_submit", ""),
+                "client_inflight_at_submit": meta.get("client_inflight_at_submit", ""),
+                "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
                 "prompt_hash": meta.get("prompt_hash", ""),
+                "oracle_runtime_key": meta.get("oracle_runtime_key", ""),
                 "hint_source": "harness_gateway_intercept",
                 "dynamo_agent_priority": "high" if priority is not None and priority > 0 else "low" if priority is not None else "",
                 "sglang_priority": priority if priority is not None else "",
@@ -1006,6 +1069,11 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "parent_request_id": meta.get("parent_request_id", ""),
                 "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
                 "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
+                "kv_storage_enabled": meta.get("kv_storage_enabled", ""),
+                "kv_storage_backend": meta.get("kv_storage_backend", ""),
+                "kv_storage_prefetch_policy": meta.get("kv_storage_prefetch_policy", ""),
+                "kv_storage_path": meta.get("kv_storage_path", ""),
+                "kv_storage_signal_source": meta.get("kv_storage_signal_source", ""),
                 **priority_chain,
                 **cache_chain,
                 **shape,

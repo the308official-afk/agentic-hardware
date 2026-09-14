@@ -50,25 +50,79 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 SERVER_READY_TIMEOUT_SECS="${SERVER_READY_TIMEOUT_SECS:-900}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-12288}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-8}"
+HICACHE_IO_BACKEND="${HICACHE_IO_BACKEND:-direct}"
+HICACHE_MEM_LAYOUT="${HICACHE_MEM_LAYOUT:-layer_first}"
+HICACHE_STORAGE_BACKEND="${HICACHE_STORAGE_BACKEND:-}"
+HICACHE_STORAGE_PREFETCH_POLICY="${HICACHE_STORAGE_PREFETCH_POLICY:-timeout}"
+HICACHE_STORAGE_BACKEND_EXTRA_CONFIG="${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG:-}"
+HICACHE_STORAGE_PATH="${HICACHE_STORAGE_PATH:-}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.72}"
 BASE_EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS:---disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule}"
-AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-1}"
-AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-1}"
-AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
+TRACE_PROFILE="${TRACE_PROFILE:-full_debug}"
+TRACE_CONTROLLER_DECISIONS_DEFAULT=1
+TRACE_IDLE_GAP_AUDIT_DEFAULT=1
+case "${TRACE_PROFILE}" in
+  minimal)
+    AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-0}"
+    AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-0}"
+    AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-0}"
+    AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-0}"
+    TRACE_CONTROLLER_DECISIONS_DEFAULT=0
+    TRACE_IDLE_GAP_AUDIT_DEFAULT=0
+    ;;
+  deadline)
+    AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-1}"
+    AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-0}"
+    AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
+    AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-0}"
+    TRACE_CONTROLLER_DECISIONS_DEFAULT=0
+    TRACE_IDLE_GAP_AUDIT_DEFAULT=0
+    ;;
+  controller_decision|idle_gap)
+    AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-1}"
+    AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-0}"
+    AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
+    AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
+    ;;
+  cache_debug|full_debug|*)
+    AGENTIC_KV_TRACE_SCHEDULER="${AGENTIC_KV_TRACE_SCHEDULER:-1}"
+    AGENTIC_KV_TRACE_KV_POOL="${AGENTIC_KV_TRACE_KV_POOL:-1}"
+    AGENTIC_RUNTIME_TELEMETRY="${AGENTIC_RUNTIME_TELEMETRY:-1}"
+    AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
+    ;;
+esac
 AGENTIC_RUNTIME_TELEMETRY_BACKEND="${AGENTIC_RUNTIME_TELEMETRY_BACKEND:-sglang}"
-AGENTIC_KV_GPU_UTIL_SAMPLER="${AGENTIC_KV_GPU_UTIL_SAMPLER:-1}"
+AGENTIC_KV_COPY_TELEMETRY_ENABLE="${AGENTIC_KV_COPY_TELEMETRY_ENABLE:-1}"
 GPU_UTIL_SAMPLE_INTERVAL_MS="${GPU_UTIL_SAMPLE_INTERVAL_MS:-100}"
+TRACE_CONTROLLER_DECISIONS="${TRACE_CONTROLLER_DECISIONS:-${TRACE_CONTROLLER_DECISIONS_DEFAULT}}"
+TRACE_CONTROLLER_COMPLETION_LINKAGE="${TRACE_CONTROLLER_COMPLETION_LINKAGE:-0}"
+TRACE_IDLE_GAP_AUDIT="${TRACE_IDLE_GAP_AUDIT:-${TRACE_IDLE_GAP_AUDIT_DEFAULT}}"
 FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES:-0}"
 FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS:-}"
+FILLER_BACKLOG_MODE="${FILLER_BACKLOG_MODE:-once}"
+FILLER_BACKLOG_TARGET="${FILLER_BACKLOG_TARGET:-0}"
+FILLER_BACKLOG_TOTAL="${FILLER_BACKLOG_TOTAL:-0}"
 TOOL_WAIT_PROFILE="${TOOL_WAIT_PROFILE:-fixed}"
 TOOL_WAIT_PROFILE_SPEC="${TOOL_WAIT_PROFILE_SPEC:-}"
 TOOL_WAIT_SEED="${TOOL_WAIT_SEED:-42}"
 TASK_REPLAY_STEPS="${TASK_REPLAY_STEPS:-1}"
+AGENTIC_WORKLOAD_PROFILE="${AGENTIC_WORKLOAD_PROFILE:-synthetic_pressure}"
 CONTROLLER_CHUNKED_PREFILL_SIZE="${CONTROLLER_CHUNKED_PREFILL_SIZE:-512}"
 CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS="${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS:-4096}"
 CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS="${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS:-}"
 CONTROLLER_ADMISSION_AGGRESSIVENESS="${CONTROLLER_ADMISSION_AGGRESSIVENESS:-hard}"
-CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/dictionary_v1.json}"
+CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS="${CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS:-}"
+CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS="${CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS:-}"
+CONTROLLER_CALIBRATED_MIN_SAMPLES="${CONTROLLER_CALIBRATED_MIN_SAMPLES:-}"
+CONTROLLER_CALIBRATED_QUANTILE="${CONTROLLER_CALIBRATED_QUANTILE:-}"
+CONTROLLER_CALIBRATION_HISTORY_CSV="${CONTROLLER_CALIBRATION_HISTORY_CSV:-}"
+CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV="${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV:-}"
+CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS="${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS:-}"
+CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT="${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT:-}"
+CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE="${CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE:-}"
+CONTROLLER_ORACLE_EXACT_FALLBACK_MS="${CONTROLLER_ORACLE_EXACT_FALLBACK_MS:-}"
+WORKLOAD_SHAPE_MODE_INDEPENDENT="${WORKLOAD_SHAPE_MODE_INDEPENDENT:-0}"
+CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/agent_trace_relations_v1.json}"
 CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE:-target_requests}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
@@ -85,11 +139,12 @@ RUN_ENV_JSON="${REPORT_DIR}/run_environment.json"
 GPU_UTIL_CSV="${REPORT_DIR}/gpu_utilization_samples.csv"
 GPU_UTIL_LOG="${REPORT_DIR}/gpu_utilization_sampler.log"
 # Snapshot explicit global encoding configuration so a concurrent edit cannot alter a live run.
-ENCODING_CASE_KEY=""
+EXPLICIT_CASE_KEY="${ENCODING_CASE_KEY:-}"
+ENCODING_CASE_KEY="${EXPLICIT_CASE_KEY}"
 if [[ -n "${PROMPT_CODEC_CONFIG:-}" ]]; then
   cp "${PROMPT_CODEC_CONFIG}" "${REPORT_DIR}/prompt_codec.input.json"
   export PROMPT_CODEC_CONFIG="${REPORT_DIR}/prompt_codec.input.json"
-  ENCODING_CASE_KEY="$("${PYTHON_BIN}" - <<'PYCODEC'
+  PROMPT_ENCODING_CASE_KEY="$("${PYTHON_BIN}" - <<'PYCODEC'
 import hashlib, json, os, subprocess
 from pathlib import Path
 config = json.loads(Path(os.environ["PROMPT_CODEC_CONFIG"]).read_text())
@@ -101,6 +156,11 @@ value = {"config": config, "scope": os.environ.get("PROMPT_ENCODING_SCOPE", "tar
 print(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16])
 PYCODEC
 )"
+  if [[ -n "${ENCODING_CASE_KEY}" ]]; then
+    ENCODING_CASE_KEY="${ENCODING_CASE_KEY}_${PROMPT_ENCODING_CASE_KEY}"
+  else
+    ENCODING_CASE_KEY="${PROMPT_ENCODING_CASE_KEY}"
+  fi
 fi
 GPU_UTIL_SAMPLER_PID=""
 SERVER_PID=""
@@ -237,6 +297,12 @@ write_run_config() {
     echo "SKIP_EXISTING_CASES=${SKIP_EXISTING_CASES}"
     echo "MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS}"
     echo "HICACHE_SIZE_GB=${HICACHE_SIZE_GB}"
+    echo "HICACHE_IO_BACKEND=${HICACHE_IO_BACKEND}"
+    echo "HICACHE_MEM_LAYOUT=${HICACHE_MEM_LAYOUT}"
+    echo "HICACHE_STORAGE_BACKEND=${HICACHE_STORAGE_BACKEND}"
+    echo "HICACHE_STORAGE_PREFETCH_POLICY=${HICACHE_STORAGE_PREFETCH_POLICY}"
+    echo "HICACHE_STORAGE_BACKEND_EXTRA_CONFIG=${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG}"
+    echo "HICACHE_STORAGE_PATH=${HICACHE_STORAGE_PATH}"
     echo "MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC}"
     echo "P0_CONTROL=$(level_knobs p0_control | tr ' ' ',')"
     echo "P1_MILD=$(level_knobs p1_mild | tr ' ' ',')"
@@ -246,14 +312,38 @@ write_run_config() {
     echo "P5_BOSS_QUEUE=$(level_knobs p5_boss_queue | tr ' ' ',')"
     echo "FILLER_REPLAY_DEADLINES=${FILLER_REPLAY_DEADLINES}"
     echo "FILLER_REPLAY_DEADLINE_MS=${FILLER_REPLAY_DEADLINE_MS}"
+    echo "FILLER_BACKLOG_MODE=${FILLER_BACKLOG_MODE}"
+    echo "FILLER_BACKLOG_TARGET=${FILLER_BACKLOG_TARGET}"
+    echo "FILLER_BACKLOG_TOTAL=${FILLER_BACKLOG_TOTAL}"
     echo "TOOL_WAIT_PROFILE=${TOOL_WAIT_PROFILE}"
     echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
     echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
     echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
+    echo "AGENTIC_WORKLOAD_PROFILE=${AGENTIC_WORKLOAD_PROFILE}"
+    echo "TRACE_PROFILE=${TRACE_PROFILE}"
+    echo "TRACE_CONTROLLER_DECISIONS=${TRACE_CONTROLLER_DECISIONS}"
+    echo "TRACE_CONTROLLER_COMPLETION_LINKAGE=${TRACE_CONTROLLER_COMPLETION_LINKAGE}"
+    echo "TRACE_IDLE_GAP_AUDIT=${TRACE_IDLE_GAP_AUDIT}"
+    echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER}"
+    echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL}"
+    echo "AGENTIC_KV_COPY_TELEMETRY_ENABLE=${AGENTIC_KV_COPY_TELEMETRY_ENABLE}"
+    echo "AGENTIC_RUNTIME_TELEMETRY=${AGENTIC_RUNTIME_TELEMETRY}"
+    echo "AGENTIC_KV_GPU_UTIL_SAMPLER=${AGENTIC_KV_GPU_UTIL_SAMPLER}"
     echo "CONTROLLER_CHUNKED_PREFILL_SIZE=${CONTROLLER_CHUNKED_PREFILL_SIZE}"
     echo "CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS=${CONTROLLER_CHUNKED_MAX_PREFILL_TOKENS}"
     echo "CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS=${CONTROLLER_CHUNKED_PREFILL_MAX_REQUESTS}"
     echo "CONTROLLER_ADMISSION_AGGRESSIVENESS=${CONTROLLER_ADMISSION_AGGRESSIVENESS}"
+    echo "CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS=${CONTROLLER_CALIBRATED_DEFAULT_FLOOR_MS}"
+    echo "CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS=${CONTROLLER_CALIBRATED_UNKNOWN_FLOOR_MS}"
+    echo "CONTROLLER_CALIBRATED_MIN_SAMPLES=${CONTROLLER_CALIBRATED_MIN_SAMPLES}"
+    echo "CONTROLLER_CALIBRATED_QUANTILE=${CONTROLLER_CALIBRATED_QUANTILE}"
+    echo "CONTROLLER_CALIBRATION_HISTORY_CSV=${CONTROLLER_CALIBRATION_HISTORY_CSV}"
+    echo "CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV=${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV}"
+    echo "CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS=${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS}"
+    echo "CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT=${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT}"
+    echo "CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE=${CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE}"
+    echo "CONTROLLER_ORACLE_EXACT_FALLBACK_MS=${CONTROLLER_ORACLE_EXACT_FALLBACK_MS}"
+    echo "WORKLOAD_SHAPE_MODE_INDEPENDENT=${WORKLOAD_SHAPE_MODE_INDEPENDENT}"
     echo "CONTROLLER_SHORTHAND_CODEC_CONFIG=${CONTROLLER_SHORTHAND_CODEC_CONFIG}"
     echo "CONTROLLER_SHORTHAND_ENCODING_SCOPE=${CONTROLLER_SHORTHAND_ENCODING_SCOPE}"
   } >"${RUN_CONFIG_ENV}"
@@ -295,8 +385,14 @@ run_case() {
   local server_log="${case_root}/sglang_server.log"
   local gateway_log="${case_root}/harness_gateway.log"
   local gateway_events="${case_root}/harness_gateway_events.jsonl"
+  local case_gpu_util_csv="${case_root}/gpu_utilization_samples.csv"
+  local case_gpu_util_log="${case_root}/gpu_utilization_sampler.log"
   local case_prompt_codec_config="${PROMPT_CODEC_CONFIG:-}"
   local case_prompt_encoding_scope="${PROMPT_ENCODING_SCOPE:-target_requests}"
+  local case_hicache_storage_backend=""
+  local case_hicache_storage_prefetch_policy=""
+  local case_hicache_storage_backend_extra_config=""
+  local case_hicache_storage_path=""
 
   if [[ "${mode}" == "controller_priority_demotion_admission_shorthand" && -z "${case_prompt_codec_config}" ]]; then
     case_prompt_codec_config="${CONTROLLER_SHORTHAND_CODEC_CONFIG}"
@@ -309,7 +405,20 @@ run_case() {
     echo "==== Skipping existing completed case: ${case_id} ===="
     return
   fi
-  rm -f "${trace}" "${telemetry}" "${runtime_telemetry}" "${metrics}" "${server_log}" "${gateway_log}" "${gateway_events}"
+  rm -f "${trace}" "${telemetry}" "${runtime_telemetry}" "${metrics}" "${server_log}" "${gateway_log}" "${gateway_events}" "${case_gpu_util_csv}" "${case_gpu_util_log}"
+  if [[ "${mode}" == storage_hicache_* ]]; then
+    case_hicache_storage_backend="${HICACHE_STORAGE_BACKEND}"
+    case_hicache_storage_prefetch_policy="${HICACHE_STORAGE_PREFETCH_POLICY}"
+    case_hicache_storage_backend_extra_config="${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG}"
+    case_hicache_storage_path="${HICACHE_STORAGE_PATH}"
+    if [[ -z "${case_hicache_storage_backend}" ]]; then
+      case_hicache_storage_backend="file"
+    fi
+    if [[ -z "${case_hicache_storage_path}" ]]; then
+      case_hicache_storage_path="${case_root}/hicache_storage"
+    fi
+    mkdir -p "${case_hicache_storage_path}"
+  fi
   if [[ -n "${case_prompt_codec_config}" ]]; then
     cp "${case_prompt_codec_config}" "${case_root}/prompt_codec.input.json"
     case_prompt_codec_config="${case_root}/prompt_codec.input.json"
@@ -317,21 +426,31 @@ run_case() {
 
   echo
   echo "==== Multi-harness case: harness=${harness} mode=${mode} level=${level} ===="
+  GPU_UTIL_CSV="${case_gpu_util_csv}"
+  GPU_UTIL_LOG="${case_gpu_util_log}"
+  start_gpu_util_sampler
   export AGENTIC_KV_TRACE_ENABLE=1
   export AGENTIC_KV_TRACE_PATH="${trace}"
   export AGENTIC_KV_TRACE_SCHEDULER
   export AGENTIC_KV_TRACE_KV_POOL
-  export AGENTIC_KV_COPY_TELEMETRY_ENABLE=1
+  export TRACE_CONTROLLER_COMPLETION_LINKAGE
+  export AGENTIC_KV_COPY_TELEMETRY_ENABLE
   export AGENTIC_KV_COPY_TELEMETRY_PATH="${telemetry}"
   export AGENTIC_RUNTIME_TELEMETRY
   export AGENTIC_RUNTIME_TELEMETRY_BACKEND
   export AGENTIC_RUNTIME_TELEMETRY_PATH="${runtime_telemetry}"
   export HICACHE_SIZE_GB
+  export HICACHE_IO_BACKEND
+  export HICACHE_MEM_LAYOUT
+  export HICACHE_STORAGE_BACKEND="${case_hicache_storage_backend}"
+  export HICACHE_STORAGE_PREFETCH_POLICY="${case_hicache_storage_prefetch_policy}"
+  export HICACHE_STORAGE_BACKEND_EXTRA_CONFIG="${case_hicache_storage_backend_extra_config}"
+  export HICACHE_STORAGE_PATH="${case_hicache_storage_path}"
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_priority_demotion_admission_soft" || "${mode}" == "controller_priority_demotion_admission_medium" || "${mode}" == "controller_priority_demotion_admission_hard" || "${mode}" == "controller_priority_demotion_admission_earlyprepare" || "${mode}" == "controller_priority_demotion_admission_shorthand" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_priority_demotion_admission_soft" || "${mode}" == "controller_priority_demotion_admission_medium" || "${mode}" == "controller_priority_demotion_admission_hard" || "${mode}" == "controller_priority_demotion_admission_earlyprepare" || "${mode}" == "controller_priority_demotion_admission_shorthand" || "${mode}" == "controller_oracle_timeline" || "${mode}" == "controller_oracle_safe_sjf" || "${mode}" == "controller_oracle_safe_sjf_balanced" || "${mode}" == "controller_oracle_safe_sjf_aggressive" || "${mode}" == "controller_oracle_safe_sjf_maxfill" || "${mode}" == "controller_priority_demotion_calibrated_admission" || "${mode}" == "controller_oracle_exact_runtime_admission" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
-  elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" ]]; then
+  elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" || "${mode}" == "storage_hicache_baseline" || "${mode}" == "storage_hicache_controller_prefetch" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"
   fi
   if [[ "${mode}" == "controller_full_chunked_prefill" ]]; then
@@ -395,14 +514,22 @@ PYPORT
     --tool-wait-profile-spec "${TOOL_WAIT_PROFILE_SPEC}" \
     --tool-wait-seed "${TOOL_WAIT_SEED}" \
     --task-replay-steps "${TASK_REPLAY_STEPS}" \
+    --agentic-workload-profile "${AGENTIC_WORKLOAD_PROFILE}" \
     --target-prompt-tokens "${target_prompt_tokens}" \
     --filler-sessions "${filler_sessions}" \
     --filler-prompt-tokens "${filler_prompt_tokens}" \
+    --filler-backlog-mode "${FILLER_BACKLOG_MODE}" \
+    --filler-backlog-target "${FILLER_BACKLOG_TARGET}" \
+    --filler-backlog-total "${FILLER_BACKLOG_TOTAL}" \
     --session-count "${session_count}" \
     --concurrency "${concurrency}" \
+    --trace-profile "${TRACE_PROFILE}" \
+    --trace-controller-decisions "${TRACE_CONTROLLER_DECISIONS}" \
+    --trace-controller-completion-linkage "${TRACE_CONTROLLER_COMPLETION_LINKAGE}" \
     "${driver_extra_args[@]}" | tee "${case_root}/driver.log"
 
   cleanup_case
+  stop_gpu_util_sampler
   echo "==== Completed: ${case_id} ===="
 }
 
@@ -494,12 +621,12 @@ echo "MODES=${MODES}"
 echo "PRESSURE_LEVELS=${PRESSURE_LEVELS}"
 echo "TOOL_WAIT_PROFILE=${TOOL_WAIT_PROFILE}"
 echo "TASK_REPLAY_STEPS=${TASK_REPLAY_STEPS}"
+echo "AGENTIC_WORKLOAD_PROFILE=${AGENTIC_WORKLOAD_PROFILE}"
 echo "TOOL_WAIT_SEED=${TOOL_WAIT_SEED}"
 if [[ -n "${TOOL_WAIT_PROFILE_SPEC}" ]]; then
   echo "TOOL_WAIT_PROFILE_SPEC=${TOOL_WAIT_PROFILE_SPEC}"
 fi
 
-start_gpu_util_sampler
 for harness in ${HARNESSES}; do
   for level in ${PRESSURE_LEVELS}; do
     for mode in ${MODES}; do
@@ -507,7 +634,6 @@ for harness in ${HARNESSES}; do
     done
   done
 done
-stop_gpu_util_sampler
 build_final_report
 
 echo

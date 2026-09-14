@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Replay Deadline Pressure Chart</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: #111827; background: #f8fafc; }
+main { max-width: 1600px; margin: 0 auto; padding: 32px; }
+h1 { margin: 0 0 8px; font-size: 30px; }
+h2 { margin-top: 32px; font-size: 22px; }
+p { line-height: 1.5; color: #334155; }
+.card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-top: 18px; overflow-x: auto; }
+.legend-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; margin-top: 10px; }
+.legend-row { display: flex; gap: 18px; align-items: flex-start; margin: 8px 0; }
+.legend-row strong { flex: 0 0 130px; }
+.legend-items { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.legend-item { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.muted { color: #64748b; }
+.legend-dot { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+.legend-symbol { width: 18px; height: 18px; flex: 0 0 auto; overflow: visible; }
+.chart-controls { display: grid; gap: 10px; margin-bottom: 14px; padding: 14px 16px; border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff; }
+.control-row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.control-row strong { flex: 0 0 112px; }
+.control-button { appearance: none; border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #111827; font-weight: 700; padding: 6px 10px; cursor: pointer; }
+.control-button:hover { border-color: #64748b; background: #f8fafc; }
+.control-hint { color: #64748b; font-size: 12px; }
+.chip-list { display: flex; flex-wrap: wrap; gap: 8px 10px; }
+.chart-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e2e8f0; border-radius: 999px; background: white; padding: 5px 9px; font-size: 12px; font-weight: 650; color: #334155; }
+.chip-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+.deadline-panel-symlog { display: none; }
+.deadline-panel-linear { display: inline; }
+.note { border-left: 4px solid #2563eb; background: #eff6ff; padding: 12px 16px; color: #1e3a8a; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; background: white; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+th { background: #f1f5f9; font-weight: 700; }
+code { background: #eef2ff; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Replay Deadline Pressure Chart</h1>
+<p>Report label: <code>admission_aggressiveness_p3_20260910_135640</code>. Generated 2026-09-10 14:27:22 UTC.</p>
+<p>Hardware profile: <code>ec2_a10g</code>. Profile file: <code>configs/hardware/ec2_a10g.env</code>.</p>
+    <p class="note">This lightweight all-harness report uses the completed workload traces directly. Each dot is the median replay for one harness and signal path; labels show n= when multiple replay requests were summarized. Use the controls to choose signal paths, switch the deadline-pressure axis between linear and symlog, and focus on selected pressure levels such as P0/P3/P5. The TTFT-impact view shows how long each replay request took to reach first token after it started. Lower is better. Exact lower-level modes remain in the evidence file.</p>
+	<h2>Signal Family Definitions</h2>
+	<p>This table explains who added the signal before it reached SGLang. The chart uses this family view first, while raw mode names remain in the evidence tables.</p>
+	<div class="card"><table><thead><tr><th>family</th><th>where_signal_is_added</th><th>what_it_means</th><th>raw_modes</th></tr></thead><tbody><tr><td>Baseline</td><td>Nowhere</td><td>No priority or cache signal is supplied for the studied replay request.</td><td>no_prefetch</td></tr><tr><td>Harness-originated</td><td>Inside or by the harness</td><td>The harness emits cache or priority intent; the gateway lowers cache signals to gateway speculative KV preload and priority signals to SGLang priority.</td><td>harness_emitted_signals</td></tr><tr><td>Front-end supplied</td><td>Before the request enters the harness</td><td>The experiment/front end marks the request before the harness sees it; the gateway translates what survives.</td><td>pre_harness_priority_hints</td></tr><tr><td>Gateway-injected</td><td>After the harness, before SGLang</td><td>The harness output is normal; the gateway attaches SGLang priority at the backend boundary.</td><td>e2e_priority_hints</td></tr><tr><td>Controller observe-only</td><td>Portable controller sidecar</td><td>The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang.</td><td>controller_observe_only</td></tr><tr><td>Controller scheduler priority</td><td>Portable controller sidecar, lowered by gateway</td><td>The controller consumes lifecycle state and, when replay is ready, authorizes SGLang scheduler priority. No speculative KV work is enabled in this phase.</td><td>controller_scheduler_priority</td></tr><tr><td>Controller speculative KV preload</td><td>Portable controller sidecar, lowered by gateway</td><td>The controller consumes lifecycle state during tool wait and authorizes a gateway speculative KV preload before replay. No scheduler priority is enabled in this phase.</td><td>controller_speculative_preload</td></tr><tr><td>Controller targeted KV prefetch</td><td>Portable controller sidecar, lowered by backend adapter when supported</td><td>The controller requests explicit host-to-device KV movement for the target prefix. If the active SGLang version has no stable direct hook, the report records that honestly instead of using a warmup fallback.</td><td>controller_targeted_kv_prefetch</td></tr><tr><td>Full controller</td><td>Portable controller sidecar, lowered by gateway</td><td>The controller combines the useful EC2 pieces: demote background traffic, priority-raise replay, skip speculative preload by policy, restore after replay, and rank tied urgent replays by deadline.</td><td>controller_full</td></tr><tr><td>Full controller + chunked prefill</td><td>Portable controller sidecar plus SGLang launch-time chunking</td><td>Same full-controller request decisions, with smaller SGLang prefill chunks so urgent replays have more scheduler boundaries between background chunks.</td><td>controller_full_chunked_prefill</td></tr></tbody></table></div>
+	<h2>Harness Cache Signal Decision Map</h2>
+	<p>This table explains how each harness produced cache signals in this report. It focuses on the target replay requests shown in the chart.</p>
+	<div class="card"><table><thead><tr><th>Harness</th><th>Did target replay emit cache signal?</th><th>What signal appeared</th><th>How the harness likely decided</th><th>Simple explanation</th></tr></thead><tbody><tr><td>Claude Code</td><td>Yes</td><td>cache_control on system and messages blocks</td><td>Structured prompt-builder rule</td><td>Claude Code knows some blocks are stable, like system instructions, tool definitions, and earlier context. It marks those blocks cacheable.</td></tr><tr><td>Qwen Code</td><td>Yes</td><td>cache_control on system, messages, and tools blocks</td><td>Cache-control setting plus structured prompt-builder rule</td><td>Qwen Code was configured with cache control enabled. It then marked stable prompt sections such as system/tool/context blocks.</td></tr><tr><td>OpenCode</td><td>Yes</td><td>promptCacheKey</td><td>Provider/session cache-key rule</td><td>OpenCode was configured to always attach a cache key for that provider/session. It did not inspect the request deeply.</td></tr><tr><td>Codex</td><td>Yes</td><td>prompt_cache_key</td><td>Session/provider cache-key rule</td><td>Codex attached a stable cache key so related requests in the same task/session can be grouped for cache reuse.</td></tr><tr><td>Pi Agent Harness</td><td>Yes</td><td>cache_control, prompt_cache_key, prompt_cache_retention</td><td>Session affinity plus cache compatibility rule</td><td>Pi carried both block-style cache markers and a session cache identity. It was mainly saying: &quot;this session has reusable context.&quot;</td></tr><tr><td>OpenClaw</td><td>Yes</td><td>prompt_cache_key, prompt_cache_retention</td><td>Session/provider cache-key rule</td><td>OpenClaw attached a stable cache key and retention hint because the provider config said prompt cache keys and long retention are supported.</td></tr><tr><td>NeMo Agent Toolkit / NAT</td><td>Yes</td><td>nvext.cache_control</td><td>Workflow/transport cache policy</td><td>NAT&#x27;s Dynamo-style transport was configured to always emit cache control for that workflow path.</td></tr><tr><td>DeepAgents / Hatcher</td><td>No</td><td>None seen</td><td>No cache-emitting rule observed</td><td>For the target replay rows, we did not see native cache metadata from this harness.</td></tr><tr><td>Hermes Agent</td><td>No</td><td>None seen</td><td>No cache-emitting rule observed</td><td>For the target replay rows, we did not see native cache metadata from this harness.</td></tr></tbody></table>
+<p class="muted">The simplest way to group them:</p>
+<table><thead><tr><th>Group</th><th>Harnesses</th><th>Meaning</th></tr></thead><tbody><tr><td>Structured prompt block caching</td><td>Claude Code, Qwen Code, Pi</td><td>The harness marks stable pieces of the prompt, like system instructions, tools, or context.</td></tr><tr><td>Session cache key caching</td><td>Codex, OpenCode, OpenClaw, Pi</td><td>The harness attaches a stable key so related requests can be associated with the same cache/session.</td></tr><tr><td>Workflow transport cache policy</td><td>NAT</td><td>The transport/workflow layer is configured to emit cache control.</td></tr><tr><td>No cache signal observed</td><td>DeepAgents/Hatcher, Hermes</td><td>No target replay cache signal was seen in this run.</td></tr></tbody></table>
+<p><strong>Main takeaway:</strong> These harnesses mostly emit cache signals because their prompt builder, provider config, session config, or workflow transport says "this request has reusable context." They are not generally deciding that the request is urgent.</p></div>
+	<h2>Pressure Level Definitions</h2>
+	<p>Each pressure level is a bundled stress setting, not a full Cartesian sweep. The chart below shows only the levels marked <strong>Yes</strong> for this run.</p>
+	<div class="card"><table><thead><tr><th>level</th><th>in_this_run</th><th>what_it_means</th><th>knobs</th></tr></thead><tbody><tr><td>P0 Control</td><td>No</td><td>Easy baseline. Confirms the replay path works when the system is not under pressure.</td><td>tool_wait_ms=500,target_prompt_tokens=1024,filler_sessions=0,filler_prompt_tokens=768,session_count=1,concurrency=1</td></tr><tr><td>P1 Short Wait</td><td>No</td><td>Short-wait pressure. Tests whether replay can resume after a small tool pause.</td><td>tool_wait_ms=250,target_prompt_tokens=2048,filler_sessions=8,filler_prompt_tokens=1024,session_count=1,concurrency=4</td></tr><tr><td>P2 Large KV</td><td>No</td><td>Large-KV pressure. Tests whether a larger target context makes replay readiness harder.</td><td>tool_wait_ms=100,target_prompt_tokens=3072,filler_sessions=16,filler_prompt_tokens=1536,session_count=1,concurrency=6</td></tr><tr><td>P3 Queue Pressure</td><td>Yes</td><td>Queue pressure. One urgent replay returns while older backend work is already queued.</td><td>tool_wait_ms=1000,target_prompt_tokens=4096,filler_sessions=32,filler_prompt_tokens=1536,session_count=1,concurrency=8</td></tr><tr><td>P4 KV Pool Pressure</td><td>No</td><td>KV-pool pressure. More filler work pushes harder on cache capacity and backend pressure.</td><td>tool_wait_ms=25,target_prompt_tokens=4096,filler_sessions=48,filler_prompt_tokens=2048,session_count=1,concurrency=10</td></tr><tr><td>P5 Boss Queue</td><td>No</td><td>Urgent burst pressure. Many urgent agents become ready together, so priority cannot make all of them first.</td><td>tool_wait_ms=50,target_prompt_tokens=4096,filler_sessions=4,filler_prompt_tokens=2048,session_count=4,concurrency=12</td></tr></tbody></table></div>
+<div class="card"><div class="chart-controls" aria-label="Replay chart controls"><div class="control-row"><strong>View</strong><button type="button" class="control-button" data-chart-preset="manager">Manager View</button><button type="button" class="control-button" data-chart-preset="all">Show All</button><span class="control-hint">Manager View keeps baseline, harness cache, harness cache + priority, front-end supplied, and full controller visible.</span></div><div class="control-row"><strong>Deadline axis</strong><label class="chart-chip"><input type="radio" name="deadline-axis" value="linear" checked> Linear</label><label class="chart-chip"><input type="radio" name="deadline-axis" value="symlog"> Symlog</label><span class="control-hint">Linear shows true distance; symlog compresses very large misses so small misses stay visible.</span></div><div class="control-row"><strong>Signals</strong><div class="chip-list"><label class="chart-chip" title="No signal was actually supplied or lowered for this replay"><input type="checkbox" data-signal-filter value="baseline" checked><span class="chip-dot" style="background:#475569"></span><span>Baseline</span></label><label class="chart-chip" title="Front end supplied signal intent before the harness; gateway lowered what came through"><input type="checkbox" data-signal-filter value="frontend_supplied" checked><span class="chip-dot" style="background:#7c3aed"></span><span>Front-End Supplied</span></label><label class="chart-chip" title="Controller raises replay priority and holds background admission only during the final quarter of the tool-wait window"><input type="checkbox" data-signal-filter value="controller_priority_demotion_admission_soft"><span class="chip-dot" style="background:#0284c7"></span><span>Controller Admission Soft</span></label><label class="chart-chip" title="Controller raises replay priority and holds background admission during the final half of the tool-wait window"><input type="checkbox" data-signal-filter value="controller_priority_demotion_admission_medium"><span class="chip-dot" style="background:#0369a1"></span><span>Controller Admission Medium</span></label><label class="chart-chip" title="Controller raises replay priority and holds background admission for the full tool-wait window"><input type="checkbox" data-signal-filter value="controller_priority_demotion_admission_hard"><span class="chip-dot" style="background:#1d4ed8"></span><span>Controller Admission Hard</span></label></div></div><div class="control-row"><strong>Pressure levels</strong><button type="button" class="control-button" data-pressure-preset="core">Core P0/P3/P5</button><button type="button" class="control-button" data-pressure-preset="all">All Pressures</button><div class="chip-list"><label class="chart-chip" title="Queue pressure. One urgent replay returns while older backend work is already queued."><input type="checkbox" data-pressure-filter value="p3_high" checked><span>P3 Queue Pressure</span></label></div></div></div><svg class="replay-pressure-chart" viewBox="0 0 1400 1117" width="1400" height="1117" data-full-width="1400" data-chart-height="1117" data-left="120" data-right="40" data-pressure-width="1240.000000" data-pressure-order="[&quot;p3_high&quot;]" role="img" aria-label="Replay Deadline Pressure Chart">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<g class="deadline-panel deadline-panel-symlog" data-axis="symlog">
+<text x="120" y="36.0" font-size="18" font-weight="800" fill="#111827">A. Replay Deadline Pressure (Symlog Axis)</text>
+<text x="120" y="58.0" font-size="12" fill="#64748b">Delay view: every dot is one replay first token. Above zero missed the replay deadline; below zero was early.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="370.6" y2="370.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="374.6" text-anchor="end" font-size="12" fill="#374151">-1000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="358.0" y2="358.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="362.0" text-anchor="end" font-size="12" fill="#374151">-500 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="328.7" y2="328.7" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="332.7" text-anchor="end" font-size="12" fill="#374151">-100 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="274.2" y2="274.2" stroke="#111827" stroke-width="1.5"/>
+<text x="108" y="278.2" text-anchor="end" font-size="12" fill="#374151">0 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="232.4" y2="232.4" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="236.4" text-anchor="end" font-size="12" fill="#374151">50 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="190.5" y2="190.5" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="194.5" text-anchor="end" font-size="12" fill="#374151">500 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="177.9" y2="177.9" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="181.9" text-anchor="end" font-size="12" fill="#374151">1000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="148.6" y2="148.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="152.6" text-anchor="end" font-size="12" fill="#374151">5000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="136.0" y2="136.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="140.0" text-anchor="end" font-size="12" fill="#374151">10000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="103.4" y2="103.4" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="107.4" text-anchor="end" font-size="12" fill="#374151">60000 ms</text>
+<text class="chart-zero-label" x="1356" y="266.2" text-anchor="end" font-size="13" font-weight="700">0 ms deadline</text>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="82" y2="426.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text x="740.0" y="448.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+<text x="740.0" y="467.0" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color = signal path</text>
+<line x1="120.0" x2="120.0" y1="82" y2="426.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="82" y2="426.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="416.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="baseline">
+<text x="704.0" y="97.9" text-anchor="middle" font-size="9" font-weight="700" fill="#475569" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">46.8s</text>
+<g><title>A. Replay Deadline Pressure (Symlog Axis) | P3 Queue Pressure | DeepAgents | Baseline | raw modes: NP = No prefetch | median 46761.1 ms vs deadline | n=1</title><circle cx="704.0" cy="107.9" r="5.8" fill="#475569" stroke="#475569" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied">
+<text x="722.0" y="150.3" text-anchor="middle" font-size="9" font-weight="700" fill="#7c3aed" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">11.0s</text>
+<g><title>A. Replay Deadline Pressure (Symlog Axis) | P3 Queue Pressure | DeepAgents | Front-End Supplied | raw modes: PH = Pre-harness priority hints | median 10964.7 ms vs deadline | n=1</title><circle cx="722.0" cy="134.3" r="5.8" fill="#7c3aed" stroke="#7c3aed" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft">
+<text x="740.0" y="151.2" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.4s</text>
+<g><title>A. Replay Deadline Pressure (Symlog Axis) | P3 Queue Pressure | DeepAgents | Controller Admission Soft | raw modes: PDA-S = Controller priority + demotion + admission / soft | median 10418.0 ms vs deadline | n=1</title><circle cx="740.0" cy="135.2" r="5.8" fill="#0284c7" stroke="#0284c7" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium">
+<text x="758.0" y="151.8" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.1s</text>
+<g><title>A. Replay Deadline Pressure (Symlog Axis) | P3 Queue Pressure | DeepAgents | Controller Admission Medium | raw modes: PDA-M = Controller priority + demotion + admission / medium | median 10089.2 ms vs deadline | n=1</title><circle cx="758.0" cy="135.8" r="5.8" fill="#0369a1" stroke="#0369a1" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard">
+<text x="776.0" y="213.2" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">345ms</text>
+<g><title>A. Replay Deadline Pressure (Symlog Axis) | P3 Queue Pressure | DeepAgents | Controller Admission Hard | raw modes: PDA-H = Controller priority + demotion + admission / hard | median 344.5 ms vs deadline | n=1</title><circle cx="776.0" cy="197.2" r="5.8" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2" opacity="0.9"/></g>
+</g>
+<line x1="120.0" x2="120.0" y1="82" y2="426.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="82" y2="426.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 237.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">lateness vs replay deadline ms (symlog)</text>
+<text x="120.0" y="480.0" font-size="11" font-weight="800" fill="#111827">Legend</text>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="baseline">
+<g><title>Baseline</title><circle cx="206.0" cy="476.0" r="5.8" fill="#475569" stroke="#475569" stroke-width="2" opacity="0.9"/></g>
+<text x="222.0" y="480.0" font-size="10" font-weight="650" fill="#334155">Baseline</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="frontend_supplied">
+<g><title>Front-End Supplied</title><circle cx="310.0" cy="476.0" r="5.8" fill="#7c3aed" stroke="#7c3aed" stroke-width="2" opacity="0.9"/></g>
+<text x="326.0" y="480.0" font-size="10" font-weight="650" fill="#334155">Front-End Supplied</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_soft">
+<g><title>Controller Admission Soft</title><circle cx="461.8" cy="476.0" r="5.8" fill="#0284c7" stroke="#0284c7" stroke-width="2" opacity="0.9"/></g>
+<text x="477.8" y="480.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Soft</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_medium">
+<g><title>Controller Admission Medium</title><circle cx="656.3" cy="476.0" r="5.8" fill="#0369a1" stroke="#0369a1" stroke-width="2" opacity="0.9"/></g>
+<text x="672.3" y="480.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Medium</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_hard">
+<g><title>Controller Admission Hard</title><circle cx="863.0" cy="476.0" r="5.8" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2" opacity="0.9"/></g>
+<text x="879.0" y="480.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Hard</text>
+</g>
+<text x="120.0" y="504.0" font-size="10" fill="#64748b">Each dot is the median replay for that harness and signal path. Labels show n= when multiple replay requests were summarized.</text>
+<text x="120.0" y="525.0" font-size="10" fill="#64748b">Harness identity is the sub-window label on the x-axis.</text>
+</g>
+<g class="deadline-panel deadline-panel-linear" data-axis="linear">
+<text x="120" y="36.0" font-size="18" font-weight="800" fill="#111827">A. Replay Deadline Pressure (Linear Axis)</text>
+<text x="120" y="58.0" font-size="12" fill="#64748b">Same replay-deadline data, but with a normal y-axis. This preserves true distance, though small values may bunch near the bottom.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="315.0" y2="315.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="319.0" text-anchor="end" font-size="12" fill="#374151">10000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="257.5" y2="257.5" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="261.5" text-anchor="end" font-size="12" fill="#374151">20000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="142.3" y2="142.3" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="146.3" text-anchor="end" font-size="12" fill="#374151">40000 ms</text>
+<text class="chart-zero-label" x="1356" y="364.6" text-anchor="end" font-size="13" font-weight="700">0 ms deadline</text>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="82" y2="426.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text x="740.0" y="448.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+<text x="740.0" y="467.0" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color = signal path</text>
+<line x1="120.0" x2="120.0" y1="82" y2="426.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="82" y2="426.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="416.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="baseline">
+<text x="704.0" y="94.0" text-anchor="middle" font-size="9" font-weight="700" fill="#475569" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">46.8s</text>
+<g><title>A. Replay Deadline Pressure (Linear Axis) | P3 Queue Pressure | DeepAgents | Baseline | raw modes: NP = No prefetch | median 46761.1 ms vs deadline | n=1</title><circle cx="704.0" cy="103.4" r="5.8" fill="#475569" stroke="#475569" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied">
+<text x="722.0" y="325.5" text-anchor="middle" font-size="9" font-weight="700" fill="#7c3aed" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">11.0s</text>
+<g><title>A. Replay Deadline Pressure (Linear Axis) | P3 Queue Pressure | DeepAgents | Front-End Supplied | raw modes: PH = Pre-harness priority hints | median 10964.7 ms vs deadline | n=1</title><circle cx="722.0" cy="309.5" r="5.8" fill="#7c3aed" stroke="#7c3aed" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft">
+<text x="740.0" y="328.6" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.4s</text>
+<g><title>A. Replay Deadline Pressure (Linear Axis) | P3 Queue Pressure | DeepAgents | Controller Admission Soft | raw modes: PDA-S = Controller priority + demotion + admission / soft | median 10418.0 ms vs deadline | n=1</title><circle cx="740.0" cy="312.6" r="5.8" fill="#0284c7" stroke="#0284c7" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium">
+<text x="758.0" y="330.5" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.1s</text>
+<g><title>A. Replay Deadline Pressure (Linear Axis) | P3 Queue Pressure | DeepAgents | Controller Admission Medium | raw modes: PDA-M = Controller priority + demotion + admission / medium | median 10089.2 ms vs deadline | n=1</title><circle cx="758.0" cy="314.5" r="5.8" fill="#0369a1" stroke="#0369a1" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard">
+<text x="776.0" y="384.0" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">345ms</text>
+<g><title>A. Replay Deadline Pressure (Linear Axis) | P3 Queue Pressure | DeepAgents | Controller Admission Hard | raw modes: PDA-H = Controller priority + demotion + admission / hard | median 344.5 ms vs deadline | n=1</title><circle cx="776.0" cy="370.6" r="5.8" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2" opacity="0.9"/></g>
+</g>
+<line x1="120.0" x2="120.0" y1="82" y2="426.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="82" y2="426.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 237.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">lateness vs replay deadline ms (linear)</text>
+<text x="120.0" y="480.0" font-size="11" font-weight="800" fill="#111827">Legend</text>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="baseline">
+<g><title>Baseline</title><circle cx="206.0" cy="476.0" r="5.8" fill="#475569" stroke="#475569" stroke-width="2" opacity="0.9"/></g>
+<text x="222.0" y="480.0" font-size="10" font-weight="650" fill="#334155">Baseline</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="frontend_supplied">
+<g><title>Front-End Supplied</title><circle cx="310.0" cy="476.0" r="5.8" fill="#7c3aed" stroke="#7c3aed" stroke-width="2" opacity="0.9"/></g>
+<text x="326.0" y="480.0" font-size="10" font-weight="650" fill="#334155">Front-End Supplied</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_soft">
+<g><title>Controller Admission Soft</title><circle cx="461.8" cy="476.0" r="5.8" fill="#0284c7" stroke="#0284c7" stroke-width="2" opacity="0.9"/></g>
+<text x="477.8" y="480.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Soft</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_medium">
+<g><title>Controller Admission Medium</title><circle cx="656.3" cy="476.0" r="5.8" fill="#0369a1" stroke="#0369a1" stroke-width="2" opacity="0.9"/></g>
+<text x="672.3" y="480.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Medium</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_hard">
+<g><title>Controller Admission Hard</title><circle cx="863.0" cy="476.0" r="5.8" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2" opacity="0.9"/></g>
+<text x="879.0" y="480.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Hard</text>
+</g>
+<text x="120.0" y="504.0" font-size="10" fill="#64748b">Each dot is the median replay for that harness and signal path. Labels show n= when multiple replay requests were summarized.</text>
+<text x="120.0" y="525.0" font-size="10" fill="#64748b">Harness identity is the sub-window label on the x-axis.</text>
+</g>
+<text x="120" y="596.0" font-size="18" font-weight="800" fill="#111827">B. Replay TTFT Impact</text>
+<text x="120" y="618.0" font-size="12" fill="#64748b">Time from replay request start at the gateway/client boundary to first token. This is the clearest view for cache-control TTFT impact.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="930.6" y2="930.6" stroke="#111827" stroke-width="1.5"/>
+<text x="108" y="934.6" text-anchor="end" font-size="12" fill="#374151">0 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="865.1" y2="865.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="869.1" text-anchor="end" font-size="12" fill="#374151">50 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="799.6" y2="799.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="803.6" text-anchor="end" font-size="12" fill="#374151">500 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="779.9" y2="779.9" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="783.9" text-anchor="end" font-size="12" fill="#374151">1000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="734.1" y2="734.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="738.1" text-anchor="end" font-size="12" fill="#374151">5000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="714.4" y2="714.4" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="718.4" text-anchor="end" font-size="12" fill="#374151">10000 ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="663.4" y2="663.4" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="667.4" text-anchor="end" font-size="12" fill="#374151">60000 ms</text>
+<text class="chart-zero-label" x="1356" y="922.6" text-anchor="end" font-size="13" font-weight="700">0 ms TTFT</text>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="642" y2="986.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text x="740.0" y="1008.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+<text x="740.0" y="1027.0" text-anchor="middle" font-size="11" fill="#64748b">one sub-window per harness; color = signal path</text>
+<line x1="120.0" x2="120.0" y1="642" y2="986.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="642" y2="986.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="976.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="baseline">
+<text x="704.0" y="660.5" text-anchor="middle" font-size="9" font-weight="700" fill="#475569" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">46.8s</text>
+<g><title>B. Replay TTFT Impact | P3 Queue Pressure | DeepAgents | Baseline | raw modes: NP = No prefetch | median 46751.4 ms TTFT | n=1</title><circle cx="704.0" cy="670.5" r="5.8" fill="#475569" stroke="#475569" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied">
+<text x="722.0" y="727.8" text-anchor="middle" font-size="9" font-weight="700" fill="#7c3aed" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">11.0s</text>
+<g><title>B. Replay TTFT Impact | P3 Queue Pressure | DeepAgents | Front-End Supplied | raw modes: PH = Pre-harness priority hints | median 10952.1 ms TTFT | n=1</title><circle cx="722.0" cy="711.8" r="5.8" fill="#7c3aed" stroke="#7c3aed" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft">
+<text x="740.0" y="729.2" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.4s</text>
+<g><title>B. Replay TTFT Impact | P3 Queue Pressure | DeepAgents | Controller Admission Soft | raw modes: PDA-S = Controller priority + demotion + admission / soft | median 10407.7 ms TTFT | n=1</title><circle cx="740.0" cy="713.2" r="5.8" fill="#0284c7" stroke="#0284c7" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium">
+<text x="758.0" y="730.1" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.1s</text>
+<g><title>B. Replay TTFT Impact | P3 Queue Pressure | DeepAgents | Controller Admission Medium | raw modes: PDA-M = Controller priority + demotion + admission / medium | median 10079.5 ms TTFT | n=1</title><circle cx="758.0" cy="714.1" r="5.8" fill="#0369a1" stroke="#0369a1" stroke-width="2" opacity="0.9"/></g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard">
+<text x="776.0" y="827.0" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">335ms</text>
+<g><title>B. Replay TTFT Impact | P3 Queue Pressure | DeepAgents | Controller Admission Hard | raw modes: PDA-H = Controller priority + demotion + admission / hard | median 334.7 ms TTFT | n=1</title><circle cx="776.0" cy="811.0" r="5.8" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2" opacity="0.9"/></g>
+</g>
+<line x1="120.0" x2="120.0" y1="642" y2="986.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="642" y2="986.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 797.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">replay TTFT ms (symlog)</text>
+<text x="120.0" y="1040.0" font-size="11" font-weight="800" fill="#111827">Legend</text>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="baseline">
+<g><title>Baseline</title><circle cx="206.0" cy="1036.0" r="5.8" fill="#475569" stroke="#475569" stroke-width="2" opacity="0.9"/></g>
+<text x="222.0" y="1040.0" font-size="10" font-weight="650" fill="#334155">Baseline</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="frontend_supplied">
+<g><title>Front-End Supplied</title><circle cx="310.0" cy="1036.0" r="5.8" fill="#7c3aed" stroke="#7c3aed" stroke-width="2" opacity="0.9"/></g>
+<text x="326.0" y="1040.0" font-size="10" font-weight="650" fill="#334155">Front-End Supplied</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_soft">
+<g><title>Controller Admission Soft</title><circle cx="461.8" cy="1036.0" r="5.8" fill="#0284c7" stroke="#0284c7" stroke-width="2" opacity="0.9"/></g>
+<text x="477.8" y="1040.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Soft</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_medium">
+<g><title>Controller Admission Medium</title><circle cx="656.3" cy="1036.0" r="5.8" fill="#0369a1" stroke="#0369a1" stroke-width="2" opacity="0.9"/></g>
+<text x="672.3" y="1040.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Medium</text>
+</g>
+<g class="signal-bucket legend-signal-item" data-signal-bucket="controller_priority_demotion_admission_hard">
+<g><title>Controller Admission Hard</title><circle cx="863.0" cy="1036.0" r="5.8" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2" opacity="0.9"/></g>
+<text x="879.0" y="1040.0" font-size="10" font-weight="650" fill="#334155">Controller Admission Hard</text>
+</g>
+<text x="120.0" y="1064.0" font-size="10" fill="#64748b">Each dot is the median replay for that harness and signal path. Labels show n= when multiple replay requests were summarized.</text>
+<text x="120.0" y="1085.0" font-size="10" fill="#64748b">Harness identity is the sub-window label on the x-axis.</text>
+<text class="chart-x-axis-label" x="740.0" y="1056" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>
+</svg></div>
+<h2>Controller Harness Exposure</h2><p>This section shows the facts the harness/workload exposed to the controller, and the actions the controller took from those facts. It is the manager-facing proof that the controller is using more than a plain priority number.</p><div class="card"><table><thead><tr><th>harness_label</th><th>pressure_level_label</th><th>mode_label</th><th>harness/controller fact</th><th>value</th><th>controller use</th></tr></thead><tbody><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-H = Controller priority + demotion + admission / hard</td><td>tool wait duration</td><td>1000 ms</td><td>starts the prepare window before replay returns</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-H = Controller priority + demotion + admission / hard</td><td>replay ETA</td><td>known</td><td>times demotion/admission around replay readiness</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-H = Controller priority + demotion + admission / hard</td><td>target priority or urgency</td><td>100</td><td>lowers replay to SGLang priority</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-H = Controller priority + demotion + admission / hard</td><td>background pressure</td><td>active=32; demotable=32</td><td>decides whether to demote or hold filler traffic</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-H = Controller priority + demotion + admission / hard</td><td>background safe to demote</td><td>yes</td><td>allows filler/background priority lowering</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-M = Controller priority + demotion + admission / medium</td><td>tool wait duration</td><td>1000 ms</td><td>starts the prepare window before replay returns</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-M = Controller priority + demotion + admission / medium</td><td>replay ETA</td><td>known</td><td>times demotion/admission around replay readiness</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-M = Controller priority + demotion + admission / medium</td><td>target priority or urgency</td><td>100</td><td>lowers replay to SGLang priority</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-M = Controller priority + demotion + admission / medium</td><td>background pressure</td><td>active=32; demotable=32</td><td>decides whether to demote or hold filler traffic</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-M = Controller priority + demotion + admission / medium</td><td>background safe to demote</td><td>yes</td><td>allows filler/background priority lowering</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-S = Controller priority + demotion + admission / soft</td><td>tool wait duration</td><td>1000 ms</td><td>starts the prepare window before replay returns</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-S = Controller priority + demotion + admission / soft</td><td>replay ETA</td><td>known</td><td>times demotion/admission around replay readiness</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-S = Controller priority + demotion + admission / soft</td><td>target priority or urgency</td><td>100</td><td>lowers replay to SGLang priority</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-S = Controller priority + demotion + admission / soft</td><td>background pressure</td><td>active=32; demotable=32</td><td>decides whether to demote or hold filler traffic</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-S = Controller priority + demotion + admission / soft</td><td>background safe to demote</td><td>yes</td><td>allows filler/background priority lowering</td></tr></tbody></table></div><details><summary>Open compact controller exposure table</summary><div class="card"><table><thead><tr><th>harness_label</th><th>pressure_level_label</th><th>mode_label</th><th>tool_wait_ms</th><th>replay_eta_known</th><th>target_priority_or_urgency</th><th>active_background_requests</th><th>background_safe_to_demote</th><th>demotable_background_count</th><th>controller_action_summary</th><th>background_lowered_signals</th><th>background_requests_blocked</th><th>background_requests_released</th><th>replay_sglang_priority</th><th>first_token_lateness_ms</th><th>exposed_fact_summary</th></tr></thead><tbody><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-H = Controller priority + demotion + admission / hard</td><td>1000</td><td>yes</td><td>100</td><td>32</td><td>yes</td><td>32</td><td>demote fillers; raise replay priority; hold filler admission; release fillers</td><td>64</td><td>32</td><td>32</td><td>100</td><td>344.546</td><td>tool wait 1000 ms; replay ETA known; target priority 100; 32 demotable background requests; background safe to demote</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-M = Controller priority + demotion + admission / medium</td><td>1000</td><td>yes</td><td>100</td><td>32</td><td>yes</td><td>32</td><td>demote fillers; raise replay priority; hold filler admission; release fillers</td><td>24</td><td>24</td><td>24</td><td>100</td><td>10089.211</td><td>tool wait 1000 ms; replay ETA known; target priority 100; 32 demotable background requests; background safe to demote</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>PDA-S = Controller priority + demotion + admission / soft</td><td>1000</td><td>yes</td><td>100</td><td>32</td><td>yes</td><td>32</td><td>demote fillers; raise replay priority; hold filler admission; release fillers</td><td>24</td><td>24</td><td>24</td><td>100</td><td>10417.962</td><td>tool wait 1000 ms; replay ETA known; target priority 100; 32 demotable background requests; background safe to demote</td></tr></tbody></table></div></details>
+<h2>System Cost Accounting</h2><p>This section asks whether priority/controller reduced target replay misses by moving delay onto filler/background work.</p><p>The manager-facing cost charts compare Baseline, Front-End Supplied, and controller modes when those modes are present. Actual totals and net changes are separated so the tradeoff is easier to read.</p><div class="card"><svg class="replay-pressure-chart cost-accounting-chart" viewBox="0 0 1400 561" width="1400" height="561" data-full-width="1400" data-chart-height="561" data-left="120" data-right="40" data-pressure-width="1240.000000" data-pressure-order="[&quot;p3_high&quot;]" role="img" aria-label="C1. Total Replay TTFT Cost">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="120" y="40.0" font-size="18" font-weight="800" fill="#111827">C1. Total Replay TTFT Cost</text>
+<text x="120" y="62.0" font-size="12" fill="#64748b">Actual target/filler TTFT totals only. Dark bars are target replay requests; light bars are filler/background requests.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="416.0" y2="416.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="420.0" text-anchor="end" font-size="12" fill="#374151">0ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="415.8" y2="415.8" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="419.8" text-anchor="end" font-size="12" fill="#374151">1.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="415.1" y2="415.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="419.1" text-anchor="end" font-size="12" fill="#374151">5.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="414.2" y2="414.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="418.2" text-anchor="end" font-size="12" fill="#374151">10.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="411.6" y2="411.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="415.6" text-anchor="end" font-size="12" fill="#374151">25.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="407.1" y2="407.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="411.1" text-anchor="end" font-size="12" fill="#374151">50.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="398.2" y2="398.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="402.2" text-anchor="end" font-size="12" fill="#374151">100.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="371.5" y2="371.5" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="375.5" text-anchor="end" font-size="12" fill="#374151">250.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="327.1" y2="327.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="331.1" text-anchor="end" font-size="12" fill="#374151">500.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="238.2" y2="238.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="242.2" text-anchor="end" font-size="12" fill="#374151">1000.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="86.0" y2="86.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="90.0" text-anchor="end" font-size="12" fill="#374151">1855.6s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="416.0" y2="416.0" stroke="#111827" stroke-width="1.6"/>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="440.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="baseline">
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Baseline | target 46751.4 ms</title>
+<rect x="666.5" y="407.7" width="10.0" height="8.3" fill="#475569" opacity="0.96" rx="2"/>
+<text x="671.5" y="401.7" text-anchor="middle" font-size="9" font-weight="700" fill="#475569" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">46.8s</text>
+</g>
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Baseline | filler 1297607.0 ms</title>
+<rect x="679.5" y="185.2" width="10.0" height="230.8" fill="#cbd5e1" opacity="0.96" rx="2"/>
+<text x="684.5" y="179.2" text-anchor="middle" font-size="9" font-weight="700" fill="#cbd5e1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1297.6s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied">
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Front-End Supplied | target 10952.1 ms</title>
+<rect x="697.5" y="414.1" width="10.0" height="1.9" fill="#7c3aed" opacity="0.96" rx="2"/>
+<text x="702.5" y="408.1" text-anchor="middle" font-size="9" font-weight="700" fill="#7c3aed" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">11.0s</text>
+</g>
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Front-End Supplied | filler 1572523.0 ms</title>
+<rect x="710.5" y="136.3" width="10.0" height="279.7" fill="#c4b5fd" opacity="0.96" rx="2"/>
+<text x="715.5" y="130.3" text-anchor="middle" font-size="9" font-weight="700" fill="#c4b5fd" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1572.5s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft">
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Controller Admission Soft | target 10407.7 ms</title>
+<rect x="728.5" y="414.1" width="10.0" height="1.9" fill="#0284c7" opacity="0.96" rx="2"/>
+<text x="733.5" y="408.1" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.4s</text>
+</g>
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Controller Admission Soft | filler 644373.6 ms</title>
+<rect x="741.5" y="301.4" width="10.0" height="114.6" fill="#bae6fd" opacity="0.96" rx="2"/>
+<text x="746.5" y="295.4" text-anchor="middle" font-size="9" font-weight="700" fill="#bae6fd" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">644.4s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium">
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Controller Admission Medium | target 10079.5 ms</title>
+<rect x="759.5" y="414.2" width="10.0" height="1.8" fill="#0369a1" opacity="0.96" rx="2"/>
+<text x="764.5" y="408.2" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.1s</text>
+</g>
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Controller Admission Medium | filler 541918.0 ms</title>
+<rect x="772.5" y="319.6" width="10.0" height="96.4" fill="#bfdbfe" opacity="0.96" rx="2"/>
+<text x="777.5" y="313.6" text-anchor="middle" font-size="9" font-weight="700" fill="#bfdbfe" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">541.9s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard">
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Controller Admission Hard | target 334.7 ms</title>
+<rect x="790.5" y="415.9" width="10.0" height="1.0" fill="#1d4ed8" opacity="0.96" rx="2"/>
+<text x="795.5" y="409.9" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">335ms</text>
+</g>
+<g><title>C1. Total Replay TTFT Cost | P3 Queue Pressure | DeepAgents | Controller Admission Hard | filler 1529834.1 ms</title>
+<rect x="803.5" y="143.9" width="10.0" height="272.1" fill="#bfdbfe" opacity="0.96" rx="2"/>
+<text x="808.5" y="137.9" text-anchor="middle" font-size="9" font-weight="700" fill="#bfdbfe" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1529.8s</text>
+</g>
+</g>
+<text x="740.0" y="472.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 251.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">total TTFT ms</text>
+<text x="120.0" y="507.0" font-size="11" font-weight="800" fill="#111827">Bars</text>
+<rect x="168.0" y="497.0" width="12" height="12" fill="#475569" rx="2"/>
+<text x="186.0" y="507.0" font-size="11" fill="#334155">baseline target</text>
+<rect x="318.0" y="497.0" width="12" height="12" fill="#cbd5e1" rx="2"/>
+<text x="336.0" y="507.0" font-size="11" fill="#334155">baseline filler</text>
+<rect x="468.0" y="497.0" width="12" height="12" fill="#7c3aed" rx="2"/>
+<text x="486.0" y="507.0" font-size="11" fill="#334155">front-end priority target</text>
+<rect x="698.0" y="497.0" width="12" height="12" fill="#c4b5fd" rx="2"/>
+<text x="716.0" y="507.0" font-size="11" fill="#334155">front-end priority filler</text>
+<rect x="928.0" y="497.0" width="12" height="12" fill="#0284c7" rx="2"/>
+<text x="946.0" y="507.0" font-size="11" fill="#334155">Controller Admission Soft target</text>
+<rect x="1214.0" y="497.0" width="12" height="12" fill="#bae6fd" rx="2"/>
+<text x="1232.0" y="507.0" font-size="11" fill="#334155">Controller Admission Soft filler</text>
+<rect x="1500.0" y="497.0" width="12" height="12" fill="#0369a1" rx="2"/>
+<text x="1518.0" y="507.0" font-size="11" fill="#334155">Controller Admission Medium target</text>
+<rect x="1802.0" y="497.0" width="12" height="12" fill="#bfdbfe" rx="2"/>
+<text x="1820.0" y="507.0" font-size="11" fill="#334155">Controller Admission Medium filler</text>
+<rect x="2104.0" y="497.0" width="12" height="12" fill="#1d4ed8" rx="2"/>
+<text x="2122.0" y="507.0" font-size="11" fill="#334155">Controller Admission Hard target</text>
+<rect x="2390.0" y="497.0" width="12" height="12" fill="#bfdbfe" rx="2"/>
+<text x="2408.0" y="507.0" font-size="11" fill="#334155">Controller Admission Hard filler</text>
+<text class="chart-x-axis-label" x="740.0" y="551" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>
+</svg></div><div class="card"><svg class="replay-pressure-chart cost-accounting-chart cost-accounting-delta-chart" viewBox="0 0 1400 561" width="1400" height="561" data-full-width="1400" data-chart-height="561" data-left="120" data-right="40" data-pressure-width="1240.000000" data-pressure-order="[&quot;p3_high&quot;]" role="img" aria-label="C2. Net TTFT Change vs Baseline">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="120" y="40.0" font-size="18" font-weight="800" fill="#111827">C2. Net TTFT Change vs Baseline</text>
+<text x="120" y="62.0" font-size="12" fill="#64748b">One net bar per non-baseline mode. Upward means the mode saved total TTFT versus baseline; downward means it added cost.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="416.0" y2="416.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="420.0" text-anchor="end" font-size="12" fill="#374151">-282.2s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="407.3" y2="407.3" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="411.3" text-anchor="end" font-size="12" fill="#374151">-250.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="339.5" y2="339.5" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="343.5" text-anchor="end" font-size="12" fill="#374151">0ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="271.7" y2="271.7" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="275.7" text-anchor="end" font-size="12" fill="#374151">250.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="203.9" y2="203.9" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="207.9" text-anchor="end" font-size="12" fill="#374151">500.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="136.2" y2="136.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="140.2" text-anchor="end" font-size="12" fill="#374151">750.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="86.0" y2="86.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="90.0" text-anchor="end" font-size="12" fill="#374151">935.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="339.5" y2="339.5" stroke="#111827" stroke-width="1.8"/>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="440.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied"><title>C2. Net TTFT Change vs Baseline | P3 Queue Pressure | DeepAgents | Front-End Supplied | net baseline-minus-mode -239116.7 ms</title>
+<rect x="708.0" y="339.5" width="10" height="64.8" fill="#db2777" opacity="0.96" rx="2"/>
+<text x="713.0" y="418.3" text-anchor="middle" font-size="9" font-weight="700" fill="#db2777" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">-239.1s</text>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft"><title>C2. Net TTFT Change vs Baseline | P3 Queue Pressure | DeepAgents | Controller Admission Soft | net baseline-minus-mode 689577.0 ms</title>
+<rect x="726.0" y="152.5" width="10" height="187.0" fill="#0284c7" opacity="0.96" rx="2"/>
+<text x="731.0" y="146.5" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">+689.6s</text>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium"><title>C2. Net TTFT Change vs Baseline | P3 Queue Pressure | DeepAgents | Controller Admission Medium | net baseline-minus-mode 792360.9 ms</title>
+<rect x="744.0" y="124.7" width="10" height="214.8" fill="#0369a1" opacity="0.96" rx="2"/>
+<text x="749.0" y="118.7" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">+792.4s</text>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard"><title>C2. Net TTFT Change vs Baseline | P3 Queue Pressure | DeepAgents | Controller Admission Hard | net baseline-minus-mode -185810.5 ms</title>
+<rect x="762.0" y="339.5" width="10" height="50.4" fill="#dc2626" opacity="0.96" rx="2"/>
+<text x="767.0" y="403.9" text-anchor="middle" font-size="9" font-weight="700" fill="#dc2626" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">-185.8s</text>
+</g>
+<text x="740.0" y="472.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 251.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">baseline total - mode total TTFT ms</text>
+<text x="120.0" y="507.0" font-size="11" font-weight="800" fill="#111827">Net</text>
+<text x="156.0" y="507.0" font-size="11" fill="#334155">baseline total - mode total; upward saves time/debt, downward adds cost/debt</text>
+<rect x="492.0" y="497.0" width="12" height="12" fill="#7c3aed" rx="2"/>
+<text x="510.0" y="507.0" font-size="11" fill="#334155">Front-End Supplied</text>
+<rect x="666.0" y="497.0" width="12" height="12" fill="#0284c7" rx="2"/>
+<text x="684.0" y="507.0" font-size="11" fill="#334155">Controller Admission Soft</text>
+<rect x="896.0" y="497.0" width="12" height="12" fill="#0369a1" rx="2"/>
+<text x="914.0" y="507.0" font-size="11" fill="#334155">Controller Admission Medium</text>
+<rect x="1142.0" y="497.0" width="12" height="12" fill="#1d4ed8" rx="2"/>
+<text x="1160.0" y="507.0" font-size="11" fill="#334155">Controller Admission Hard</text>
+<text class="chart-x-axis-label" x="740.0" y="551" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>
+</svg></div><div class="card"><svg class="replay-pressure-chart cost-accounting-chart" viewBox="0 0 1400 561" width="1400" height="561" data-full-width="1400" data-chart-height="561" data-left="120" data-right="40" data-pressure-width="1240.000000" data-pressure-order="[&quot;p3_high&quot;]" role="img" aria-label="D1. Total Replay Deadline Debt">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="120" y="40.0" font-size="18" font-weight="800" fill="#111827">D1. Total Replay Deadline Debt</text>
+<text x="120" y="62.0" font-size="12" fill="#64748b">Actual positive replay lateness totals only. Dark bars are target replay requests; light bars are filler/background requests.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="416.0" y2="416.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="420.0" text-anchor="end" font-size="12" fill="#374151">0ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="415.8" y2="415.8" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="419.8" text-anchor="end" font-size="12" fill="#374151">1.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="415.1" y2="415.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="419.1" text-anchor="end" font-size="12" fill="#374151">5.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="414.2" y2="414.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="418.2" text-anchor="end" font-size="12" fill="#374151">10.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="411.6" y2="411.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="415.6" text-anchor="end" font-size="12" fill="#374151">25.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="407.1" y2="407.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="411.1" text-anchor="end" font-size="12" fill="#374151">50.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="398.2" y2="398.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="402.2" text-anchor="end" font-size="12" fill="#374151">100.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="371.6" y2="371.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="375.6" text-anchor="end" font-size="12" fill="#374151">250.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="327.1" y2="327.1" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="331.1" text-anchor="end" font-size="12" fill="#374151">500.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="238.2" y2="238.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="242.2" text-anchor="end" font-size="12" fill="#374151">1000.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="86.0" y2="86.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="90.0" text-anchor="end" font-size="12" fill="#374151">1856.4s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="416.0" y2="416.0" stroke="#111827" stroke-width="1.6"/>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="440.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="baseline">
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Baseline | target 46761.1 ms</title>
+<rect x="666.5" y="407.7" width="10.0" height="8.3" fill="#475569" opacity="0.96" rx="2"/>
+<text x="671.5" y="401.7" text-anchor="middle" font-size="9" font-weight="700" fill="#475569" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">46.8s</text>
+</g>
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Baseline | filler 1298486.9 ms</title>
+<rect x="679.5" y="185.2" width="10.0" height="230.8" fill="#cbd5e1" opacity="0.96" rx="2"/>
+<text x="684.5" y="179.2" text-anchor="middle" font-size="9" font-weight="700" fill="#cbd5e1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1298.5s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied">
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Front-End Supplied | target 10964.7 ms</title>
+<rect x="697.5" y="414.1" width="10.0" height="1.9" fill="#7c3aed" opacity="0.96" rx="2"/>
+<text x="702.5" y="408.1" text-anchor="middle" font-size="9" font-weight="700" fill="#7c3aed" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">11.0s</text>
+</g>
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Front-End Supplied | filler 1573260.9 ms</title>
+<rect x="710.5" y="136.3" width="10.0" height="279.7" fill="#c4b5fd" opacity="0.96" rx="2"/>
+<text x="715.5" y="130.3" text-anchor="middle" font-size="9" font-weight="700" fill="#c4b5fd" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1573.3s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft">
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Controller Admission Soft | target 10418.0 ms</title>
+<rect x="728.5" y="414.1" width="10.0" height="1.9" fill="#0284c7" opacity="0.96" rx="2"/>
+<text x="733.5" y="408.1" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.4s</text>
+</g>
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Controller Admission Soft | filler 1391695.4 ms</title>
+<rect x="741.5" y="168.6" width="10.0" height="247.4" fill="#bae6fd" opacity="0.96" rx="2"/>
+<text x="746.5" y="162.6" text-anchor="middle" font-size="9" font-weight="700" fill="#bae6fd" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1391.7s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium">
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Controller Admission Medium | target 10089.2 ms</title>
+<rect x="759.5" y="414.2" width="10.0" height="1.8" fill="#0369a1" opacity="0.96" rx="2"/>
+<text x="764.5" y="408.2" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">10.1s</text>
+</g>
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Controller Admission Medium | filler 1283807.7 ms</title>
+<rect x="772.5" y="187.8" width="10.0" height="228.2" fill="#bfdbfe" opacity="0.96" rx="2"/>
+<text x="777.5" y="181.8" text-anchor="middle" font-size="9" font-weight="700" fill="#bfdbfe" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1283.8s</text>
+</g>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard">
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Controller Admission Hard | target 344.5 ms</title>
+<rect x="790.5" y="415.9" width="10.0" height="1.0" fill="#1d4ed8" opacity="0.96" rx="2"/>
+<text x="795.5" y="409.9" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">345ms</text>
+</g>
+<g><title>D1. Total Replay Deadline Debt | P3 Queue Pressure | DeepAgents | Controller Admission Hard | filler 1530921.2 ms</title>
+<rect x="803.5" y="143.9" width="10.0" height="272.1" fill="#bfdbfe" opacity="0.96" rx="2"/>
+<text x="808.5" y="137.9" text-anchor="middle" font-size="9" font-weight="700" fill="#bfdbfe" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">1530.9s</text>
+</g>
+</g>
+<text x="740.0" y="472.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 251.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">total replay debt ms</text>
+<text x="120.0" y="507.0" font-size="11" font-weight="800" fill="#111827">Bars</text>
+<rect x="168.0" y="497.0" width="12" height="12" fill="#475569" rx="2"/>
+<text x="186.0" y="507.0" font-size="11" fill="#334155">baseline target</text>
+<rect x="318.0" y="497.0" width="12" height="12" fill="#cbd5e1" rx="2"/>
+<text x="336.0" y="507.0" font-size="11" fill="#334155">baseline filler</text>
+<rect x="468.0" y="497.0" width="12" height="12" fill="#7c3aed" rx="2"/>
+<text x="486.0" y="507.0" font-size="11" fill="#334155">front-end priority target</text>
+<rect x="698.0" y="497.0" width="12" height="12" fill="#c4b5fd" rx="2"/>
+<text x="716.0" y="507.0" font-size="11" fill="#334155">front-end priority filler</text>
+<rect x="928.0" y="497.0" width="12" height="12" fill="#0284c7" rx="2"/>
+<text x="946.0" y="507.0" font-size="11" fill="#334155">Controller Admission Soft target</text>
+<rect x="1214.0" y="497.0" width="12" height="12" fill="#bae6fd" rx="2"/>
+<text x="1232.0" y="507.0" font-size="11" fill="#334155">Controller Admission Soft filler</text>
+<rect x="1500.0" y="497.0" width="12" height="12" fill="#0369a1" rx="2"/>
+<text x="1518.0" y="507.0" font-size="11" fill="#334155">Controller Admission Medium target</text>
+<rect x="1802.0" y="497.0" width="12" height="12" fill="#bfdbfe" rx="2"/>
+<text x="1820.0" y="507.0" font-size="11" fill="#334155">Controller Admission Medium filler</text>
+<rect x="2104.0" y="497.0" width="12" height="12" fill="#1d4ed8" rx="2"/>
+<text x="2122.0" y="507.0" font-size="11" fill="#334155">Controller Admission Hard target</text>
+<rect x="2390.0" y="497.0" width="12" height="12" fill="#bfdbfe" rx="2"/>
+<text x="2408.0" y="507.0" font-size="11" fill="#334155">Controller Admission Hard filler</text>
+<text class="chart-x-axis-label" x="740.0" y="551" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>
+</svg></div><div class="card"><svg class="replay-pressure-chart cost-accounting-chart cost-accounting-delta-chart" viewBox="0 0 1400 561" width="1400" height="561" data-full-width="1400" data-chart-height="561" data-left="120" data-right="40" data-pressure-width="1240.000000" data-pressure-order="[&quot;p3_high&quot;]" role="img" aria-label="D2. Net Replay Debt Change vs Baseline">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="120" y="40.0" font-size="18" font-weight="800" fill="#111827">D2. Net Replay Debt Change vs Baseline</text>
+<text x="120" y="62.0" font-size="12" fill="#64748b">One net bar per non-baseline mode. Upward means the mode reduced replay debt versus baseline; downward means it increased debt.</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="416.0" y2="416.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="420.0" text-anchor="end" font-size="12" fill="#374151">-282.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="337.0" y2="337.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="341.0" text-anchor="end" font-size="12" fill="#374151">-200.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="240.7" y2="240.7" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="244.7" text-anchor="end" font-size="12" fill="#374151">-100.0s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="144.4" y2="144.4" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="148.4" text-anchor="end" font-size="12" fill="#374151">0ms</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="86.0" y2="86.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="108" y="90.0" text-anchor="end" font-size="12" fill="#374151">60.6s</text>
+<line class="chart-horizontal-span" x1="120" x2="1360" y1="144.4" y2="144.4" stroke="#111827" stroke-width="1.8"/>
+<g class="pressure-level" data-pressure-level="p3_high" data-pressure-index="0">
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="2.1" stroke-dasharray="5 6"/>
+<line x1="120.0" x2="120.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<line x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#bfdbfe" stroke-width="1.6" stroke-dasharray="3 4"/>
+<text x="740.0" y="440.0" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">DeepAgents</text>
+<g class="signal-bucket" data-signal-bucket="frontend_supplied"><title>D2. Net Replay Debt Change vs Baseline | P3 Queue Pressure | DeepAgents | Front-End Supplied | net baseline-minus-mode -238977.7 ms</title>
+<rect x="708.0" y="144.4" width="10" height="230.2" fill="#db2777" opacity="0.96" rx="2"/>
+<text x="713.0" y="388.6" text-anchor="middle" font-size="9" font-weight="700" fill="#db2777" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">-239.0s</text>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_soft"><title>D2. Net Replay Debt Change vs Baseline | P3 Queue Pressure | DeepAgents | Controller Admission Soft | net baseline-minus-mode -56865.4 ms</title>
+<rect x="726.0" y="144.4" width="10" height="54.8" fill="#dc2626" opacity="0.96" rx="2"/>
+<text x="731.0" y="213.1" text-anchor="middle" font-size="9" font-weight="700" fill="#dc2626" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">-56.9s</text>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_medium"><title>D2. Net Replay Debt Change vs Baseline | P3 Queue Pressure | DeepAgents | Controller Admission Medium | net baseline-minus-mode 51351.1 ms</title>
+<rect x="744.0" y="94.9" width="10" height="49.5" fill="#0369a1" opacity="0.96" rx="2"/>
+<text x="749.0" y="88.9" text-anchor="middle" font-size="9" font-weight="700" fill="#0369a1" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">+51.4s</text>
+</g>
+<g class="signal-bucket" data-signal-bucket="controller_priority_demotion_admission_hard"><title>D2. Net Replay Debt Change vs Baseline | P3 Queue Pressure | DeepAgents | Controller Admission Hard | net baseline-minus-mode -186017.8 ms</title>
+<rect x="762.0" y="144.4" width="10" height="179.2" fill="#dc2626" opacity="0.96" rx="2"/>
+<text x="767.0" y="337.6" text-anchor="middle" font-size="9" font-weight="700" fill="#dc2626" stroke="#ffffff" stroke-width="3" paint-order="stroke" stroke-linejoin="round">-186.0s</text>
+</g>
+<text x="740.0" y="472.0" text-anchor="middle" font-size="16" font-weight="800" fill="#111827">P3 Queue Pressure</text>
+</g>
+<line class="chart-right-boundary" x1="1360.0" x2="1360.0" y1="86" y2="450.0" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 6"/>
+<text transform="translate(32 251.0) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700">baseline total - mode total replay debt ms</text>
+<text x="120.0" y="507.0" font-size="11" font-weight="800" fill="#111827">Net</text>
+<text x="156.0" y="507.0" font-size="11" fill="#334155">baseline total - mode total; upward saves time/debt, downward adds cost/debt</text>
+<rect x="492.0" y="497.0" width="12" height="12" fill="#7c3aed" rx="2"/>
+<text x="510.0" y="507.0" font-size="11" fill="#334155">Front-End Supplied</text>
+<rect x="666.0" y="497.0" width="12" height="12" fill="#0284c7" rx="2"/>
+<text x="684.0" y="507.0" font-size="11" fill="#334155">Controller Admission Soft</text>
+<rect x="896.0" y="497.0" width="12" height="12" fill="#0369a1" rx="2"/>
+<text x="914.0" y="507.0" font-size="11" fill="#334155">Controller Admission Medium</text>
+<rect x="1142.0" y="497.0" width="12" height="12" fill="#1d4ed8" rx="2"/>
+<text x="1160.0" y="507.0" font-size="11" fill="#334155">Controller Admission Hard</text>
+<text class="chart-x-axis-label" x="740.0" y="551" text-anchor="middle" font-size="14" font-weight="700">pressure level</text>
+</svg></div><details><summary>Open cost accounting summary table</summary><div class="card"><table><thead><tr><th>harness_label</th><th>pressure_level_label</th><th>signal_bucket_label</th><th>target_request_count</th><th>filler_request_count</th><th>sum_target_ttft_ms</th><th>sum_filler_ttft_ms</th><th>sum_total_ttft_ms</th><th>sum_target_replay_debt_ms</th><th>sum_filler_replay_debt_ms</th><th>sum_total_replay_debt_ms</th><th>filler_replay_debt_unmeasured_requests</th></tr></thead><tbody><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>Controller Admission Hard</td><td>1</td><td>32</td><td>334.715</td><td>1529834.118</td><td>1530168.833</td><td>344.546</td><td>1530921.221</td><td>1531265.767</td><td>0</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>Controller Admission Medium</td><td>1</td><td>29</td><td>10079.526</td><td>541917.958</td><td>551997.484</td><td>10089.211</td><td>1283807.652</td><td>1293896.863</td><td>0</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>Controller Admission Soft</td><td>1</td><td>30</td><td>10407.729</td><td>644373.63</td><td>654781.359</td><td>10417.962</td><td>1391695.434</td><td>1402113.396</td><td>0</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>Baseline</td><td>1</td><td>30</td><td>46751.355</td><td>1297607.011</td><td>1344358.366</td><td>46761.12</td><td>1298486.872</td><td>1345247.992</td><td>0</td></tr><tr><td>DeepAgents</td><td>P3 Queue Pressure</td><td>Front-End Supplied</td><td>1</td><td>31</td><td>10952.111</td><td>1572522.967</td><td>1583475.078</td><td>10964.727</td><td>1573260.919</td><td>1584225.646</td><td>0</td></tr></tbody></table></div></details>
+ 	<h2>Evidence Tables</h2>
+ 	<p>The proof tables, raw replay rows, priority preservation audit, cache signal audit, cache action proof, and summary tables are now kept out of the main report.</p>
+ 	<p><a href="evidence_tables.html">Open the evidence tables / raw proof file</a>.</p>
+ 	</main>
+
+<script>
+(function () {
+  const managerBuckets = new Set(["baseline", "harness_cache_emitted", "harness_cache_priority_emitted", "frontend_supplied", "controller_full", "controller_full_chunked"]);
+  const corePressures = new Set(["p0_control", "p3_high", "p5_boss_queue"]);
+  const filterInputs = Array.from(document.querySelectorAll('[data-signal-filter]'));
+  const pressureInputs = Array.from(document.querySelectorAll('[data-pressure-filter]'));
+  const axisInputs = Array.from(document.querySelectorAll('input[name="deadline-axis"]'));
+
+  function selectedSignals() {
+    return new Set(filterInputs.filter((input) => input.checked).map((input) => input.value));
+  }
+
+  function applySignalFilters() {
+    const selected = selectedSignals();
+    document.querySelectorAll('[data-signal-bucket]').forEach((node) => {
+      const bucket = node.getAttribute('data-signal-bucket');
+      node.style.display = selected.has(bucket) ? '' : 'none';
+    });
+  }
+
+  function selectedPressures() {
+    return new Set(pressureInputs.filter((input) => input.checked).map((input) => input.value));
+  }
+
+  function applyPressureFilters() {
+    let selected = selectedPressures();
+    if (selected.size === 0) {
+      pressureInputs.forEach((input) => { input.checked = true; });
+      selected = selectedPressures();
+    }
+    document.querySelectorAll('.replay-pressure-chart').forEach((svg) => {
+      const pressureOrder = JSON.parse(svg.getAttribute('data-pressure-order') || '[]');
+      const visiblePressures = pressureOrder.filter((pressure) => selected.has(pressure));
+      const pressureWidth = Number(svg.getAttribute('data-pressure-width') || 0);
+      const left = Number(svg.getAttribute('data-left') || 0);
+      const right = Number(svg.getAttribute('data-right') || 0);
+      const height = Number(svg.getAttribute('data-chart-height') || svg.getAttribute('height') || 0);
+      const activeCount = Math.max(1, visiblePressures.length);
+      const activeRight = left + pressureWidth * activeCount;
+      const activeWidth = activeRight + right;
+
+      svg.setAttribute('viewBox', `0 0 ${activeWidth} ${height}`);
+      svg.setAttribute('width', String(activeWidth));
+
+      svg.querySelectorAll('[data-pressure-level]').forEach((node) => {
+        const pressure = node.getAttribute('data-pressure-level');
+        const originalIndex = Number(node.getAttribute('data-pressure-index') || 0);
+        const visibleIndex = visiblePressures.indexOf(pressure);
+        if (visibleIndex === -1) {
+          node.style.display = 'none';
+          node.removeAttribute('transform');
+          return;
+        }
+        node.style.display = 'inline';
+        const dx = (visibleIndex - originalIndex) * pressureWidth;
+        node.setAttribute('transform', `translate(${dx} 0)`);
+      });
+
+      svg.querySelectorAll('.chart-horizontal-span').forEach((node) => {
+        node.setAttribute('x2', String(activeRight));
+      });
+      svg.querySelectorAll('.chart-right-boundary').forEach((node) => {
+        node.setAttribute('x1', String(activeRight));
+        node.setAttribute('x2', String(activeRight));
+      });
+      svg.querySelectorAll('.chart-zero-label').forEach((node) => {
+        node.setAttribute('x', String(activeRight - 4));
+      });
+      svg.querySelectorAll('.chart-x-axis-label').forEach((node) => {
+        node.setAttribute('x', String(left + (pressureWidth * activeCount) / 2));
+      });
+    });
+  }
+
+  function applyAxis() {
+    const selected = (axisInputs.find((input) => input.checked) || { value: 'linear' }).value;
+    document.querySelectorAll('.deadline-panel').forEach((node) => {
+      node.style.display = node.getAttribute('data-axis') === selected ? 'inline' : 'none';
+    });
+  }
+
+  function setPreset(name) {
+    const available = filterInputs.map((input) => input.value);
+    let desired = name === 'manager'
+      ? new Set(available.filter((bucket) => managerBuckets.has(bucket)))
+      : new Set(available);
+    if (desired.size === 0) desired = new Set(available);
+    filterInputs.forEach((input) => { input.checked = desired.has(input.value); });
+    applySignalFilters();
+  }
+
+  function setPressurePreset(name) {
+    const available = pressureInputs.map((input) => input.value);
+    let desired = name === 'core'
+      ? new Set(available.filter((pressure) => corePressures.has(pressure)))
+      : new Set(available);
+    if (desired.size === 0) desired = new Set(available);
+    pressureInputs.forEach((input) => { input.checked = desired.has(input.value); });
+    applyPressureFilters();
+  }
+
+  filterInputs.forEach((input) => input.addEventListener('change', applySignalFilters));
+  pressureInputs.forEach((input) => input.addEventListener('change', applyPressureFilters));
+  axisInputs.forEach((input) => input.addEventListener('change', applyAxis));
+  document.querySelectorAll('[data-chart-preset]').forEach((button) => {
+    button.addEventListener('click', () => setPreset(button.getAttribute('data-chart-preset')));
+  });
+  document.querySelectorAll('[data-pressure-preset]').forEach((button) => {
+    button.addEventListener('click', () => setPressurePreset(button.getAttribute('data-pressure-preset')));
+  });
+
+  applySignalFilters();
+  applyPressureFilters();
+  applyAxis();
+}());
+</script>
+
+ 	</body>
+ 	</html>
+ 	

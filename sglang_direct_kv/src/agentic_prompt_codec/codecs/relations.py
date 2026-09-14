@@ -1,30 +1,87 @@
-"""An intentionally narrow, lossless relation grammar; no prose inference."""
+"""Lossless, rule-based shorthand for common coding-agent trace relations."""
 import re
 from ..models import EncodedSegment
-from ..validation import editable_parts
+from ..rules.base import RuleState
+from ..rules.registry import DEFAULT_AGENT_TRACE_RULES, LEGEND_BY_RULE, build_rules
 
-FACT = re.compile(r"^(?P<a>(?:[Tt]he )?[A-Za-z]+) is on (?P<b>(?:the )?[A-Za-z]+)\.$")
+PROTECTED_BLOCKS = re.compile(
+    r"```[\s\S]*?(?:```|\Z)|~~~[\s\S]*?(?:~~~|\Z)"
+    r"|^[ \t]*(?:[\[{]|\$ |>>> |HARNESS_REPLAY_EXPERIMENT_JSON:).*$",
+    re.MULTILINE,
+)
 
 
-class RelationsCodec:
-    name = "relations_v1"
+def editable_parts(text: str) -> list[tuple[str, bool]]:
+    out: list[tuple[str, bool]] = []
+    start = 0
+    for match in PROTECTED_BLOCKS.finditer(text):
+        out.append((text[start:match.start()], True))
+        out.append((match.group(), False))
+        start = match.end()
+    out.append((text[start:], True))
+    return out
+
+
+def render(body: str, state: RuleState, enabled_rules: tuple[str, ...]) -> EncodedSegment:
+    expansions = state.expansions
+    if not expansions:
+        return EncodedSegment(body, body)
+    alias_lines = [f"{alias}={original}" for alias, original in state.entity_aliases.items()]
+    legend_lines = [LEGEND_BY_RULE[name] for name in enabled_rules if name in state.counts]
+    if alias_lines:
+        legend_lines = ["Request-local entity aliases:"] + alias_lines + legend_lines
+    legend = (
+        "Relational shorthand legend. Expand these request-local forms exactly:\n"
+        + "\n".join(legend_lines)
+        + "\nText:\n"
+    )
+    return EncodedSegment(
+        legend + body,
+        body,
+        tuple(expansions),
+        legend,
+        True,
+        tuple(sorted(state.counts.items())),
+    )
+
+
+class AgentTraceRelationsCodec:
+    name = "agent_trace_relations_v1"
 
     def encode(self, text, config, counter, check_budget):
-        lines = [(line, editable) for part, editable in editable_parts(text) for line in part.splitlines(keepends=True)]
-        mapping = {}
-        out = []
-        for line, editable in lines:
+        parts = editable_parts(text)
+        body_parts: list[str] = []
+        enabled_rules = tuple(config.enabled_rules or DEFAULT_AGENT_TRACE_RULES)
+        rules = build_rules(enabled_rules)
+        state = RuleState(text, config.max_shorthand_rules)
+        for rule in rules:
+            apply_to_parts = getattr(rule, "apply_to_parts", None)
+            if apply_to_parts is not None:
+                parts = apply_to_parts(parts, state, check_budget)
+
+        for part, editable in parts:
             check_budget()
-            match = FACT.fullmatch(line.rstrip("\r\n"))
-            if match and editable:
-                original = match.group()
-                alias = f"{match['a']} @ {match['b']}."
-                if alias not in text:
-                    mapping[alias] = original
-                    line = line.replace(original, alias, 1)
-            out.append(line)
-        if not mapping:
-            return EncodedSegment(text, text)
-        body = "".join(out)
-        legend = 'Local shorthand: "A @ B." means "A is on B." This convention applies only to the following text.\nText:\n'
-        return EncodedSegment(legend + body, body, tuple(mapping.items()), legend)
+            if not editable:
+                body_parts.append(part)
+                continue
+            lines = []
+            for line in part.splitlines(keepends=True):
+                ending = ""
+                core = line
+                if core.endswith("\r\n"):
+                    core, ending = core[:-2], "\r\n"
+                elif core.endswith("\n"):
+                    core, ending = core[:-1], "\n"
+                replacement = core
+                for rule in rules:
+                    if getattr(rule, "apply_to_parts", None) is not None:
+                        continue
+                    updated = rule.apply(replacement, state, check_budget)
+                    check_budget()
+                    if updated != replacement:
+                        replacement = updated
+                        break
+                lines.append(replacement + ending)
+            body_parts.append("".join(lines))
+
+        return render("".join(body_parts), state, enabled_rules)

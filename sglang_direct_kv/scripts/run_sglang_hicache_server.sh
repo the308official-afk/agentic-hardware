@@ -7,6 +7,10 @@ PORT="${PORT:-30000}"
 HICACHE_SIZE_GB="${HICACHE_SIZE_GB:-14}"
 HICACHE_IO_BACKEND="${HICACHE_IO_BACKEND:-direct}"
 HICACHE_MEM_LAYOUT="${HICACHE_MEM_LAYOUT:-layer_first}"
+HICACHE_STORAGE_BACKEND="${HICACHE_STORAGE_BACKEND:-}"
+HICACHE_STORAGE_PREFETCH_POLICY="${HICACHE_STORAGE_PREFETCH_POLICY:-}"
+HICACHE_STORAGE_BACKEND_EXTRA_CONFIG="${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG:-}"
+HICACHE_STORAGE_PATH="${HICACHE_STORAGE_PATH:-}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.55}"
 CUDA_GRAPH_FLAG="${CUDA_GRAPH_FLAG:---disable-cuda-graph}"
 OVERLAP_FLAG="${OVERLAP_FLAG:---disable-overlap-schedule}"
@@ -34,6 +38,9 @@ fi
 if [[ -n "${AGENTIC_RUNTIME_TELEMETRY_PATH}" ]]; then
   mkdir -p "$(dirname "${AGENTIC_RUNTIME_TELEMETRY_PATH}")"
 fi
+if [[ -n "${HICACHE_STORAGE_PATH}" ]]; then
+  mkdir -p "${HICACHE_STORAGE_PATH}"
+fi
 export AGENTIC_KV_TRACE_ENABLE
 export AGENTIC_KV_TRACE_PATH
 export AGENTIC_KV_COPY_TELEMETRY_ENABLE
@@ -41,6 +48,9 @@ export AGENTIC_KV_COPY_TELEMETRY_PATH
 export AGENTIC_RUNTIME_TELEMETRY
 export AGENTIC_RUNTIME_TELEMETRY_PATH
 export AGENTIC_RUNTIME_TELEMETRY_BACKEND
+if [[ "${HICACHE_STORAGE_BACKEND}" == "file" && -n "${HICACHE_STORAGE_PATH}" ]]; then
+  export SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR="${HICACHE_STORAGE_PATH}"
+fi
 export PYTHONPATH="$(pwd)/src:${PYTHONPATH:-}"
 
 if command -v nvcc >/dev/null 2>&1; then
@@ -66,6 +76,19 @@ launch_args=(
   --decode-attention-backend "${DECODE_ATTENTION_BACKEND}"
 )
 
+if [[ -n "${HICACHE_STORAGE_BACKEND}" ]]; then
+  launch_args+=(--hicache-storage-backend "${HICACHE_STORAGE_BACKEND}")
+fi
+if [[ "${HICACHE_STORAGE_BACKEND}" == "file" && -n "${HICACHE_STORAGE_PATH}" ]]; then
+  launch_args+=(--file-storage-path "${HICACHE_STORAGE_PATH}")
+fi
+if [[ -n "${HICACHE_STORAGE_BACKEND}" && -n "${HICACHE_STORAGE_PREFETCH_POLICY}" ]]; then
+  launch_args+=(--hicache-storage-prefetch-policy "${HICACHE_STORAGE_PREFETCH_POLICY}")
+fi
+if [[ -n "${HICACHE_STORAGE_BACKEND}" && -n "${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG}" ]]; then
+  launch_args+=(--hicache-storage-backend-extra-config "${HICACHE_STORAGE_BACKEND_EXTRA_CONFIG}")
+fi
+
 if [[ -n "${CUDA_GRAPH_FLAG}" ]]; then
   # shellcheck disable=SC2206
   launch_args+=( ${CUDA_GRAPH_FLAG} )
@@ -83,13 +106,17 @@ if [[ -n "${SGLANG_DOCKER_IMAGE}" ]]; then
   if [[ "${SGLANG_DOCKER_PULL}" == "1" ]]; then
     docker pull "${SGLANG_DOCKER_IMAGE}"
   fi
+  docker_mount_args=(-v "$(pwd):$(pwd)")
+  if [[ -n "${HICACHE_STORAGE_PATH}" ]]; then
+    docker_mount_args+=(-v "${HICACHE_STORAGE_PATH}:${HICACHE_STORAGE_PATH}")
+  fi
   echo "Launching SGLang in Docker image: ${SGLANG_DOCKER_IMAGE}"
   exec docker run --rm \
     ${SGLANG_DOCKER_GPU_ARGS} \
     --network host \
     --ipc host \
     --shm-size 16g \
-    -v "$(pwd):$(pwd)" \
+    "${docker_mount_args[@]}" \
     -w "$(pwd)" \
     -e AGENTIC_KV_TRACE_ENABLE \
     -e AGENTIC_KV_TRACE_PATH \
@@ -100,6 +127,7 @@ if [[ -n "${SGLANG_DOCKER_IMAGE}" ]]; then
     -e AGENTIC_RUNTIME_TELEMETRY \
     -e AGENTIC_RUNTIME_TELEMETRY_PATH \
     -e AGENTIC_RUNTIME_TELEMETRY_BACKEND \
+    -e SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR="${SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR:-}" \
     -e PYTHONPATH="$(pwd)/src:${PYTHONPATH:-}" \
     -e HF_TOKEN="${HF_TOKEN:-}" \
     -e HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN:-}}" \

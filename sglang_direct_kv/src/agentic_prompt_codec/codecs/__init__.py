@@ -1,5 +1,3 @@
-from .dictionary import DictionaryCodec
-from .identity import IdentityCodec
-from .relations import RelationsCodec
+from .registry import BUILTINS
 
-BUILTINS = {c.name: c for c in (IdentityCodec, DictionaryCodec, RelationsCodec)}
+__all__ = ["BUILTINS"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from typing import Any
 from .adapters import PayloadAdapter
 from .codecs import BUILTINS
@@ -39,6 +40,7 @@ class PromptEncoder:
         tokens = candidate_tokens = legend_tokens = None
         changed = 0
         validation = "not_run"
+        rule_counts: Counter[str] = Counter()
         limit = min(self.config.max_encode_ms, budget_ms) if budget_ms is not None else self.config.max_encode_ms
 
         def check() -> None:
@@ -47,12 +49,26 @@ class PromptEncoder:
 
         def finish(status, reason, chosen=payload):
             now = time.time_ns()
-            return EncodingResult(chosen, status, reason, self.codec.name, self.fingerprint,
-                original_hash, digest(chosen), started_ns, now,
-                (time.perf_counter() - started) * 1000,
-                getattr(self.counter, "identity", ""), tokens,
-                candidate_tokens if status == "applied" else tokens,
-                candidate_tokens, legend_tokens, changed if status == "applied" else 0, validation)
+            return EncodingResult(
+                payload=chosen,
+                status=status,
+                reason=reason,
+                codec=self.codec.name,
+                config_hash=self.fingerprint,
+                original_hash=original_hash,
+                encoded_hash=digest(chosen),
+                started_ns=started_ns,
+                finished_ns=now,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                tokenizer_id=getattr(self.counter, "identity", ""),
+                original_tokens=tokens,
+                encoded_tokens=candidate_tokens if status == "applied" else tokens,
+                candidate_tokens=candidate_tokens,
+                legend_tokens=legend_tokens,
+                changed_segments=changed if status == "applied" else 0,
+                validation=validation,
+                rule_counts=dict(rule_counts),
+            )
 
         if self.codec.name == "identity":
             return finish("unchanged", "identity")
@@ -79,6 +95,7 @@ class PromptEncoder:
                 if candidate.text != segment.text:
                     replacements[segment.path] = candidate.text
                     legend_tokens += self.counter.count_text(candidate.legend)
+                    rule_counts.update(dict(candidate.rule_counts))
             validation = "round_trip" if all_reversible else "protected_content_only"
             if not replacements:
                 return finish("unchanged", "no_candidate")

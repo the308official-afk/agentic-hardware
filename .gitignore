@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.codex_external/
 node_modules
 node_modules/
 **/node_modules

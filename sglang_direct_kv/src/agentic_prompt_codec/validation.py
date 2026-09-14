@@ -26,9 +26,9 @@ def editable_parts(text: str) -> list[tuple[str, bool]]:
 
 def decode(segment: EncodedSegment) -> str:
     """Expand exactly once; definitions themselves are never recursively read."""
-    mapping = dict(segment.dictionary)
-    if len(mapping) != len(segment.dictionary) or any(not key for key in mapping):
-        raise ValueError("invalid dictionary")
+    mapping = dict(segment.expansions)
+    if len(mapping) != len(segment.expansions) or any(not key for key in mapping):
+        raise ValueError("invalid shorthand expansions")
     if not mapping:
         return segment.body
     pattern = re.compile("|".join(re.escape(key) for key in sorted(mapping, key=len, reverse=True)))
@@ -40,8 +40,10 @@ def validate(original: str, candidate: EncodedSegment) -> None:
         raise ValueError("rendered content does not match body and legend")
     if candidate.reversible and decode(candidate) != original:
         raise ValueError("round-trip mismatch")
-    if any(original.count(alias) for alias, _ in candidate.dictionary):
-        raise ValueError("alias collides with source text")
+    if any(original.count(alias) for alias, _ in candidate.expansions):
+        raise ValueError("shorthand expression collides with source text")
+    if candidate.reversible:
+        return
     for text, editable in editable_parts(original):
         if not editable and candidate.body.count(text) < original.count(text):
             raise ValueError("protected content changed")

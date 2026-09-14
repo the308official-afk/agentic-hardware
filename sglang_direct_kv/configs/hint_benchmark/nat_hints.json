@@ -1,0 +1,371 @@
+{
+  "schema_version": "hint_benchmark_manifest_v1",
+  "harness": {
+    "id": "nemo_agent_toolkit",
+    "display_name": "NeMo Agent Toolkit / NAT",
+    "aliases": [
+      "nat",
+      "nemo_agent_toolkit",
+      "NeMo Agent Toolkit"
+    ]
+  },
+  "source": {
+    "deck_path": "presentation/Harness Signal Tables As-Is.pptx",
+    "slides": [
+      5,
+      10
+    ],
+    "notes": "Initial NAT hint inventory copied from the scheduling and KV/cache NAT columns in the deck. SGLang lowering is intentionally out of scope for this manifest."
+  },
+  "source_classes": {
+    "organic": "The workload shape naturally caused the harness to emit the hint.",
+    "workflow_config": "The benchmark workflow explicitly configured the hint.",
+    "client_supplied": "The client or session supplied the hint before the harness processed the request.",
+    "provider_config": "A provider setting caused or carried the hint.",
+    "metrics_feedback": "The value appears after execution in metrics or usage feedback rather than as request metadata."
+  },
+  "required_smoke_scenarios": [
+    "nat_no_hints_baseline",
+    "nat_priority_high",
+    "nat_priority_low",
+    "nat_prefix_reuse_id",
+    "nat_cache_control_ttl"
+  ],
+  "hints": [
+    {
+      "id": "priority",
+      "display_name": "Soft priority",
+      "family": "scheduling",
+      "canonical_area": "soft_priority",
+      "raw_nat_fields": [
+        "priority"
+      ],
+      "deck_description": "Emits priority",
+      "deck_json": {
+        "priority": "priority"
+      },
+      "scope": "request",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": true,
+      "scenario_ids": [
+        "nat_priority_high",
+        "nat_priority_low"
+      ],
+      "expected_values": [
+        100,
+        2
+      ],
+      "benchmark_question": "Can NAT emit request priority when the workflow marks a request as high or low priority?",
+      "notes": "This is the first scheduling hint to benchmark. It is treated as configured workflow behavior unless later evidence shows NAT derives it organically.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "latency_sensitivity",
+      "display_name": "Latency sensitivity",
+      "family": "scheduling",
+      "canonical_area": "latency_sensitivity",
+      "raw_nat_fields": [
+        "latency_sensitivity"
+      ],
+      "deck_description": "Experimental latency_sensitivity",
+      "deck_json": {
+        "latency_sensitivity": "latency_sensitivity"
+      },
+      "scope": "request",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_latency_sensitive"
+      ],
+      "expected_values": [
+        100
+      ],
+      "benchmark_question": "Can NAT emit latency sensitivity metadata when a workflow or request is marked latency sensitive?",
+      "notes": "The deck labels this as experimental, so the scenario should report unsupported/version-bound if the installed NAT build cannot emit it.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "provider_qos",
+      "display_name": "Provider speed/QoS tier",
+      "family": "scheduling",
+      "canonical_area": "provider_qos_tier",
+      "raw_nat_fields": [
+        "provider",
+        "provider.qos_tier"
+      ],
+      "deck_description": "Provider-dependent",
+      "deck_json": {
+        "via": "provider"
+      },
+      "scope": "provider",
+      "expected_source_class": "provider_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_provider_qos"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT preserve or expose provider-dependent QoS metadata when the provider configuration supplies it?",
+      "notes": "This should not be treated as an organic NAT decision unless a concrete provider path proves otherwise.",
+      "default_injection_level": "provider_level"
+    },
+    {
+      "id": "expected_output_length",
+      "display_name": "Expected output length",
+      "family": "scheduling",
+      "canonical_area": "expected_output_length",
+      "raw_nat_fields": [
+        "osl"
+      ],
+      "deck_description": "Emits osl",
+      "deck_json": {
+        "output_length": "osl"
+      },
+      "scope": "request",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_expected_output_length"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT emit an expected output length hint for a request?",
+      "notes": "The first scenario can supply a known expected output length. Later scenarios can test whether NAT estimates this itself.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "expected_interarrival_time",
+      "display_name": "Expected interarrival time",
+      "family": "scheduling",
+      "canonical_area": "expected_interarrival_time",
+      "raw_nat_fields": [
+        "iat"
+      ],
+      "deck_description": "Custom iat",
+      "deck_json": {
+        "interarrival_time": "iat"
+      },
+      "scope": "workflow",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_expected_interarrival_time"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT emit expected interarrival timing when the benchmark workflow provides a request cadence?",
+      "notes": "Treat as custom workflow metadata unless NAT documentation or code shows an organic estimator.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "predicted_remaining_calls",
+      "display_name": "Predicted remaining calls",
+      "family": "scheduling",
+      "canonical_area": "predicted_remaining_calls",
+      "raw_nat_fields": [
+        "total_requests"
+      ],
+      "deck_description": "Custom total_requests",
+      "deck_json": {
+        "remaining_calls": "total_requests"
+      },
+      "scope": "workflow",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_remaining_calls"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT emit a remaining-call or total-request count for a multi-step workflow?",
+      "notes": "The benchmark should use a multi-step workflow so this field has a clear meaning.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "prefix_id",
+      "display_name": "Prefix/workflow reuse ID",
+      "family": "scheduling_and_cache",
+      "canonical_area": "prefix_workflow_reuse_id",
+      "raw_nat_fields": [
+        "prefix_id"
+      ],
+      "deck_description": "Custom prefix_id; also listed as NAT cache key/bucket, but not equivalent to a true cache key",
+      "deck_json": {
+        "prefix_id": "prefix_id",
+        "cache_key": "prefix_id"
+      },
+      "scope": "workflow",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": true,
+      "scenario_ids": [
+        "nat_prefix_reuse_id"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT attach the same prefix/workflow reuse ID across related requests?",
+      "notes": "Label carefully: the deck says prefix_id can act like a cache bucket signal, but it is not a true prompt cache key.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "cache_namespace",
+      "display_name": "Cache namespace/isolation",
+      "family": "cache",
+      "canonical_area": "cache_namespace",
+      "raw_nat_fields": [
+        "nvext.cache_salt"
+      ],
+      "deck_description": "Could pass Dynamo salt",
+      "deck_json": {
+        "cache_namespace": "nvext.cache_salt"
+      },
+      "scope": "request_or_session",
+      "expected_source_class": "client_supplied",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_cache_namespace"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT preserve a client/session cache namespace or salt at the outgoing request boundary?",
+      "notes": "NAT 1.8.0 _DynamoTransport does not create cache_salt itself in our inspected path; the benchmark verifies preservation.",
+      "default_injection_level": "session_level"
+    },
+    {
+      "id": "cache_ttl",
+      "display_name": "Cache TTL",
+      "family": "cache",
+      "canonical_area": "cache_ttl",
+      "raw_nat_fields": [
+        "nvext.cache_control.ttl"
+      ],
+      "deck_description": "Experimental nvext.cache_control.ttl",
+      "deck_json": {
+        "cache_ttl": "nvext.cache_control.ttl"
+      },
+      "scope": "request_or_cache_entry",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": true,
+      "scenario_ids": [
+        "nat_cache_control_ttl"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT emit cache-control TTL metadata when a cache TTL is configured?",
+      "notes": "The deck labels this experimental, so the benchmark should distinguish missing support from a failed required behavior.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "cache_entry_type",
+      "display_name": "Cache entry type",
+      "family": "cache",
+      "canonical_area": "cache_entry_type",
+      "raw_nat_fields": [
+        "nvext.cache_control.type",
+        "type"
+      ],
+      "deck_description": "type:\"ephemeral\" experimentally",
+      "deck_json": {
+        "cache_type": "type:\"ephemeral\" experimentally"
+      },
+      "scope": "request_or_cache_entry",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_cache_ephemeral"
+      ],
+      "expected_values": [
+        "ephemeral"
+      ],
+      "benchmark_question": "Can NAT emit an ephemeral cache entry type when configured?",
+      "notes": "Optional until a concrete supported NAT version path is confirmed.",
+      "default_injection_level": "cache_entry_level"
+    },
+    {
+      "id": "eviction_priority",
+      "display_name": "Eviction priority",
+      "family": "cache",
+      "canonical_area": "eviction_priority",
+      "raw_nat_fields": [
+        "priority"
+      ],
+      "deck_description": "Emits priority",
+      "deck_json": {
+        "eviction_priority": "priority"
+      },
+      "scope": "request_or_cache_entry",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_eviction_priority"
+      ],
+      "expected_values": [],
+      "benchmark_question": "When NAT emits priority, can that same metadata be observed as cache eviction priority intent?",
+      "notes": "This is priority-derived. The benchmark should avoid counting it as a separate organic hint unless NAT emits a separate eviction-priority field.",
+      "default_injection_level": "workflow_level"
+    },
+    {
+      "id": "cache_hit_feedback",
+      "display_name": "Cache-hit feedback",
+      "family": "cache",
+      "canonical_area": "cache_hit_feedback",
+      "raw_nat_fields": [
+        "profiler",
+        "metrics"
+      ],
+      "deck_description": "Profiler/metrics",
+      "deck_json": {
+        "via": "metrics"
+      },
+      "scope": "metrics",
+      "expected_source_class": "metrics_feedback",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_cache_feedback_metrics"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Can NAT expose cache-hit feedback through profiler or metrics output after execution?",
+      "notes": "This is not request emission. Keep it in a separate report section from request-boundary hints.",
+      "default_injection_level": "runtime_feedback_level"
+    },
+    {
+      "id": "cache_pinning",
+      "display_name": "Cache pinning",
+      "family": "cache",
+      "canonical_area": "cache_pinning",
+      "raw_nat_fields": [
+        "cache_pinning"
+      ],
+      "deck_description": "Experimental/version-bound",
+      "deck_json": {
+        "cache_pinning": "version-bound"
+      },
+      "scope": "cache_entry",
+      "expected_source_class": "workflow_config",
+      "required_for_smoke": false,
+      "scenario_ids": [
+        "nat_cache_pinning",
+        "nat_cache_control_first_only"
+      ],
+      "expected_values": [],
+      "benchmark_question": "Does this NAT version expose cache pinning or pin-like retention metadata?",
+      "notes": "Version-bound and optional. The benchmark should report unsupported if no concrete field exists.",
+      "default_injection_level": "cache_entry_level"
+    }
+  ],
+  "excluded_hints": [
+    {
+      "id": "strict_priority",
+      "reason": "The deck lists strict_priority for Dynamo, not for NAT. Do not treat it as a required NAT benchmark target unless another NAT-specific source confirms it."
+    },
+    {
+      "id": "speculative_prefill",
+      "reason": "The deck lists speculative_prefill for Dynamo and Codex WebSocket prewarm, not NAT."
+    }
+  ],
+  "injection_levels": {
+    "none": "No hint is intentionally injected for this scenario.",
+    "provider_level": "The hint comes from provider or model configuration before the harness builds the request.",
+    "client_level": "The client supplies the hint before the harness processes the task.",
+    "session_level": "The hint is attached to an entire conversation/session.",
+    "task_level": "The hint is attached to one agent task.",
+    "workflow_level": "The hint is attached to a workflow, workflow step, or workflow path.",
+    "request_level": "The hint is attached to one model request.",
+    "prompt_block_level": "The hint is attached to a specific prompt, message, system, or tool block.",
+    "cache_entry_level": "The hint is attached to a cache entry or cache retention policy.",
+    "runtime_feedback_level": "The value appears after execution as metrics, usage, or profiler feedback.",
+    "unknown": "The benchmark observed a hint but cannot yet classify where it entered the path."
+  }
+}

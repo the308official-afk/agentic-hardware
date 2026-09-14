@@ -15,6 +15,7 @@ from .backend import (
     ObserveOnlyBackendAdapter,
     SGLangTargetedKVPrefetchBackendAdapter,
 )
+from .aiconfigurator_estimator import AIConfiguratorRuntimeCalibrator
 from .harness_signal import (
     HARNESS_CONTROLLER_SIGNAL_SCHEMA,
     HarnessControllerSignal,
@@ -31,11 +32,19 @@ from .models import (
     SessionPhase,
 )
 from .policy import ControllerPolicy, PolicyConfig
+from .runtime_calibration import (
+    OracleExactRuntimeTable,
+    RuntimeCalibrator,
+    RuntimeEstimate,
+    oracle_runtime_key,
+    runtime_class_key,
+)
 from .state_store import ControllerStateStore, SessionState
 from .timing_estimator import TimingEstimator
 
 __all__ = [
     "BackendActionResult",
+    "AIConfiguratorRuntimeCalibrator",
     "BackendAdapter",
     "BackendCapabilities",
     "ControllerCommand",
@@ -54,10 +63,15 @@ __all__ = [
     "KVAction",
     "ObserveOnlyBackendAdapter",
     "PolicyConfig",
+    "OracleExactRuntimeTable",
+    "RuntimeCalibrator",
+    "RuntimeEstimate",
     "SchedulerAction",
     "SGLangTargetedKVPrefetchBackendAdapter",
     "SessionPhase",
     "SessionState",
     "TimingEstimator",
     "build_harness_controller_signal",
+    "oracle_runtime_key",
+    "runtime_class_key",
 ]

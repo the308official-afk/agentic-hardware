@@ -41,14 +41,13 @@ cup [x2] plate.
 
 The receiving LLM gets both the legend and the encoded text. The goal is to
 preserve every stated fact and qualification while expressing relationships
-compactly. Summarization and repeated-phrase substitution are separate
-techniques; neither defines what we mean by shorthand here.
+compactly. Summarization and repeated-phrase aliasing are separate techniques;
+neither defines what we mean by shorthand here.
 
-This example defines the intended notation, not the current codec's literal
-output or a measured token saving. The portable `agentic_prompt_codec` module
-currently includes a narrow `is on` relation prototype using `@`, alongside a
-separate dictionary codec. See the [shorthand definition and implementation
-boundaries](sglang_direct_kv/docs/prompt_codec.md#what-shorthand-means-in-this-project)
+This example defines the intended notation, not a measured token saving. The
+portable `agentic_prompt_codec` module implements this direction with the
+rule-based `agent_trace_relations_v1` codec. See the [shorthand definition and
+implementation boundaries](sglang_direct_kv/docs/prompt_codec.md#what-shorthand-means-in-this-project)
 and the [module README](sglang_direct_kv/src/agentic_prompt_codec/README.md).
 
 ## Repository Map
@@ -100,6 +99,55 @@ From a local checkout, the common EC2 helper commands are:
 ./aws/ssh_to_ec2.sh 0
 ./aws/download.sh 0
 ```
+
+## Real HiCache Storage Smoke
+
+Use this when you want to get our feet wet with real SGLang L3/storage-backed
+HiCache instead of simulated storage movement. This is intentionally small: one
+harness, one pressure level, and three families.
+
+```bash
+cd ~/agentic_hardware/sglang_direct_kv
+source .venv/bin/activate
+
+HARDWARE_PROFILE=ec2_a10g \
+SIGNAL_FAMILIES="baseline storage_baseline storage_controller_prefetch" \
+HARNESSES="hatcher" \
+PRESSURE_LEVELS="p1_mild" \
+TOOL_WAIT_PROFILE=fixed \
+P1_MILD_KNOBS="tool_wait_ms=1000 target_prompt_tokens=4096 filler_sessions=8 filler_prompt_tokens=2048 session_count=1 concurrency=4" \
+HICACHE_STORAGE_BACKEND=file \
+HICACHE_STORAGE_PREFETCH_POLICY=timeout \
+REPORT_BUILDER_MODE=lightweight \
+REPORT_LABEL="storage_hicache_smoke_$(date +%Y%m%d_%H%M%S)" \
+bash scripts/run_harness_signal_design_space.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+What this compares:
+
+```text
+baseline                    no priority, no controller, normal HiCache
+storage_baseline            real SGLang HiCache storage backend enabled
+storage_controller_prefetch real HiCache storage plus controller gateway preload
+```
+
+What to inspect afterward:
+
+```text
+artifacts/results/latest_master_report.html
+artifacts/results/reports/<REPORT_LABEL>/cache_action_proof.csv
+```
+
+In the proof CSV, look for `storage_prefetch_events`,
+`storage_to_host_events`, and `first_storage_action_after_sglang_receive_ms`.
+Those fields are the first check that SGLang actually entered the storage-facing
+HiCache path during the run.
+
+For the `file` backend, each case gets its own `hicache_storage` folder under
+the case directory. The launcher passes that path to SGLang as
+`--file-storage-path` and also exports
+`SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR` for SGLang versions that read the file
+backend path from the environment.
 
 ## GH200 Transfer And Run Workflow
 
@@ -245,18 +293,28 @@ because raw traces can become very large.
 ## Optional Prompt Encoding
 
 A removable, request-local shorthand encoder is available as the independent
-`agentic_prompt_codec` package. It is disabled by default. Dictionary shorthand
-and a small relation grammar are token-counted with their legends included;
-failed or unhelpful transformations pass through unchanged. Scheduling modes
-remain independent of encoding.
+`agentic_prompt_codec` package. It is disabled by default. Shorthand means
+lossless symbolic relations, token-counted with their legends included; failed
+or unhelpful transformations pass through unchanged. Scheduling modes remain
+independent of encoding.
+
+The shorthand layer is modular: relation rules live under
+`sglang_direct_kv/src/agentic_prompt_codec/rules/`, and
+`configs/prompt_codecs/agent_trace_relations_v1.json` selects which rules are
+enabled. Every encoded request records `encoding_rule_counts`, so the report can
+show which shorthand forms actually fired.
+
+The active rules include request-local workspace/file/function/command aliases
+plus coding-agent workflow forms such as phase headings, step headings,
+read/run/modify/ensure relations, guard reasons, and tool-call counts.
 
 The controller can also turn shorthand into an explicit experiment knob with
 `controller_priority_demotion_admission_shorthand`. That mode keeps the current
 priority + demotion + admission behavior, then asks the gateway to apply
-dictionary shorthand only when the codec proves net token savings for the
+relational shorthand only when the codec proves net token savings for the
 configured scope. The encoder remains request-local and portable: it does not
-require SGLang changes, harness changes, fine-tuning, or remembered dictionaries
-across requests.
+require SGLang changes, harness changes, fine-tuning, or remembered state across
+requests.
 
 See [the prompt codec guide](sglang_direct_kv/docs/prompt_codec.md) for library
 usage, the streaming proxy, token/quality evaluation, and an isolated EC2
@@ -285,7 +343,7 @@ The current manager-facing comparisons use these modes:
 | `controller_priority_demote` | Minimal controller probe. The controller does only two active things: lower filler/background requests to priority `-100` during the tool-wait window, and raise the target replay to priority `100`. |
 | `controller_priority_demotion_admission` | Minimal three-action controller probe. The controller raises target replay priority, lowers filler/background priority, and temporarily holds filler/background admission during the replay-critical window. |
 | `controller_priority_demotion_admission_earlyprepare` | Same priority + demotion + admission path, but it opens the background hold/demotion window before the replay returns. Configure the lead time with `CONTROLLER_EARLYPREPARE_LEAD_MS`; default is `500`. |
-| `controller_priority_demotion_admission_shorthand` | Same priority + demotion + admission path, plus request-local dictionary shorthand. Configure with `CONTROLLER_SHORTHAND_CODEC_CONFIG`; default is `configs/prompt_codecs/dictionary_v1.json`. |
+| `controller_priority_demotion_admission_shorthand` | Same priority + demotion + admission path, plus request-local relational shorthand. Configure with `CONTROLLER_SHORTHAND_CODEC_CONFIG`; default is `configs/prompt_codecs/agent_trace_relations_v1.json`. |
 | `controller_admission_control` | Portable controller phase 6. The controller admits or skips speculative warmup based on pressure limits, so overload cases get explicit skip reasons instead of unbounded background work. |
 
 The lightweight master report also includes a **System Cost Accounting** section.
@@ -355,6 +413,35 @@ TOOL_WAIT_PROFILE_SPEC="quick:70:200,moderate:25:2000,slow:5:20000"
 The sampler is deterministic for the same `TOOL_WAIT_SEED`, harness, pressure
 level, mode, and session id. This keeps runs reproducible while still giving the
 experiment richer timing structure.
+
+### Realistic coding-agent workload profile
+
+For the most production-like synthetic workload currently available in this
+testbed, use `AGENTIC_WORKLOAD_PROFILE=realistic_agentic_mix` together with the
+matching sampled tool waits. This changes the request shape, not just the wait
+time: target and filler sessions are drawn from coding-agent phases such as
+planning/routing, file inspection, patch reasoning, test/build reasoning,
+review/final response, and slow external-tool resume. Each phase gets a
+different prompt-size and output-token budget.
+
+```bash
+cd sglang_direct_kv
+
+AGENTIC_WORKLOAD_PROFILE=realistic_agentic_mix \
+TOOL_WAIT_PROFILE=realistic_agentic_mix \
+TASK_REPLAY_STEPS=3 \
+TOOL_WAIT_SEED=42 \
+FILLER_REPLAY_DEADLINES=1 \
+bash scripts/run_harness_signal_design_space.sh \
+  Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+The built-in `realistic_agentic_mix` wait profile samples from this reproducible
+mix: quick file reads around 250 ms, repository searches around 800 ms, small
+commands around 2 seconds, test/build waits around 7 seconds, and rare slow
+external waits around 18 seconds. The old pressure workload remains the default:
+if `AGENTIC_WORKLOAD_PROFILE` is omitted, the scripts use
+`synthetic_pressure`.
 
 ## Portable Agent-Aware Controller Foundation
 
@@ -597,7 +684,7 @@ PRESSURE_LEVELS="p3_high" \
 SIGNAL_FAMILIES="baseline frontend_supplied controller_priority_demotion_admission controller_shorthand" \
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="controller_priority_demotion_admission" \
 CONTROLLER_SHORTHAND_MODES="controller_priority_demotion_admission_shorthand" \
-CONTROLLER_SHORTHAND_CODEC_CONFIG="configs/prompt_codecs/dictionary_v1.json" \
+CONTROLLER_SHORTHAND_CODEC_CONFIG="configs/prompt_codecs/agent_trace_relations_v1.json" \
 CONTROLLER_SHORTHAND_ENCODING_SCOPE="target_requests" \
 P3_HIGH_KNOBS="tool_wait_ms=1000 target_prompt_tokens=4096 filler_sessions=32 filler_prompt_tokens=1536 session_count=1 concurrency=8" \
 FILLER_REPLAY_DEADLINES=1 \
@@ -611,6 +698,16 @@ show the same controller proof as `controller_priority_demotion_admission`, plus
 `gateway.prompt_encoding` events and `prompt_encoding_proof.csv` rows showing
 whether shorthand was applied, skipped, or failed. Interpret latency only after
 checking that net prompt tokens fell after including the shorthand legend.
+
+To scan real trajectory logs before adding a new shorthand rule:
+
+```bash
+cd sglang_direct_kv
+python3 scripts/scan_prompt_shorthand_trajectories.py \
+  --root /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware/.codex_external/agentbench_results \
+  --approx-token-counter \
+  --max-records 500
+```
 
 Focused validation of the chunked-prefill controller variant:
 
@@ -676,6 +773,8 @@ smallest possible boundary adapter.
 | Phase 6.7: Minimal priority-plus-demotion probe | Implemented; EC2 run pending | Strip the controller back to the two highest-value actions: raise target replay priority and aggressively demote filler/background work. | Run `controller_priority_demote` against baseline and front-end priority on DeepAgents/Hatcher at `p3_high` with a 1000 ms fixed tool wait. Success requires proof that filler requests entering during the replay window were lowered to priority `-100`, the target replay reached SGLang with priority `100`, and the target replay improved without hiding filler cost. |
 | Phase 6.8: Minimal priority-plus-demotion-plus-admission probe | Implemented; EC2 run pending | Add direct gateway admission control to the minimal controller: hold filler/background requests at the gateway boundary during the replay-critical window. | Run `controller_priority_demotion_admission` against baseline, front-end priority, and `controller_priority_demote` on DeepAgents/Hatcher at `p3_high` with a 1000 ms fixed tool wait. Success requires proof that filler/background requests were blocked before entering SGLang, released after target replay, and cost accounting shows where the delay moved. |
 | Phase 6.9: EarlyPrepare admission window | Implemented; EC2 run pending | Start demotion/admission before the target replay returns, using the expected tool-wait completion time exposed by the harness. | Run `controller_priority_demotion_admission_earlyprepare` against baseline, front-end priority, and the prior admission modes on DeepAgents/Hatcher at `p3_high`. Success requires proof that the hold/demotion window opened before `m27.replay.due`, replay priority still reached SGLang, and target replay lateness moves closer to zero without excessive total TTFT cost. |
+| Phase 6.10: Oracle timeline admission | Implemented; EC2 run pending | Give the controller an upper-bound timeline view: expected replay-ready time plus estimated filler runtime. It admits filler only when the filler is expected to finish before the replay-critical window. | Run `controller_oracle_timeline` against baseline, front-end priority, and the prior controller admission modes on DeepAgents/Hatcher at `p3_high`. Success requires proof rows showing each oracle `admit` or `hold` decision, estimated filler runtime, time until replay, safety margin, replay priority lowering, and resulting target/filler cost. |
+| Phase 6.11: Idle-aware Oracle SJF tuning | Implemented; EC2 run pending | Keep strict `controller_oracle_safe_sjf` as the conservative baseline, then test less cautious SJF modes that use shorter safety margins, higher filler concurrency, and a one-short-filler idle override when strict fit would leave the backend empty. | Run `controller_oracle_safe_sjf`, `controller_oracle_safe_sjf_balanced`, `controller_oracle_safe_sjf_aggressive`, and `controller_oracle_safe_sjf_maxfill` against baseline/front-end priority on DeepAgents/Hatcher at `p3_high`. Success requires trace rows distinguishing `shortest_safe_filler_fits_before_next_replay`, `idle_override_shortest_filler_admitted_to_avoid_empty_backend`, and `maxfill_shortest_filler_admitted_without_fit_requirement`, then compare target debt, filler debt, total TTFT, and GPU idle. |
 | Phase 7: GH200 profile and scale-up | Prepared; GH200 run pending | Re-run the same controller design on GH200 with larger pressure profiles and host-harness/Docker-SGLang split. | [gh200/run_controller_scaleup.sh](gh200/run_controller_scaleup.sh) runs the EC2-validated controller modes with `HARDWARE_PROFILE=gh200`, host-side harnesses, Dockerized SGLang, and the lightweight report builder. GH200 report should use the same scripts and modes as EC2, with only hardware profile and host/container setup differences. |
 
 For Phase 6.5, the demote/restore proof is window-aware. Earlier filler

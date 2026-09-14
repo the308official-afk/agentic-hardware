@@ -2260,6 +2260,7 @@ def _cache_path_telemetry_event(
         "init_load_back": "init_load_back",
         "load_back": "load_back",
         "load": "hicache_load",
+        "prefetch": "hicache_storage_prefetch",
         "cache_finished_req": "cache_finished_req",
         "cache_unfinished_req": "cache_unfinished_req",
     }
@@ -2494,6 +2495,7 @@ def _request_stage_category(method_name: str) -> tuple[str, str, int] | None:
         "write": ("hicache_write_host", "memory movement", 92),
         "evict_device": ("hicache_evict_device", "memory residency", 93),
         "evict_host": ("hicache_evict_host", "memory residency", 94),
+        "prefetch": ("hicache_storage_prefetch", "memory movement", 95),
         "forward_batch_generation": ("model_forward_generation", "model work", 100),
         "forward_batch_split_prefill": ("model_forward_split_prefill", "model work", 101),
         "_forward_batch_generation_dllm": ("model_forward_dllm", "model work", 102),

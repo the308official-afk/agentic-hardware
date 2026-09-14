@@ -1,0 +1,29 @@
+{
+  "codec": {
+    "codec": "agent_trace_relations_v1",
+    "enabled_rules": [
+      "workspace_root_alias",
+      "file_path_alias",
+      "function_alias",
+      "validation_command_alias",
+      "execute_tool_command",
+      "markdown_phase_heading",
+      "markdown_step_heading",
+      "numbered_bold_step",
+      "phase",
+      "guard_reason",
+      "tool_calls",
+      "read_for_purpose",
+      "run_for_purpose",
+      "modify_to_goal",
+      "do_not",
+      "ensure"
+    ],
+    "min_saved_tokens": 16,
+    "min_saved_ratio": 0.05,
+    "max_encode_ms": 100,
+    "max_input_chars": 100000,
+    "max_shorthand_rules": 64
+  },
+  "tokenizer": {"model": "Qwen/Qwen2.5-Coder-7B-Instruct", "local_files_only": true}
+}

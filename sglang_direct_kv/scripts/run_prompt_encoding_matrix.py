@@ -15,7 +15,7 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct")
-    parser.add_argument("--codecs", nargs="+", default=["identity", "dictionary_v1"])
+    parser.add_argument("--codecs", nargs="+", default=["identity", "agent_trace_relations_v1"])
     parser.add_argument("--modes", nargs="+", default=["no_prefetch", "controller_full"])
     parser.add_argument("--pressures", nargs="+", default=["p0_control", "p1_mild", "p3_high", "p4_cliff", "p5_boss_queue"])
     parser.add_argument("--harnesses", nargs="+", default=["hatcher"])
@@ -34,7 +34,7 @@ def main():
     plan = []
     for index, (repeat, codec, mode) in enumerate(jobs):
         config = root / "configs" / "prompt_codecs" / f"{codec}.json"
-        if codec not in {"identity", "dictionary_v1", "relations_v1"} or not config.is_file():
+        if codec not in {"identity", "agent_trace_relations_v1"} or not config.is_file():
             parser.error(f"unknown configured codec: {codec}")
         plan.append({"order": index, "repeat": repeat, "codec": codec, "mode": mode,
                      "config": str(config), "scope": args.scope, "label": f"{args.label}_r{repeat}_{codec}_{mode}"})

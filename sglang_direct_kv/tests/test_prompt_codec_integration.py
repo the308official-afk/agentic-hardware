@@ -22,7 +22,7 @@ import evaluate_prompt_codec as evaluation
 import run_multi_harness_replay_driver as harness_driver
 from agentic_prompt_codec import CodecConfig, PromptEncoder
 from agentic_prompt_codec.proxy import make_proxy_handler
-from test_prompt_codec import CharacterCounter, PROSE
+from test_prompt_codec import CharacterCounter, RELATION_PROSE
 
 
 @contextmanager
@@ -61,11 +61,12 @@ class IntegrationTests(unittest.TestCase):
         meta = {"session_id": "s", "label": "s_replay", "phase": "replay", "mode": "controller_full",
                 "controller_sglang_priority": 100, "harness": "hatcher", "prompt_hash": "driver-hash"}
         marker = base64.urlsafe_b64encode(json.dumps(meta).encode()).decode()
-        return {"messages": [{"role": "user", "content": PROSE * 30 + "\nHARNESS_REPLAY_EXPERIMENT_JSON:" + marker}]}, meta
+        return {"messages": [{"role": "user", "content": RELATION_PROSE + "\nHARNESS_REPLAY_EXPERIMENT_JSON:" + marker}]}, meta
 
     def test_gateway_payload_and_explicit_first_content_time_include_encoding(self):
         requests = []
-        encoder = PromptEncoder(CodecConfig(codec="dictionary_v1", max_encode_ms=5000), CharacterCounter())
+        encoder = PromptEncoder(CodecConfig(codec="agent_trace_relations_v1", max_encode_ms=5000,
+                                            min_saved_ratio=0.01), CharacterCounter())
         original_encode = encoder.encode
         def delayed(*args):
             time.sleep(0.025)
@@ -88,7 +89,7 @@ class IntegrationTests(unittest.TestCase):
             gateway.write_jsonl(trace, {"event": "m27.controller_demote_restore.restored", "session_id": "s", "backend_acted": True})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(requests[0]["priority"], 100)
-            self.assertIn("Local shorthand", requests[0]["messages"][0]["content"])
+            self.assertIn("Relational shorthand", requests[0]["messages"][0]["content"])
             self.assertNotIn("HARNESS_REPLAY_EXPERIMENT_JSON", requests[0]["messages"][0]["content"])
             end = next(r for r in map(json.loads, trace.read_text().splitlines()) if r["event"] == "m27.request.end")
             self.assertGreater(end["gateway_to_first_content_ms"], end["ttft_ms"] + 20)
@@ -374,9 +375,10 @@ class IntegrationTests(unittest.TestCase):
     def test_streaming_proxy_delivers_first_chunk_before_backend_finishes(self):
         requests, events = [], []
         release = threading.Event()
-        payload = {"messages": [{"role": "system", "content": "keep this"}, {"role": "user", "content": PROSE * 30}],
+        payload = {"messages": [{"role": "system", "content": "keep this"}, {"role": "user", "content": RELATION_PROSE}],
                    "stream": True, "priority": 100, "cache_salt": "same-tenant"}
-        encoder = PromptEncoder(CodecConfig(codec="dictionary_v1", max_encode_ms=5000), CharacterCounter())
+        encoder = PromptEncoder(CodecConfig(codec="agent_trace_relations_v1", max_encode_ms=5000,
+                                            min_saved_ratio=0.01), CharacterCounter())
         with serve(self.backend(requests, release=release)) as backend:
             with serve(make_proxy_handler(backend, encoder, record=events.append)) as proxy:
                 with httpx.stream("POST", proxy + "/v1/chat/completions", json=payload) as response:
@@ -395,21 +397,22 @@ class IntegrationTests(unittest.TestCase):
         base = {"harness": "hatcher", "pressure_level": "p0_control", "mode": "no_prefetch",
                 "first_token_lateness_ms": 100, "ttft_ms": 100}
         rows = [dict(base, encoding_codec="identity", encoding_config_hash="a"),
-                dict(base, encoding_codec="dictionary_v1", encoding_config_hash="b", first_token_lateness_ms=20),
-                dict(base, encoding_codec="dictionary_v1", encoding_config_hash="b", first_token_lateness_ms="", error="empty")]
+                dict(base, encoding_codec="agent_trace_relations_v1", encoding_config_hash="b", first_token_lateness_ms=20),
+                dict(base, encoding_codec="agent_trace_relations_v1", encoding_config_hash="b", first_token_lateness_ms="", error="empty")]
         summary = report.summarize(rows)
         self.assertEqual(len(summary), 2)
-        candidate = next(row for row in summary if row["encoding_codec"] == "dictionary_v1")
+        candidate = next(row for row in summary if row["encoding_codec"] == "agent_trace_relations_v1")
         self.assertEqual(candidate["requests"], 2)
         self.assertEqual(candidate["failures"], 1)
         self.assertEqual(candidate["median_first_token_lateness_ms"], 20)
 
     def test_quality_evaluator_scores_both_arms_and_isolates_warmup(self):
         requests = []
-        encoder = PromptEncoder(CodecConfig(codec="dictionary_v1", max_encode_ms=5000), CharacterCounter())
+        encoder = PromptEncoder(CodecConfig(codec="agent_trace_relations_v1", max_encode_ms=5000,
+                                            min_saved_ratio=0.01), CharacterCounter())
         with tempfile.TemporaryDirectory() as folder, serve(self.backend(requests)) as backend:
             workload = Path(folder) / "workload.jsonl"
-            workload.write_text(json.dumps({"id": "quality", "replay_prompt": PROSE * 30, "expected_answer": "answer"}) + "\n")
+            workload.write_text(json.dumps({"id": "quality", "replay_prompt": RELATION_PROSE, "expected_answer": "answer"}) + "\n")
             out = Path(folder) / "evaluation"
             args = ["evaluation", "--workload", str(workload), "--config", str(workload),
                     "--out-dir", str(out), "--base-url", backend, "--cache-condition", "warm"]
