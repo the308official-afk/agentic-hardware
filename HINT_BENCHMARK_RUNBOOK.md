@@ -28,16 +28,29 @@ cd ~/agentic_hardware
 | Session / Request | A session setting causes the signal, and it appears on outgoing requests. |
 | Configuration / Request | A config setting causes the signal, and it appears on outgoing requests. |
 
+<style>
+.hint-benchmark-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.hint-benchmark-table pre,
+.hint-benchmark-table code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+</style>
+
 ## Claude Code
 
-<table>
+<table class="hint-benchmark-table">
 <colgroup>
-<col width="13%" style="width: 13%;">
-<col width="22%" style="width: 22%;">
-<col>
-<col width="20%" style="width: 20%;">
-<col width="13%" style="width: 13%;">
-<col width="16%" style="width: 16%;">
+<col width="11%" style="width: 11%;">
+<col width="30%" style="width: 30%;">
+<col width="29%" style="width: 29%;">
+<col width="14%" style="width: 14%;">
+<col width="8%" style="width: 8%;">
+<col width="8%" style="width: 8%;">
 </colgroup>
 <thead>
 <tr>
@@ -253,14 +266,14 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 
 ## NeMo Agent Toolkit / NAT
 
-<table>
+<table class="hint-benchmark-table">
 <colgroup>
-<col width="13%" style="width: 13%;">
-<col width="22%" style="width: 22%;">
-<col>
-<col width="20%" style="width: 20%;">
-<col width="13%" style="width: 13%;">
-<col width="16%" style="width: 16%;">
+<col width="11%" style="width: 11%;">
+<col width="30%" style="width: 30%;">
+<col width="29%" style="width: 29%;">
+<col width="14%" style="width: 14%;">
+<col width="8%" style="width: 8%;">
+<col width="8%" style="width: 8%;">
 </colgroup>
 <thead>
 <tr>
