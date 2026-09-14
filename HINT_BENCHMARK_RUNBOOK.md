@@ -16,6 +16,19 @@ bash -lc 'source aws/config.sh && ssh $(ssh_opts hintbench) "$EC2_USER@${SERVERS
 cd ~/agentic_hardware
 ```
 
+## Where Attached Legend
+
+| Value | Meaning |
+| --- | --- |
+| Request | Attached to one model request. |
+| Workflow | Comes from the harness workflow for this task or path. |
+| Workflow stream | Describes a planned stream of requests, such as cadence or count. |
+| Prompt block | Attached to one system, message, tool, or cacheable prompt block. |
+| Header | Sent as a request header, outside the JSON body. |
+| Session/request | Comes from session metadata or request metadata. |
+| Provider metadata | Provider-specific metadata preserved at the boundary. |
+| First request only | Appears only on the first request in a repeated sequence. |
+
 ## NeMo Agent Toolkit / NAT
 
 <table>
@@ -24,7 +37,7 @@ cd ~/agentic_hardware
 <th>Run</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
-<th>Attachment Level</th>
+<th>Where Attached</th>
 <th>Evidence</th>
 </tr>
 </thead>
@@ -49,7 +62,7 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
 <li>none</li>
 </ul>
 </td>
-<td>request level</td>
+<td>Request</td>
 <td>Native NAT transport capture control case.</td>
 </tr>
 <tr>
@@ -81,7 +94,7 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
-<td>workflow, session, request/cache-entry, provider pass-through</td>
+<td>Workflow / Session/request / Provider metadata</td>
 <td>Native NAT `_DynamoTransport` request-boundary capture.</td>
 </tr>
 <tr>
@@ -108,7 +121,7 @@ RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>total_requests</code></li>
 </ul>
 </td>
-<td>workflow/request-stream level</td>
+<td>Workflow stream</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -134,7 +147,7 @@ RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority</code></li>
 </ul>
 </td>
-<td>workflow and cache-entry level</td>
+<td>Workflow / Request</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -158,7 +171,7 @@ RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
-<td>session/provider level</td>
+<td>Session/request / Provider metadata</td>
 <td>Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.</td>
 </tr>
 <tr>
@@ -181,7 +194,7 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority=100</code></li>
 </ul>
 </td>
-<td>workflow level</td>
+<td>Workflow</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -204,7 +217,7 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority=2</code></li>
 </ul>
 </td>
-<td>workflow level</td>
+<td>Workflow</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -228,7 +241,7 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority</code></li>
 </ul>
 </td>
-<td>workflow level</td>
+<td>Workflow</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -251,7 +264,7 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
 <li><code>osl</code></li>
 </ul>
 </td>
-<td>workflow/request estimate level</td>
+<td>Workflow stream</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
 <tr>
@@ -274,7 +287,7 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
 <li><code>iat</code></li>
 </ul>
 </td>
-<td>workflow/request-stream level</td>
+<td>Workflow stream</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
 <tr>
@@ -297,7 +310,7 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
 <li><code>total_requests</code></li>
 </ul>
 </td>
-<td>workflow/request-stream level</td>
+<td>Workflow stream</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -320,7 +333,7 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
 <li><code>prefix_id</code></li>
 </ul>
 </td>
-<td>workflow/session reuse level</td>
+<td>Workflow / Session/request</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -343,7 +356,7 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control.ttl</code></li>
 </ul>
 </td>
-<td>cache-entry/request level</td>
+<td>Request</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -366,7 +379,7 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
-<td>cache-entry level</td>
+<td>Request</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -389,7 +402,7 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control</code></li>
 </ul>
 </td>
-<td>cache-entry/request sequence level</td>
+<td>First request only</td>
 <td>Native NAT transport capture.</td>
 </tr>
 <tr>
@@ -412,7 +425,7 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_salt</code></li>
 </ul>
 </td>
-<td>session/request namespace level</td>
+<td>Session/request</td>
 <td>Pass-through preserved by NAT transport.</td>
 </tr>
 <tr>
@@ -435,7 +448,7 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
-<td>provider level</td>
+<td>Provider metadata</td>
 <td>Pass-through preserved by NAT transport; not NAT-invented.</td>
 </tr>
 </tbody>
@@ -449,7 +462,7 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 <th>Run</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
-<th>Attachment Level</th>
+<th>Where Attached</th>
 <th>Evidence</th>
 </tr>
 </thead>
@@ -474,7 +487,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li>none</li>
 </ul>
 </td>
-<td>request level</td>
+<td>Request</td>
 <td>Native Claude Code request-boundary control case.</td>
 </tr>
 <tr>
@@ -500,7 +513,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
-<td>session, request, content-block, cache-entry</td>
+<td>Header / Prompt block</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -523,7 +536,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
-<td>session/provider request header</td>
+<td>Header</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -548,7 +561,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.ttl="1h"</code></li>
 </ul>
 </td>
-<td>content-block and cache-entry level</td>
+<td>Prompt block</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -571,7 +584,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>system.*.cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
-<td>request and content-block level</td>
+<td>Request / Prompt block</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -594,7 +607,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
-<td>session/provider request header</td>
+<td>Header</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
 <tr>
@@ -618,7 +631,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.ttl="1h"</code></li>
 </ul>
 </td>
-<td>content-block/cache-entry level</td>
+<td>Prompt block</td>
 <td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
 </tr>
 <tr>
@@ -641,7 +654,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
-<td>content-block/cache-entry level</td>
+<td>Prompt block</td>
 <td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
 </tr>
 </tbody>
