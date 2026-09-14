@@ -145,10 +145,11 @@ without manually listing scenario IDs.
 | `all_request_boundary` | Show everything visible without SGLang. | `full_nat_coverage` | all request-boundary observed signals |
 | `runtime_feedback` | Reserved for cache-hit metrics. | `nat_cache_feedback_metrics` | `cache_hit_feedback` after backend run |
 | Claude `baseline` | Hide intentional hints. | `claude_no_hints_baseline` | none |
-| Claude `qos_only` | Probe Claude Code native service-tier variants. | native service-tier probes | `service_tier` |
-| Claude `cache_only` | Probe Claude Code native cache-control locations and TTL. | native cache-control probes | `cache_control`, optional `cache_control.ttl` |
+| Claude `qos_only` | Probe Claude Code native service-tier and fast-mode variants. | native service-tier probes plus `fastMode=true` probe | `service_tier`, `anthropic-beta` |
+| Claude `cache_only` | Probe Claude Code native cache-control locations and TTL. | native cache-control probes, `ENABLE_PROMPT_CACHING_1H`, and `FORCE_PROMPT_CACHING_5M` | `cache_control`, optional `cache_control.ttl`, optional cache beta/header behavior |
 | Claude `prewarm_only` | Probe whether Claude Code CLI emits max-token-zero prewarm. | native prewarm-like probe | `max_tokens=0`, `cache_control` |
 | Claude `feedback_only` | Probe whether Claude Code native path can expose cache feedback. | native real-provider probe | `usage.cache_creation_input_tokens`, `usage.cache_read_input_tokens` |
+| Claude `real_provider_feedback` | Run real Claude Code provider-response probes. | real provider cache-feedback and TTL probes | cache creation/read usage counters and TTL usage buckets when exposed |
 | Claude `native_client_boundary` | Run Claude Code CLI-only probes. | native Claude Code scenarios | native Claude Code probe targets only |
 | Claude `direct_api_capabilities` | Run direct Anthropic API capability probes. | `direct_anthropic_api_coverage` | `speed`, explicit TTL, `max_tokens=0`, cache feedback |
 | Claude `bedrock_provider_config` | Run Bedrock provider-config probes. | `bedrock_config_coverage` | Bedrock service-tier header |

@@ -57,6 +57,7 @@
       "scenario_ids": [
         "claude_service_tier_auto",
         "claude_service_tier_standard_only",
+        "claude_fast_mode_setting",
         "claude_api_fast_mode",
         "claude_bedrock_service_tier_priority"
       ],
@@ -99,11 +100,16 @@
       "id": "cache_ttl",
       "canonical_signal": "Cache TTL",
       "meaning": "Controls prompt cache retention duration when the request exposes a TTL.",
-      "raw_fields": ["cache_control.ttl", "system.*.cache_control.ttl", "messages.*.content.*.cache_control.ttl"],
+      "raw_fields": [
+        "cache_control.ttl",
+        "system.*.cache_control.ttl",
+        "messages.*.content.*.cache_control.ttl",
+        "_capture.headers.anthropic-beta"
+      ],
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
-      "scenario_ids": ["claude_provider_retention_1h", "claude_api_cache_ttl_1h"],
+      "scenario_ids": ["claude_provider_retention_1h", "claude_provider_retention_5m", "claude_api_cache_ttl_1h"],
       "status": "targeted_native_capture"
     },
     {
@@ -153,12 +159,18 @@
       "id": "cache_pinning",
       "canonical_signal": "Cache pinning / retention",
       "meaning": "Claude does not expose a literal pin flag; longer retention is represented by provider-managed cache TTL.",
-      "raw_fields": ["cache_control.ttl", "system.*.cache_control.ttl", "messages.*.content.*.cache_control.ttl"],
+      "raw_fields": [
+        "cache_control.ttl",
+        "system.*.cache_control.ttl",
+        "messages.*.content.*.cache_control.ttl",
+        "_capture.headers.anthropic-beta"
+      ],
       "default_injection_level": "cache_entry_level",
       "expected_source_class": "prompt_builder_policy",
       "supported_consumer": "Claude prompt cache",
       "scenario_ids": [
         "claude_provider_retention_1h",
+        "claude_provider_retention_5m",
         "claude_api_cache_ttl_1h",
         "claude_cache_pinning_negative_probe"
       ],

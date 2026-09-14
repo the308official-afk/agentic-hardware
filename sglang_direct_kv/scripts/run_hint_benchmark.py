@@ -342,6 +342,95 @@ def capture_claude_native_payloads(
     return captured, client_runs
 
 
+def parse_json_stdout(stdout: str) -> dict[str, Any] | None:
+    stripped = stdout.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else {"stdout_json": parsed}
+
+
+def capture_claude_real_provider_payloads(
+    scenarios: list[dict[str, Any]],
+    *,
+    command: str,
+    timeout_seconds: float,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    captured: dict[str, list[dict[str, Any]]] = {}
+    client_runs: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        payloads: list[dict[str, Any]] = []
+        env = os.environ.copy()
+        setup = scenario.get("client_setup") or scenario.get("synthetic_setup", {})
+        env_overrides = setup.get("env", {}) if isinstance(setup, dict) else {}
+        if not isinstance(env_overrides, dict):
+            env_overrides = {}
+        for key, value in env_overrides.items():
+            env[str(key)] = str(value)
+        request_count = max(1, int(scenario.get("workload_shape", {}).get("request_count") or 1))
+        for invocation_index in range(request_count):
+            cmd = claude_cli_command(scenario, command, invocation_index)
+            started_at = time.time()
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    cwd=REPO_ROOT.parent,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    check=False,
+                )
+                response_payload = parse_json_stdout(completed.stdout)
+                if response_payload is not None:
+                    response_payload = dict(response_payload)
+                    response_payload.setdefault("usage", {})
+                    response_payload["_capture"] = {
+                        "kind": "claude_cli_real_provider_response",
+                        "command": cmd,
+                        "returncode": completed.returncode,
+                        "received_at_unix": time.time(),
+                    }
+                    payloads.append(response_payload)
+                client_runs.append(
+                    {
+                        "scenario_id": scenario["id"],
+                        "invocation_index": invocation_index,
+                        "command": cmd,
+                        "returncode": completed.returncode,
+                        "stdout_tail": completed.stdout[-2000:],
+                        "stderr_tail": completed.stderr[-2000:],
+                        "duration_seconds": time.time() - started_at,
+                        "captured_payload_count": len(payloads),
+                        "response_json_parsed": response_payload is not None,
+                    }
+                )
+            except FileNotFoundError as exc:
+                raise HintBenchmarkConfigError(
+                    f"Claude real-provider capture requires the Claude CLI command {cmd[0]!r}. "
+                    "Install/configure Claude Code or pass --claude-command."
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                client_runs.append(
+                    {
+                        "scenario_id": scenario["id"],
+                        "invocation_index": invocation_index,
+                        "command": cmd,
+                        "returncode": "timeout",
+                        "stdout_tail": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
+                        "stderr_tail": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "",
+                        "duration_seconds": time.time() - started_at,
+                        "captured_payload_count": len(payloads),
+                        "response_json_parsed": False,
+                    }
+                )
+        captured[scenario["id"]] = payloads
+    return captured, client_runs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--harness", default="nemo_agent_toolkit", choices=tuple(DEFAULT_CONFIGS))
@@ -380,6 +469,14 @@ def main() -> None:
         "--claude-native-capture",
         action="store_true",
         help="Run the real Claude CLI/client against a local capture endpoint and validate emitted request fields.",
+    )
+    parser.add_argument(
+        "--claude-real-provider-capture",
+        action="store_true",
+        help=(
+            "Run the real Claude CLI/client against its configured provider and validate response usage fields. "
+            "This is for post-execution feedback, not request-boundary capture."
+        ),
     )
     parser.add_argument(
         "--anthropic-api-payload-capture",
@@ -422,6 +519,7 @@ def main() -> None:
             args.fixture_observations,
             args.nat_dynamo_transport_capture,
             args.claude_native_capture,
+            args.claude_real_provider_capture,
             args.anthropic_api_payload_capture,
         )
     )
@@ -429,12 +527,14 @@ def main() -> None:
         parser.error(
             "Choose exactly one of --dry-run, --fixture-observations, "
             "--nat-dynamo-transport-capture, --claude-native-capture, "
-            "or --anthropic-api-payload-capture."
+            "--claude-real-provider-capture, or --anthropic-api-payload-capture."
         )
     if args.nat_dynamo_transport_capture and args.harness != "nemo_agent_toolkit":
         parser.error("--nat-dynamo-transport-capture requires --harness nemo_agent_toolkit.")
     if args.claude_native_capture and args.harness != "claude_code":
         parser.error("--claude-native-capture requires --harness claude_code.")
+    if args.claude_real_provider_capture and args.harness != "claude_code":
+        parser.error("--claude-real-provider-capture requires --harness claude_code.")
     if args.anthropic_api_payload_capture and args.harness != "claude_code":
         parser.error("--anthropic-api-payload-capture requires --harness claude_code.")
 
@@ -461,6 +561,8 @@ def main() -> None:
             if args.nat_dynamo_transport_capture
             else "claude_native_capture"
             if args.claude_native_capture
+            else "claude_real_provider_capture"
+            if args.claude_real_provider_capture
             else "anthropic_api_payload_capture"
             if args.anthropic_api_payload_capture
             else "fixture_smoke"
@@ -476,6 +578,7 @@ def main() -> None:
             args.fixture_observations,
             args.nat_dynamo_transport_capture,
             args.claude_native_capture,
+            args.claude_real_provider_capture,
             args.anthropic_api_payload_capture,
         ]
         if any(generated_observation_modes) and args.observed_jsonl:
@@ -499,6 +602,22 @@ def main() -> None:
                 result["scenario_records"],
                 captured_payloads,
                 evidence_source="claude_native_capture",
+            )
+            result["client_runs"] = client_runs
+            result["captured_payload_counts"] = {
+                scenario_id: len(payloads) for scenario_id, payloads in captured_payloads.items()
+            }
+        elif args.claude_real_provider_capture:
+            captured_payloads, client_runs = capture_claude_real_provider_payloads(
+                selected,
+                command=args.claude_command,
+                timeout_seconds=args.claude_timeout_seconds,
+            )
+            observations = build_payload_observations(
+                manifest,
+                result["scenario_records"],
+                captured_payloads,
+                evidence_source="claude_real_provider_capture",
             )
             result["client_runs"] = client_runs
             result["captured_payload_counts"] = {

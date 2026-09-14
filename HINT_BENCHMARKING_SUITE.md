@@ -56,6 +56,7 @@ Claude signal evidence must stay split by layer:
 | Lane | What it proves | Example signals |
 | --- | --- | --- |
 | Claude Code native capture | What the real Claude Code CLI emits at the request boundary. | `cache_control` on system/message blocks, session headers, context management. |
+| Claude Code real-provider response capture | What the real Claude Code CLI receives after provider execution. | cache creation/read usage, cache TTL usage buckets when exposed. |
 | Direct Anthropic API payload capture | What the lower Anthropic Messages API can express when a client supplies the fields. | `speed: "fast"`, explicit cache TTL, `max_tokens: 0`, cache usage response fields. |
 | Provider-config payload capture | What a provider integration can carry outside the normal request body. | Bedrock service-tier header. |
 
@@ -531,7 +532,8 @@ Current Claude native-client capture implementation:
 manifest: sglang_direct_kv/configs/hint_benchmark/claude_hints.json
 scenarios: sglang_direct_kv/configs/hint_benchmark/claude_scenarios.json
 knobs: sglang_direct_kv/configs/hint_benchmark/claude_knobs.json
-runner mode: --claude-native-capture
+request-boundary runner mode: --claude-native-capture
+real-provider feedback runner mode: --claude-real-provider-capture
 ```
 
 Current EC2 status:
@@ -552,6 +554,7 @@ The benchmark outputs include an `evidence_tier` column:
 | Evidence Tier | Meaning |
 | --- | --- |
 | `native_client_or_transport_capture` | A real client or real harness transport path emitted the captured field. This can support native-emission claims. |
+| `native_client_real_provider_response` | A real Claude Code client received a real provider response. This can support cache-feedback claims, but it is not request-boundary evidence. |
 | `external_observed_file` | A separately captured observed-evidence file was validated by the suite. Check the file provenance before claiming native support. |
 | `fixture_plumbing_only` | The suite generated fake observations from expected emissions. This only tests parser/report plumbing. |
 | `recipe_only` | The suite recorded what would be run, but did not execute or observe a harness. |

@@ -13,6 +13,7 @@
       "claude_no_hints_baseline",
       "claude_service_tier_auto",
       "claude_service_tier_standard_only",
+      "claude_fast_mode_setting",
       "claude_repeated_session_prefix",
       "claude_long_running_cache_session",
       "claude_tool_heavy_request",
@@ -21,12 +22,14 @@
       "claude_prewarm_like_probe",
       "claude_provider_cache_feedback_probe",
       "claude_provider_retention_1h",
+      "claude_provider_retention_5m",
       "claude_cache_pinning_negative_probe"
     ],
     "all_claude_signal_recipes": [
       "claude_no_hints_baseline",
       "claude_service_tier_auto",
       "claude_service_tier_standard_only",
+      "claude_fast_mode_setting",
       "claude_repeated_session_prefix",
       "claude_long_running_cache_session",
       "claude_tool_heavy_request",
@@ -35,6 +38,7 @@
       "claude_prewarm_like_probe",
       "claude_provider_cache_feedback_probe",
       "claude_provider_retention_1h",
+      "claude_provider_retention_5m",
       "claude_cache_pinning_negative_probe",
       "claude_api_fast_mode",
       "claude_bedrock_service_tier_priority",
@@ -127,6 +131,37 @@
         {"hint_id": "provider_qos", "raw_field": "service_tier", "expected_value": "standard_only", "required": true}
       ],
       "notes": "This is a native-client probe. Failure means this client/config path did not emit the field."
+    },
+    {
+      "id": "claude_fast_mode_setting",
+      "display_name": "Claude native fast mode setting",
+      "status": "native_fast_mode_access_required",
+      "source_class": "provider_config",
+      "injection_level": "session_level",
+      "scope": "provider",
+      "trigger_type": "configured_fast_mode",
+      "target_hint_ids": ["provider_qos"],
+      "benchmark_question": "Does Claude Code fastMode=true appear at the provider request boundary?",
+      "workload_shape": {"request_count": 1, "client": "claude_cli", "fast_mode": true},
+      "client_setup": {
+        "cli_args": [
+          "--settings",
+          "{\"fastMode\":true}",
+          "-p",
+          "Hint benchmark fast mode probe. Reply with one short sentence.",
+          "--output-format",
+          "json"
+        ]
+      },
+      "expected_emissions": [
+        {
+          "hint_id": "provider_qos",
+          "raw_field": "_capture.headers.anthropic-beta",
+          "expected_value": "present",
+          "required": true
+        }
+      ],
+      "notes": "Claude Code documents fast mode as a client setting that affects provider routing/cache key behavior. This scenario may fail when the installed client/account/model does not support fast mode."
     },
     {
       "id": "claude_repeated_session_prefix",
@@ -305,19 +340,47 @@
       "workload_shape": {"request_count": 2, "client": "claude_cli", "stable_prefix": true},
       "client_setup": {
         "env": {
-          "ANTHROPIC_CACHE_TTL": "1h",
-          "CLAUDE_CODE_CACHE_TTL": "1h"
+          "ENABLE_PROMPT_CACHING_1H": "1"
         },
         "cli_prompt": "Hint benchmark long cache retention probe turn {invocation_index}. Reuse stable context and answer briefly."
       },
       "expected_emissions": [
-        {"hint_id": "cache_ttl", "raw_field": "system.*.cache_control.ttl", "expected_value": "present", "required": true},
+        {"hint_id": "cache_control", "raw_field": "system.*.cache_control.type", "expected_value": "ephemeral", "required": true},
+        {"hint_id": "cache_ttl", "raw_field": "system.*.cache_control.ttl", "expected_value": "present", "required": false},
+        {"hint_id": "cache_ttl", "raw_field": "messages.*.content.*.cache_control.ttl", "expected_value": "present", "required": false},
+        {"hint_id": "cache_ttl", "raw_field": "_capture.headers.anthropic-beta", "expected_value": "present", "required": false}
+      ],
+      "negative_expectations": [
+        {"hint_id": "cache_pinning", "raw_field": "cache_pinning", "expected_value": "present"}
+      ],
+      "notes": "Claude Code documents ENABLE_PROMPT_CACHING_1H=1 as the long-retention knob. TTL may appear as body cache_control.ttl, a beta/header behavior, or post-execution cache_creation detail depending on provider path."
+    },
+    {
+      "id": "claude_provider_retention_5m",
+      "display_name": "Claude provider-managed 5m retention",
+      "status": "native_client_required",
+      "source_class": "prompt_builder_policy",
+      "injection_level": "cache_entry_level",
+      "scope": "cache_entry",
+      "trigger_type": "default_cache_retention_control",
+      "target_hint_ids": ["cache_ttl", "cache_control"],
+      "benchmark_question": "Does the real Claude client expose cache-control evidence when forced to use 5-minute prompt caching?",
+      "workload_shape": {"request_count": 2, "client": "claude_cli", "stable_prefix": true},
+      "client_setup": {
+        "env": {
+          "FORCE_PROMPT_CACHING_5M": "1"
+        },
+        "cli_prompt": "Hint benchmark five minute cache retention probe turn {invocation_index}. Reuse stable context and answer briefly."
+      },
+      "expected_emissions": [
+        {"hint_id": "cache_control", "raw_field": "system.*.cache_control.type", "expected_value": "ephemeral", "required": true},
+        {"hint_id": "cache_ttl", "raw_field": "system.*.cache_control.ttl", "expected_value": "present", "required": false},
         {"hint_id": "cache_ttl", "raw_field": "messages.*.content.*.cache_control.ttl", "expected_value": "present", "required": false}
       ],
       "negative_expectations": [
         {"hint_id": "cache_pinning", "raw_field": "cache_pinning", "expected_value": "present"}
       ],
-      "notes": "Claude retention is provider-managed TTL behavior, not a separate cache_pinning=true request field. Any explicit TTL value is enough for this benchmark probe."
+      "notes": "This is the documented short-retention knob. It mainly proves cache-control emission and gives a contrast against ENABLE_PROMPT_CACHING_1H."
     },
     {
       "id": "claude_cache_pinning_negative_probe",

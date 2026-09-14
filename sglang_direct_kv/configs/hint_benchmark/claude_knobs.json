@@ -9,8 +9,8 @@
     },
     "qos_only": {
       "display_name": "Claude Code native provider QoS probes",
-      "scenario_selectors": ["claude_service_tier_auto", "claude_service_tier_standard_only"],
-      "expected_signal_visibility": ["service_tier"]
+      "scenario_selectors": ["claude_service_tier_auto", "claude_service_tier_standard_only", "claude_fast_mode_setting"],
+      "expected_signal_visibility": ["service_tier", "_capture.headers.anthropic-beta"]
     },
     "cache_only": {
       "display_name": "Prompt cache only",
@@ -20,7 +20,8 @@
         "claude_tool_heavy_request",
         "claude_stable_system_context",
         "claude_stable_message_context",
-        "claude_provider_retention_1h"
+        "claude_provider_retention_1h",
+        "claude_provider_retention_5m"
       ],
       "expected_signal_visibility": [
         "cache_control.type",
@@ -57,6 +58,7 @@
         "claude_prewarm_like_probe",
         "claude_provider_cache_feedback_probe",
         "claude_provider_retention_1h",
+        "claude_provider_retention_5m",
         "claude_cache_pinning_negative_probe"
       ],
       "expected_signal_visibility": ["Claude Code native-client probe targets only"]
@@ -70,6 +72,16 @@
       "display_name": "Bedrock provider-config probes",
       "scenario_selectors": ["bedrock_config_coverage"],
       "expected_signal_visibility": ["_capture.headers.x-amzn-bedrock-service-tier"]
+    },
+    "real_provider_feedback": {
+      "display_name": "Claude Code real-provider response feedback",
+      "scenario_selectors": ["claude_provider_cache_feedback_probe", "claude_provider_retention_1h", "claude_provider_retention_5m"],
+      "expected_signal_visibility": [
+        "usage.cache_creation_input_tokens",
+        "usage.cache_read_input_tokens",
+        "usage.cache_creation.ephemeral_5m_input_tokens",
+        "usage.cache_creation.ephemeral_1h_input_tokens"
+      ]
     },
     "all_request_boundary": {
       "display_name": "All Claude Code native-client boundary probes",

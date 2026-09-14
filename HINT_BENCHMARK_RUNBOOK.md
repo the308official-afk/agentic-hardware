@@ -670,6 +670,32 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```
 
+Claude provider-managed 5m retention:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_provider_retention_5m_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_provider_retention_5m \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Claude native fast mode:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_fast_mode_setting_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_fast_mode_setting \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
 Claude cache pinning negative probe:
 
 ```bash
@@ -692,7 +718,7 @@ cd ~/agentic_hardware
 RUN_ID="claude_qos_variants_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_service_tier_auto,claude_service_tier_standard_only \
+  --scenarios claude_service_tier_auto,claude_service_tier_standard_only,claude_fast_mode_setting \
   --claude-native-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
@@ -718,8 +744,21 @@ cd ~/agentic_hardware
 RUN_ID="claude_cache_ttl_and_feedback_$(date +%Y%m%d_%H%M%S)"
 python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
   --harness claude_code \
-  --scenarios claude_provider_retention_1h,claude_provider_cache_feedback_probe \
+  --scenarios claude_provider_retention_1h,claude_provider_retention_5m,claude_provider_cache_feedback_probe \
   --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+Claude real-provider cache feedback:
+
+```bash
+cd ~/agentic_hardware
+RUN_ID="claude_real_provider_feedback_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile real_provider_feedback \
+  --claude-real-provider-capture \
   --run-id "$RUN_ID" \
   --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
 ```

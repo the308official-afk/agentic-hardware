@@ -197,6 +197,10 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
             evidence_tier_for_mode("anthropic_api_payload_capture"),
             "documented_direct_api_payload",
         )
+        self.assertEqual(
+            evidence_tier_for_mode("claude_real_provider_capture"),
+            "native_client_real_provider_response",
+        )
 
     def test_payload_index_expectations_can_check_first_only_cache_control(self):
         manifest, scenarios = load_benchmark_inputs(MANIFEST, SCENARIOS)
@@ -253,7 +257,7 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         manifest, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
         self.assertEqual(manifest["harness"]["id"], "claude_code")
         self.assertEqual(len(manifest["hints"]), 8)
-        self.assertEqual(len(scenarios["scenarios"]), 17)
+        self.assertEqual(len(scenarios["scenarios"]), 19)
 
     def test_selects_claude_knob_profile_scenarios(self):
         _, scenarios = load_benchmark_inputs(CLAUDE_MANIFEST, CLAUDE_SCENARIOS)
@@ -262,7 +266,7 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         selected = select_scenarios(scenarios, profile["scenario_selectors"])
         self.assertEqual(
             [scenario["id"] for scenario in selected],
-            ["claude_service_tier_auto", "claude_service_tier_standard_only"],
+            ["claude_service_tier_auto", "claude_service_tier_standard_only", "claude_fast_mode_setting"],
         )
 
     def test_generic_payload_observations_extract_claude_array_paths(self):
