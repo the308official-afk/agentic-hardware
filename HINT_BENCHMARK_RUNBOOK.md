@@ -35,6 +35,7 @@ cd ~/agentic_hardware
 <thead>
 <tr>
 <th>Run</th>
+<th>Plain Purpose</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
 <th>Where Attached</th>
@@ -44,6 +45,7 @@ cd ~/agentic_hardware
 <tbody>
 <tr>
 <td>NAT baseline</td>
+<td>Confirm NAT emits no hints when knobs are off.</td>
 <td>
 
 ```bash
@@ -67,6 +69,7 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>All NAT request-boundary signals</td>
+<td>Produce every NAT signal we can observe today in one run.</td>
 <td>
 
 ```bash
@@ -99,6 +102,7 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Scheduling signals only</td>
+<td>Produce NAT priority and request-planning signals.</td>
 <td>
 
 ```bash
@@ -126,6 +130,7 @@ RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Cache signals only</td>
+<td>Produce NAT cache reuse and cache-control signals.</td>
 <td>
 
 ```bash
@@ -152,6 +157,7 @@ RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Pass-through signals only</td>
+<td>Preserve provider and session metadata through NAT.</td>
 <td>
 
 ```bash
@@ -176,6 +182,7 @@ RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Priority high</td>
+<td>Produce a high-priority NAT request.</td>
 <td>
 
 ```bash
@@ -199,6 +206,7 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Priority low</td>
+<td>Produce a low-priority NAT request.</td>
 <td>
 
 ```bash
@@ -222,6 +230,7 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Latency sensitive</td>
+<td>Produce a latency-sensitive NAT request.</td>
 <td>
 
 ```bash
@@ -246,6 +255,7 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Expected output length</td>
+<td>Produce the expected output length hint.</td>
 <td>
 
 ```bash
@@ -269,6 +279,7 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Expected interarrival time</td>
+<td>Produce the expected request spacing hint.</td>
 <td>
 
 ```bash
@@ -292,6 +303,7 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Planned request count</td>
+<td>Produce the planned request count hint.</td>
 <td>
 
 ```bash
@@ -315,6 +327,7 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Prefix reuse ID</td>
+<td>Produce the reusable prefix/session ID hint.</td>
 <td>
 
 ```bash
@@ -338,6 +351,7 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Cache TTL</td>
+<td>Produce a cache lifetime hint.</td>
 <td>
 
 ```bash
@@ -361,6 +375,7 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Ephemeral cache entry</td>
+<td>Produce an ephemeral cache-control hint.</td>
 <td>
 
 ```bash
@@ -384,6 +399,7 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>First-only cache control</td>
+<td>Produce cache control only on the first repeated request.</td>
 <td>
 
 ```bash
@@ -407,6 +423,7 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Cache namespace</td>
+<td>Produce a cache namespace hint.</td>
 <td>
 
 ```bash
@@ -430,6 +447,7 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
 </tr>
 <tr>
 <td>Provider QoS pass-through</td>
+<td>Preserve provider QoS metadata through NAT.</td>
 <td>
 
 ```bash
@@ -460,6 +478,7 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 <thead>
 <tr>
 <th>Run</th>
+<th>Plain Purpose</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
 <th>Where Attached</th>
@@ -469,6 +488,7 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 <tbody>
 <tr>
 <td>Claude native baseline</td>
+<td>Confirm Claude emits no benchmark hints when knobs are off.</td>
 <td>
 
 ```bash
@@ -492,6 +512,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>All Claude native request-boundary probes</td>
+<td>Produce all Claude Code signals observed today in one run.</td>
 <td>
 
 ```bash
@@ -518,6 +539,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>Claude native QoS probes</td>
+<td>Produce the Claude fast-mode header.</td>
 <td>
 
 ```bash
@@ -541,6 +563,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>Claude native cache probes</td>
+<td>Produce Claude prompt-cache markers and TTL.</td>
 <td>
 
 ```bash
@@ -566,6 +589,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>Claude native prewarm probe</td>
+<td>Send a request that warms a cacheable prompt block.</td>
 <td>
 
 ```bash
@@ -589,6 +613,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>Claude native fast mode only</td>
+<td>Produce only the Claude fast-mode header.</td>
 <td>
 
 ```bash
@@ -612,6 +637,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>Claude native 1h cache TTL</td>
+<td>Produce Claude cache control with a 1-hour TTL.</td>
 <td>
 
 ```bash
@@ -636,6 +662,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 </tr>
 <tr>
 <td>Claude native 5m cache control</td>
+<td>Produce Claude cache control with default 5-minute retention.</td>
 <td>
 
 ```bash
