@@ -64,6 +64,12 @@ The executable knob catalog is:
 sglang_direct_kv/configs/hint_benchmark/nat_knobs.json
 ```
 
+The operational runbook with copy-paste commands is:
+
+```text
+HINT_BENCHMARK_RUNBOOK.md
+```
+
 Use knob profiles when the benchmark user wants to stress one signal family
 without manually listing scenario IDs.
 

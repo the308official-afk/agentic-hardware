@@ -546,6 +546,12 @@ The executable NAT knob catalog is:
 sglang_direct_kv/configs/hint_benchmark/nat_knobs.json
 ```
 
+The copy-paste runbook for operating the benchmark is:
+
+```text
+HINT_BENCHMARK_RUNBOOK.md
+```
+
 The runner supports named knob profiles with:
 
 ```bash
