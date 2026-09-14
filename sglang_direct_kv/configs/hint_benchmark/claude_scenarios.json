@@ -157,7 +157,7 @@
         {
           "hint_id": "provider_qos",
           "raw_field": "_capture.headers.anthropic-beta",
-          "expected_value": "present",
+          "expected_value": {"contains": "fast-mode"},
           "required": true
         }
       ],

@@ -84,6 +84,27 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(validation["validation_rows"][0]["result"], "pass")
         self.assertEqual(validation["scenario_summaries"][0]["result"], "pass")
 
+    def test_validation_supports_contains_expectation(self):
+        manifest, scenarios = load_benchmark_inputs(MANIFEST, SCENARIOS)
+        selected = select_scenarios(scenarios, "nat_priority_high")
+        result = build_dry_run(manifest, selected, run_id="unit_test", created_at=1.0)
+        result["scenario_records"][0]["expected_emissions"] = [
+            {
+                "hint_id": "priority",
+                "raw_field": "header",
+                "expected_value": {"contains": "fast-mode"},
+                "required": True,
+            }
+        ]
+        validation = validate_hint_evidence(
+            manifest,
+            result["scenario_records"],
+            [{"scenario_id": "nat_priority_high", "raw_field": "header", "value": "beta-a,fast-mode-2026"}],
+            execution_mode="observed_file",
+        )
+        self.assertEqual(validation["validation_rows"][0]["result"], "pass")
+        self.assertEqual(validation["scenario_summaries"][0]["result"], "pass")
+
     def test_validation_fails_missing_expected_hint(self):
         manifest, scenarios = load_benchmark_inputs(MANIFEST, SCENARIOS)
         selected = select_scenarios(scenarios, "nat_cache_control_ttl")

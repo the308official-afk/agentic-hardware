@@ -353,6 +353,8 @@ def value_matches(observed: Any, expected: Any) -> bool:
     if isinstance(expected, dict):
         if "one_of" in expected:
             return any(value_matches(observed, item) for item in expected["one_of"])
+        if "contains" in expected:
+            return str(expected["contains"]) in str(observed)
         if "numeric_range" in expected:
             lo, hi = expected["numeric_range"]
             try:
@@ -369,6 +371,8 @@ def fixture_value_for_expected(expected: Any) -> Any:
     if isinstance(expected, dict):
         if "one_of" in expected and expected["one_of"]:
             return expected["one_of"][0]
+        if "contains" in expected:
+            return str(expected["contains"])
         if "numeric_range" in expected:
             lo, hi = expected["numeric_range"]
             return (float(lo) + float(hi)) / 2
