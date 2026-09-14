@@ -365,7 +365,10 @@ def main() -> None:
     parser.add_argument(
         "--fixture-observations",
         action="store_true",
-        help="Generate fixture observations from scenario expectations. This proves benchmark plumbing, not real NAT emission.",
+        help=(
+            "Generate fixture observations from scenario expectations. "
+            "This proves benchmark plumbing only, not native harness emission."
+        ),
     )
     parser.add_argument(
         "--nat-dynamo-transport-capture",

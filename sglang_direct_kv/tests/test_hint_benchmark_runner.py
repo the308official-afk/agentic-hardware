@@ -10,6 +10,8 @@ from agentic_kv.hint_benchmark import (
     build_payload_observations,
     build_dry_run,
     build_fixture_observations,
+    build_hint_support_matrix,
+    evidence_tier_for_mode,
     load_knob_profiles,
     load_benchmark_inputs,
     select_knob_profile,
@@ -131,6 +133,15 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
             observations,
             execution_mode="fixture_smoke",
         )
+        self.assertEqual(result["run"]["evidence_tier"], "fixture_plumbing_only")
+        self.assertTrue(
+            all(row["evidence_tier"] == "fixture_plumbing_only" for row in validation["validation_rows"])
+        )
+        support_matrix = [
+            row for row in build_hint_support_matrix(validation["validation_rows"])
+            if row["scenario_id"] != "nat_no_hints_baseline"
+        ]
+        self.assertTrue(all(row["support"] == "fixture_plumbing_only" for row in support_matrix))
         by_scenario = {row["scenario_id"]: row for row in validation["scenario_summaries"]}
         self.assertEqual(by_scenario["nat_priority_high"]["result"], "pass")
         self.assertEqual(by_scenario["nat_priority_low"]["result"], "pass")
@@ -157,6 +168,9 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
                 "nat_cache_control_ttl": [{"nvext": {"cache_control": {"ttl": "1s"}}}],
             },
         )
+        self.assertTrue(
+            all(row["evidence_tier"] == "native_client_or_transport_capture" for row in observations)
+        )
         validation = validate_hint_evidence(
             manifest,
             result["scenario_records"],
@@ -166,6 +180,18 @@ class HintBenchmarkRunnerTests(unittest.TestCase):
         by_scenario = {row["scenario_id"]: row for row in validation["scenario_summaries"]}
         self.assertEqual(by_scenario["nat_priority_high"]["result"], "pass")
         self.assertEqual(by_scenario["nat_cache_control_ttl"]["result"], "pass")
+
+    def test_evidence_tier_classifies_native_and_fixture_modes(self):
+        self.assertEqual(evidence_tier_for_mode("fixture_smoke"), "fixture_plumbing_only")
+        self.assertEqual(evidence_tier_for_mode("dry_run"), "recipe_only")
+        self.assertEqual(
+            evidence_tier_for_mode("claude_native_capture"),
+            "native_client_or_transport_capture",
+        )
+        self.assertEqual(
+            evidence_tier_for_mode("nat_dynamo_transport_capture"),
+            "native_client_or_transport_capture",
+        )
 
     def test_payload_index_expectations_can_check_first_only_cache_control(self):
         manifest, scenarios = load_benchmark_inputs(MANIFEST, SCENARIOS)

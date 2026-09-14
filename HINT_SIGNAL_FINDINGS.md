@@ -50,6 +50,20 @@ Important boundary: Claude rows below are now native-client probes, not
 synthetic payload evidence. A fixture run may test benchmark plumbing, but it
 must not be counted as proof that Claude Code organically emitted a signal.
 
+Important boundary: the earlier all-harness SGLang replay experiments are still
+valuable adapter/glue evidence. They show that Claude-shaped request metadata
+can travel through our gateway/backend path. They do not, by themselves, prove
+that the official Claude Code CLI emitted those fields organically.
+
+Benchmark outputs include an `evidence_tier` column:
+
+| Evidence Tier | How To Interpret It |
+| --- | --- |
+| `native_client_or_transport_capture` | Claimable native client/transport evidence. |
+| `external_observed_file` | Validate the observed file provenance before citing as native evidence. |
+| `fixture_plumbing_only` | Parser/report smoke test only. |
+| `recipe_only` | Scenario recipe only; no observed emission. |
+
 ## Signal Findings
 
 | Harness | Signal | Observed? | Injection level | Scope / affects | What produces it | Scenario ID | Example JSON shape | Native vs pass-through | Evidence source | Caveat |

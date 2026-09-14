@@ -2,10 +2,12 @@
 
 from .runner import (
     HintBenchmarkConfigError,
+    build_hint_support_matrix,
     build_nat_payload_observations,
     build_payload_observations,
     build_dry_run,
     build_fixture_observations,
+    evidence_tier_for_mode,
     load_knob_profiles,
     load_observations_jsonl,
     load_benchmark_inputs,
@@ -18,10 +20,12 @@ from .runner import (
 
 __all__ = [
     "HintBenchmarkConfigError",
+    "build_hint_support_matrix",
     "build_nat_payload_observations",
     "build_payload_observations",
     "build_dry_run",
     "build_fixture_observations",
+    "evidence_tier_for_mode",
     "load_knob_profiles",
     "load_observations_jsonl",
     "load_benchmark_inputs",

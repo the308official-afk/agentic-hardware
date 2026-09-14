@@ -409,6 +409,16 @@ These runs require the actual Claude Code CLI/client on the EC2 machine. If the
 binary is not named `claude`, set `CLAUDE_CODE_BIN=/path/to/claude` or pass
 `--claude-command /path/to/claude`.
 
+The existing multi-harness SGLang experiments already prove that our
+adapter/glue/backend path can run Claude-shaped traffic. These commands are for
+one narrower claim: whether the real Claude Code client itself emits the hint at
+the request boundary. Do not reinstall the whole SGLang testbed for this; only
+verify/install the missing `claude` client when native Claude evidence is needed.
+
+Every output table includes `evidence_tier`. Treat
+`native_client_or_transport_capture` as claimable native evidence. Treat
+`fixture_plumbing_only` as a parser/report smoke test only.
+
 Claude baseline:
 
 ```bash

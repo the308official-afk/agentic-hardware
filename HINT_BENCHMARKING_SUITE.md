@@ -525,11 +525,25 @@ Current EC2 status:
 native capture adapter: implemented
 native Claude CLI/client: required on EC2 before Claude evidence can be claimed
 previous synthetic payload smoke: parser/plumbing only; not native harness evidence
+previous all-harness SGLang runs: adapter/glue evidence, not proof of organic Claude CLI emission
 ```
 
 Important wording: Claude benchmark claims must come from the real Claude
 client. Fixture or parser-only runs may test the benchmark plumbing, but must
 not be counted as evidence that Claude Code organically emitted a signal.
+
+The benchmark outputs include an `evidence_tier` column:
+
+| Evidence Tier | Meaning |
+| --- | --- |
+| `native_client_or_transport_capture` | A real client or real harness transport path emitted the captured field. This can support native-emission claims. |
+| `external_observed_file` | A separately captured observed-evidence file was validated by the suite. Check the file provenance before claiming native support. |
+| `fixture_plumbing_only` | The suite generated fake observations from expected emissions. This only tests parser/report plumbing. |
+| `recipe_only` | The suite recorded what would be run, but did not execute or observe a harness. |
+
+For Claude Code, `fixture_plumbing_only` and adapter-backed all-harness runs are
+not enough. A Claude row should stay `pending native run` until
+`--claude-native-capture` runs successfully against the actual Claude Code CLI.
 
 ## Success Criteria
 

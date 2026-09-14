@@ -163,6 +163,7 @@ def build_dry_run(
     run_id = run_id or f"hint_bench_{uuid.uuid4().hex[:12]}"
     created_at = time.time() if created_at is None else created_at
     harness = manifest["harness"]["id"]
+    tier = evidence_tier_for_mode(execution_mode)
     scenario_records = []
     expectation_rows = []
 
@@ -172,6 +173,7 @@ def build_dry_run(
             "created_at_unix": created_at,
             "harness": harness,
             "execution_mode": execution_mode,
+            "evidence_tier": tier,
             "scenario_id": scenario["id"],
             "scenario_name": scenario.get("display_name", scenario["id"]),
             "scenario_status": scenario.get("status", ""),
@@ -223,6 +225,7 @@ def build_dry_run(
             "created_at_unix": created_at,
             "harness": harness,
             "execution_mode": execution_mode,
+            "evidence_tier": tier,
             "scenario_count": len(scenario_records),
             "expectation_count": len(expectation_rows),
             "manifest_schema_version": manifest.get("schema_version"),
@@ -230,6 +233,18 @@ def build_dry_run(
         "scenario_records": scenario_records,
         "expectation_rows": expectation_rows,
     }
+
+
+def evidence_tier_for_mode(execution_mode: str) -> str:
+    if execution_mode in {"nat_dynamo_transport_capture", "claude_native_capture"}:
+        return "native_client_or_transport_capture"
+    if execution_mode == "observed_file":
+        return "external_observed_file"
+    if execution_mode == "fixture_smoke":
+        return "fixture_plumbing_only"
+    if execution_mode == "dry_run":
+        return "recipe_only"
+    return "unknown"
 
 
 def build_fixture_observations(scenario_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -248,6 +263,7 @@ def build_fixture_observations(scenario_records: list[dict[str, Any]]) -> list[d
                     "injection_level": scenario.get("injection_level", ""),
                     "scope": scenario.get("scope", ""),
                     "evidence_source": "fixture_from_scenario_expected_emissions",
+                    "evidence_tier": "fixture_plumbing_only",
                 }
             )
     return observations
@@ -381,6 +397,7 @@ def build_nat_payload_observations(
                         "scope": scenario.get("scope", ""),
                         "payload_index": payload_index,
                         "evidence_source": evidence_source,
+                        "evidence_tier": evidence_tier_for_mode(evidence_source),
                         "raw_emitted_value": payload,
                     }
                 )
@@ -427,6 +444,7 @@ def build_payload_observations(
                         "scope": scenario.get("scope", ""),
                         "payload_index": payload_index,
                         "evidence_source": evidence_source,
+                        "evidence_tier": evidence_tier_for_mode(evidence_source),
                         "raw_emitted_value": payload,
                     }
                 )
@@ -458,6 +476,7 @@ def validate_hint_evidence(
     execution_mode: str = "dry_run",
 ) -> dict[str, Any]:
     observations = observations or []
+    tier = evidence_tier_for_mode(execution_mode)
     known_fields = {raw_field for hint in manifest.get("hints", []) for raw_field in hint_raw_fields(hint)}
     known_hint_ids = {hint["id"] for hint in manifest.get("hints", [])}
 
@@ -536,6 +555,7 @@ def validate_hint_evidence(
                         "run_id": scenario.get("run_id", ""),
                         "harness": scenario.get("harness", ""),
                         "execution_mode": execution_mode,
+                        "evidence_tier": tier,
                         "scenario_id": scenario_id,
                         "scenario_name": scenario.get("scenario_name", ""),
                         "scenario_status": scenario.get("scenario_status", ""),
@@ -565,6 +585,8 @@ def validate_hint_evidence(
                     {
                         "run_id": scenario.get("run_id", ""),
                         "harness": scenario.get("harness", ""),
+                        "execution_mode": execution_mode,
+                        "evidence_tier": tier,
                         "scenario_id": scenario_id,
                         "hint_id": observed_hint_id or "unknown",
                         "raw_field": observed_raw_field or "unknown",
@@ -590,6 +612,7 @@ def validate_hint_evidence(
                 "run_id": scenario.get("run_id", ""),
                 "harness": scenario.get("harness", ""),
                 "execution_mode": execution_mode,
+                "evidence_tier": tier,
                 "scenario_id": scenario_id,
                 "scenario_name": scenario.get("scenario_name", ""),
                 "result": scenario_result,
@@ -626,6 +649,14 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def write_dry_run_outputs(result: dict[str, Any], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=False)
     (out_dir / "run.json").write_text(json.dumps(result["run"], indent=2, sort_keys=True) + "\n")
+    if "captured_payload_counts" in result:
+        (out_dir / "captured_payload_counts.json").write_text(
+            json.dumps(result["captured_payload_counts"], indent=2, sort_keys=True) + "\n"
+        )
+    if "client_runs" in result:
+        (out_dir / "client_runs.json").write_text(
+            json.dumps(result["client_runs"], indent=2, sort_keys=True) + "\n"
+        )
     if "knob_profile" in result:
         (out_dir / "knob_profile.json").write_text(
             json.dumps(result["knob_profile"], indent=2, sort_keys=True) + "\n"
@@ -654,7 +685,10 @@ def build_hint_support_matrix(validation_rows: list[dict[str, Any]]) -> list[dic
         if row.get("expectation_type") != "expected_emission":
             continue
         result = row.get("result", "")
-        if result == "pass":
+        evidence_tier = row.get("evidence_tier", "")
+        if result == "pass" and evidence_tier == "fixture_plumbing_only":
+            support = "fixture_plumbing_only"
+        elif result == "pass":
             support = "observed"
         elif result == "optional_missing":
             support = "optional_not_observed"
@@ -671,6 +705,8 @@ def build_hint_support_matrix(validation_rows: list[dict[str, Any]]) -> list[dic
                 "hint_id": row.get("hint_id", ""),
                 "raw_field": row.get("raw_field", ""),
                 "source_class": row.get("source_class", ""),
+                "execution_mode": row.get("execution_mode", ""),
+                "evidence_tier": evidence_tier,
                 "injection_level": row.get("injection_level", ""),
                 "scope": row.get("scope", ""),
                 "required": row.get("required", ""),
