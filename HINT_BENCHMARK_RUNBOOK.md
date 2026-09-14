@@ -29,6 +29,221 @@ cd ~/agentic_hardware
 | Provider metadata | Provider-specific metadata preserved at the boundary. |
 | First request only | Appears only on the first request in a repeated sequence. |
 
+## Claude Code
+
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Plain Purpose</th>
+<th>Command</th>
+<th>Signals Observed Today</th>
+<th>Where Attached</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Claude native baseline</td>
+<td>Confirm Claude emits no benchmark hints when knobs are off.</td>
+<td>
+
+```bash
+RUN_ID="claude_baseline_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile baseline \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li>none</li>
+</ul>
+</td>
+<td>Request</td>
+<td>Native Claude Code request-boundary control case.</td>
+</tr>
+<tr>
+<td>All Claude native request-boundary probes</td>
+<td>Produce all Claude Code signals observed today in one run.</td>
+<td>
+
+```bash
+RUN_ID="claude_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile all_request_boundary \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>system.*.cache_control.type="ephemeral"</code></li>
+<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
+<li><code>cache_control.ttl="1h"</code></li>
+<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
+</ul>
+</td>
+<td>Header / Prompt block</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native QoS probes</td>
+<td>Produce the Claude fast-mode header.</td>
+<td>
+
+```bash
+RUN_ID="claude_qos_only_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile qos_only \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
+</ul>
+</td>
+<td>Header</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native cache probes</td>
+<td>Produce Claude prompt-cache markers and TTL.</td>
+<td>
+
+```bash
+RUN_ID="claude_cache_only_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile cache_only \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>system.*.cache_control.type="ephemeral"</code></li>
+<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
+<li><code>cache_control.ttl="1h"</code></li>
+</ul>
+</td>
+<td>Prompt block</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native prewarm probe</td>
+<td>Send a request that warms a cacheable prompt block.</td>
+<td>
+
+```bash
+RUN_ID="claude_prewarm_only_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --knob-profile prewarm_only \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>system.*.cache_control.type="ephemeral"</code></li>
+</ul>
+</td>
+<td>Request / Prompt block</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native fast mode only</td>
+<td>Produce only the Claude fast-mode header.</td>
+<td>
+
+```bash
+RUN_ID="claude_fast_mode_setting_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_fast_mode_setting \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
+</ul>
+</td>
+<td>Header</td>
+<td>Native Claude Code request-boundary capture.</td>
+</tr>
+<tr>
+<td>Claude native 1h cache TTL</td>
+<td>Produce Claude cache control with a 1-hour TTL.</td>
+<td>
+
+```bash
+RUN_ID="claude_provider_retention_1h_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_provider_retention_1h \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>cache_control.type="ephemeral"</code></li>
+<li><code>cache_control.ttl="1h"</code></li>
+</ul>
+</td>
+<td>Prompt block</td>
+<td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
+</tr>
+<tr>
+<td>Claude native 5m cache control</td>
+<td>Produce Claude cache control with default 5-minute retention.</td>
+<td>
+
+```bash
+RUN_ID="claude_provider_retention_5m_$(date +%Y%m%d_%H%M%S)"
+python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
+  --harness claude_code \
+  --scenarios claude_provider_retention_5m \
+  --claude-native-capture \
+  --run-id "$RUN_ID" \
+  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
+```
+
+</td>
+<td>
+<ul>
+<li><code>cache_control.type="ephemeral"</code></li>
+</ul>
+</td>
+<td>Prompt block</td>
+<td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
+</tr>
+</tbody>
+</table>
+
 ## NeMo Agent Toolkit / NAT
 
 <table>
@@ -468,221 +683,6 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 </td>
 <td>Provider metadata</td>
 <td>Pass-through preserved by NAT transport; not NAT-invented.</td>
-</tr>
-</tbody>
-</table>
-
-## Claude Code
-
-<table>
-<thead>
-<tr>
-<th>Run</th>
-<th>Plain Purpose</th>
-<th>Command</th>
-<th>Signals Observed Today</th>
-<th>Where Attached</th>
-<th>Evidence</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Claude native baseline</td>
-<td>Confirm Claude emits no benchmark hints when knobs are off.</td>
-<td>
-
-```bash
-RUN_ID="claude_baseline_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile baseline \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li>none</li>
-</ul>
-</td>
-<td>Request</td>
-<td>Native Claude Code request-boundary control case.</td>
-</tr>
-<tr>
-<td>All Claude native request-boundary probes</td>
-<td>Produce all Claude Code signals observed today in one run.</td>
-<td>
-
-```bash
-RUN_ID="claude_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile all_request_boundary \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>system.*.cache_control.type="ephemeral"</code></li>
-<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
-<li><code>cache_control.ttl="1h"</code></li>
-<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
-</ul>
-</td>
-<td>Header / Prompt block</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr>
-<td>Claude native QoS probes</td>
-<td>Produce the Claude fast-mode header.</td>
-<td>
-
-```bash
-RUN_ID="claude_qos_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile qos_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
-</ul>
-</td>
-<td>Header</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr>
-<td>Claude native cache probes</td>
-<td>Produce Claude prompt-cache markers and TTL.</td>
-<td>
-
-```bash
-RUN_ID="claude_cache_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile cache_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>system.*.cache_control.type="ephemeral"</code></li>
-<li><code>messages.*.content.*.cache_control.type="ephemeral"</code></li>
-<li><code>cache_control.ttl="1h"</code></li>
-</ul>
-</td>
-<td>Prompt block</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr>
-<td>Claude native prewarm probe</td>
-<td>Send a request that warms a cacheable prompt block.</td>
-<td>
-
-```bash
-RUN_ID="claude_prewarm_only_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --knob-profile prewarm_only \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>system.*.cache_control.type="ephemeral"</code></li>
-</ul>
-</td>
-<td>Request / Prompt block</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr>
-<td>Claude native fast mode only</td>
-<td>Produce only the Claude fast-mode header.</td>
-<td>
-
-```bash
-RUN_ID="claude_fast_mode_setting_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_fast_mode_setting \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
-</ul>
-</td>
-<td>Header</td>
-<td>Native Claude Code request-boundary capture.</td>
-</tr>
-<tr>
-<td>Claude native 1h cache TTL</td>
-<td>Produce Claude cache control with a 1-hour TTL.</td>
-<td>
-
-```bash
-RUN_ID="claude_provider_retention_1h_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_provider_retention_1h \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>cache_control.type="ephemeral"</code></li>
-<li><code>cache_control.ttl="1h"</code></li>
-</ul>
-</td>
-<td>Prompt block</td>
-<td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
-</tr>
-<tr>
-<td>Claude native 5m cache control</td>
-<td>Produce Claude cache control with default 5-minute retention.</td>
-<td>
-
-```bash
-RUN_ID="claude_provider_retention_5m_$(date +%Y%m%d_%H%M%S)"
-python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
-  --harness claude_code \
-  --scenarios claude_provider_retention_5m \
-  --claude-native-capture \
-  --run-id "$RUN_ID" \
-  --out-dir "sglang_direct_kv/artifacts/results/hint_benchmark/$RUN_ID"
-```
-
-</td>
-<td>
-<ul>
-<li><code>cache_control.type="ephemeral"</code></li>
-</ul>
-</td>
-<td>Prompt block</td>
-<td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
 </tr>
 </tbody>
 </table>
