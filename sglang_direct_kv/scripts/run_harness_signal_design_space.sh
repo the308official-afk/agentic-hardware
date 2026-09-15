@@ -8,7 +8,7 @@ cd "${DIRECT_ROOT}"
 
 SIGNAL_FAMILIES="${SIGNAL_FAMILIES:-baseline harness_emitted frontend_supplied gateway_injected}"
 if [[ "${SIGNAL_FAMILIES}" == "all" ]]; then
-  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_oracle_timeline controller_calibrated_admission controller_oracle_exact_runtime controller_shorthand controller_admission controller_full controller_full_chunked storage_baseline storage_controller_prefetch"
+  SIGNAL_FAMILIES="baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_oracle_timeline controller_calibrated_admission controller_oracle_exact_runtime controller_deadline_fair controller_shorthand controller_admission controller_full controller_full_chunked storage_baseline storage_controller_prefetch"
 fi
 
 REPORT_LABEL="${REPORT_LABEL:-signal_design_space_$(date +%Y%m%d_%H%M%S)}"
@@ -66,6 +66,7 @@ CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES="${CONTROLLER_PRIORITY_DEMOTION_ADM
 CONTROLLER_ORACLE_TIMELINE_MODES="${CONTROLLER_ORACLE_TIMELINE_MODES:-controller_oracle_timeline}"
 CONTROLLER_CALIBRATED_ADMISSION_MODES="${CONTROLLER_CALIBRATED_ADMISSION_MODES:-controller_priority_demotion_calibrated_admission}"
 CONTROLLER_ORACLE_EXACT_RUNTIME_MODES="${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES:-controller_oracle_exact_runtime_admission}"
+CONTROLLER_DEADLINE_FAIR_MODES="${CONTROLLER_DEADLINE_FAIR_MODES:-controller_deadline_fair}"
 CONTROLLER_SHORTHAND_MODES="${CONTROLLER_SHORTHAND_MODES:-controller_priority_demotion_admission_shorthand}"
 CONTROLLER_ADMISSION_MODES="${CONTROLLER_ADMISSION_MODES:-controller_admission_control}"
 CONTROLLER_FULL_MODES="${CONTROLLER_FULL_MODES:-controller_full}"
@@ -129,10 +130,10 @@ validate_families() {
   local family
   for family in ${SIGNAL_FAMILIES}; do
     case "${family}" in
-      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore|controller_priority_demote|controller_priority_demotion_admission|controller_oracle_timeline|controller_calibrated_admission|controller_oracle_exact_runtime|controller_shorthand|controller_admission|controller_full|controller_full_chunked|storage_baseline|storage_controller_prefetch) ;;
+      baseline|harness_emitted|frontend_supplied|gateway_injected|controller_observe|controller_scheduler|controller_preload|controller_targeted_prefetch|controller_demote_restore|controller_priority_demote|controller_priority_demotion_admission|controller_oracle_timeline|controller_calibrated_admission|controller_oracle_exact_runtime|controller_deadline_fair|controller_shorthand|controller_admission|controller_full|controller_full_chunked|storage_baseline|storage_controller_prefetch) ;;
       *)
         echo "Unknown SIGNAL_FAMILIES entry: ${family}" >&2
-        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_oracle_timeline controller_calibrated_admission controller_oracle_exact_runtime controller_shorthand controller_admission controller_full controller_full_chunked storage_baseline storage_controller_prefetch all" >&2
+        echo "Supported: baseline harness_emitted frontend_supplied gateway_injected controller_observe controller_scheduler controller_preload controller_targeted_prefetch controller_demote_restore controller_priority_demote controller_priority_demotion_admission controller_oracle_timeline controller_calibrated_admission controller_oracle_exact_runtime controller_deadline_fair controller_shorthand controller_admission controller_full controller_full_chunked storage_baseline storage_controller_prefetch all" >&2
         exit 2
         ;;
     esac
@@ -227,6 +228,7 @@ write_combined_run_config() {
     echo "CONTROLLER_CALIBRATED_QUANTILE=${CONTROLLER_CALIBRATED_QUANTILE:-}"
     echo "CONTROLLER_CALIBRATION_HISTORY_CSV=${CONTROLLER_CALIBRATION_HISTORY_CSV:-}"
     echo "CONTROLLER_ORACLE_EXACT_RUNTIME_MODES=${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}"
+    echo "CONTROLLER_DEADLINE_FAIR_MODES=${CONTROLLER_DEADLINE_FAIR_MODES}"
     echo "CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV=${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV}"
     echo "CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS=${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS}"
     echo "CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT=${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT}"
@@ -331,6 +333,7 @@ run_family_piece() {
   CONTROLLER_CALIBRATED_QUANTILE="${CONTROLLER_CALIBRATED_QUANTILE:-}" \
   CONTROLLER_CALIBRATION_HISTORY_CSV="${CONTROLLER_CALIBRATION_HISTORY_CSV:-}" \
   CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV="${CONTROLLER_ORACLE_RUNTIME_TRUTH_CSV}" \
+  CONTROLLER_DEADLINE_FAIR_MODES="${CONTROLLER_DEADLINE_FAIR_MODES}" \
   CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS="${CONTROLLER_ORACLE_EXACT_SAFETY_MARGIN_MS}" \
   CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT="${CONTROLLER_ORACLE_EXACT_MAX_IN_FLIGHT}" \
   CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE="${CONTROLLER_ORACLE_EXACT_IDLE_OVERRIDE}" \
@@ -432,6 +435,11 @@ for family in ${SIGNAL_FAMILIES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
     done
     FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_oracle_exact_runtime:priority_plus_demotion_plus_exact_runtime_admission")"
+  elif [[ "${family}" == "controller_deadline_fair" ]]; then
+    for mode in ${CONTROLLER_DEADLINE_FAIR_MODES}; do
+      EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
+    done
+    FAMILY_EXPANSION="$(append_unique_word "${FAMILY_EXPANSION}" "controller_deadline_fair:all_replays_due_time_ordering")"
   elif [[ "${family}" == "controller_shorthand" ]]; then
     for mode in ${CONTROLLER_SHORTHAND_MODES}; do
       EXPANDED_MODES="$(append_unique_word "${EXPANDED_MODES}" "${mode}")"
@@ -525,6 +533,9 @@ fi
 if word_in_list "controller_oracle_exact_runtime" "${SIGNAL_FAMILIES}"; then
   echo "- controller_oracle_exact_runtime -> ${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}"
 fi
+if word_in_list "controller_deadline_fair" "${SIGNAL_FAMILIES}"; then
+  echo "- controller_deadline_fair -> ${CONTROLLER_DEADLINE_FAIR_MODES}"
+fi
 if word_in_list "controller_shorthand" "${SIGNAL_FAMILIES}"; then
   echo "- controller_shorthand -> ${CONTROLLER_SHORTHAND_MODES}"
 fi
@@ -599,6 +610,10 @@ fi
 
 if word_in_list "controller_oracle_exact_runtime" "${SIGNAL_FAMILIES}"; then
   run_family_piece "controller_oracle_exact_runtime" "priority_plus_demotion_plus_exact_runtime_admission" "${CONTROLLER_ORACLE_EXACT_RUNTIME_MODES}" "${HARNESSES}"
+fi
+
+if word_in_list "controller_deadline_fair" "${SIGNAL_FAMILIES}"; then
+  run_family_piece "controller_deadline_fair" "all_replays_due_time_ordering" "${CONTROLLER_DEADLINE_FAIR_MODES}" "${HARNESSES}"
 fi
 
 if word_in_list "controller_shorthand" "${SIGNAL_FAMILIES}"; then

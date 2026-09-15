@@ -38,6 +38,7 @@ PRIORITY_ENABLED_MODES = {
     "controller_oracle_safe_sjf_maxfill",
     "controller_priority_demotion_calibrated_admission",
     "controller_oracle_exact_runtime_admission",
+    "controller_deadline_fair",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -60,6 +61,7 @@ CONTROLLER_ORACLE_SAFE_SJF_AGGRESSIVE_MODE = "controller_oracle_safe_sjf_aggress
 CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE = "controller_oracle_safe_sjf_maxfill"
 CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE = "controller_priority_demotion_calibrated_admission"
 CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE = "controller_oracle_exact_runtime_admission"
+CONTROLLER_DEADLINE_FAIR_MODE = "controller_deadline_fair"
 CONTROLLER_ORACLE_SAFE_SJF_MODES = {
     CONTROLLER_ORACLE_SAFE_SJF_MODE,
     CONTROLLER_ORACLE_SAFE_SJF_BALANCED_MODE,
@@ -84,6 +86,7 @@ CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_PRIORITY_DEMOTE_MODE,
     *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
+    CONTROLLER_DEADLINE_FAIR_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
@@ -322,6 +325,13 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     phase = str(meta.get("phase") or "")
     mode = str(meta.get("mode") or "")
     if mode in CONTROLLER_PRIORITY_MODES:
+        if mode == CONTROLLER_DEADLINE_FAIR_MODE:
+            if not meta.get("controller_deadline_fair"):
+                return None
+            try:
+                return int(float(meta.get("controller_sglang_priority")))
+            except (TypeError, ValueError):
+                return None
         if mode in {
             CONTROLLER_DEMOTE_RESTORE_MODE,
             CONTROLLER_PRIORITY_DEMOTE_MODE,

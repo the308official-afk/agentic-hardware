@@ -33,6 +33,14 @@ Admission`. It still gives target replay high priority and demotes background
 work, but it admits filler only when a conservative calibrated runtime estimate
 fits before the target replay due time.
 
+`controller_deadline_fair` is the no-special-target variant. It does not treat
+one request as user-priority and another as low-priority. Instead, every replay
+request with a known tool-return/deadline time receives a numeric SGLang
+priority derived from that due time. Earlier due times get higher scheduler
+rank. This lets us test whether exposing replay-deadline timing for all
+requests improves fairness without relying on manually marked high-priority
+traffic.
+
 ## Decision Quality Ledger
 
 Controller short-filler admission experiments should be explainable after the

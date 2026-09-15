@@ -82,6 +82,7 @@ MODE_LABELS = {
     "controller_oracle_safe_sjf_maxfill": "MFA = Controller priority + demotion + max filler admission",
     "controller_priority_demotion_calibrated_admission": "CFA = Controller priority + demotion + calibrated filler admission",
     "controller_oracle_exact_runtime_admission": "OEA = Controller priority + demotion + oracle exact-runtime admission",
+    "controller_deadline_fair": "CDF = Controller deadline-fair scheduling",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
@@ -117,6 +118,7 @@ MODE_COLORS = {
     "controller_oracle_safe_sjf_maxfill": "#2563eb",
     "controller_priority_demotion_calibrated_admission": "#166534",
     "controller_oracle_exact_runtime_admission": "#14b8a6",
+    "controller_deadline_fair": "#0f766e",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
@@ -289,6 +291,12 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#14b8a6",
         "modes": {"controller_oracle_exact_runtime_admission"},
     },
+    "controller_deadline_fair": {
+        "label": "Controller Deadline Fair",
+        "description": "Controller assigns all replay requests priority by due time, without marking one workload as semantically higher priority than another",
+        "color": "#0f766e",
+        "modes": {"controller_deadline_fair"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
@@ -349,6 +357,7 @@ CHART_SIGNAL_ORDER = (
     "controller_oracle_safe_sjf_maxfill",
     "controller_priority_demotion_calibrated_admission",
     "controller_oracle_exact_runtime_admission",
+    "controller_deadline_fair",
     "controller_admission",
     "controller_full",
     "controller_full_chunked",
@@ -382,6 +391,7 @@ COST_ACCOUNTING_SIGNAL_BUCKETS = (
     "controller_oracle_safe_sjf_maxfill",
     "controller_priority_demotion_calibrated_admission",
     "controller_oracle_exact_runtime_admission",
+    "controller_deadline_fair",
     "controller_full",
     "controller_full_chunked",
 )
@@ -459,6 +469,10 @@ COST_ACCOUNTING_COLORS = {
         "target": "#0f766e",
         "filler": "#99f6e4",
     },
+    "controller_deadline_fair": {
+        "target": "#0f766e",
+        "filler": "#99f6e4",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -525,6 +539,10 @@ COST_ACCOUNTING_DELTA_COLORS = {
         "worse": "#dc2626",
     },
     "controller_oracle_exact_runtime_admission": {
+        "better": "#0f766e",
+        "worse": "#dc2626",
+    },
+    "controller_deadline_fair": {
         "better": "#0f766e",
         "worse": "#dc2626",
     },

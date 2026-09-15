@@ -36,6 +36,7 @@ from agentic_kv.controller import (
 )
 from agentic_kv.controller.modes import (
     CONTROLLER_ADMISSION_CONTROL_MODE,
+    CONTROLLER_DEADLINE_FAIR_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
     CONTROLLER_FULL_MODE,
@@ -94,6 +95,7 @@ from agentic_kv.controller.workload import (
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
+DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 SUPPORTED_HARNESSES = (
     "hatcher",
     "codex",
@@ -251,6 +253,23 @@ def controller_prepare_lead_ms(wait_ms: int) -> int:
     if wait_ms <= 10_000:
         return min(wait_ms, 1_000)
     return min(wait_ms, 1_500)
+
+
+def controller_targeted_prefetch_lead_ms(wait_ms: int) -> int:
+    override = os.environ.get("CONTROLLER_TARGETED_PREFETCH_LEAD_MS")
+    if override not in (None, ""):
+        try:
+            return max(0, int(float(override)))
+        except ValueError:
+            pass
+    return controller_prepare_lead_ms(wait_ms)
+
+
+def deadline_fair_priority_for_due(replay_due_ms: float) -> int:
+    base = int(os.environ.get("CONTROLLER_DEADLINE_FAIR_BASE_PRIORITY", "100000") or "100000")
+    bucket_ms = max(1, int(os.environ.get("CONTROLLER_DEADLINE_FAIR_BUCKET_MS", "10") or "10"))
+    due_bucket = int(max(0.0, replay_due_ms) // bucket_ms)
+    return max(1, base - due_bucket)
 
 
 def trace_has_event(path: Path, label: str, event: str) -> bool:
@@ -1257,6 +1276,7 @@ async def run_filler(
     tool_wait_seed: int = 42,
     trace_controller_completion_linkage: bool = False,
     submit_request: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    deadline_fair_priority: Callable[[dict[str, Any], float, str, str], dict[str, Any]] | None = None,
 ) -> None:
     def offset_ms() -> float:
         if workload_start is None:
@@ -1683,6 +1703,8 @@ async def run_filler(
             int(replay_meta["max_tokens"]),
         )
         replay_meta["oracle_runtime_key"] = oracle_runtime_key(replay_meta)
+        if deadline_fair_priority is not None:
+            replay_meta.update(deadline_fair_priority(replay_meta, replay_due_ms, "filler", "replay"))
         replay_meta = attach_pre_harness_priority_intent(replay_meta)
         write_background_reshape_signal(replay_meta, request_id=replay_label, stage="replay")
         admission_result = await wait_for_admission_if_needed(replay_meta, request_id=replay_label, stage="replay")
@@ -1924,6 +1946,7 @@ async def main_async() -> None:
     workload_start = time.perf_counter()
     controller_demotion_state: dict[str, Any] = {"active": False, "meta": {}, "owners": set()}
     controller_enabled = controller_mode(args.mode)
+    controller_active_deadline_fair = args.mode == CONTROLLER_DEADLINE_FAIR_MODE
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_active_preload = controller_speculative_preload_mode(args.mode)
     controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
@@ -1947,6 +1970,7 @@ async def main_async() -> None:
                 or controller_active_priority_demotion_admission
                 or controller_active_admission
                 or controller_active_full
+                or controller_active_deadline_fair
             ),
             prepare_window_ms=0 if (controller_active_demote_restore or controller_active_full) else max(25, max_target_tool_wait_ms),
             min_demote_idle_ms=0 if (controller_active_demote_restore or controller_active_full) else 250,
@@ -1972,7 +1996,7 @@ async def main_async() -> None:
                 kv_release=False,
                 live_metrics=True,
                 observe_only=False,
-                backend_name=CONTROLLER_SCHEDULER_PRIORITY_MODE,
+                backend_name=args.mode,
             )
         )
     elif controller_active_preload:
@@ -2198,6 +2222,49 @@ async def main_async() -> None:
             kv_action=kv_action,
             require_acted=True,
         )
+
+    def assign_deadline_fair_priority(
+        meta: dict[str, Any],
+        replay_due_ms: float,
+        request_group: str,
+        stage: str,
+    ) -> dict[str, Any]:
+        priority = deadline_fair_priority_for_due(replay_due_ms)
+        fields = {
+            "priority_label": "deadline_fair",
+            "controller_deadline_fair": True,
+            "controller_sglang_priority": priority,
+            "controller_deadline_due_offset_ms": round(replay_due_ms, 3),
+            "controller_priority_translation": f"controller.deadline_fair_due_priority={priority}",
+            "controller_priority_translation_source": "controller_deadline_fair_due_time",
+        }
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.controller_deadline_fair.priority_assigned",
+                "session_id": meta.get("session_id", ""),
+                "mode": args.mode,
+                "harness": args.harness,
+                "pressure_level": args.pressure_level,
+                "phase": meta.get("phase", ""),
+                "label": meta.get("label", ""),
+                "request_id": meta.get("label", ""),
+                "request_group": request_group,
+                "stage": stage,
+                "task_index": meta.get("task_index", ""),
+                "tool_wait_step": meta.get("tool_wait_step", ""),
+                "task_replay_steps": meta.get("task_replay_steps", ""),
+                "tool_wait_ms": meta.get("tool_wait_ms", ""),
+                "tool_wait_class": meta.get("tool_wait_class", ""),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "assigned_sglang_priority": priority,
+                "bucket_ms": int(os.environ.get("CONTROLLER_DEADLINE_FAIR_BUCKET_MS", "10") or "10"),
+                "base_priority": int(os.environ.get("CONTROLLER_DEADLINE_FAIR_BASE_PRIORITY", "100000") or "100000"),
+                "reason": "deadline_fair_mode_orders_all_replays_by_due_time_without_semantic_high_priority",
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+        return fields
 
     async def controller_admission_decision(
         pair: HarnessPair,
@@ -2548,6 +2615,8 @@ async def main_async() -> None:
             "filler_backlog_target": filler_backlog_target if args.filler_backlog_mode == "constant" else "",
             "filler_backlog_total": filler_backlog_total if args.filler_backlog_mode == "constant" else "",
             "cost_feedback_allow_background_demote": True,
+            "reuse_probability": 0.98,
+            "recompute_cost_tokens": args.target_prompt_tokens,
             "agentic_workload_profile": args.agentic_workload_profile,
             "controller_admission_aggressiveness": admission_aggressiveness
             if controller_active_priority_demotion_admission
@@ -2571,7 +2640,7 @@ async def main_async() -> None:
             "task_index": pair.task_index,
             "prompt_hash": prompt_hash(target_initial_prompt),
             "prompt_tokens": estimate_tokens(target_initial_prompt),
-            "priority_label": "high",
+            "priority_label": "normal" if controller_active_deadline_fair else "high",
             "max_tokens": target_initial_max_tokens,
             "tool_wait_step": 0,
             "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
@@ -2614,6 +2683,9 @@ async def main_async() -> None:
                         False,
                     ),
                     submit_request=bounded_request,
+                    deadline_fair_priority=assign_deadline_fair_priority
+                    if controller_active_deadline_fair
+                    else None,
                 )
             )
             task.set_name(f"{pair.session_id}_pressure_{idx:03d}")
@@ -2944,13 +3016,23 @@ async def main_async() -> None:
                 and controller_admission_row
                 and controller_admission_row.get("admitted")
             )
+            warmup_task: asyncio.Task[None] | None = None
             if targeted_prefetch_command is not None:
                 direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
+                targeted_prefetch_lead_ms = controller_targeted_prefetch_lead_ms(wait_ms)
+                targeted_prefetch_start_ms = max(tool_start_ms, replay_due_ms - targeted_prefetch_lead_ms)
+                trigger_prompt = (
+                    target_current_prompt
+                    + "\n\n"
+                    + f"{DIRECT_LOAD_TRIGGER} session_id={pair.session_id} prompt_hash={prompt_hash(target_current_prompt)}"
+                )
+                trigger_label = f"{pair.session_id}_controller_targeted_direct_load_{wait_spec.step_index:02d}"
                 targeted_event_base = {
                     "session_id": pair.session_id,
                     "mode": args.mode,
                     "harness": args.harness,
                     "request_id": str(initial_meta["label"]),
+                    "prefetch_request_id": trigger_label,
                     "expected_replay_request_id": replay_label,
                     "prefix_id": step_base_meta["prefix_id"],
                     "tool_wait_step": wait_spec.step_index,
@@ -2958,6 +3040,8 @@ async def main_async() -> None:
                     "tool_wait_profile": args.tool_wait_profile,
                     "tool_wait_class": wait_spec.wait_class,
                     "tool_wait_ms": wait_ms,
+                    "reuse_probability": step_base_meta.get("reuse_probability", ""),
+                    "recompute_cost_tokens": step_base_meta.get("recompute_cost_tokens", ""),
                     "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
                     "controller_command_id": targeted_prefetch_command.get("command_id", ""),
                     "controller_command_reason": targeted_prefetch_command.get("reason", ""),
@@ -2968,7 +3052,11 @@ async def main_async() -> None:
                     "direct_hook_available": direct_hook_available,
                     "tool_start_offset_ms": round(tool_start_ms, 3),
                     "replay_due_offset_ms": round(replay_due_ms, 3),
+                    "targeted_prefetch_lead_ms": targeted_prefetch_lead_ms,
+                    "targeted_prefetch_start_offset_ms": round(targeted_prefetch_start_ms, 3),
                     "offset_ms": round(offset_ms(), 3),
+                    "trigger_marker": DIRECT_LOAD_TRIGGER,
+                    "trigger_prompt_hash": prompt_hash(trigger_prompt),
                 }
                 write_trace(args.trace, {**targeted_event_base, "event": "m27.targeted_kv_prefetch.requested"})
                 write_trace(
@@ -2980,7 +3068,62 @@ async def main_async() -> None:
                         else "m27.targeted_kv_prefetch.unavailable",
                     },
                 )
-            warmup_task: asyncio.Task[None] | None = None
+                if direct_hook_available:
+                    direct_load_meta = {
+                        **step_base_meta,
+                        "session_id": pair.session_id,
+                        "phase": "hint_prefetch",
+                        "label": trigger_label,
+                        "task_index": pair.task_index,
+                        "prompt_hash": prompt_hash(target_current_prompt),
+                        "trigger_prompt_hash": prompt_hash(trigger_prompt),
+                        "priority_label": "high",
+                        "max_tokens": 1,
+                        "controller_targeted_kv_prefetch": True,
+                        "prefetch_action": "direct_load",
+                        "trigger_marker": DIRECT_LOAD_TRIGGER,
+                        "parent_request_id": str(initial_meta["label"]),
+                        "expected_replay_request_id": replay_label,
+                        "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
+                        "controller_command_id": targeted_prefetch_command.get("command_id", ""),
+                        "controller_kv_translation": "controller.targeted_prefetch=direct_load_trigger",
+                    }
+                    direct_load_meta = attach_harness_priority_metadata(direct_load_meta)
+
+                    async def run_targeted_direct_load() -> None:
+                        await sleep_until(targeted_prefetch_start_ms)
+                        write_trace(
+                            args.trace,
+                            {
+                                **targeted_event_base,
+                                "event": "m27.targeted_kv_prefetch.direct_load_start",
+                                "offset_ms": round(offset_ms(), 3),
+                            },
+                        )
+                        try:
+                            await bounded_request(trigger_prompt, direct_load_meta)
+                            write_trace(
+                                args.trace,
+                                {
+                                    **targeted_event_base,
+                                    "event": "m27.targeted_kv_prefetch.direct_load_end",
+                                    "status": "ok",
+                                    "offset_ms": round(offset_ms(), 3),
+                                },
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            write_trace(
+                                args.trace,
+                                {
+                                    **targeted_event_base,
+                                    "event": "m27.targeted_kv_prefetch.direct_load_error",
+                                    "status": "error",
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                    "offset_ms": round(offset_ms(), 3),
+                                },
+                            )
+
+                    warmup_task = asyncio.create_task(run_targeted_direct_load())
             if (
                 direct_gateway_speculative_prefill
                 or cache_signal_driven_preload
@@ -3412,6 +3555,24 @@ async def main_async() -> None:
                         "offset_ms": round(offset_ms(), 3),
                     },
                 )
+            deadline_fair_replay_fields: dict[str, Any] = {}
+            if controller_active_deadline_fair:
+                deadline_fair_replay_fields = assign_deadline_fair_priority(
+                    {
+                        **step_base_meta,
+                        "session_id": pair.session_id,
+                        "phase": "replay",
+                        "label": replay_label,
+                        "task_index": pair.task_index,
+                    },
+                    replay_due_ms,
+                    "target",
+                    "replay",
+                )
+                controller_replay_priority = int(deadline_fair_replay_fields["controller_sglang_priority"])
+                controller_replay_rank = "deadline_due_time"
+                controller_replay_count = "all_due_replays"
+                controller_ladder_priority = controller_replay_priority
             replay_max_tokens = 8
             replay_workload_meta: dict[str, Any] = {
                 "agentic_workload_profile": args.agentic_workload_profile,
@@ -3447,24 +3608,27 @@ async def main_async() -> None:
                 "label": replay_label,
                 "task_index": pair.task_index,
                 "prompt_hash": prompt_hash(step_replay_prompt),
-                "priority_label": "high",
+                "priority_label": "deadline_fair" if controller_active_deadline_fair else "high",
                 "deadline_offset_ms": round(replay_due_ms, 3),
                 "max_tokens": replay_max_tokens,
                 "prompt_tokens": estimate_tokens(step_replay_prompt),
                 **replay_workload_meta,
+                **deadline_fair_replay_fields,
             }
             if controller_replay_priority is not None:
-                replay_meta.update(
-                    {
-                        "controller_sglang_priority": controller_replay_priority,
-                        "controller_decision_id": controller_decision_id,
-                        "controller_command_id": controller_command_id,
-                        "controller_priority_translation": f"controller.set_priority={controller_replay_priority}",
-                        "controller_replay_rank": controller_replay_rank,
-                        "controller_urgent_replay_count": controller_replay_count,
-                        "controller_priority_ladder": controller_ladder_priority,
-                    }
-                )
+                controller_fields = {
+                    "controller_sglang_priority": controller_replay_priority,
+                    "controller_decision_id": controller_decision_id,
+                    "controller_command_id": controller_command_id,
+                    "controller_replay_rank": controller_replay_rank,
+                    "controller_urgent_replay_count": controller_replay_count,
+                    "controller_priority_ladder": controller_ladder_priority,
+                }
+                if not controller_active_deadline_fair:
+                    controller_fields[
+                        "controller_priority_translation"
+                    ] = f"controller.set_priority={controller_replay_priority}"
+                replay_meta.update(controller_fields)
             replay_meta = attach_harness_priority_metadata(replay_meta)
             if controller_demotion_state.get("active"):
                 write_trace(

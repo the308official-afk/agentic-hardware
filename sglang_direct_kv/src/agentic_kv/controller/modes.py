@@ -25,6 +25,7 @@ CONTROLLER_ORACLE_SAFE_SJF_AGGRESSIVE_MODE = "controller_oracle_safe_sjf_aggress
 CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE = "controller_oracle_safe_sjf_maxfill"
 CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE = "controller_priority_demotion_calibrated_admission"
 CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE = "controller_oracle_exact_runtime_admission"
+CONTROLLER_DEADLINE_FAIR_MODE = "controller_deadline_fair"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -79,6 +80,7 @@ SUPPORTED_MODES = (
     CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE,
     CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE,
     CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE,
+    CONTROLLER_DEADLINE_FAIR_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
@@ -92,7 +94,7 @@ def controller_observe_only_mode(mode: str) -> bool:
 
 
 def controller_scheduler_priority_mode(mode: str) -> bool:
-    return mode == CONTROLLER_SCHEDULER_PRIORITY_MODE
+    return mode in {CONTROLLER_SCHEDULER_PRIORITY_MODE, CONTROLLER_DEADLINE_FAIR_MODE}
 
 
 def controller_speculative_preload_mode(mode: str) -> bool:
@@ -197,6 +199,7 @@ def controller_mode(mode: str) -> bool:
         CONTROLLER_DEMOTE_RESTORE_MODE,
         CONTROLLER_PRIORITY_DEMOTE_MODE,
         *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
+        CONTROLLER_DEADLINE_FAIR_MODE,
         CONTROLLER_ADMISSION_CONTROL_MODE,
         CONTROLLER_FULL_MODE,
         CONTROLLER_FULL_CHUNKED_PREFILL_MODE,

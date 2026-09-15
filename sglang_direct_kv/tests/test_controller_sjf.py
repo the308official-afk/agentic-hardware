@@ -4,7 +4,12 @@ import asyncio
 import json
 from pathlib import Path
 
-from agentic_kv.controller.modes import controller_safe_sjf_degree
+from agentic_kv.controller.modes import (
+    CONTROLLER_DEADLINE_FAIR_MODE,
+    controller_mode,
+    controller_safe_sjf_degree,
+    controller_scheduler_priority_mode,
+)
 from agentic_kv.controller.sjf import SafeFillerAdmissionScheduler
 
 
@@ -73,3 +78,8 @@ def test_sjf_mode_degrees_are_stable() -> None:
     assert controller_safe_sjf_degree("controller_oracle_safe_sjf_balanced") == (75, 3, True, True)
     assert controller_safe_sjf_degree("controller_oracle_safe_sjf_aggressive") == (25, 6, True, True)
     assert controller_safe_sjf_degree("controller_oracle_safe_sjf_maxfill") == (0, 12, False, True)
+
+
+def test_deadline_fair_is_scheduler_controller_mode() -> None:
+    assert controller_mode(CONTROLLER_DEADLINE_FAIR_MODE)
+    assert controller_scheduler_priority_mode(CONTROLLER_DEADLINE_FAIR_MODE)
