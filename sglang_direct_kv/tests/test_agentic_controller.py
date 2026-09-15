@@ -40,6 +40,8 @@ class AgenticControllerTests(unittest.TestCase):
                 "tool_wait_ms": 2000,
                 "tool_wait_step": 1,
                 "task_replay_steps": 2,
+                "reuse_probability": 0.98,
+                "recompute_cost_tokens": 80000,
                 "prompt_hash": "abc",
                 "max_tokens": 8,
                 "native_cache_profile": {"enabled": True, "cache_key_seed": "repo-session"},
@@ -61,6 +63,8 @@ class AgenticControllerTests(unittest.TestCase):
         self.assertEqual(signal["replay"]["deadline_after_tool_ms"], 50)
         self.assertTrue(signal["cache"]["stable_prefix"])
         self.assertEqual(signal["cache"]["cache_key"], "repo-session")
+        self.assertEqual(signal["cache"]["reuse_probability"], 0.98)
+        self.assertEqual(signal["cache"]["recompute_cost_tokens"], 80000)
         self.assertFalse(signal["scheduling"]["safe_to_demote"])
         self.assertEqual(signal["competition"]["demotable_background_requests"], 0)
         self.assertTrue(signal["cost_feedback"]["allow_background_demote"])
@@ -601,6 +605,41 @@ class AgenticControllerTests(unittest.TestCase):
         self.assertIs(decision.commands[0].kv_action, KVAction.PREFETCH)
         self.assertTrue(result.accepted)
         self.assertTrue(result.acted)
+
+    def test_targeted_prefetch_policy_uses_cache_value_signals(self) -> None:
+        store = ControllerStateStore()
+        low_value_signal = build_harness_controller_signal(
+            {
+                "session_id": "s1",
+                "prefix_id": "p1",
+                "phase": "tool_wait",
+                "tool_wait_ms": 50,
+                "reuse_probability": 0.1,
+                "recompute_cost_tokens": 80000,
+            },
+            monotonic_ms=0,
+            expected_completion_ms=50,
+            deadline_after_completion_ms=50,
+        )
+        state, _ = store.apply_event(
+            ControllerEvent(
+                event_id="event-wait",
+                event=EventType.TOOL_STARTED,
+                session_id="s1",
+                prefix_id="p1",
+                monotonic_ms=0,
+                expected_completion_ms=50,
+                deadline_after_completion_ms=50,
+                metadata={"harness_controller_signal": low_value_signal},
+            )
+        )
+        policy = ControllerPolicy(PolicyConfig(observe_only=False, prepare_window_ms=100))
+        backend = SGLangTargetedKVPrefetchBackendAdapter(direct_hook_available=True)
+
+        decision = policy.plan(state, backend.capabilities(), now_ms=0)
+
+        self.assertNotIn(KVAction.PREFETCH, {command.kv_action for command in decision.commands})
+        self.assertIn("reuse probability", decision.reason)
 
 
 if __name__ == "__main__":

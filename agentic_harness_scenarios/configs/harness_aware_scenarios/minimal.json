@@ -1,0 +1,274 @@
+{
+  "schema_version": "harness_aware_scenarios.v1",
+  "purpose": "Minimal deterministic scenarios that show how harness-level workflow signals change backend decisions.",
+  "scenarios": [
+    {
+      "scenario_id": "deadline_scheduling_minimal",
+      "brief_claim": "Better deadline scheduling",
+      "scenario_type": "deadline_scheduling",
+      "description": "An urgent user-facing replay becomes ready while a long background prefill is queued.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_prefix",
+        "phase": "replay_ready",
+        "deadline_after_ready_ms": 100,
+        "priority": 100,
+        "user_waiting": true
+      },
+      "backend_state": {
+        "background_prefill_ms": 260,
+        "urgent_service_ms": 35
+      },
+      "baseline_policy": "fifo_static_queue",
+      "harness_aware_policy": "deadline_priority_scheduler",
+      "expected_benefit": "Urgent replay runs before background prefill and meets its first-token deadline.",
+      "chart": "lateness_bar"
+    },
+    {
+      "scenario_id": "proactive_kv_minimal",
+      "brief_claim": "Proactive KV-cache management",
+      "scenario_type": "proactive_kv",
+      "description": "A long-context agent enters tool wait and is likely to reuse expensive KV soon.",
+      "harness_signals": {
+        "session_id": "repo_agent",
+        "prefix_id": "repo_agent_long_context",
+        "phase": "tool_wait",
+        "expected_tool_return_ms": 30000,
+        "eta_uncertainty_ms": 2000,
+        "deadline_after_ready_ms": 120,
+        "reuse_probability": 0.98,
+        "recompute_cost_tokens": 80000
+      },
+      "backend_state": {
+        "recompute_tokens_if_lost": 80000,
+        "recompute_ms": 820,
+        "prefetch_validation_ms": 12,
+        "urgent_service_ms": 30
+      },
+      "baseline_policy": "inactive_cache_reactive",
+      "harness_aware_policy": "eta_value_kv_prepare",
+      "expected_benefit": "KV is prepared before replay, avoiding replay-side prompt recompute.",
+      "chart": "kv_timeline"
+    },
+    {
+      "scenario_id": "eviction_value_minimal",
+      "brief_claim": "Better decisions about which cache to evict",
+      "scenario_type": "eviction_value",
+      "description": "Two idle KV entries compete for limited memory; one is likely to return soon and expensive to recompute.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_prefix",
+        "phase": "tool_wait",
+        "expected_tool_return_ms": 50,
+        "reuse_probability": 0.98,
+        "recompute_cost_tokens": 80000
+      },
+      "backend_state": {
+        "high_value_recompute_tokens": 80000,
+        "low_value_recompute_tokens": 5000,
+        "high_value_recompute_ms": 620,
+        "low_value_recompute_ms": 40,
+        "high_value_score": 78400,
+        "low_value_score": 250
+      },
+      "baseline_policy": "lru_eviction",
+      "harness_aware_policy": "reuse_value_eviction",
+      "expected_benefit": "The backend evicts low-value KV instead of the soon-returning expensive context.",
+      "chart": "eviction_value_bar"
+    },
+    {
+      "scenario_id": "jit_headroom_minimal",
+      "brief_claim": "Just-in-time GPU headroom",
+      "scenario_type": "jit_headroom",
+      "description": "Background work can run during a tool wait, but an urgent replay ETA is approaching.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_prefix",
+        "phase": "tool_wait",
+        "expected_tool_return_ms": 5000,
+        "eta_uncertainty_ms": 300,
+        "deadline_after_ready_ms": 100,
+        "priority": 100,
+        "user_waiting": true
+      },
+      "backend_state": {
+        "background_work_available_ms": 5000,
+        "background_fill_ms": 180,
+        "jit_headroom_ms": 120,
+        "urgent_service_ms": 35
+      },
+      "baseline_policy": "static_full_background_admission",
+      "harness_aware_policy": "eta_window_headroom",
+      "expected_benefit": "Background work remains high early, then a narrow replay headroom window opens near ETA.",
+      "chart": "capacity_timeline"
+    },
+    {
+      "scenario_id": "prefill_chunking_minimal",
+      "brief_claim": "Smarter prefill chunking",
+      "scenario_type": "prefill_chunking",
+      "description": "A long background prefill overlaps an upcoming urgent replay.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_prefix",
+        "phase": "tool_wait",
+        "expected_tool_return_ms": 400,
+        "deadline_after_ready_ms": 100,
+        "priority": 100
+      },
+      "backend_state": {
+        "large_chunk_ms": 220,
+        "small_chunk_ms": 45,
+        "urgent_service_ms": 35
+      },
+      "baseline_policy": "static_large_prefill_chunks",
+      "harness_aware_policy": "eta_aware_prefill_chunks",
+      "expected_benefit": "Smaller chunks near ETA reduce the replay boundary wait.",
+      "chart": "chunk_timeline"
+    },
+    {
+      "scenario_id": "memory_admission_minimal",
+      "brief_claim": "More accurate memory admission",
+      "scenario_type": "admission",
+      "description": "Background requests look admissible now, but they would occupy the replay-critical window.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_prefix",
+        "phase": "tool_wait",
+        "expected_tool_return_ms": 250,
+        "deadline_after_ready_ms": 100,
+        "priority": 100,
+        "user_waiting": true
+      },
+      "backend_state": {
+        "background_candidates": 3,
+        "safe_background_admits": 1,
+        "background_candidate_ms": 55,
+        "urgent_service_ms": 35
+      },
+      "baseline_policy": "current_capacity_admission",
+      "harness_aware_policy": "future_deadline_admission",
+      "expected_benefit": "Admission avoids risky background work that would block the upcoming replay.",
+      "chart": "admission_bar"
+    },
+    {
+      "scenario_id": "critical_path_minimal",
+      "brief_claim": "Critical-path scheduling",
+      "scenario_type": "critical_path",
+      "description": "Two equal-size requests are ready; one unlocks several downstream tasks.",
+      "harness_signals": {
+        "session_id": "planner_agent",
+        "prefix_id": "planner_agent_prefix",
+        "phase": "replay_ready",
+        "work_value": "critical_path",
+        "priority": 50
+      },
+      "backend_state": {
+        "independent_request_ms": 120,
+        "critical_request_ms": 120,
+        "downstream_total_ms": 400
+      },
+      "baseline_policy": "arrival_order_equal_priority",
+      "harness_aware_policy": "critical_path_first",
+      "expected_benefit": "The branch-unlocking request runs first and downstream work starts earlier.",
+      "chart": "workflow_gantt"
+    },
+    {
+      "scenario_id": "cancellation_minimal",
+      "brief_claim": "Cancellation of low-value work",
+      "scenario_type": "cancellation",
+      "description": "One speculative branch finds the answer, making two sibling branches useless.",
+      "harness_signals": {
+        "session_id": "research_agent",
+        "prefix_id": "research_branches",
+        "phase": "speculative",
+        "work_value": "speculative",
+        "cancelable": true
+      },
+      "backend_state": {
+        "speculative_branch_tokens": 6000,
+        "losing_branches": 2
+      },
+      "baseline_policy": "no_semantic_cancellation",
+      "harness_aware_policy": "cancelable_work_drop",
+      "expected_benefit": "Useless branches stop consuming tokens and KV capacity.",
+      "chart": "waste_bar"
+    },
+    {
+      "scenario_id": "batching_minimal",
+      "brief_claim": "Better batching",
+      "scenario_type": "batching",
+      "description": "Urgent interactive work and flexible background work are ready at the same time.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_prefix",
+        "phase": "replay_ready",
+        "priority": 100,
+        "user_waiting": true,
+        "work_value": "interactive"
+      },
+      "backend_state": {
+        "mixed_batch_urgent_p95_ms": 280,
+        "semantic_batch_urgent_p95_ms": 75,
+        "mixed_batch_throughput": 100,
+        "semantic_batch_throughput": 92
+      },
+      "baseline_policy": "throughput_only_batching",
+      "harness_aware_policy": "semantic_latency_batching",
+      "expected_benefit": "Urgent tail latency improves while background throughput remains visible.",
+      "chart": "tail_latency_bar"
+    },
+    {
+      "scenario_id": "path_selection_minimal",
+      "brief_claim": "Better model and execution-path selection",
+      "scenario_type": "path_selection",
+      "description": "Critical user-facing work and low-value background work do not need the same execution path.",
+      "harness_signals": {
+        "session_id": "mixed_workflow",
+        "prefix_id": "mixed_workflow_prefix",
+        "phase": "active",
+        "priority": 80,
+        "user_waiting": true,
+        "work_value": "critical_and_background"
+      },
+      "backend_state": {
+        "request_count": 6,
+        "critical_request_count": 2,
+        "low_value_request_count": 4,
+        "strong_path_cost": 10,
+        "cheap_path_cost": 3
+      },
+      "baseline_policy": "one_execution_path",
+      "harness_aware_policy": "work_value_path_selection",
+      "expected_benefit": "Critical requests stay on the strong path while low-value work uses a cheaper path.",
+      "chart": "cost_bar"
+    },
+    {
+      "scenario_id": "predictive_behavior_minimal",
+      "brief_claim": "Predictive rather than reactive behavior",
+      "scenario_type": "predictive",
+      "description": "A combined mini lifecycle where ETA, deadline, and KV value let the backend prepare before replay arrives.",
+      "harness_signals": {
+        "session_id": "support_agent",
+        "prefix_id": "support_agent_long_prefix",
+        "phase": "tool_wait",
+        "expected_tool_return_ms": 2000,
+        "eta_uncertainty_ms": 200,
+        "deadline_after_ready_ms": 100,
+        "priority": 100,
+        "user_waiting": true,
+        "reuse_probability": 0.95,
+        "recompute_cost_tokens": 48000
+      },
+      "backend_state": {
+        "reactive_discovery_ms": 45,
+        "reactive_kv_prepare_ms": 310,
+        "prepared_first_token_ms": 38,
+        "urgent_service_ms": 35
+      },
+      "baseline_policy": "react_after_replay_arrival",
+      "harness_aware_policy": "predictive_eta_deadline_kv_prepare",
+      "expected_benefit": "Replay first token arrives quickly because preparation happened before tool completion.",
+      "chart": "lifecycle_timeline"
+    }
+  ]
+}

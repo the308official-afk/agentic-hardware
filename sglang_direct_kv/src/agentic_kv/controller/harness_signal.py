@@ -91,6 +91,8 @@ class CacheSignal:
     stable_prefix: bool = False
     cache_key: str = ""
     reuse_scope: str = ""
+    reuse_probability: float | None = None
+    recompute_cost_tokens: int | None = None
     repo_context_hash: str = ""
     tool_schema_hash: str = ""
     conversation_prefix_hash: str = ""
@@ -295,6 +297,8 @@ def build_harness_controller_signal(
             stable_prefix=stable_prefix,
             cache_key=_text(meta.get("cache_key") or meta.get("gateway_cache_salt") or native_cache_profile.get("cache_key_seed")),
             reuse_scope=_text(meta.get("cache_reuse_scope"), "session" if stable_prefix else ""),
+            reuse_probability=_float_or_none(meta.get("reuse_probability")),
+            recompute_cost_tokens=_int_or_none(meta.get("recompute_cost_tokens")),
             repo_context_hash=_text(meta.get("repo_context_hash")),
             tool_schema_hash=_text(meta.get("tool_schema_hash")),
             conversation_prefix_hash=_text(meta.get("conversation_prefix_hash") or meta.get("prompt_hash")),

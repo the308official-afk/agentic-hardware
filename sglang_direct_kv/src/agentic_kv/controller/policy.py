@@ -216,7 +216,7 @@ class ControllerPolicy:
                     "demote background work during replay-critical window",
                 )
             )
-        if active and capabilities.kv_prefetch:
+        if active and capabilities.kv_prefetch and self._should_prefetch_kv(state, reasons):
             commands.append(
                 self._command(
                     state,
@@ -240,6 +240,27 @@ class ControllerPolicy:
         if not commands:
             reasons.append("prepare actions not active or not supported")
         return commands
+
+    def _should_prefetch_kv(self, state: SessionState, reasons: list[str]) -> bool:
+        signal = self._harness_signal(state)
+        if not signal:
+            return True
+        if not self._signal_bool(signal, ("replay", "likely"), default=False):
+            reasons.append("replay is not marked likely; skip KV prefetch")
+            return False
+        if not self._signal_bool(signal, ("cache", "stable_prefix"), default=False):
+            reasons.append("stable reusable prefix not marked; skip KV prefetch")
+            return False
+        reuse_probability = self._signal_float(signal, ("cache", "reuse_probability"))
+        recompute_cost_tokens = self._signal_int(signal, ("cache", "recompute_cost_tokens"), default=0) or 0
+        if reuse_probability is not None and reuse_probability < 0.5:
+            reasons.append(f"reuse probability {reuse_probability:.2f} too low for KV prefetch")
+            return False
+        if recompute_cost_tokens <= 0:
+            reasons.append("recompute cost not provided; use timing-only KV prefetch")
+        else:
+            reasons.append(f"valuable reusable KV: p(reuse)={reuse_probability if reuse_probability is not None else 'unknown'}, recompute_tokens={recompute_cost_tokens}")
+        return True
 
     def _should_demote_background(self, state: SessionState, reasons: list[str]) -> bool:
         signal = self._harness_signal(state)
