@@ -42,10 +42,11 @@ cd ~/agentic_hardware
 <col width="12%" style="width: 12%;">
 <col width="18%" style="width: 18%;">
 <col width="12%" style="width: 12%;">
-<col>
-<col width="18%" style="width: 18%;">
-<col width="12%" style="width: 12%;">
-<col width="14%" style="width: 14%;">
+<col width="25%" style="width: 25%;">
+<col width="15%" style="width: 15%;">
+<col width="16%" style="width: 16%;">
+<col width="9%" style="width: 9%;">
+<col width="8%" style="width: 8%;">
 </colgroup>
 <thead>
 <tr>
@@ -54,6 +55,7 @@ cd ~/agentic_hardware
 <th>Source Lane</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
+<th>When It Appears</th>
 <th>Where Attached</th>
 <th>Evidence</th>
 </tr>
@@ -81,6 +83,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li>none</li>
 </ul>
 </td>
+<td>No benchmark hint knobs are enabled: <code>--knob-profile baseline</code>.</td>
 <td>Request</td>
 <td>Native Claude Code request-boundary control case.</td>
 </tr>
@@ -109,6 +112,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile all_request_boundary</code>; observed signals come from stable-context cache probes, <code>claude_fast_mode_setting</code> with <code>fastMode=true</code>, <code>ENABLE_PROMPT_CACHING_1H=1</code>, and <code>FORCE_PROMPT_CACHING_5M=1</code>.</td>
 <td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -134,6 +138,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile qos_only</code>, including scenario <code>claude_fast_mode_setting</code>.</td>
 <td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -161,6 +166,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.ttl="1h"</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile cache_only</code>, including stable-prefix cache scenarios plus <code>claude_provider_retention_1h</code> with <code>ENABLE_PROMPT_CACHING_1H=1</code> and <code>claude_provider_retention_5m</code> with <code>FORCE_PROMPT_CACHING_5M=1</code>.</td>
 <td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -186,6 +192,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>system.*.cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile prewarm_only</code> with scenario <code>claude_prewarm_like_probe</code>.</td>
 <td>Request</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -211,6 +218,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>anthropic-beta: fast-mode-2026-02-01</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>claude_fast_mode_setting</code>, which passes Claude settings with <code>fastMode=true</code>.</td>
 <td>Configuration</td>
 <td>Native Claude Code request-boundary capture.</td>
 </tr>
@@ -237,6 +245,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.ttl="1h"</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>claude_provider_retention_1h</code> with <code>ENABLE_PROMPT_CACHING_1H=1</code>.</td>
 <td>Configuration</td>
 <td>Native Claude Code request-boundary capture using `ENABLE_PROMPT_CACHING_1H=1`.</td>
 </tr>
@@ -262,6 +271,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <li><code>cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>claude_provider_retention_5m</code> with <code>FORCE_PROMPT_CACHING_5M=1</code>.</td>
 <td>Configuration</td>
 <td>Native Claude Code request-boundary capture using `FORCE_PROMPT_CACHING_5M=1`.</td>
 </tr>
@@ -275,10 +285,11 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <col width="12%" style="width: 12%;">
 <col width="18%" style="width: 18%;">
 <col width="12%" style="width: 12%;">
-<col>
-<col width="18%" style="width: 18%;">
-<col width="12%" style="width: 12%;">
-<col width="14%" style="width: 14%;">
+<col width="25%" style="width: 25%;">
+<col width="15%" style="width: 15%;">
+<col width="16%" style="width: 16%;">
+<col width="9%" style="width: 9%;">
+<col width="8%" style="width: 8%;">
 </colgroup>
 <thead>
 <tr>
@@ -287,6 +298,7 @@ python3 sglang_direct_kv/scripts/run_hint_benchmark.py \
 <th>Source Lane</th>
 <th>Command</th>
 <th>Signals Observed Today</th>
+<th>When It Appears</th>
 <th>Where Attached</th>
 <th>Evidence</th>
 </tr>
@@ -314,6 +326,7 @@ RUN_ID="nat_baseline_$(date +%Y%m%d_%H%M%S)"
 <li>none</li>
 </ul>
 </td>
+<td>No NAT benchmark hint knobs are enabled: <code>--knob-profile baseline</code>.</td>
 <td>Request</td>
 <td>Native NAT transport capture control case.</td>
 </tr>
@@ -348,6 +361,7 @@ RUN_ID="nat_all_request_boundary_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile all_request_boundary</code>, which combines scheduling, cache-control, namespace, and provider QoS scenarios.</td>
 <td>Configuration</td>
 <td>Native NAT `_DynamoTransport` request-boundary capture.</td>
 </tr>
@@ -377,6 +391,7 @@ RUN_ID="nat_scheduling_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>total_requests</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile scheduling_only</code>, including high/low priority, latency sensitivity, output length, cadence, and planned-count scenarios.</td>
 <td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -405,6 +420,7 @@ RUN_ID="nat_cache_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile cache_only</code>, including prefix reuse, TTL, ephemeral cache control, first-only cache control, and eviction-priority intent.</td>
 <td>Configuration</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -431,6 +447,7 @@ RUN_ID="nat_passthrough_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
+<td>Runs <code>--knob-profile passthrough_only</code>, including <code>nat_cache_namespace</code> and <code>nat_provider_qos</code>.</td>
 <td>Session</td>
 <td>Preserved through NAT transport; provider QoS is pass-through, not NAT-invented.</td>
 </tr>
@@ -456,6 +473,7 @@ RUN_ID="nat_priority_high_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority=100</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_priority_high</code>, whose workflow metadata sets <code>priority="high"</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -481,6 +499,7 @@ RUN_ID="nat_priority_low_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority=2</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_priority_low</code>, whose workflow metadata sets <code>priority="low"</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -507,6 +526,7 @@ RUN_ID="nat_latency_sensitive_$(date +%Y%m%d_%H%M%S)"
 <li><code>priority</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_latency_sensitive</code>, whose workflow metadata sets <code>latency_sensitivity=100</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -532,6 +552,7 @@ RUN_ID="nat_expected_output_length_$(date +%Y%m%d_%H%M%S)"
 <li><code>osl</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_expected_output_length</code>, whose workflow metadata sets <code>osl=128</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
@@ -557,6 +578,7 @@ RUN_ID="nat_expected_interarrival_time_$(date +%Y%m%d_%H%M%S)"
 <li><code>iat</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_expected_interarrival_time</code>, whose workflow metadata sets <code>iat=750</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture from configured workload metadata.</td>
 </tr>
@@ -582,6 +604,7 @@ RUN_ID="nat_remaining_calls_$(date +%Y%m%d_%H%M%S)"
 <li><code>total_requests</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_remaining_calls</code>, whose workflow metadata sets <code>total_requests=4</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -607,6 +630,7 @@ RUN_ID="nat_prefix_reuse_id_$(date +%Y%m%d_%H%M%S)"
 <li><code>prefix_id</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_prefix_reuse_id</code>, whose workflow metadata sets a shared <code>prefix_id</code>.</td>
 <td>Session</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -632,6 +656,7 @@ RUN_ID="nat_cache_control_ttl_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control.ttl</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_cache_control_ttl</code>, whose workflow metadata sets <code>cache_control.ttl="1s"</code>.</td>
 <td>Request</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -657,6 +682,7 @@ RUN_ID="nat_cache_ephemeral_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control.type="ephemeral"</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_cache_ephemeral</code>, whose workflow metadata sets <code>cache_control.type="ephemeral"</code>.</td>
 <td>Request</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -682,6 +708,7 @@ RUN_ID="nat_cache_control_first_only_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_control</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_cache_control_first_only</code>, whose workflow metadata sets <code>cache_control.mode="first_only"</code>.</td>
 <td>Task</td>
 <td>Native NAT transport capture.</td>
 </tr>
@@ -707,6 +734,7 @@ RUN_ID="nat_cache_namespace_$(date +%Y%m%d_%H%M%S)"
 <li><code>nvext.cache_salt</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_cache_namespace</code>, whose client metadata supplies <code>nvext.cache_salt</code>.</td>
 <td>Session</td>
 <td>Pass-through preserved by NAT transport.</td>
 </tr>
@@ -732,6 +760,7 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 <li><code>provider.qos_tier</code></li>
 </ul>
 </td>
+<td>Runs scenario <code>nat_provider_qos</code>, whose provider metadata supplies <code>qos_tier</code>.</td>
 <td>Configuration</td>
 <td>Pass-through preserved by NAT transport; not NAT-invented.</td>
 </tr>
@@ -740,15 +769,15 @@ RUN_ID="nat_provider_qos_$(date +%Y%m%d_%H%M%S)"
 
 ## Missing Or Blocked Today
 
-| Harness | Signal | Current State |
-| --- | --- | --- |
-| NAT | cache-hit runtime feedback | Not request-boundary metadata; needs backend/runtime cache metrics. |
-| NAT | literal `cache_pinning=true` | Not observed in NAT 1.8.0; NAT exposes ephemeral/first-only cache control instead. |
-| Claude Code | native `service_tier=auto` / `standard_only` body field | Not observed through tested Claude Code env-var path. |
-| Claude Code | literal cache key | Not observed; Claude appears to use provider-derived exact-prefix matching. |
-| Claude Code | tool-level `cache_control` | Not observed in the tested tool-heavy request. |
-| Claude Code | native `max_tokens=0` prewarm | Not observed from Claude Code CLI in our capture. |
-| Claude Code | real cache-hit usage counters | Implemented runner path, but EC2 Claude CLI is not logged in today. |
+| Harness | Signal | Current State | Needed To See It |
+| --- | --- | --- | --- |
+| NAT | cache-hit runtime feedback | Not request-boundary metadata; needs backend/runtime cache metrics. | Run a real backend cache-hit experiment and collect post-execution profiler/metrics output, not only request-boundary capture. |
+| NAT | literal `cache_pinning=true` | Not observed in NAT 1.8.0; NAT exposes ephemeral/first-only cache control instead. | A NAT version/path would need to expose an actual pinning field; today use first-only/ephemeral cache control as the observable pin-like behavior. |
+| Claude Code | native `service_tier=auto` / `standard_only` body field | Not observed through tested Claude Code env-var path. | A Claude Code/provider path would need to forward <code>ANTHROPIC_SERVICE_TIER</code> or <code>CLAUDE_CODE_SERVICE_TIER</code> into the request body. |
+| Claude Code | literal cache key | Not observed; Claude appears to use provider-derived exact-prefix matching. | Claude Code or the provider would need to expose a literal request cache-key field; current native capture did not. |
+| Claude Code | tool-level `cache_control` | Not observed in the tested tool-heavy request. | Run a Claude Code setup with stable tool definitions that the CLI/provider marks directly as <code>tools.*.cache_control</code>; our observed path cached system/message blocks instead. |
+| Claude Code | native `max_tokens=0` prewarm | Not observed from Claude Code CLI in our capture. | Claude Code would need a native zero-token request path; direct API can represent this, but the native CLI path has not emitted it. |
+| Claude Code | real cache-hit usage counters | Implemented runner path, but EC2 Claude CLI is not logged in today. | Use an authenticated Claude/provider run with repeated identical cacheable prefix requests inside the TTL, then capture response usage counters. |
 
 ## Inspect Results
 
