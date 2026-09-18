@@ -39,6 +39,9 @@ PRIORITY_ENABLED_MODES = {
     "controller_priority_demotion_calibrated_admission",
     "controller_oracle_exact_runtime_admission",
     "controller_deadline_fair",
+    "controller_predictive_deadline_queue",
+    "controller_value_aware_eviction",
+    "controller_memory_admission",
     "controller_admission_control",
     "controller_full",
     "controller_full_chunked_prefill",
@@ -62,6 +65,9 @@ CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE = "controller_oracle_safe_sjf_maxfill"
 CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE = "controller_priority_demotion_calibrated_admission"
 CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE = "controller_oracle_exact_runtime_admission"
 CONTROLLER_DEADLINE_FAIR_MODE = "controller_deadline_fair"
+CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE = "controller_predictive_deadline_queue"
+CONTROLLER_VALUE_AWARE_EVICTION_MODE = "controller_value_aware_eviction"
+CONTROLLER_MEMORY_ADMISSION_MODE = "controller_memory_admission"
 CONTROLLER_ORACLE_SAFE_SJF_MODES = {
     CONTROLLER_ORACLE_SAFE_SJF_MODE,
     CONTROLLER_ORACLE_SAFE_SJF_BALANCED_MODE,
@@ -87,6 +93,9 @@ CONTROLLER_PRIORITY_MODES = {
     CONTROLLER_PRIORITY_DEMOTE_MODE,
     *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
     CONTROLLER_DEADLINE_FAIR_MODE,
+    CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE,
+    CONTROLLER_VALUE_AWARE_EVICTION_MODE,
+    CONTROLLER_MEMORY_ADMISSION_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
@@ -325,6 +334,23 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
     phase = str(meta.get("phase") or "")
     mode = str(meta.get("mode") or "")
     if mode in CONTROLLER_PRIORITY_MODES:
+        if mode == CONTROLLER_VALUE_AWARE_EVICTION_MODE:
+            try:
+                return int(float(meta.get("controller_sglang_priority")))
+            except (TypeError, ValueError):
+                value_class = str(meta.get("controller_eviction_value_class") or "")
+                if value_class == "protected_high_value":
+                    return int(meta.get("high_priority") or 100)
+                if value_class == "normal_value":
+                    return int(os.environ.get("CONTROLLER_EVICTION_NORMAL_PRIORITY", "0") or "0")
+                if value_class == "evictable_low_value":
+                    return int(meta.get("low_priority") or -100)
+                return None
+        if mode == CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE and meta.get("controller_predictive_deadline_queue"):
+            try:
+                return int(float(meta.get("controller_sglang_priority")))
+            except (TypeError, ValueError):
+                return None
         if mode == CONTROLLER_DEADLINE_FAIR_MODE:
             if not meta.get("controller_deadline_fair"):
                 return None
@@ -357,7 +383,7 @@ def sglang_priority(meta: dict[str, Any], payload: dict[str, Any] | None = None)
         return None
     if str(meta.get("mode") or "") == NAT_INFERRED_PRIORITY_MODE:
         return payload_nvext_priority(payload or {})
-    if phase == "pressure_filler":
+    if phase.startswith("pressure_filler"):
         return int(meta.get("low_priority") or -100)
     if str(meta.get("mode") or "") == PRE_HARNESS_PRIORITY_MODE:
         intent = as_dict(meta.get("priority_intent"))
@@ -579,6 +605,8 @@ def priority_translation_context(meta: dict[str, Any], payload: dict[str, Any]) 
             source = "experiment_marker_priority_intent"
         else:
             source = "none"
+    elif mode == CONTROLLER_VALUE_AWARE_EVICTION_MODE:
+        source = "controller_value_aware_eviction_priority"
     elif mode in CONTROLLER_PRIORITY_MODES:
         if priority is not None:
             source = (
@@ -667,9 +695,26 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
         "controller_demote_translation": meta.get("controller_demote_translation", ""),
         "controller_admission_decision": meta.get("controller_admission_decision", ""),
         "controller_admission_reason": meta.get("controller_admission_reason", ""),
+        "controller_memory_admission_decision": meta.get("controller_memory_admission_decision", ""),
+        "controller_memory_admission_reason": meta.get("controller_memory_admission_reason", ""),
+        "controller_memory_admission_predicted_replay_count": meta.get(
+            "controller_memory_admission_predicted_replay_count", ""
+        ),
+        "controller_memory_admission_predicted_replay_tokens": meta.get(
+            "controller_memory_admission_predicted_replay_tokens", ""
+        ),
+        "controller_memory_admission_reserved_headroom_tokens": meta.get(
+            "controller_memory_admission_reserved_headroom_tokens", ""
+        ),
+        "controller_memory_admission_candidate_tokens": meta.get("controller_memory_admission_candidate_tokens", ""),
+        "controller_memory_admission_delayed_for_ms": meta.get("controller_memory_admission_delayed_for_ms", ""),
         "controller_replay_rank": meta.get("controller_replay_rank", ""),
         "controller_urgent_replay_count": meta.get("controller_urgent_replay_count", ""),
         "controller_priority_ladder": meta.get("controller_priority_ladder", ""),
+        "controller_eviction_policy": meta.get("controller_eviction_policy", ""),
+        "controller_eviction_value_score": meta.get("controller_eviction_value_score", ""),
+        "controller_eviction_value_class": meta.get("controller_eviction_value_class", ""),
+        "controller_eviction_translation": meta.get("controller_eviction_translation", ""),
         "harness_native_cache_signal_seen": cache_chain["harness_native_cache_signal_seen"],
         "harness_native_cache_signal": cache_chain["harness_native_cache_signal"],
         "gateway_cache_translation": cache_chain["gateway_cache_translation"],
@@ -719,9 +764,26 @@ def build_sglang_payload(payload: dict[str, Any], meta: dict[str, Any], api_kind
             "controller_demote_translation": meta.get("controller_demote_translation", ""),
             "controller_admission_decision": meta.get("controller_admission_decision", ""),
             "controller_admission_reason": meta.get("controller_admission_reason", ""),
+            "controller_memory_admission_decision": meta.get("controller_memory_admission_decision", ""),
+            "controller_memory_admission_reason": meta.get("controller_memory_admission_reason", ""),
+            "controller_memory_admission_predicted_replay_count": meta.get(
+                "controller_memory_admission_predicted_replay_count", ""
+            ),
+            "controller_memory_admission_predicted_replay_tokens": meta.get(
+                "controller_memory_admission_predicted_replay_tokens", ""
+            ),
+            "controller_memory_admission_reserved_headroom_tokens": meta.get(
+                "controller_memory_admission_reserved_headroom_tokens", ""
+            ),
+            "controller_memory_admission_candidate_tokens": meta.get("controller_memory_admission_candidate_tokens", ""),
+            "controller_memory_admission_delayed_for_ms": meta.get("controller_memory_admission_delayed_for_ms", ""),
             "controller_replay_rank": meta.get("controller_replay_rank", ""),
             "controller_urgent_replay_count": meta.get("controller_urgent_replay_count", ""),
             "controller_priority_ladder": meta.get("controller_priority_ladder", ""),
+            "controller_eviction_policy": meta.get("controller_eviction_policy", ""),
+            "controller_eviction_value_score": meta.get("controller_eviction_value_score", ""),
+            "controller_eviction_value_class": meta.get("controller_eviction_value_class", ""),
+            "controller_eviction_translation": meta.get("controller_eviction_translation", ""),
             "parent_request_id": meta.get("parent_request_id", ""),
             "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
             "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),
@@ -1076,6 +1138,10 @@ def make_handler(target_base: str, trace_path: Path | None, log_path: Path | Non
                 "controller_replay_rank": meta.get("controller_replay_rank", ""),
                 "controller_urgent_replay_count": meta.get("controller_urgent_replay_count", ""),
                 "controller_priority_ladder": meta.get("controller_priority_ladder", ""),
+                "controller_eviction_policy": meta.get("controller_eviction_policy", ""),
+                "controller_eviction_value_score": meta.get("controller_eviction_value_score", ""),
+                "controller_eviction_value_class": meta.get("controller_eviction_value_class", ""),
+                "controller_eviction_translation": meta.get("controller_eviction_translation", ""),
                 "parent_request_id": meta.get("parent_request_id", ""),
                 "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
                 "warmup_prompt_tokens": meta.get("warmup_prompt_tokens", ""),

@@ -1,0 +1,2 @@
+{"event": "m27.workload_start", "ts_ns": 0}
+{"event": "m27.replay_blocker_snapshot", "request_id": "victim", "snapshot_event": "before_acquire", "snapshot_offset_ms": 1000, "snapshot_build_ms": 0.04, "pending_ahead_count": 1, "inflight_snapshot_count": 2, "pending_ahead_ids": ["later"], "inflight_snapshot_ids": ["early", "nodue"]}

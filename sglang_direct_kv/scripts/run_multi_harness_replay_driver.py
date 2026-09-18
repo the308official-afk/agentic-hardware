@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import heapq
 import hashlib
 import json
 import os
@@ -45,6 +46,8 @@ from agentic_kv.controller.modes import (
     CONTROLLER_ORACLE_SAFE_SJF_MODE,
     CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE,
     CONTROLLER_ORACLE_TIMELINE_MODE,
+    CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE,
+    CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE,
     CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE,
     CONTROLLER_PRIORITY_DEMOTE_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
@@ -57,6 +60,8 @@ from agentic_kv.controller.modes import (
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_SPECULATIVE_PRELOAD_MODE,
     CONTROLLER_TARGETED_KV_PREFETCH_MODE,
+    CONTROLLER_MEMORY_ADMISSION_MODE,
+    CONTROLLER_VALUE_AWARE_EVICTION_MODE,
     HARNESS_EMITTED_SIGNAL_MODE,
     HARNESS_NATIVE_CACHE_MODE,
     NAT_INFERRED_PRIORITY_MODE,
@@ -68,13 +73,16 @@ from agentic_kv.controller.modes import (
     controller_admission_lead_ms,
     controller_demote_restore_mode,
     controller_full_mode,
+    controller_memory_admission_mode,
     controller_mode,
     controller_observe_only_mode,
+    controller_proactive_kv_management_mode,
     controller_priority_demotion_admission_mode,
     controller_safe_sjf_degree,
     controller_scheduler_priority_mode,
     controller_speculative_preload_mode,
     controller_targeted_kv_prefetch_mode,
+    controller_value_aware_eviction_mode,
     storage_hicache_mode,
 )
 from agentic_kv.controller.runtime_calibration import OracleExactRuntimeTable, RuntimeCalibrator, oracle_runtime_key
@@ -95,7 +103,7 @@ from agentic_kv.controller.workload import (
 from run_real_prompt_controlled_replay import make_pressure_filler_prompt, make_shared_prefix, prompt_hash
 
 MARKER = "HARNESS_REPLAY_EXPERIMENT_JSON:"
-DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
+AUTHORIZED_DIRECT_LOAD_MECHANISM = "prepared_prefix_control"
 SUPPORTED_HARNESSES = (
     "hatcher",
     "codex",
@@ -155,6 +163,10 @@ def env_flag(name: str, default: bool = False) -> bool:
 def optional_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def env_truthy(name: str, default: bool = False) -> bool:
@@ -162,10 +174,6 @@ def env_truthy(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def make_agentic_workload_prompt(
@@ -263,6 +271,115 @@ def controller_targeted_prefetch_lead_ms(wait_ms: int) -> int:
         except ValueError:
             pass
     return controller_prepare_lead_ms(wait_ms)
+
+
+def controller_direct_load_estimate_ms(prompt_tokens: int) -> int:
+    fixed_ms = float(os.environ.get("CONTROLLER_DIRECT_LOAD_FIXED_MS", "1000") or "1000")
+    ms_per_token = float(os.environ.get("CONTROLLER_DIRECT_LOAD_MS_PER_TOKEN", "2.0") or "2.0")
+    multiplier = float(os.environ.get("CONTROLLER_DIRECT_LOAD_ESTIMATE_MULTIPLIER", "1.0") or "1.0")
+    base_estimate_ms = fixed_ms + (max(0, prompt_tokens) * ms_per_token)
+    return max(0, int(round(base_estimate_ms * max(0.0, multiplier))))
+
+
+def controller_direct_load_allowed_wait_classes() -> set[str]:
+    raw = os.environ.get("CONTROLLER_DIRECT_LOAD_ALLOWED_WAIT_CLASSES", "all")
+    classes = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if not classes or "all" in classes or "*" in classes:
+        return set()
+    return classes
+
+
+def controller_direct_load_contract() -> str:
+    if env_truthy("CONTROLLER_DIRECT_LOAD_REQUIRE_COMPLETION", default=False):
+        return "requires_direct_load_completion_before_replay"
+    return "best_effort_direct_load_before_replay"
+
+
+def controller_direct_load_safety_margin_ms() -> int:
+    return max(0, int(float(os.environ.get("CONTROLLER_DIRECT_LOAD_SAFETY_MARGIN_MS", "750") or "750")))
+
+
+def controller_direct_load_latest_finish_ms(replay_due_ms: float) -> float:
+    return replay_due_ms - controller_direct_load_safety_margin_ms()
+
+
+def controller_direct_load_mechanism() -> str:
+    mechanism = os.environ.get("CONTROLLER_DIRECT_LOAD_MECHANISM", AUTHORIZED_DIRECT_LOAD_MECHANISM).strip()
+    mechanism = mechanism or AUTHORIZED_DIRECT_LOAD_MECHANISM
+    if mechanism != AUTHORIZED_DIRECT_LOAD_MECHANISM:
+        raise ValueError(
+            "Unsupported controller direct-load mechanism "
+            f"{mechanism!r}. The legacy synthetic-request KV warmup path has been removed; "
+            f"use {AUTHORIZED_DIRECT_LOAD_MECHANISM!r}, which calls SGLang/HiCache prepare-prefix control."
+        )
+    return mechanism
+
+
+def controller_direct_load_window(
+    *,
+    tool_start_ms: float,
+    replay_due_ms: float,
+    prompt_tokens: int,
+    wait_class: str | None = None,
+) -> dict[str, Any]:
+    estimated_ms = controller_direct_load_estimate_ms(prompt_tokens)
+    safety_margin_ms = controller_direct_load_safety_margin_ms()
+    latest_finish_ms = replay_due_ms - safety_margin_ms
+    available_slack_ms = latest_finish_ms - tool_start_ms
+    allowed_wait_classes = controller_direct_load_allowed_wait_classes()
+    normalized_wait_class = (wait_class or "").strip().lower()
+    contract = controller_direct_load_contract()
+    if allowed_wait_classes and normalized_wait_class not in allowed_wait_classes:
+        return {
+            "admitted": False,
+            "reason": "skip_prefetch_wait_class_not_allowed_by_guarantee_contract",
+            "contract": contract,
+            "allowed_wait_classes": ",".join(sorted(allowed_wait_classes)),
+            "estimated_ms": estimated_ms,
+            "safety_margin_ms": safety_margin_ms,
+            "available_slack_ms": available_slack_ms,
+            "start_ms": tool_start_ms,
+            "latest_finish_ms": latest_finish_ms,
+        }
+    if latest_finish_ms <= tool_start_ms:
+        return {
+            "admitted": False,
+            "reason": "skip_prefetch_no_safe_window_before_replay",
+            "contract": contract,
+            "allowed_wait_classes": ",".join(sorted(allowed_wait_classes)) if allowed_wait_classes else "all",
+            "estimated_ms": estimated_ms,
+            "safety_margin_ms": safety_margin_ms,
+            "available_slack_ms": available_slack_ms,
+            "start_ms": tool_start_ms,
+            "latest_finish_ms": latest_finish_ms,
+        }
+    if estimated_ms > available_slack_ms:
+        return {
+            "admitted": False,
+            "reason": "skip_prefetch_not_enough_eta_slack",
+            "contract": contract,
+            "allowed_wait_classes": ",".join(sorted(allowed_wait_classes)) if allowed_wait_classes else "all",
+            "estimated_ms": estimated_ms,
+            "safety_margin_ms": safety_margin_ms,
+            "available_slack_ms": available_slack_ms,
+            "start_ms": tool_start_ms,
+            "latest_finish_ms": latest_finish_ms,
+        }
+    # Start at the latest safe point that still leaves the estimated load time
+    # plus the replay safety margin. Starting too early can observe the prefix
+    # before pressure evicts it, then falsely conclude no H2D work is needed.
+    start_ms = max(tool_start_ms, latest_finish_ms - estimated_ms)
+    return {
+        "admitted": True,
+        "reason": "admit_prefetch_latest_safe_start_before_replay",
+        "contract": contract,
+        "allowed_wait_classes": ",".join(sorted(allowed_wait_classes)) if allowed_wait_classes else "all",
+        "estimated_ms": estimated_ms,
+        "safety_margin_ms": safety_margin_ms,
+        "available_slack_ms": available_slack_ms,
+        "start_ms": start_ms,
+        "latest_finish_ms": latest_finish_ms,
+    }
 
 
 def deadline_fair_priority_for_due(replay_due_ms: float) -> int:
@@ -409,6 +526,98 @@ def attach_pre_harness_priority_intent(meta: dict[str, Any]) -> dict[str, Any]:
 def attach_harness_priority_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     meta = attach_pre_harness_priority_intent(meta)
     return attach_nat_inferred_priority_profile(meta)
+
+
+def _stable_percent(seed: str) -> int:
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % 100
+
+
+def _float_meta(meta: dict[str, Any], key: str, default: float) -> float:
+    try:
+        value = meta.get(key)
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def value_aware_eviction_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    if not controller_value_aware_eviction_mode(str(meta.get("mode") or "")):
+        return {}
+
+    session_id = str(meta.get("session_id") or "")
+    prefix_id = str(meta.get("prefix_id") or f"{session_id}:prefix")
+    phase = str(meta.get("phase") or "")
+    step = str(meta.get("tool_wait_step") or "0")
+    bucket = _stable_percent(f"{session_id}|{prefix_id}|{step}")
+    prompt_tokens = int(_float_meta(meta, "prompt_tokens", 0.0))
+
+    if bucket < 40:
+        value_class = "protected_high_value"
+        reuse_probability = _float_meta(meta, "reuse_probability", 0.95)
+        recompute_cost_tokens = int(_float_meta(meta, "recompute_cost_tokens", float(max(prompt_tokens, 2048))))
+        priority = int(float(meta.get("high_priority") or 100))
+        work_value = "critical_path"
+        criticality = "high"
+        cancelable = False
+    elif bucket < 75:
+        value_class = "normal_value"
+        reuse_probability = _float_meta(meta, "reuse_probability", 0.65)
+        recompute_cost_tokens = int(_float_meta(meta, "recompute_cost_tokens", float(max(prompt_tokens // 2, 1024))))
+        priority = int(float(os.environ.get("CONTROLLER_EVICTION_NORMAL_PRIORITY", "0") or "0"))
+        work_value = "normal"
+        criticality = "normal"
+        cancelable = False
+    else:
+        value_class = "evictable_low_value"
+        reuse_probability = _float_meta(
+            meta,
+            "reuse_probability",
+            float(os.environ.get("CONTROLLER_EVICTION_LOW_REUSE_PROBABILITY", "0.15") or "0.15"),
+        )
+        recompute_cost_tokens = int(
+            _float_meta(
+                meta,
+                "recompute_cost_tokens",
+                float(os.environ.get("CONTROLLER_EVICTION_LOW_RECOMPUTE_TOKENS", "256") or "256"),
+            )
+        )
+        priority = int(float(meta.get("low_priority") or -100))
+        work_value = "low_value_replay"
+        criticality = "low"
+        cancelable = True
+
+    urgency_factor = 1.0
+    try:
+        eta_ms = float(meta.get("expected_tool_return_ms") or meta.get("next_ready_eta_ms") or meta.get("tool_wait_ms") or 0)
+        if eta_ms > 0:
+            urgency_factor = max(0.25, min(4.0, 60_000.0 / eta_ms))
+    except (TypeError, ValueError):
+        urgency_factor = 1.0
+    value_score = int(round(reuse_probability * max(1, recompute_cost_tokens) * urgency_factor))
+    return {
+        "reuse_probability": reuse_probability,
+        "recompute_cost_tokens": recompute_cost_tokens,
+        "work_value": work_value,
+        "criticality": criticality,
+        "cancelable": cancelable,
+        "priority_label": "low"
+        if value_class == "evictable_low_value"
+        else "normal"
+        if value_class == "normal_value"
+        else "high",
+        "controller_sglang_priority": priority,
+        "controller_eviction_policy": "sglang_radix_priority_eviction",
+        "controller_eviction_value_class": value_class,
+        "controller_eviction_value_score": value_score,
+        "controller_eviction_bucket": bucket,
+        "controller_eviction_signal_source": "session_id,prefix_id,phase,expected_tool_return_ms,reuse_probability,recompute_cost_tokens,deadline_after_ready_ms",
+        "controller_eviction_translation": f"sglang.priority={priority};radix_eviction_policy=priority",
+        "controller_eviction_scope": "all_replay_capable_requests",
+        "controller_eviction_phase_seen": phase,
+    }
 
 
 def controller_event_from_meta(
@@ -1277,6 +1486,13 @@ async def run_filler(
     trace_controller_completion_linkage: bool = False,
     submit_request: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     deadline_fair_priority: Callable[[dict[str, Any], float, str, str], dict[str, Any]] | None = None,
+    predictive_deadline_priority: Callable[[dict[str, Any], float, str, str], dict[str, Any]] | None = None,
+    targeted_kv_prefetch: Callable[
+        [dict[str, Any], str, str, float, float, ToolWaitSpec, int, str],
+        asyncio.Task[None] | None,
+    ]
+    | None = None,
+    memory_admission_register: Callable[[dict[str, Any], float, int, str, ToolWaitSpec, str], None] | None = None,
 ) -> None:
     def offset_ms() -> float:
         if workload_start is None:
@@ -1553,9 +1769,10 @@ async def run_filler(
         initial_workload_meta = workload_meta(initial_shape, agentic_workload_profile)
     else:
         prompt = make_pressure_filler_prompt(filler_session, tokens)
-    meta = {
-        **current_meta_base(),
-        "session_id": filler_session,
+        meta = {
+            **current_meta_base(),
+            "session_id": filler_session,
+        "prefix_id": f"{filler_session}:prefix",
         "phase": "pressure_filler_initial" if filler_replay_deadlines else "pressure_filler",
         "label": f"{filler_session}_initial" if filler_replay_deadlines else f"{filler_session}_request",
         "task_index": pair.task_index,
@@ -1563,11 +1780,12 @@ async def run_filler(
         "prompt_tokens": estimate_tokens(prompt),
         "priority_label": "low",
         "max_tokens": initial_max_tokens,
-        "tool_wait_step": 0,
-        "task_replay_steps": total_steps,
-        **initial_workload_meta,
-    }
-    meta["estimated_runtime_ms"] = estimate_request_runtime_ms(int(meta["prompt_tokens"]), int(meta["max_tokens"]))
+            "tool_wait_step": 0,
+            "task_replay_steps": total_steps,
+            **initial_workload_meta,
+        }
+        meta.update(value_aware_eviction_metadata(meta))
+        meta["estimated_runtime_ms"] = estimate_request_runtime_ms(int(meta["prompt_tokens"]), int(meta["max_tokens"]))
     meta["oracle_runtime_key"] = oracle_runtime_key(meta)
     meta = attach_pre_harness_priority_intent(meta)
     write_background_reshape_signal(meta, request_id=str(meta["label"]), stage="initial")
@@ -1599,6 +1817,49 @@ async def run_filler(
         replay_label = replay_label_for(filler_session, spec.step_index, total_steps)
         tool_start_ms = offset_ms()
         replay_due_ms = tool_start_ms + wait_ms
+        predictive_replay_fields: dict[str, Any] = {}
+        prefetch_task: asyncio.Task[None] | None = None
+        tool_wait_meta = {
+            **current_meta_base(),
+            "session_id": filler_session,
+            "prefix_id": f"{filler_session}:prefix",
+            "phase": "tool_wait",
+            "label": f"{filler_session}_tool_wait_{spec.step_index:02d}",
+            "task_index": pair.task_index,
+            "tool_wait_ms": wait_ms,
+            "tool_wait_step": spec.step_index,
+            "task_replay_steps": total_steps,
+            "tool_wait_class": spec.wait_class,
+            "reuse_probability": 0.98,
+            "recompute_cost_tokens": estimate_tokens(current_prompt),
+        }
+        if memory_admission_register is not None:
+            memory_admission_register(
+                tool_wait_meta,
+                replay_due_ms,
+                estimate_tokens(current_prompt),
+                "filler",
+                spec,
+                replay_label,
+            )
+        if predictive_deadline_priority is not None:
+            predictive_replay_fields = predictive_deadline_priority(
+                {**tool_wait_meta, "label": replay_label},
+                replay_due_ms,
+                "filler",
+                "tool_wait",
+            )
+        if targeted_kv_prefetch is not None:
+            prefetch_task = targeted_kv_prefetch(
+                tool_wait_meta,
+                current_prompt,
+                replay_label,
+                tool_start_ms,
+                replay_due_ms,
+                spec,
+                total_steps,
+                "filler",
+            )
         if trace is not None:
             write_trace(
                 trace,
@@ -1683,6 +1944,7 @@ async def run_filler(
         replay_meta = {
             **current_meta_base(),
             "session_id": filler_session,
+            "prefix_id": f"{filler_session}:prefix",
             "session_generation": spec.step_index + 1,
             "phase": "pressure_filler",
             "label": replay_label,
@@ -1698,6 +1960,7 @@ async def run_filler(
             "tool_wait_class": spec.wait_class,
             **replay_workload_meta,
         }
+        replay_meta.update(value_aware_eviction_metadata(replay_meta))
         replay_meta["estimated_runtime_ms"] = estimate_request_runtime_ms(
             int(replay_meta["prompt_tokens"]),
             int(replay_meta["max_tokens"]),
@@ -1705,6 +1968,8 @@ async def run_filler(
         replay_meta["oracle_runtime_key"] = oracle_runtime_key(replay_meta)
         if deadline_fair_priority is not None:
             replay_meta.update(deadline_fair_priority(replay_meta, replay_due_ms, "filler", "replay"))
+        if predictive_replay_fields:
+            replay_meta.update(predictive_replay_fields)
         replay_meta = attach_pre_harness_priority_intent(replay_meta)
         write_background_reshape_signal(replay_meta, request_id=replay_label, stage="replay")
         admission_result = await wait_for_admission_if_needed(replay_meta, request_id=replay_label, stage="replay")
@@ -1726,6 +1991,8 @@ async def run_filler(
             )
             if safe_filler_scheduler is not None and admission_result and admission_result.get("admitted_by_safe_sjf"):
                 await safe_filler_scheduler.complete(replay_label)
+        if prefetch_task is not None:
+            await asyncio.gather(prefetch_task, return_exceptions=True)
         if trace is not None:
             write_trace(
                 trace,
@@ -1770,7 +2037,10 @@ async def main_async() -> None:
     parser.add_argument(
         "--tool-wait-profile-spec",
         default=os.environ.get("TOOL_WAIT_PROFILE_SPEC", ""),
-        help="Optional custom comma list: class:weight:wait_ms,class:weight:wait_ms.",
+        help=(
+            "Optional custom comma list: class:weight:wait_ms,class:weight:wait_ms. "
+            "Ranges are supported, e.g. very_short:20:100-500,short:35:1000-5000."
+        ),
     )
     parser.add_argument(
         "--tool-wait-seed",
@@ -1842,10 +2112,29 @@ async def main_async() -> None:
         default=os.environ.get("TRACE_CONTROLLER_COMPLETION_LINKAGE", "0"),
         help="Set to 1 to emit compact completion rows linking SJF admit decisions to actual filler finish times.",
     )
+    parser.add_argument(
+        "--trace-replay-blockers",
+        default=os.environ.get("TRACE_REPLAY_BLOCKERS", "0"),
+        help="Set to 1 to capture bounded local pending/in-flight request-id snapshots for replay deep dives.",
+    )
+    parser.add_argument(
+        "--trace-replay-blockers-max-ids",
+        type=int,
+        default=int(os.environ.get("TRACE_REPLAY_BLOCKERS_MAX_IDS", "16") or "16"),
+        help="Maximum pending or in-flight request IDs to include in each replay blocker snapshot.",
+    )
+    parser.add_argument(
+        "--trace-replay-blockers-events",
+        default=os.environ.get("TRACE_REPLAY_BLOCKERS_EVENTS", "before_acquire,submit"),
+        help="Comma-separated blocker snapshot points: before_acquire,submit.",
+    )
     args = parser.parse_args()
     os.environ["TRACE_PROFILE"] = str(args.trace_profile)
     os.environ["TRACE_CONTROLLER_DECISIONS"] = str(args.trace_controller_decisions)
     os.environ["TRACE_CONTROLLER_COMPLETION_LINKAGE"] = str(args.trace_controller_completion_linkage)
+    os.environ["TRACE_REPLAY_BLOCKERS"] = str(args.trace_replay_blockers)
+    os.environ["TRACE_REPLAY_BLOCKERS_MAX_IDS"] = str(args.trace_replay_blockers_max_ids)
+    os.environ["TRACE_REPLAY_BLOCKERS_EVENTS"] = str(args.trace_replay_blockers_events)
     if args.task_replay_steps < 1:
         raise SystemExit("--task-replay-steps must be at least 1")
     if args.filler_backlog_target < 0:
@@ -1920,7 +2209,6 @@ async def main_async() -> None:
         filler_backlog_total = args.filler_sessions
     configured_background_requests = filler_backlog_target if args.filler_backlog_mode == "constant" else args.filler_sessions
     rows: list[dict[str, Any]] = []
-    sem = asyncio.Semaphore(args.concurrency)
     admission_lock = asyncio.Lock()
     admitted_warmups = 0
     admission_max_warmups = int(os.environ.get("CONTROLLER_ADMISSION_MAX_WARMUPS_PER_CASE", "1"))
@@ -1947,12 +2235,15 @@ async def main_async() -> None:
     controller_demotion_state: dict[str, Any] = {"active": False, "meta": {}, "owners": set()}
     controller_enabled = controller_mode(args.mode)
     controller_active_deadline_fair = args.mode == CONTROLLER_DEADLINE_FAIR_MODE
+    controller_active_predictive_deadline_queue = args.mode == CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE
     controller_active_priority = controller_scheduler_priority_mode(args.mode)
     controller_active_preload = controller_speculative_preload_mode(args.mode)
     controller_active_targeted_prefetch = controller_targeted_kv_prefetch_mode(args.mode)
+    controller_active_proactive_kv_management = controller_proactive_kv_management_mode(args.mode)
     controller_active_demote_restore = controller_demote_restore_mode(args.mode)
     controller_active_priority_demotion_admission = controller_priority_demotion_admission_mode(args.mode)
     controller_active_admission = controller_admission_control_mode(args.mode)
+    controller_active_memory_admission = controller_memory_admission_mode(args.mode)
     controller_active_full = controller_full_mode(args.mode)
     admission_aggressiveness = controller_admission_aggressiveness(args.mode)
     max_target_tool_wait_ms = max(
@@ -1969,6 +2260,7 @@ async def main_async() -> None:
                 or controller_active_demote_restore
                 or controller_active_priority_demotion_admission
                 or controller_active_admission
+                or controller_active_memory_admission
                 or controller_active_full
                 or controller_active_deadline_fair
             ),
@@ -2022,7 +2314,7 @@ async def main_async() -> None:
                 kv_release=False,
                 live_metrics=True,
                 observe_only=False,
-                backend_name=CONTROLLER_TARGETED_KV_PREFETCH_MODE,
+                backend_name=args.mode,
                 backend_version=(
                     "direct_hook_available=1"
                     if os.environ.get("AGENTIC_KV_TARGETED_PREFETCH_HOOK", "").lower() in {"1", "true", "yes"}
@@ -2043,6 +2335,19 @@ async def main_async() -> None:
                 backend_name=args.mode,
             )
         )
+    elif controller_active_memory_admission:
+        controller_backend = GatewayAdmissionControlBackendAdapter(
+            BackendCapabilities(
+                priority_queue=False,
+                background_prefill_budget=False,
+                kv_demote=False,
+                kv_prefetch=False,
+                kv_release=False,
+                live_metrics=True,
+                observe_only=False,
+                backend_name=args.mode,
+            )
+        )
     elif controller_active_admission:
         controller_backend = GatewayAdmissionControlBackendAdapter(
             BackendCapabilities(
@@ -2053,7 +2358,7 @@ async def main_async() -> None:
                 kv_release=True,
                 live_metrics=True,
                 observe_only=False,
-                backend_name=CONTROLLER_ADMISSION_CONTROL_MODE,
+                backend_name=args.mode,
             )
         )
     elif controller_active_full:
@@ -2128,6 +2433,182 @@ async def main_async() -> None:
         delay = workload_start + target_ms / 1000.0 - time.perf_counter()
         if delay > 0:
             await asyncio.sleep(delay)
+
+    memory_admission_state: dict[str, Any] = {
+        "predicted_replays": [],
+        "decision_seq": 0,
+        "delayed_candidates": 0,
+        "admitted_candidates": 0,
+    }
+
+    def memory_admission_lookahead_ms() -> float:
+        return float(os.environ.get("CONTROLLER_MEMORY_ADMISSION_LOOKAHEAD_MS", "15000") or "15000")
+
+    def memory_admission_release_grace_ms() -> float:
+        return float(os.environ.get("CONTROLLER_MEMORY_ADMISSION_RELEASE_GRACE_MS", "50") or "50")
+
+    def memory_admission_min_candidate_tokens() -> int:
+        return int(float(os.environ.get("CONTROLLER_MEMORY_ADMISSION_MIN_CANDIDATE_TOKENS", "1024") or "1024"))
+
+    def memory_admission_max_delay_ms() -> float:
+        return float(os.environ.get("CONTROLLER_MEMORY_ADMISSION_MAX_DELAY_MS", "30000") or "30000")
+
+    def memory_admission_token_budget() -> int:
+        configured = os.environ.get("CONTROLLER_MEMORY_ADMISSION_TOKEN_BUDGET", "").strip()
+        if configured:
+            return int(float(configured))
+        return int(float(os.environ.get("MAX_TOTAL_TOKENS", "12288") or "12288"))
+
+    def memory_admission_reserve_fraction() -> float:
+        return max(0.0, float(os.environ.get("CONTROLLER_MEMORY_ADMISSION_RESERVE_FRACTION", "0.65") or "0.65"))
+
+    def register_memory_admission_replay(
+        meta: dict[str, Any],
+        replay_due_ms: float,
+        prompt_tokens: int,
+        request_group: str,
+        wait_spec: ToolWaitSpec,
+        replay_label: str,
+    ) -> None:
+        if not controller_active_memory_admission:
+            return
+        entry = {
+            "session_id": str(meta.get("session_id") or ""),
+            "prefix_id": str(meta.get("prefix_id") or f"{meta.get('session_id', '')}:prefix"),
+            "request_group": request_group,
+            "expected_replay_request_id": replay_label,
+            "replay_due_offset_ms": float(replay_due_ms),
+            "expected_tool_return_ms": int(wait_spec.wait_ms),
+            "next_ready_eta_ms": int(wait_spec.wait_ms),
+            "eta_uncertainty_ms": max(1, int(wait_spec.wait_ms) // 4),
+            "deadline_after_ready_ms": int(wait_spec.wait_ms),
+            "reuse_probability": float(meta.get("reuse_probability") or 0.98),
+            "recompute_cost_tokens": int(meta.get("recompute_cost_tokens") or prompt_tokens),
+            "tool_wait_step": wait_spec.step_index,
+            "tool_wait_class": wait_spec.wait_class,
+        }
+        memory_admission_state["predicted_replays"].append(entry)
+        write_trace(
+            args.trace,
+            {
+                "event": "m27.controller_memory_admission.replay_registered",
+                "mode": args.mode,
+                "harness": args.harness,
+                "pressure_level": args.pressure_level,
+                **entry,
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+
+    def memory_admission_candidate(meta: dict[str, Any]) -> bool:
+        if not controller_active_memory_admission:
+            return False
+        phase = str(meta.get("phase") or "")
+        if phase in {"replay", "hint_prefetch", "speculative_prefill", "tool_wait"}:
+            return False
+        if phase.startswith("pressure_filler") and meta.get("deadline_offset_ms") not in (None, ""):
+            return False
+        return phase in {"initial_turn", "pressure_filler_initial", "pressure_filler", "background"}
+
+    async def apply_memory_admission_if_needed(meta: dict[str, Any]) -> dict[str, Any]:
+        if not memory_admission_candidate(meta):
+            return meta
+        now = offset_ms()
+        lookahead_ms = memory_admission_lookahead_ms()
+        release_grace_ms = memory_admission_release_grace_ms()
+        token_budget = memory_admission_token_budget()
+        reserve_fraction = memory_admission_reserve_fraction()
+        min_candidate_tokens = memory_admission_min_candidate_tokens()
+        max_delay_ms = memory_admission_max_delay_ms()
+        active_replays = [
+            entry
+            for entry in memory_admission_state["predicted_replays"]
+            if now <= float(entry["replay_due_offset_ms"]) <= now + lookahead_ms
+        ]
+        predicted_replay_tokens = int(
+            round(
+                sum(
+                    float(entry.get("reuse_probability") or 0.0)
+                    * max(1, int(entry.get("recompute_cost_tokens") or 0))
+                    for entry in active_replays
+                )
+            )
+        )
+        candidate_tokens = int(meta.get("prompt_tokens") or 0)
+        reserve_tokens = int(round(token_budget * reserve_fraction))
+        earliest_due_ms = min(
+            [float(entry["replay_due_offset_ms"]) for entry in active_replays],
+            default=0.0,
+        )
+        projected_tokens = predicted_replay_tokens + candidate_tokens
+        risky = bool(
+            active_replays
+            and candidate_tokens >= min_candidate_tokens
+            and projected_tokens >= reserve_tokens
+        )
+        memory_admission_state["decision_seq"] += 1
+        decision_seq = int(memory_admission_state["decision_seq"])
+        delay_until_ms = min(earliest_due_ms + release_grace_ms, now + max_delay_ms) if risky else now
+        delay_ms = max(0.0, delay_until_ms - now)
+        decision = "delay" if delay_ms > 1 else "admit"
+        reason = (
+            "candidate_would_consume_reserved_near_future_replay_headroom"
+            if decision == "delay"
+            else "safe_current_capacity_after_near_future_replay_reserve"
+        )
+        base_event = {
+            "event": "m27.controller_memory_admission.decision",
+            "mode": args.mode,
+            "harness": args.harness,
+            "pressure_level": args.pressure_level,
+            "decision_seq": decision_seq,
+            "decision": decision,
+            "reason": reason,
+            "session_id": meta.get("session_id", ""),
+            "prefix_id": meta.get("prefix_id", ""),
+            "phase": meta.get("phase", ""),
+            "request_id": meta.get("label", ""),
+            "label": meta.get("label", ""),
+            "candidate_tokens": candidate_tokens,
+            "predicted_replay_count": len(active_replays),
+            "predicted_replay_tokens": predicted_replay_tokens,
+            "token_budget": token_budget,
+            "reserve_fraction": reserve_fraction,
+            "reserved_headroom_tokens": reserve_tokens,
+            "projected_candidate_plus_replay_tokens": projected_tokens,
+            "lookahead_ms": lookahead_ms,
+            "earliest_replay_due_offset_ms": round(earliest_due_ms, 3) if earliest_due_ms else "",
+            "planned_delay_ms": round(delay_ms, 3),
+            "offset_ms": round(now, 3),
+        }
+        write_trace(args.trace, base_event)
+        out = {
+            **meta,
+            "controller_memory_admission_decision": decision,
+            "controller_memory_admission_reason": reason,
+            "controller_memory_admission_predicted_replay_count": len(active_replays),
+            "controller_memory_admission_predicted_replay_tokens": predicted_replay_tokens,
+            "controller_memory_admission_reserved_headroom_tokens": reserve_tokens,
+            "controller_memory_admission_candidate_tokens": candidate_tokens,
+        }
+        if decision == "delay":
+            memory_admission_state["delayed_candidates"] += 1
+            await sleep_until(delay_until_ms)
+            released_at_ms = offset_ms()
+            delayed_for_ms = released_at_ms - now
+            out["controller_memory_admission_delayed_for_ms"] = round(delayed_for_ms, 3)
+            write_trace(
+                args.trace,
+                {
+                    **base_event,
+                    "event": "m27.controller_memory_admission.released",
+                    "actual_delay_ms": round(delayed_for_ms, 3),
+                    "release_offset_ms": round(released_at_ms, 3),
+                },
+            )
+        else:
+            memory_admission_state["admitted_candidates"] += 1
+        return out
 
     def record_controller_event(
         event_id: str,
@@ -2223,25 +2704,44 @@ async def main_async() -> None:
             require_acted=True,
         )
 
-    def assign_deadline_fair_priority(
+    def assign_due_time_priority(
         meta: dict[str, Any],
         replay_due_ms: float,
         request_group: str,
         stage: str,
+        *,
+        predictive: bool = False,
     ) -> dict[str, Any]:
         priority = deadline_fair_priority_for_due(replay_due_ms)
+        policy_label = "predictive_deadline_queue" if predictive else "deadline_fair"
+        event_name = (
+            "m27.controller_predictive_deadline_queue.priority_assigned"
+            if predictive
+            else "m27.controller_deadline_fair.priority_assigned"
+        )
+        translation_source = (
+            "controller_predictive_deadline_queue_tool_wait_eta"
+            if predictive
+            else "controller_deadline_fair_due_time"
+        )
+        reason = (
+            "predictive_deadline_queue_orders_replay_requests_by_due_time_from_tool_wait_eta"
+            if predictive
+            else "deadline_fair_mode_orders_all_replays_by_due_time_without_semantic_high_priority"
+        )
         fields = {
-            "priority_label": "deadline_fair",
-            "controller_deadline_fair": True,
+            "priority_label": policy_label,
+            "controller_deadline_fair": not predictive,
+            "controller_predictive_deadline_queue": predictive,
             "controller_sglang_priority": priority,
             "controller_deadline_due_offset_ms": round(replay_due_ms, 3),
-            "controller_priority_translation": f"controller.deadline_fair_due_priority={priority}",
-            "controller_priority_translation_source": "controller_deadline_fair_due_time",
+            "controller_priority_translation": f"controller.{policy_label}.due_priority={priority}",
+            "controller_priority_translation_source": translation_source,
         }
         write_trace(
             args.trace,
             {
-                "event": "m27.controller_deadline_fair.priority_assigned",
+                "event": event_name,
                 "session_id": meta.get("session_id", ""),
                 "mode": args.mode,
                 "harness": args.harness,
@@ -2260,11 +2760,27 @@ async def main_async() -> None:
                 "assigned_sglang_priority": priority,
                 "bucket_ms": int(os.environ.get("CONTROLLER_DEADLINE_FAIR_BUCKET_MS", "10") or "10"),
                 "base_priority": int(os.environ.get("CONTROLLER_DEADLINE_FAIR_BASE_PRIORITY", "100000") or "100000"),
-                "reason": "deadline_fair_mode_orders_all_replays_by_due_time_without_semantic_high_priority",
+                "reason": reason,
                 "offset_ms": round(offset_ms(), 3),
             },
         )
         return fields
+
+    def assign_deadline_fair_priority(
+        meta: dict[str, Any],
+        replay_due_ms: float,
+        request_group: str,
+        stage: str,
+    ) -> dict[str, Any]:
+        return assign_due_time_priority(meta, replay_due_ms, request_group, stage, predictive=False)
+
+    def assign_predictive_deadline_priority(
+        meta: dict[str, Any],
+        replay_due_ms: float,
+        request_group: str,
+        stage: str,
+    ) -> dict[str, Any]:
+        return assign_due_time_priority(meta, replay_due_ms, request_group, stage, predictive=True)
 
     async def controller_admission_decision(
         pair: HarnessPair,
@@ -2380,8 +2896,14 @@ async def main_async() -> None:
             "trace_controller_decisions": args.trace_controller_decisions,
             "trace_controller_completion_linkage": args.trace_controller_completion_linkage,
             "tool_wait_distribution": [
-                {"class": name, "weight": weight, "wait_ms": wait_ms}
-                for name, weight, wait_ms in tool_wait_distribution(
+                {
+                    "class": name,
+                    "weight": weight,
+                    "wait_min_ms": wait_min_ms,
+                    "wait_max_ms": wait_max_ms,
+                    "wait_ms": wait_min_ms if wait_min_ms == wait_max_ms else "",
+                }
+                for name, weight, wait_min_ms, wait_max_ms in tool_wait_distribution(
                     args.tool_wait_profile,
                     args.tool_wait_ms,
                     args.tool_wait_profile_spec,
@@ -2416,96 +2938,441 @@ async def main_async() -> None:
             "controller_safe_sjf_idle_override": safe_sjf_idle_override
             if args.mode in CONTROLLER_ORACLE_SAFE_SJF_MODES
             else "",
+            "controller_memory_admission_lookahead_ms": memory_admission_lookahead_ms()
+            if controller_active_memory_admission
+            else "",
+            "controller_memory_admission_release_grace_ms": memory_admission_release_grace_ms()
+            if controller_active_memory_admission
+            else "",
+            "controller_memory_admission_token_budget": memory_admission_token_budget()
+            if controller_active_memory_admission
+            else "",
+            "controller_memory_admission_reserve_fraction": memory_admission_reserve_fraction()
+            if controller_active_memory_admission
+            else "",
+            "controller_memory_admission_min_candidate_tokens": memory_admission_min_candidate_tokens()
+            if controller_active_memory_admission
+            else "",
         },
     )
 
-    client_queue_state = {"pending": 0, "in_flight": 0, "submit_seq": 0}
-    client_queue_lock = asyncio.Lock()
+    class SubmissionPriorityGate:
+        def __init__(
+            self,
+            capacity: int,
+            *,
+            predictive_enabled: bool,
+            trace_blockers: bool,
+            blocker_max_ids: int,
+            blocker_events: set[str],
+        ) -> None:
+            self.capacity = max(1, capacity)
+            self.predictive_enabled = predictive_enabled
+            self.trace_blockers = trace_blockers
+            self.blocker_max_ids = max(0, blocker_max_ids)
+            self.blocker_events = blocker_events
+            self.pending = 0
+            self.in_flight = 0
+            self.submit_seq = 0
+            self.wait_seq = 0
+            self.condition = asyncio.Condition()
+            self.heap: list[list[Any]] = []
+            self.in_flight_entries: dict[str, dict[str, Any]] = {}
 
-    async def bounded_request(prompt: str, meta: dict[str, Any]) -> None:
-        queued_at_ms = offset_ms()
-        async with client_queue_lock:
-            client_queue_state["pending"] += 1
-            pending_before_acquire = client_queue_state["pending"]
-            in_flight_before_acquire = client_queue_state["in_flight"]
-        async with sem:
-            acquired_at_ms = offset_ms()
-            async with client_queue_lock:
-                client_queue_state["pending"] = max(0, client_queue_state["pending"] - 1)
-                client_queue_state["in_flight"] += 1
-                client_queue_state["submit_seq"] += 1
-                submit_seq = client_queue_state["submit_seq"]
-                pending_at_submit = client_queue_state["pending"]
-                in_flight_at_submit = client_queue_state["in_flight"]
-            meta = {
-                **meta,
-                "client_submit_seq": submit_seq,
-                "client_sem_capacity": args.concurrency,
+        def priority_for(self, meta: dict[str, Any]) -> tuple[tuple[float, int], str, str]:
+            if self.predictive_enabled and meta.get("controller_predictive_deadline_queue"):
+                try:
+                    priority = int(float(meta.get("controller_sglang_priority")))
+                except (TypeError, ValueError):
+                    priority = 0
+                due_offset = optional_float(meta.get("deadline_offset_ms"))
+                due_component = int(due_offset * 1000) if due_offset is not None else 0
+                return (-float(priority), due_component), "predictive_deadline_queue", str(priority)
+            return (0.0, 0), "fifo", ""
+
+        def prune_cancelled(self) -> None:
+            while self.heap and not self.heap[0][3]:
+                heapq.heappop(self.heap)
+
+        @staticmethod
+        def is_replay_like(meta: dict[str, Any]) -> bool:
+            phase = str(meta.get("phase") or "")
+            label = str(meta.get("label") or "")
+            return (
+                phase in {"replay", "pressure_filler"}
+                or "_replay_" in label
+                or meta.get("deadline_offset_ms") not in (None, "")
+            )
+
+        @staticmethod
+        def compact_entry(meta: dict[str, Any], *, queued_at_ms: float, sort_key: Any) -> dict[str, Any]:
+            return {
+                "request_id": meta.get("label", ""),
+                "session_id": meta.get("session_id", ""),
+                "phase": meta.get("phase", ""),
+                "request_group": meta.get("request_group", ""),
+                "tool_wait_step": meta.get("tool_wait_step", ""),
+                "tool_wait_class": meta.get("tool_wait_class", ""),
+                "tool_wait_ms": meta.get("tool_wait_ms", ""),
+                "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
+                "controller_sglang_priority": meta.get("controller_sglang_priority", ""),
+                "controller_replay_rank": meta.get("controller_replay_rank", ""),
+                "queued_offset_ms": round(queued_at_ms, 3),
+                "submission_sort_key": str(sort_key),
+            }
+
+        def blocker_snapshot(
+            self,
+            *,
+            snapshot_event: str,
+            entry: list[Any],
+            meta: dict[str, Any],
+            queued_at_ms: float,
+            pending_before_acquire: int,
+            in_flight_before_acquire: int,
+        ) -> dict[str, Any] | None:
+            if not self.trace_blockers or snapshot_event not in self.blocker_events or not self.is_replay_like(meta):
+                return None
+            started = time.perf_counter()
+            request_id = str(meta.get("label") or "")
+            active_pending = [item for item in self.heap if item[3]]
+            active_pending.sort(key=lambda item: (item[0], item[1]))
+            try:
+                current_index = active_pending.index(entry)
+            except ValueError:
+                current_index = 0
+            pending_ahead = active_pending[:current_index]
+            pending_all_except_self = [item for item in active_pending if item is not entry]
+            in_flight_entries = sorted(
+                self.in_flight_entries.values(),
+                key=lambda item: (optional_float(item.get("acquired_offset_ms")) or 0.0, str(item.get("request_id") or "")),
+            )
+
+            def ids_from_pending(items: list[list[Any]]) -> list[str]:
+                return [str(item[4].get("request_id") or item[2] or "") for item in items[: self.blocker_max_ids]]
+
+            def ids_from_inflight(items: list[dict[str, Any]]) -> list[str]:
+                return [str(item.get("request_id") or "") for item in items[: self.blocker_max_ids]]
+
+            pending_ahead_ids = ids_from_pending(pending_ahead)
+            pending_ids = ids_from_pending(pending_all_except_self)
+            in_flight_ids = ids_from_inflight(in_flight_entries)
+            snapshot_build_ms = (time.perf_counter() - started) * 1000.0
+            return {
+                "event": "m27.replay_blocker_snapshot",
+                "snapshot_event": snapshot_event,
+                "snapshot_offset_ms": round(offset_ms(), 3),
+                "snapshot_build_ms": round(snapshot_build_ms, 3),
+                "trace_replay_blockers_max_ids": self.blocker_max_ids,
+                "request_id": request_id,
+                "session_id": meta.get("session_id", ""),
+                "phase": meta.get("phase", ""),
+                "request_group": meta.get("request_group", ""),
+                "tool_wait_step": meta.get("tool_wait_step", ""),
+                "tool_wait_class": meta.get("tool_wait_class", ""),
+                "tool_wait_ms": meta.get("tool_wait_ms", ""),
+                "deadline_offset_ms": meta.get("deadline_offset_ms", ""),
+                "controller_sglang_priority": meta.get("controller_sglang_priority", ""),
+                "controller_replay_rank": meta.get("controller_replay_rank", ""),
                 "client_pending_before_acquire": pending_before_acquire,
                 "client_inflight_before_acquire": in_flight_before_acquire,
-                "client_pending_at_submit": pending_at_submit,
-                "client_inflight_at_submit": in_flight_at_submit,
-                "client_queue_wait_ms": round(acquired_at_ms - queued_at_ms, 3),
-                "harness_controller_signal": build_harness_controller_signal(meta),
+                "pending_ahead_count": len(pending_ahead),
+                "pending_snapshot_count": len(pending_all_except_self),
+                "inflight_snapshot_count": len(in_flight_entries),
+                "pending_ahead_ids": pending_ahead_ids,
+                "pending_snapshot_ids": pending_ids,
+                "inflight_snapshot_ids": in_flight_ids,
+                "pending_ahead_truncated": len(pending_ahead) > len(pending_ahead_ids),
+                "pending_snapshot_truncated": len(pending_all_except_self) > len(pending_ids),
+                "inflight_snapshot_truncated": len(in_flight_entries) > len(in_flight_ids),
+                "queued_offset_ms": round(queued_at_ms, 3),
             }
-            try:
-                write_trace(
-                    args.trace,
-                    {
-                        "event": "m27.harness.request_input",
-                        "session_id": meta.get("session_id", ""),
-                        "phase": meta.get("phase", ""),
-                        "mode": meta.get("mode", ""),
-                        "harness": meta.get("harness", args.harness),
-                        "label": meta.get("label", ""),
-                        "request_id": meta.get("label", ""),
-                        "prompt_hash": meta.get("prompt_hash", ""),
-                        "tool_wait_step": meta.get("tool_wait_step", ""),
-                        "task_replay_steps": meta.get("task_replay_steps", ""),
-                        "tool_wait_profile": meta.get("tool_wait_profile", ""),
-                        "tool_wait_class": meta.get("tool_wait_class", ""),
-                        "harness_controller_signal": meta.get("harness_controller_signal", {}),
-                        "offset_ms": round(offset_ms(), 3),
-                        "priority_intent": meta.get("priority_intent", ""),
-                        "workflow_node": meta.get("workflow_node", ""),
-                        "workflow_node_goal": meta.get("workflow_node_goal", ""),
-                        "inference_source": meta.get("inference_source", ""),
-                        "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
-                        "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
-                        "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
-                        "client_submit_seq": meta.get("client_submit_seq", ""),
-                        "client_sem_capacity": meta.get("client_sem_capacity", ""),
-                        "client_pending_before_acquire": meta.get("client_pending_before_acquire", ""),
-                        "client_inflight_before_acquire": meta.get("client_inflight_before_acquire", ""),
-                        "client_pending_at_submit": meta.get("client_pending_at_submit", ""),
-                        "client_inflight_at_submit": meta.get("client_inflight_at_submit", ""),
-                        "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
-                    },
-                )
-                await run_harness_request(args.harness, args.gateway_base, args.model, prompt, meta, args.log_dir)
-                write_trace(
-                    args.trace,
-                    {
-                        "event": "m27.harness.request_done",
-                        "session_id": meta.get("session_id", ""),
-                        "phase": meta.get("phase", ""),
-                        "mode": meta.get("mode", ""),
-                        "harness": meta.get("harness", args.harness),
-                        "label": meta.get("label", ""),
-                        "request_id": meta.get("label", ""),
-                        "tool_wait_step": meta.get("tool_wait_step", ""),
-                        "task_replay_steps": meta.get("task_replay_steps", ""),
-                        "tool_wait_profile": meta.get("tool_wait_profile", ""),
-                        "tool_wait_class": meta.get("tool_wait_class", ""),
-                        "harness_controller_signal": meta.get("harness_controller_signal", {}),
-                        "client_submit_seq": meta.get("client_submit_seq", ""),
-                        "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
-                        "offset_ms": round(offset_ms(), 3),
-                    },
-                )
-            finally:
-                async with client_queue_lock:
-                    client_queue_state["in_flight"] = max(0, client_queue_state["in_flight"] - 1)
+
+        async def acquire(self, meta: dict[str, Any]) -> dict[str, Any]:
+            queued_at_ms = offset_ms()
+            sort_key, policy, submission_priority = self.priority_for(meta)
+            async with self.condition:
+                self.pending += 1
+                self.wait_seq += 1
+                pending_before_acquire = self.pending
+                in_flight_before_acquire = self.in_flight
+                compact = self.compact_entry(meta, queued_at_ms=queued_at_ms, sort_key=sort_key)
+                entry: list[Any] = [sort_key, self.wait_seq, meta.get("label", ""), True, compact]
+                heapq.heappush(self.heap, entry)
+                blocker_snapshots = [
+                    snapshot
+                    for snapshot in [
+                        self.blocker_snapshot(
+                            snapshot_event="before_acquire",
+                            entry=entry,
+                            meta=meta,
+                            queued_at_ms=queued_at_ms,
+                            pending_before_acquire=pending_before_acquire,
+                            in_flight_before_acquire=in_flight_before_acquire,
+                        )
+                    ]
+                    if snapshot is not None
+                ]
+                self.condition.notify_all()
+                try:
+                    while True:
+                        self.prune_cancelled()
+                        if self.in_flight < self.capacity and self.heap and self.heap[0] is entry:
+                            heapq.heappop(self.heap)
+                            entry[3] = False
+                            self.pending = max(0, self.pending - 1)
+                            self.in_flight += 1
+                            self.submit_seq += 1
+                            acquired_at_ms = offset_ms()
+                            compact["acquired_offset_ms"] = round(acquired_at_ms, 3)
+                            compact["client_submit_seq"] = self.submit_seq
+                            self.in_flight_entries[str(compact.get("request_id") or "")] = compact
+                            submit_snapshot = self.blocker_snapshot(
+                                snapshot_event="submit",
+                                entry=entry,
+                                meta=meta,
+                                queued_at_ms=queued_at_ms,
+                                pending_before_acquire=pending_before_acquire,
+                                in_flight_before_acquire=in_flight_before_acquire,
+                            )
+                            if submit_snapshot is not None:
+                                blocker_snapshots.append(submit_snapshot)
+                            info = {
+                                "client_submit_seq": self.submit_seq,
+                                "client_sem_capacity": self.capacity,
+                                "client_pending_before_acquire": pending_before_acquire,
+                                "client_inflight_before_acquire": in_flight_before_acquire,
+                                "client_pending_at_submit": self.pending,
+                                "client_inflight_at_submit": self.in_flight,
+                                "client_queue_wait_ms": round(acquired_at_ms - queued_at_ms, 3),
+                                "client_submission_policy": policy,
+                                "client_submission_priority": submission_priority,
+                                "client_blocker_snapshots": blocker_snapshots,
+                            }
+                            self.condition.notify_all()
+                            return info
+                        await self.condition.wait()
+                except BaseException:
+                    if entry[3]:
+                        entry[3] = False
+                        self.pending = max(0, self.pending - 1)
+                        self.condition.notify_all()
+                    raise
+
+        async def release(self, request_id: str | None = None) -> None:
+            async with self.condition:
+                self.in_flight = max(0, self.in_flight - 1)
+                if request_id:
+                    self.in_flight_entries.pop(str(request_id), None)
+                self.condition.notify_all()
+
+    client_submission_gate = SubmissionPriorityGate(
+        args.concurrency,
+        predictive_enabled=controller_active_predictive_deadline_queue,
+        trace_blockers=env_flag("TRACE_REPLAY_BLOCKERS", False),
+        blocker_max_ids=max(0, int(args.trace_replay_blockers_max_ids)),
+        blocker_events={
+            item.strip()
+            for item in str(args.trace_replay_blockers_events or "").split(",")
+            if item.strip()
+        },
+    )
+    async def bounded_request(prompt: str, meta: dict[str, Any]) -> None:
+        meta = await apply_memory_admission_if_needed(meta)
+        gate_info = await client_submission_gate.acquire(meta)
+        blocker_snapshots = list(gate_info.pop("client_blocker_snapshots", []) or [])
+        meta = {
+            **meta,
+            **gate_info,
+            "harness_controller_signal": build_harness_controller_signal(meta),
+        }
+        try:
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.harness.request_input",
+                    "session_id": meta.get("session_id", ""),
+                    "phase": meta.get("phase", ""),
+                    "mode": meta.get("mode", ""),
+                    "harness": meta.get("harness", args.harness),
+                    "label": meta.get("label", ""),
+                    "request_id": meta.get("label", ""),
+                    "prompt_hash": meta.get("prompt_hash", ""),
+                    "tool_wait_step": meta.get("tool_wait_step", ""),
+                    "task_replay_steps": meta.get("task_replay_steps", ""),
+                    "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                    "tool_wait_class": meta.get("tool_wait_class", ""),
+                    "harness_controller_signal": meta.get("harness_controller_signal", {}),
+                    "offset_ms": round(offset_ms(), 3),
+                    "priority_intent": meta.get("priority_intent", ""),
+                    "workflow_node": meta.get("workflow_node", ""),
+                    "workflow_node_goal": meta.get("workflow_node_goal", ""),
+                    "inference_source": meta.get("inference_source", ""),
+                    "expected_inferred_priority": meta.get("expected_inferred_priority", ""),
+                    "harness_input_priority_signal": meta.get("harness_input_priority_signal", ""),
+                    "harness_input_priority_signal_source": meta.get("harness_input_priority_signal_source", ""),
+                    "client_submit_seq": meta.get("client_submit_seq", ""),
+                    "client_sem_capacity": meta.get("client_sem_capacity", ""),
+                    "client_pending_before_acquire": meta.get("client_pending_before_acquire", ""),
+                    "client_inflight_before_acquire": meta.get("client_inflight_before_acquire", ""),
+                    "client_pending_at_submit": meta.get("client_pending_at_submit", ""),
+                    "client_inflight_at_submit": meta.get("client_inflight_at_submit", ""),
+                    "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
+                    "client_submission_policy": meta.get("client_submission_policy", ""),
+                    "client_submission_priority": meta.get("client_submission_priority", ""),
+                },
+            )
+            await run_harness_request(args.harness, args.gateway_base, args.model, prompt, meta, args.log_dir)
+            write_trace(
+                args.trace,
+                {
+                    "event": "m27.harness.request_done",
+                    "session_id": meta.get("session_id", ""),
+                    "phase": meta.get("phase", ""),
+                    "mode": meta.get("mode", ""),
+                    "harness": meta.get("harness", args.harness),
+                    "label": meta.get("label", ""),
+                    "request_id": meta.get("label", ""),
+                    "tool_wait_step": meta.get("tool_wait_step", ""),
+                    "task_replay_steps": meta.get("task_replay_steps", ""),
+                    "tool_wait_profile": meta.get("tool_wait_profile", ""),
+                    "tool_wait_class": meta.get("tool_wait_class", ""),
+                    "harness_controller_signal": meta.get("harness_controller_signal", {}),
+                    "client_submit_seq": meta.get("client_submit_seq", ""),
+                    "client_queue_wait_ms": meta.get("client_queue_wait_ms", ""),
+                    "client_submission_policy": meta.get("client_submission_policy", ""),
+                    "client_submission_priority": meta.get("client_submission_priority", ""),
+                    "offset_ms": round(offset_ms(), 3),
+                },
+            )
+        finally:
+            await client_submission_gate.release(str(meta.get("label") or ""))
+            for snapshot in blocker_snapshots:
+                write_trace(args.trace, snapshot)
+
+    def prepared_prefix_control_url() -> str:
+        return os.environ.get("AGENTIC_KV_PREPARE_CONTROL_URL", "http://127.0.0.1:31991/prepare_prefix_kv")
+
+    async def prepare_prefix_kv_control_request(
+        meta: dict[str, Any],
+        prefetch_window: dict[str, Any],
+        *,
+        plan_only: bool = False,
+    ) -> dict[str, Any]:
+        payload = {
+            "session_id": meta.get("session_id", ""),
+            "prefix_id": meta.get("prefix_id", ""),
+            "prompt_hash": meta.get("prompt_hash", ""),
+            "request_id": meta.get("parent_request_id", "") or meta.get("request_id", ""),
+            "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+            "mem_quota": meta.get("direct_kv_mem_quota", ""),
+            "plan_only": plan_only,
+            "wait": not plan_only,
+            "wait_timeout_ms": max(1, int(max(0.0, float(prefetch_window["latest_finish_ms"]) - offset_ms()))),
+            "control_timeout_ms": max(1, int(max(0.0, float(prefetch_window["latest_finish_ms"]) - offset_ms())) + 1_000),
+            "source": "controller_proactive_kv_management",
+        }
+        event_stem = (
+            "m27.targeted_kv_prefetch.prepare_prefix_control_plan"
+            if plan_only
+            else "m27.targeted_kv_prefetch.prepare_prefix_control"
+        )
+        write_trace(
+            args.trace,
+            {
+                "event": f"{event_stem}_request",
+                "session_id": meta.get("session_id", ""),
+                "prefix_id": meta.get("prefix_id", ""),
+                "request_id": meta.get("parent_request_id", "") or meta.get("request_id", ""),
+                "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+                "prompt_hash": meta.get("prompt_hash", ""),
+                "prepare_control_url": prepared_prefix_control_url(),
+                "plan_only": plan_only,
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+        try:
+            async with httpx.AsyncClient(timeout=None, limits=httpx.Limits(max_keepalive_connections=0)) as client:
+                response = await client.post(prepared_prefix_control_url(), json=payload)
+                result = response.json()
+                result.setdefault("http_status", response.status_code)
+        except Exception as exc:  # noqa: BLE001
+            result = {
+                "ok": False,
+                "status": "prepare_control_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        write_trace(
+            args.trace,
+            {
+                "event": f"{event_stem}_result",
+                "session_id": meta.get("session_id", ""),
+                "prefix_id": meta.get("prefix_id", ""),
+                "request_id": meta.get("parent_request_id", "") or meta.get("request_id", ""),
+                "expected_replay_request_id": meta.get("expected_replay_request_id", ""),
+                "prompt_hash": meta.get("prompt_hash", ""),
+                "result": result,
+                "plan_only": plan_only,
+                "offset_ms": round(offset_ms(), 3),
+            },
+        )
+        return result
+
+    def direct_load_selective_admission_enabled() -> bool:
+        return env_truthy("CONTROLLER_DIRECT_LOAD_SELECTIVE_ADMISSION", default=True)
+
+    def direct_load_min_saved_tokens() -> int:
+        try:
+            return max(0, int(float(os.environ.get("CONTROLLER_DIRECT_LOAD_MIN_SAVED_TOKENS", "1024") or "1024")))
+        except ValueError:
+            return 1024
+
+    def direct_load_admission_from_plan(plan_result: dict[str, Any]) -> dict[str, Any]:
+        status = str(plan_result.get("status") or "")
+        try:
+            host_tokens = int(plan_result.get("host_tokens") or 0)
+        except (TypeError, ValueError):
+            host_tokens = 0
+        min_tokens = direct_load_min_saved_tokens()
+        if not direct_load_selective_admission_enabled():
+            return {
+                "admitted": True,
+                "reason": "selective_admission_disabled",
+                "plan_status": status,
+                "host_tokens": host_tokens,
+                "min_saved_tokens": min_tokens,
+            }
+        if status == "would_load_back":
+            if host_tokens < min_tokens:
+                return {
+                    "admitted": False,
+                    "reason": "skip_host_resident_prefix_too_small",
+                    "plan_status": status,
+                    "host_tokens": host_tokens,
+                    "min_saved_tokens": min_tokens,
+                }
+            return {
+                "admitted": True,
+                "reason": "admit_host_resident_evicted_prefix",
+                "plan_status": status,
+                "host_tokens": host_tokens,
+                "min_saved_tokens": min_tokens,
+            }
+        if status == "already_device_resident":
+            return {
+                "admitted": False,
+                "reason": "skip_already_device_resident",
+                "plan_status": status,
+                "host_tokens": host_tokens,
+                "min_saved_tokens": min_tokens,
+            }
+        return {
+            "admitted": False,
+            "reason": f"skip_prepare_plan_status_{status or 'unknown'}",
+            "plan_status": status,
+            "host_tokens": host_tokens,
+            "min_saved_tokens": min_tokens,
+        }
 
     def full_controller_priority_for_pair(index: int) -> tuple[int, int, int]:
         total = max(1, len(pairs))
@@ -2640,12 +3507,15 @@ async def main_async() -> None:
             "task_index": pair.task_index,
             "prompt_hash": prompt_hash(target_initial_prompt),
             "prompt_tokens": estimate_tokens(target_initial_prompt),
-            "priority_label": "normal" if controller_active_deadline_fair else "high",
+            "priority_label": "normal"
+            if (controller_active_deadline_fair or controller_active_predictive_deadline_queue)
+            else "high",
             "max_tokens": target_initial_max_tokens,
             "tool_wait_step": 0,
             "speculative_prefill": args.mode == "e2e_priority_hints_speculative_prefill",
             **target_initial_workload_meta,
         }
+        initial_meta.update(value_aware_eviction_metadata(initial_meta))
         initial_meta = attach_harness_priority_metadata(initial_meta)
         await bounded_request(target_initial_prompt, initial_meta)
         target_current_prompt = target_initial_prompt
@@ -2657,6 +3527,235 @@ async def main_async() -> None:
         next_filler_index = 0
         active_demote_command: dict[str, Any] | None = None
         demote_restore_active = False
+
+        def schedule_all_request_targeted_kv_prefetch(
+            tool_wait_meta: dict[str, Any],
+            current_prompt: str,
+            replay_label: str,
+            tool_start_ms: float,
+            replay_due_ms: float,
+            wait_spec: ToolWaitSpec,
+            total_steps: int,
+            request_group: str,
+        ) -> asyncio.Task[None] | None:
+            session_id = str(tool_wait_meta.get("session_id") or "")
+            controller_result = record_controller_event(
+                f"{session_id}:tool_started:{wait_spec.step_index}",
+                EventType.TOOL_STARTED,
+                {**tool_wait_meta, "expected_replay_request_id": replay_label},
+                monotonic_ms=int(tool_start_ms),
+                expected_completion_ms=int(replay_due_ms),
+                deadline_after_completion_ms=int(wait_spec.wait_ms),
+                eta_uncertainty_ms=max(1, int(wait_spec.wait_ms) // 4),
+            )
+            targeted_prefetch_command = selected_controller_command(controller_result, kv_action="prefetch")
+            if targeted_prefetch_command is None:
+                return None
+
+            direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
+            direct_load_prompt_tokens = estimate_tokens(current_prompt)
+            prefetch_window = controller_direct_load_window(
+                tool_start_ms=tool_start_ms,
+                replay_due_ms=replay_due_ms,
+                prompt_tokens=direct_load_prompt_tokens,
+                wait_class=wait_spec.wait_class,
+            )
+            targeted_prefetch_lead_ms = int(max(0.0, replay_due_ms - float(prefetch_window["start_ms"])))
+            targeted_prefetch_start_ms = float(prefetch_window["start_ms"])
+            direct_kv_h2d_priority = deadline_fair_priority_for_due(replay_due_ms)
+            direct_load_mechanism = controller_direct_load_mechanism()
+            trigger_label = f"{session_id}_controller_proactive_direct_load_{wait_spec.step_index:02d}"
+            targeted_event_base = {
+                "session_id": session_id,
+                "mode": args.mode,
+                "harness": args.harness,
+                "request_id": str(tool_wait_meta.get("label") or ""),
+                "request_group": request_group,
+                "prefetch_request_id": trigger_label,
+                "expected_replay_request_id": replay_label,
+                "prefix_id": tool_wait_meta.get("prefix_id", ""),
+                "tool_wait_step": wait_spec.step_index,
+                "task_replay_steps": total_steps,
+                "tool_wait_profile": args.tool_wait_profile,
+                "tool_wait_class": wait_spec.wait_class,
+                "tool_wait_ms": int(wait_spec.wait_ms),
+                "reuse_probability": tool_wait_meta.get("reuse_probability", ""),
+                "recompute_cost_tokens": tool_wait_meta.get("recompute_cost_tokens", ""),
+                "direct_load_prompt_tokens": direct_load_prompt_tokens,
+                "direct_load_estimated_ms": prefetch_window["estimated_ms"],
+                "direct_load_safety_margin_ms": prefetch_window["safety_margin_ms"],
+                "direct_load_available_slack_ms": round(float(prefetch_window["available_slack_ms"]), 3),
+                "direct_load_latest_finish_offset_ms": round(float(prefetch_window["latest_finish_ms"]), 3),
+                "direct_load_admission_reason": prefetch_window["reason"],
+                "direct_load_contract": prefetch_window["contract"],
+                "direct_load_allowed_wait_classes": prefetch_window["allowed_wait_classes"],
+                "direct_load_mechanism": direct_load_mechanism,
+                "direct_load_execution_path": "sglang_prepare_prefix_control",
+                "direct_kv_h2d_priority": direct_kv_h2d_priority,
+                "direct_kv_h2d_priority_source": "harness_tool_wait_eta_replay_due",
+                "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
+                "controller_command_id": targeted_prefetch_command.get("command_id", ""),
+                "controller_command_reason": targeted_prefetch_command.get("reason", ""),
+                "backend_name": targeted_prefetch_command.get("backend_name", ""),
+                "backend_accepted": targeted_prefetch_command.get("backend_accepted", ""),
+                "backend_acted": targeted_prefetch_command.get("backend_acted", ""),
+                "backend_reason": targeted_prefetch_command.get("backend_reason", ""),
+                "direct_hook_available": direct_hook_available,
+                "tool_start_offset_ms": round(tool_start_ms, 3),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "targeted_prefetch_lead_ms": targeted_prefetch_lead_ms,
+                "targeted_prefetch_start_offset_ms": round(targeted_prefetch_start_ms, 3),
+                "offset_ms": round(offset_ms(), 3),
+            }
+            write_trace(args.trace, {**targeted_event_base, "event": "m27.targeted_kv_prefetch.requested"})
+            write_trace(
+                args.trace,
+                {
+                    **targeted_event_base,
+                    "event": "m27.targeted_kv_prefetch.acted"
+                    if direct_hook_available
+                    else "m27.targeted_kv_prefetch.unavailable",
+                },
+            )
+            if not prefetch_window["admitted"]:
+                write_trace(
+                    args.trace,
+                    {
+                        **targeted_event_base,
+                        "event": "m27.targeted_kv_prefetch.skipped",
+                        "status": "skipped",
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+                return None
+            if not direct_hook_available:
+                return None
+
+            direct_load_meta = {
+                **tool_wait_meta,
+                "phase": "hint_prefetch",
+                "label": trigger_label,
+                "prompt_hash": prompt_hash(current_prompt),
+                "priority_label": "background",
+                "deadline_offset_ms": round(replay_due_ms, 3),
+                "replay_due_offset_ms": round(replay_due_ms, 3),
+                "expected_tool_return_ms": int(wait_spec.wait_ms),
+                "next_ready_eta_ms": int(wait_spec.wait_ms),
+                "direct_kv_h2d_priority": direct_kv_h2d_priority,
+                "direct_kv_h2d_priority_source": "harness_tool_wait_eta_replay_due",
+                "max_tokens": 1,
+                "controller_targeted_kv_prefetch": True,
+                "controller_proactive_kv_management": True,
+                "prefetch_action": direct_load_mechanism,
+                "parent_request_id": str(tool_wait_meta.get("label") or ""),
+                "expected_replay_request_id": replay_label,
+                "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
+                "controller_command_id": targeted_prefetch_command.get("command_id", ""),
+                "controller_kv_translation": f"controller.proactive_kv_management={direct_load_mechanism}",
+                "prepared_kv_contract": prefetch_window["contract"],
+                "prepared_kv_expected_replay_id": replay_label,
+            }
+            direct_load_meta = attach_harness_priority_metadata(direct_load_meta)
+
+            async def run_targeted_direct_load() -> None:
+                await sleep_until(targeted_prefetch_start_ms)
+                timeout_s = max(0.0, (float(prefetch_window["latest_finish_ms"]) - offset_ms()) / 1000.0)
+                if timeout_s <= 0:
+                    write_trace(
+                        args.trace,
+                        {
+                            **targeted_event_base,
+                            "event": "m27.targeted_kv_prefetch.direct_load_skipped_expired",
+                            "status": "skipped",
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+                    return
+                plan_result = await prepare_prefix_kv_control_request(
+                    direct_load_meta,
+                    prefetch_window,
+                    plan_only=True,
+                )
+                selective_admission = direct_load_admission_from_plan(plan_result)
+                if not selective_admission["admitted"]:
+                    write_trace(
+                        args.trace,
+                        {
+                            **targeted_event_base,
+                            "event": "m27.targeted_kv_prefetch.skipped",
+                            "status": "skipped",
+                            "prepared_kv_status": "not_needed",
+                            "selective_admission_reason": selective_admission["reason"],
+                            "selective_admission_status": selective_admission["plan_status"],
+                            "selective_admission_host_tokens": selective_admission["host_tokens"],
+                            "selective_admission_min_saved_tokens": selective_admission["min_saved_tokens"],
+                            "prepare_prefix_plan_result": plan_result,
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+                    return
+                write_trace(
+                    args.trace,
+                    {
+                        **targeted_event_base,
+                        "event": "m27.targeted_kv_prefetch.direct_load_start",
+                        "selective_admission_reason": selective_admission["reason"],
+                        "selective_admission_status": selective_admission["plan_status"],
+                        "selective_admission_host_tokens": selective_admission["host_tokens"],
+                        "selective_admission_min_saved_tokens": selective_admission["min_saved_tokens"],
+                        "offset_ms": round(offset_ms(), 3),
+                    },
+                )
+                try:
+                    result = await prepare_prefix_kv_control_request(direct_load_meta, prefetch_window)
+                    if not result.get("ok"):
+                        write_trace(
+                            args.trace,
+                            {
+                                **targeted_event_base,
+                                "event": "m27.targeted_kv_prefetch.direct_load_error",
+                                "status": str(result.get("status") or "error"),
+                                "prepared_kv_status": "not_ready",
+                                "prepare_prefix_result": result,
+                                "offset_ms": round(offset_ms(), 3),
+                            },
+                        )
+                        return
+                    write_trace(
+                        args.trace,
+                        {
+                            **targeted_event_base,
+                            "event": "m27.targeted_kv_prefetch.direct_load_end",
+                            "status": "ok",
+                            "prepared_kv_status": "ready",
+                            "direct_load_mechanism": direct_load_mechanism,
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+                except asyncio.TimeoutError:
+                    write_trace(
+                        args.trace,
+                        {
+                            **targeted_event_base,
+                            "event": "m27.targeted_kv_prefetch.direct_load_timeout_before_replay",
+                            "status": "timeout",
+                            "prepared_kv_status": "not_ready",
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    write_trace(
+                        args.trace,
+                        {
+                            **targeted_event_base,
+                            "event": "m27.targeted_kv_prefetch.direct_load_error",
+                            "status": "error",
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+
+            return asyncio.create_task(run_targeted_direct_load())
 
         def launch_filler_task(idx: int, *, reason: str) -> asyncio.Task[None]:
             task = asyncio.create_task(
@@ -2685,6 +3784,15 @@ async def main_async() -> None:
                     submit_request=bounded_request,
                     deadline_fair_priority=assign_deadline_fair_priority
                     if controller_active_deadline_fair
+                    else None,
+                    predictive_deadline_priority=assign_predictive_deadline_priority
+                    if controller_active_predictive_deadline_queue
+                    else None,
+                    targeted_kv_prefetch=schedule_all_request_targeted_kv_prefetch
+                    if controller_active_proactive_kv_management
+                    else None,
+                    memory_admission_register=register_memory_admission_replay
+                    if controller_active_memory_admission
                     else None,
                 )
             )
@@ -2933,6 +4041,37 @@ async def main_async() -> None:
             }
             tool_start_ms = offset_ms()
             replay_due_ms = tool_start_ms + wait_ms
+            predictive_replay_fields: dict[str, Any] = {}
+            register_memory_admission_replay(
+                {
+                    **step_base_meta,
+                    "session_id": pair.session_id,
+                    "prefix_id": base_meta.get("prefix_id", f"{pair.session_id}:prefix"),
+                    "phase": "tool_wait",
+                    "label": f"{pair.session_id}_tool_wait_{wait_spec.step_index:02d}",
+                    "reuse_probability": 0.98,
+                    "recompute_cost_tokens": estimate_tokens(target_current_prompt),
+                },
+                replay_due_ms=replay_due_ms,
+                prompt_tokens=estimate_tokens(target_current_prompt),
+                request_group="target",
+                wait_spec=wait_spec,
+                replay_label=replay_label,
+            )
+            if controller_active_predictive_deadline_queue:
+                predictive_replay_fields = assign_predictive_deadline_priority(
+                    {
+                        **step_base_meta,
+                        "session_id": pair.session_id,
+                        "phase": "tool_wait",
+                        "label": replay_label,
+                        "task_index": pair.task_index,
+                        "task_replay_steps": len(target_wait_specs),
+                    },
+                    replay_due_ms,
+                    "target",
+                    "tool_wait",
+                )
             controller_tool_start_result = record_controller_event(
                 f"{pair.session_id}:tool_started:{wait_spec.step_index}",
                 EventType.TOOL_STARTED,
@@ -3019,13 +4158,17 @@ async def main_async() -> None:
             warmup_task: asyncio.Task[None] | None = None
             if targeted_prefetch_command is not None:
                 direct_hook_available = str(targeted_prefetch_command.get("backend_acted")).lower() == "true"
-                targeted_prefetch_lead_ms = controller_targeted_prefetch_lead_ms(wait_ms)
-                targeted_prefetch_start_ms = max(tool_start_ms, replay_due_ms - targeted_prefetch_lead_ms)
-                trigger_prompt = (
-                    target_current_prompt
-                    + "\n\n"
-                    + f"{DIRECT_LOAD_TRIGGER} session_id={pair.session_id} prompt_hash={prompt_hash(target_current_prompt)}"
+                direct_load_prompt_tokens = estimate_tokens(target_current_prompt)
+                prefetch_window = controller_direct_load_window(
+                    tool_start_ms=tool_start_ms,
+                    replay_due_ms=replay_due_ms,
+                    prompt_tokens=direct_load_prompt_tokens,
+                    wait_class=wait_spec.wait_class,
                 )
+                targeted_prefetch_lead_ms = int(max(0.0, replay_due_ms - float(prefetch_window["start_ms"])))
+                targeted_prefetch_start_ms = float(prefetch_window["start_ms"])
+                direct_kv_h2d_priority = deadline_fair_priority_for_due(replay_due_ms)
+                direct_load_mechanism = controller_direct_load_mechanism()
                 trigger_label = f"{pair.session_id}_controller_targeted_direct_load_{wait_spec.step_index:02d}"
                 targeted_event_base = {
                     "session_id": pair.session_id,
@@ -3042,6 +4185,18 @@ async def main_async() -> None:
                     "tool_wait_ms": wait_ms,
                     "reuse_probability": step_base_meta.get("reuse_probability", ""),
                     "recompute_cost_tokens": step_base_meta.get("recompute_cost_tokens", ""),
+                    "direct_load_prompt_tokens": direct_load_prompt_tokens,
+                    "direct_load_estimated_ms": prefetch_window["estimated_ms"],
+                    "direct_load_safety_margin_ms": prefetch_window["safety_margin_ms"],
+                    "direct_load_available_slack_ms": round(float(prefetch_window["available_slack_ms"]), 3),
+                    "direct_load_latest_finish_offset_ms": round(float(prefetch_window["latest_finish_ms"]), 3),
+                    "direct_load_admission_reason": prefetch_window["reason"],
+                    "direct_load_contract": prefetch_window["contract"],
+                    "direct_load_allowed_wait_classes": prefetch_window["allowed_wait_classes"],
+                    "direct_load_mechanism": direct_load_mechanism,
+                    "direct_load_execution_path": "sglang_prepare_prefix_control",
+                    "direct_kv_h2d_priority": direct_kv_h2d_priority,
+                    "direct_kv_h2d_priority_source": "harness_tool_wait_eta_replay_due",
                     "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
                     "controller_command_id": targeted_prefetch_command.get("command_id", ""),
                     "controller_command_reason": targeted_prefetch_command.get("reason", ""),
@@ -3055,8 +4210,6 @@ async def main_async() -> None:
                     "targeted_prefetch_lead_ms": targeted_prefetch_lead_ms,
                     "targeted_prefetch_start_offset_ms": round(targeted_prefetch_start_ms, 3),
                     "offset_ms": round(offset_ms(), 3),
-                    "trigger_marker": DIRECT_LOAD_TRIGGER,
-                    "trigger_prompt_hash": prompt_hash(trigger_prompt),
                 }
                 write_trace(args.trace, {**targeted_event_base, "event": "m27.targeted_kv_prefetch.requested"})
                 write_trace(
@@ -3068,7 +4221,17 @@ async def main_async() -> None:
                         else "m27.targeted_kv_prefetch.unavailable",
                     },
                 )
-                if direct_hook_available:
+                if not prefetch_window["admitted"]:
+                    write_trace(
+                        args.trace,
+                        {
+                            **targeted_event_base,
+                            "event": "m27.targeted_kv_prefetch.skipped",
+                            "status": "skipped",
+                            "offset_ms": round(offset_ms(), 3),
+                        },
+                    )
+                elif direct_hook_available:
                     direct_load_meta = {
                         **step_base_meta,
                         "session_id": pair.session_id,
@@ -3076,38 +4239,109 @@ async def main_async() -> None:
                         "label": trigger_label,
                         "task_index": pair.task_index,
                         "prompt_hash": prompt_hash(target_current_prompt),
-                        "trigger_prompt_hash": prompt_hash(trigger_prompt),
-                        "priority_label": "high",
+                        "priority_label": "background",
+                        "deadline_offset_ms": round(replay_due_ms, 3),
+                        "replay_due_offset_ms": round(replay_due_ms, 3),
+                        "expected_tool_return_ms": int(wait_ms),
+                        "next_ready_eta_ms": int(wait_ms),
+                        "direct_kv_h2d_priority": direct_kv_h2d_priority,
+                        "direct_kv_h2d_priority_source": "harness_tool_wait_eta_replay_due",
                         "max_tokens": 1,
                         "controller_targeted_kv_prefetch": True,
-                        "prefetch_action": "direct_load",
-                        "trigger_marker": DIRECT_LOAD_TRIGGER,
+                        "prefetch_action": direct_load_mechanism,
                         "parent_request_id": str(initial_meta["label"]),
                         "expected_replay_request_id": replay_label,
                         "controller_decision_id": targeted_prefetch_command.get("controller_decision_id", ""),
                         "controller_command_id": targeted_prefetch_command.get("command_id", ""),
-                        "controller_kv_translation": "controller.targeted_prefetch=direct_load_trigger",
+                        "controller_kv_translation": f"controller.targeted_prefetch={direct_load_mechanism}",
+                        "prepared_kv_contract": prefetch_window["contract"],
+                        "prepared_kv_expected_replay_id": replay_label,
                     }
                     direct_load_meta = attach_harness_priority_metadata(direct_load_meta)
 
                     async def run_targeted_direct_load() -> None:
                         await sleep_until(targeted_prefetch_start_ms)
+                        timeout_s = max(0.0, (float(prefetch_window["latest_finish_ms"]) - offset_ms()) / 1000.0)
+                        if timeout_s <= 0:
+                            write_trace(
+                                args.trace,
+                                {
+                                    **targeted_event_base,
+                                    "event": "m27.targeted_kv_prefetch.direct_load_skipped_expired",
+                                    "status": "skipped",
+                                    "offset_ms": round(offset_ms(), 3),
+                                },
+                            )
+                            return
+                        plan_result = await prepare_prefix_kv_control_request(
+                            direct_load_meta,
+                            prefetch_window,
+                            plan_only=True,
+                        )
+                        selective_admission = direct_load_admission_from_plan(plan_result)
+                        if not selective_admission["admitted"]:
+                            write_trace(
+                                args.trace,
+                                {
+                                    **targeted_event_base,
+                                    "event": "m27.targeted_kv_prefetch.skipped",
+                                    "status": "skipped",
+                                    "prepared_kv_status": "not_needed",
+                                    "selective_admission_reason": selective_admission["reason"],
+                                    "selective_admission_status": selective_admission["plan_status"],
+                                    "selective_admission_host_tokens": selective_admission["host_tokens"],
+                                    "selective_admission_min_saved_tokens": selective_admission["min_saved_tokens"],
+                                    "prepare_prefix_plan_result": plan_result,
+                                    "offset_ms": round(offset_ms(), 3),
+                                },
+                            )
+                            return
                         write_trace(
                             args.trace,
                             {
                                 **targeted_event_base,
                                 "event": "m27.targeted_kv_prefetch.direct_load_start",
+                                "selective_admission_reason": selective_admission["reason"],
+                                "selective_admission_status": selective_admission["plan_status"],
+                                "selective_admission_host_tokens": selective_admission["host_tokens"],
+                                "selective_admission_min_saved_tokens": selective_admission["min_saved_tokens"],
                                 "offset_ms": round(offset_ms(), 3),
                             },
                         )
                         try:
-                            await bounded_request(trigger_prompt, direct_load_meta)
+                            result = await prepare_prefix_kv_control_request(direct_load_meta, prefetch_window)
+                            if not result.get("ok"):
+                                write_trace(
+                                    args.trace,
+                                    {
+                                        **targeted_event_base,
+                                        "event": "m27.targeted_kv_prefetch.direct_load_error",
+                                        "status": str(result.get("status") or "error"),
+                                        "prepared_kv_status": "not_ready",
+                                        "prepare_prefix_result": result,
+                                        "offset_ms": round(offset_ms(), 3),
+                                    },
+                                )
+                                return
                             write_trace(
                                 args.trace,
                                 {
                                     **targeted_event_base,
                                     "event": "m27.targeted_kv_prefetch.direct_load_end",
                                     "status": "ok",
+                                    "prepared_kv_status": "ready",
+                                    "direct_load_mechanism": direct_load_mechanism,
+                                    "offset_ms": round(offset_ms(), 3),
+                                },
+                            )
+                        except asyncio.TimeoutError:
+                            write_trace(
+                                args.trace,
+                                {
+                                    **targeted_event_base,
+                                    "event": "m27.targeted_kv_prefetch.direct_load_timeout_before_replay",
+                                    "status": "timeout",
+                                    "prepared_kv_status": "not_ready",
                                     "offset_ms": round(offset_ms(), 3),
                                 },
                             )
@@ -3573,6 +4807,11 @@ async def main_async() -> None:
                 controller_replay_rank = "deadline_due_time"
                 controller_replay_count = "all_due_replays"
                 controller_ladder_priority = controller_replay_priority
+            if predictive_replay_fields:
+                controller_replay_priority = int(predictive_replay_fields["controller_sglang_priority"])
+                controller_replay_rank = "predictive_deadline_due_time"
+                controller_replay_count = "all_due_replays"
+                controller_ladder_priority = controller_replay_priority
             replay_max_tokens = 8
             replay_workload_meta: dict[str, Any] = {
                 "agentic_workload_profile": args.agentic_workload_profile,
@@ -3608,13 +4847,19 @@ async def main_async() -> None:
                 "label": replay_label,
                 "task_index": pair.task_index,
                 "prompt_hash": prompt_hash(step_replay_prompt),
-                "priority_label": "deadline_fair" if controller_active_deadline_fair else "high",
+                "priority_label": "deadline_fair"
+                if controller_active_deadline_fair
+                else "predictive_deadline_queue"
+                if controller_active_predictive_deadline_queue
+                else "high",
                 "deadline_offset_ms": round(replay_due_ms, 3),
                 "max_tokens": replay_max_tokens,
                 "prompt_tokens": estimate_tokens(step_replay_prompt),
                 **replay_workload_meta,
                 **deadline_fair_replay_fields,
+                **predictive_replay_fields,
             }
+            replay_meta.update(value_aware_eviction_metadata(replay_meta))
             if controller_replay_priority is not None:
                 controller_fields = {
                     "controller_sglang_priority": controller_replay_priority,
@@ -3624,7 +4869,7 @@ async def main_async() -> None:
                     "controller_urgent_replay_count": controller_replay_count,
                     "controller_priority_ladder": controller_ladder_priority,
                 }
-                if not controller_active_deadline_fair:
+                if not (controller_active_deadline_fair or controller_active_predictive_deadline_queue):
                     controller_fields[
                         "controller_priority_translation"
                     ] = f"controller.set_priority={controller_replay_priority}"

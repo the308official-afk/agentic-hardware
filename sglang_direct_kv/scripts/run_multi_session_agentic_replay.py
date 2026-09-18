@@ -13,7 +13,6 @@ from typing import Any
 import httpx
 
 from run_real_prompt_controlled_replay import (
-    DIRECT_LOAD_TRIGGER,
     DYNAMO_PRIORITY_MODE,
     E2E_PRIORITY_MODE,
     ReplayPair,
@@ -494,37 +493,9 @@ async def main_async() -> None:
             await run_request(filler, prompt, "pressure_filler", f"{session_id}_request", args.filler_max_tokens)
 
         async def issue_prefetch(pair: ReplayPair, replay_due_ms: float) -> None:
-            base_hash = prompt_hash(pair.prompt)
-            trigger_prompt = pair.prompt + "\n\n" + (
-                f"{DIRECT_LOAD_TRIGGER} session_id={pair.session_id} prompt_hash={base_hash}"
-            )
-            write_trace_event(
-                {
-                    "event": "m27.prefetch.start",
-                    "session_id": pair.session_id,
-                    "mode": args.mode,
-                    "prefetch_action": "direct_load",
-                    "prompt_hash": base_hash,
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                }
-            )
-            await run_request(
-                pair,
-                trigger_prompt,
-                "hint_prefetch",
-                f"{pair.session_id}_direct_prefetch",
-                args.prefetch_max_tokens,
-                use_concurrency_limit=args.mode not in PRIORITY_PREFETCH_MODES,
-            )
-            write_trace_event(
-                {
-                    "event": "m27.prefetch.end",
-                    "session_id": pair.session_id,
-                    "mode": args.mode,
-                    "prefetch_action": "direct_load",
-                    "prompt_hash": base_hash,
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                }
+            raise RuntimeError(
+                "Legacy request-triggered KV prefetch has been removed. "
+                "Use the multi-harness Scenario 2 prepared_prefix_control path instead."
             )
 
         async def run_session(index: int, spec: dict[str, Any]) -> None:

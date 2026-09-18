@@ -294,6 +294,39 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(harness_driver.replay_label_for("s", 1, 1), "s_replay")
         self.assertEqual(harness_driver.replay_label_for("s", 2, 3), "s_replay_02")
 
+    def test_tool_wait_profile_spec_supports_weighted_ranges(self):
+        spec = "very_short:20:100-500,short:35:1000-5000,medium:30:10000-30000,long:15:60000-120000"
+        sampled = harness_driver.sample_tool_wait_specs(
+            profile="fixed",
+            base_wait_ms=50,
+            custom_spec=spec,
+            steps=32,
+            seed=17,
+            stream_key="timeline-a",
+        )
+        sampled_again = harness_driver.sample_tool_wait_specs(
+            profile="fixed",
+            base_wait_ms=50,
+            custom_spec=spec,
+            steps=32,
+            seed=17,
+            stream_key="timeline-a",
+        )
+        self.assertEqual(sampled, sampled_again)
+        self.assertEqual(len(sampled), 32)
+
+        ranges = {
+            "very_short": (100, 500),
+            "short": (1000, 5000),
+            "medium": (10_000, 30_000),
+            "long": (60_000, 120_000),
+        }
+        self.assertTrue({spec.wait_class for spec in sampled}.issubset(ranges))
+        for wait_spec in sampled:
+            lower, upper = ranges[wait_spec.wait_class]
+            self.assertGreaterEqual(wait_spec.wait_ms, lower)
+            self.assertLessEqual(wait_spec.wait_ms, upper)
+
     def test_report_matches_multiple_replay_due_rows_by_label(self):
         with tempfile.TemporaryDirectory() as folder:
             case = Path(folder) / "hatcher_p3_high_controller_full_tw50_f0_twprofagentic_mixed_steps2_seed7"

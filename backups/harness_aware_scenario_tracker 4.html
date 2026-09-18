@@ -1,0 +1,1152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harness-Aware Scenario Tracker</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #162033;
+      --muted: #5d6b82;
+      --line: #d8e0ea;
+      --panel: #ffffff;
+      --bg: #f6f8fb;
+      --baseline: #64748b;
+      --aware: #0f766e;
+      --pending: #b45309;
+      --soft: #eef6f5;
+      --soft-warn: #fff7ed;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    header {
+      padding: 34px 40px 28px;
+      background: #111827;
+      color: white;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 28px 28px 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.2;
+    }
+
+    h1 {
+      font-size: 30px;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+
+    h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      margin: 8px 0 0;
+    }
+
+    a {
+      color: #155e75;
+      text-decoration: none;
+      font-weight: 650;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      color: #d8dee9;
+      font-size: 16px;
+    }
+
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 18px 0;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+      background: var(--soft);
+      color: var(--aware);
+      border: 1px solid #b7d9d3;
+    }
+
+    .status.pending {
+      background: var(--soft-warn);
+      color: var(--pending);
+      border-color: #fed7aa;
+    }
+
+    .status.planned {
+      background: #eef2ff;
+      color: #3730a3;
+      border-color: #c7d2fe;
+    }
+
+    .lede {
+      color: var(--muted);
+      max-width: 920px;
+    }
+
+    .scenario {
+      display: grid;
+      gap: 18px;
+    }
+
+    .scenario-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .chart {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 190px minmax(160px, 1fr) 120px;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .label {
+      font-weight: 700;
+      color: #334155;
+    }
+
+    .track {
+      height: 18px;
+      border-radius: 4px;
+      background: #e7edf5;
+      overflow: hidden;
+    }
+
+    .fill {
+      height: 100%;
+      border-radius: 4px;
+    }
+
+    .fill.baseline {
+      background: var(--baseline);
+    }
+
+    .fill.aware {
+      background: var(--aware);
+    }
+
+    .value {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .callout {
+      border-left: 4px solid var(--aware);
+      background: var(--soft);
+      padding: 12px 14px;
+      border-radius: 6px;
+      color: #134e4a;
+    }
+
+    .signals {
+      padding: 12px 14px;
+      border: 1px solid #dbe7e5;
+      border-radius: 8px;
+      background: #f8fcfb;
+    }
+
+    .signals-title {
+      margin: 0 0 8px;
+      color: #334155;
+      font-weight: 750;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #b7d9d3;
+      background: white;
+      color: #115e59;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: nowrap;
+    }
+
+    .setup {
+      padding: 12px 14px;
+      border: 1px solid #d9e2ec;
+      border-radius: 8px;
+      background: #f9fbff;
+    }
+
+    .setup-title {
+      margin: 0 0 8px;
+      color: #334155;
+      font-weight: 750;
+    }
+
+    .setup p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .evidence {
+      padding: 12px 14px;
+      border: 1px solid #d9e2ec;
+      border-radius: 8px;
+      background: #fcfdff;
+    }
+
+    .evidence-title {
+      margin: 0 0 8px;
+      color: #334155;
+      font-weight: 750;
+    }
+
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 18px;
+    }
+
+    .evidence-item {
+      display: grid;
+      grid-template-columns: minmax(130px, .9fr) minmax(120px, 1.1fr);
+      gap: 10px;
+      align-items: baseline;
+      padding: 5px 0;
+      border-top: 1px solid #edf2f7;
+    }
+
+    .evidence-item:nth-child(-n + 2) {
+      border-top: 0;
+    }
+
+    .evidence-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+
+    .evidence-value {
+      color: #223149;
+      font-weight: 750;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+
+    .evidence-note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .warning {
+      border-left-color: var(--pending);
+      background: var(--soft-warn);
+      color: #7c2d12;
+    }
+
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-top: 8px;
+      color: var(--muted);
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .todo-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .todo {
+      padding: 12px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+
+    .selected-template {
+      border: 1px solid #d9e2ec;
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 14px;
+      margin-top: 16px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric-tile {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: white;
+      padding: 10px;
+    }
+
+    .metric-name {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+
+    .metric-value {
+      margin-top: 4px;
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.1;
+      color: var(--aware);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric-value.warn {
+      color: var(--pending);
+    }
+
+    .metric-value.bad {
+      color: #b91c1c;
+    }
+
+    .explain-panel {
+      border: 1px solid #d9e2ec;
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 0;
+    }
+
+    .explain-panel summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      color: #334155;
+      font-weight: 800;
+      list-style-position: inside;
+    }
+
+    .explain-body {
+      display: grid;
+      gap: 10px;
+      padding: 0 14px 14px;
+      color: var(--muted);
+    }
+
+    .explain-body p {
+      margin: 0;
+    }
+
+    .explain-body strong {
+      color: #223149;
+    }
+
+    @media (max-width: 720px) {
+      header {
+        padding: 28px 22px 24px;
+      }
+
+      main {
+        padding: 20px 16px 40px;
+      }
+
+      .bar-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+
+      .value {
+        text-align: left;
+      }
+
+      .metric-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .evidence-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .evidence-item:nth-child(-n + 2) {
+        border-top: 1px solid #edf2f7;
+      }
+
+      .evidence-item:first-child {
+        border-top: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Harness-Aware Scenario Tracker</h1>
+    <p class="subtitle">A manager-facing record of the simple scenario experiments: what we ran, why it matters, and the chart-level result. Detailed CSVs and proof tables stay in the generated reports.</p>
+  </header>
+
+  <main>
+    <section class="section">
+      <h2>Experiment Rule</h2>
+      <p class="lede">For each scenario, start with two modes only: a baseline where the backend does not receive the harness signal, and a harness-aware controller mode where the backend uses the signal to make the smarter decision. Add diagnostic modes only when the two-mode story does not explain the result.</p>
+      <p class="lede">Before any new real experiment, coordinate with the backend task to reuse the established SGLang scripts, hooks, modes, and proof columns.</p>
+      <p class="lede">After every scenario run finishes, update this tracker with the latest result cards, a short interpretation, and links to the detailed report and proof files.</p>
+    </section>
+
+    <section class="section">
+      <h2>Selected Manager Chart Template</h2>
+      <p class="lede">Each completed scenario should show the main request-facing benefit, the system-level trade-off, and the total workload impact. For all-request scenarios, the main benefit is measured across every replay request rather than one special target request.</p>
+      <div class="selected-template">
+        <h3>Three Metric Cards</h3>
+        <div class="metric-grid">
+          <div class="metric-tile">
+            <div class="metric-name">Request Impact</div>
+            <div class="metric-value">Win / Loss</div>
+            <p class="small">Did the measured replay requests get better?</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">System Trade-off</div>
+            <div class="metric-value warn">Cost / None</div>
+            <p class="small">Did the controller pay a runtime or throughput cost?</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Total Workload</div>
+            <div class="metric-value warn">Clean / Mixed</div>
+            <p class="small">Was the overall trade-off worth it?</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section scenario">
+      <div class="scenario-head">
+        <h2>Scenario 1: Better Deadline Scheduling</h2>
+        <span class="status">Clear Win</span>
+      </div>
+      <p class="lede">A group of replay requests becomes ready at different times after tool waits. The harness exposes when each replay is expected to become ready, so the backend can move the soonest-due replay work forward instead of treating the workload as ordinary queue traffic.</p>
+      <div class="callout">
+        <strong>In simple words:</strong> this scenario checks whether the backend can improve the whole replay workload when the harness tells it, "these tool calls will return at these times, and every replay wants its next token as soon as possible."
+      </div>
+      <div class="setup">
+        <p class="setup-title">How the experiment is set up</p>
+        <p>The same 32 replay requests are run in both modes using the same generated timeline. Tool waits are sampled from realistic buckets, so some replays return quickly and others return much later. In baseline mode, replay submissions use ordinary FIFO behavior. In controller mode, the harness exposes replay timing during tool wait; the controller assigns due-time priority before replay, uses that priority in the local submission gate, and lowers the same priority into SGLang.</p>
+      </div>
+      <details class="explain-panel">
+        <summary>What the controller does and why this scenario wins</summary>
+        <div class="explain-body">
+          <p><strong>What this setup tests:</strong> whether the backend can serve replay requests in a better order when the harness tells it when each tool call is expected to return.</p>
+          <p><strong>What the controller does:</strong> it looks at the expected replay-ready time for every request and gives the soonest-due replay the highest scheduling priority. It applies that ordering before the request enters SGLang through the local submission gate, then lowers the same priority into SGLang so the backend scheduler sees the same intent.</p>
+          <p><strong>Why this creates a win:</strong> without these timing signals, ready replay requests can wait behind work that is less time-sensitive. With the controller, replay work that is due soon moves forward in both queues, so the group spends less time waiting after tool return. That is why total TTFT, average TTFT, total lateness, average lateness, and worst-case lateness improved in the tracker.</p>
+        </div>
+      </details>
+      <div class="signals">
+        <p class="signals-title">Harness signals exposed to the backend in controller mode</p>
+        <div class="chip-row">
+          <span class="chip">session_id</span>
+          <span class="chip">phase = tool_wait</span>
+          <span class="chip">expected_tool_return_ms</span>
+          <span class="chip">next_ready_eta_ms</span>
+          <span class="chip">deadline_after_ready_ms</span>
+          <span class="chip">tool_wait_class</span>
+          <span class="chip">task_replay_steps</span>
+        </div>
+      </div>
+
+      <div class="chart" aria-label="Scenario 1 manager summary cards">
+        <h3>Manager Summary</h3>
+        <p class="small"><strong>Latest clear-win run:</strong> <code>deadline_predictive_queue_submitprio_20260916_221604</code> compared <code>no_prefetch</code> against <code>controller_predictive_deadline_queue</code>. The controller improved both total work and average per-request delay across all 32 replay requests.</p>
+        <div class="metric-grid">
+          <div class="metric-tile">
+            <div class="metric-name">Total TTFT</div>
+            <div class="metric-value">15.1% better</div>
+            <p class="small">Improved from 101.5 s to 86.2 s across all replay requests.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Avg TTFT / Request</div>
+            <div class="metric-value">0.5 s faster</div>
+            <p class="small">Average replay TTFT improved from 3.2 s to 2.7 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Total Lateness</div>
+            <div class="metric-value">22.1% better</div>
+            <p class="small">Improved from 278.7 s to 217.1 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Avg Lateness / Request</div>
+            <div class="metric-value">1.9 s less late</div>
+            <p class="small">Average replay lateness improved from 8.7 s to 6.8 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">P95 Lateness</div>
+            <div class="metric-value">37.6% better</div>
+            <p class="small">Improved from 31.3 s to 19.5 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Max Lateness</div>
+            <div class="metric-value">38.0% better</div>
+            <p class="small">Improved from 31.6 s to 19.6 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Workload Window</div>
+            <div class="metric-value warn">23.0 s longer</div>
+            <p class="small">Full workload window increased from 234.7 s to 257.7 s.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="evidence" aria-label="Scenario 1 controller ingredients">
+        <p class="evidence-title">What The Controller Used</p>
+        <div class="evidence-grid">
+          <div class="evidence-item">
+            <div class="evidence-label">Timing signal</div>
+            <div class="evidence-value">tool return ETA</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Priority rule</div>
+            <div class="evidence-value">earliest due first</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Decision timing</div>
+            <div class="evidence-value">during tool_wait</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Before SGLang</div>
+            <div class="evidence-value">local submission gate</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Inside SGLang</div>
+            <div class="evidence-value">scheduler priority lowering</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Coverage</div>
+            <div class="evidence-value">all replay requests</div>
+          </div>
+        </div>
+        <p class="evidence-note">The clear win came from using the harness timing signal early and in both scheduling stages. The controller did not only tell SGLang about priority; it also used that priority before requests entered SGLang.</p>
+      </div>
+
+      <div class="evidence" aria-label="Scenario 1 predictive deadline queue mechanism evidence">
+        <p class="evidence-title">Mechanism Evidence</p>
+        <div class="evidence-grid">
+          <div class="evidence-item">
+            <div class="evidence-label">Controller mode</div>
+            <div class="evidence-value">controller_predictive_deadline_queue</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Early priorities assigned</div>
+            <div class="evidence-value">32 / 32 replay requests</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Tool-wait buckets</div>
+            <div class="evidence-value">7 very short, 8 short, 14 medium, 3 long</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">SGLang priority rows</div>
+            <div class="evidence-value">32 / 32 replay requests</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Local submission priority</div>
+            <div class="evidence-value">32 / 32 replay requests</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Same timeline</div>
+            <div class="evidence-value">mode-independent seed</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Proof source</div>
+            <div class="evidence-value">submission gate + gateway lowered</div>
+          </div>
+        </div>
+        <p class="evidence-note">This proves the all-replay predictive path is wired through both queues we care about: the harness exposed replay timing during tool wait, the controller assigned due-time priorities before replay, the local submission gate used those priorities before SGLang, and the gateway lowered those priorities into SGLang. In this run, the controller improved total TTFT and total deadline lateness.</p>
+      </div>
+
+      <div class="evidence" aria-label="Scenario 1 reproducibility settings">
+        <p class="evidence-title">Reproduce This Run</p>
+        <div class="evidence-grid">
+          <div class="evidence-item">
+            <div class="evidence-label">Run label</div>
+            <div class="evidence-value">deadline_predictive_queue_submitprio_20260916_221604</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Modes</div>
+            <div class="evidence-value">no_prefetch vs controller_predictive_deadline_queue</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Harness / model</div>
+            <div class="evidence-value">hatcher / Qwen2.5-Coder-7B</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Pressure level</div>
+            <div class="evidence-value">p3_high</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Replay requests</div>
+            <div class="evidence-value">32 measured, 48 submitted per mode</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Filler sessions</div>
+            <div class="evidence-value">15</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Replay steps</div>
+            <div class="evidence-value">2 per session</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Concurrency</div>
+            <div class="evidence-value">6</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Tool wait seed</div>
+            <div class="evidence-value">20260916</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Timeline control</div>
+            <div class="evidence-value">WORKLOAD_SHAPE_MODE_INDEPENDENT=1</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Wait ranges</div>
+            <div class="evidence-value">100-500 ms, 1-5 s, 10-30 s, 60-120 s</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Wait weights</div>
+            <div class="evidence-value">20%, 35%, 30%, 15%</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Workload profile</div>
+            <div class="evidence-value">synthetic_pressure</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Tool wait profile</div>
+            <div class="evidence-value">realistic_deadline_fair</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="links">
+        <a href="sglang_direct_kv/artifacts/results/reports/deadline_predictive_queue_submitprio_20260916_221604/master_report.html">Predictive deadline queue report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/deadline_predictive_queue_submitprio_20260916_221604/global_kv_readiness_by_mode.csv">All replay timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/claim1_deadline_scheduling_3mode_20260914_205655/master_report.html">Earlier target-only report</a>
+        <a href="HARNESS_AWARE_SCENARIOS.md">Scenario plan</a>
+      </div>
+    </section>
+
+    <section class="section scenario">
+      <div class="scenario-head">
+        <h2>Scenario 2: Proactive KV-Cache Management</h2>
+        <span class="status done">Improved + Guarantee Smoke</span>
+      </div>
+      <p class="lede">Many long-context sessions enter tool wait and are likely to resume at different times. The harness exposes each session's identity, reusable prefix, expected return time, reuse likelihood, and recompute cost, so the backend can prepare valuable KV before replay.</p>
+      <div class="callout">
+        <strong>In simple words:</strong> this scenario checks whether the backend can prepare KV for all soon-returning replay sessions, not just one special target session.
+      </div>
+      <div class="setup">
+        <p class="setup-title">How the experiment is set up</p>
+        <p>The same 32 replay requests are run in both modes using the same generated timeline. Each replay session has its own <code>session_id</code> and <code>prefix_id</code>. In baseline mode, the backend waits until replay arrives. In controller mode, the harness exposes ETA, reuse probability, and recompute cost during tool wait. The controller requests real SGLang-side KV preparation only when the window is safe enough for the load to finish before replay.</p>
+      </div>
+      <details class="explain-panel">
+        <summary>What the controller does and why this scenario wins</summary>
+        <div class="explain-body">
+          <p><strong>What this setup tests:</strong> whether the backend can make replay cheaper by preparing useful KV before the replay request arrives.</p>
+          <p><strong>What the controller does:</strong> during tool wait, it uses the harness signals to identify sessions that are likely to reuse a prefix soon and would be expensive to recompute. Before moving anything, it asks SGLang for a <code>plan_only</code> prepare-prefix answer. If the prefix is already on GPU, it skips it. If the prefix is too small or not safely loadable, it skips it. If SGLang says the prefix is evicted from GPU but backed by host KV and worth loading, the controller admits the load.</p>
+          <p><strong>Important load-path guarantee:</strong> the controller is directly loading KV blocks using SGLang's own prepared-prefix / HiCache <code>load_back</code> mechanism. It is not sending fake requests, synthetic prompts, or cache-warming requests and hoping SGLang loads KV as a side effect. The KV movement is done through the same SGLang mechanism that replay would rely on, so SGLang is aware of the host-to-device movement.</p>
+          <p><strong>Why this creates a win:</strong> without the controller, replay may arrive and then pay the reload or rebuild cost while the user is waiting. With the controller, useful host-resident KV can be moved back to GPU before replay arrives, and redundant loads are avoided. That is why the selective-admission run improved total TTFT and total lateness across the workload.</p>
+        </div>
+      </details>
+      <div class="signals">
+        <p class="signals-title">Harness signals exposed to the backend in controller mode</p>
+        <div class="chip-row">
+          <span class="chip">session_id</span>
+          <span class="chip">prefix_id</span>
+          <span class="chip">phase = tool_wait</span>
+          <span class="chip">expected_tool_return_ms / next_ready_eta_ms</span>
+          <span class="chip">eta_uncertainty_ms</span>
+          <span class="chip">deadline_after_ready_ms</span>
+          <span class="chip">reuse_probability</span>
+          <span class="chip">recompute_cost_tokens</span>
+        </div>
+      </div>
+
+      <div class="chart" aria-label="Scenario 2 manager summary cards">
+        <h3>Manager Summary</h3>
+        <p class="small"><strong>Latest all-request run:</strong> <code>proactive_kv_management_selective_admission_20260917_062007</code> compared <code>no_prefetch</code> against <code>controller_proactive_kv_management</code>. This rerun kept the same long 60-120s tool waits, but added selective backend admission before direct KV movement. It is a modest aggregate timing win.</p>
+        <div class="metric-grid">
+          <div class="metric-tile">
+            <div class="metric-name">Total TTFT</div>
+            <div class="metric-value">5.3% better</div>
+            <p class="small">Improved from 123.1 s to 116.5 s across all 32 replay requests.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Avg TTFT / Request</div>
+            <div class="metric-value">0.2 s faster</div>
+            <p class="small">Average replay TTFT improved from 3.8 s to 3.6 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Total Lateness</div>
+            <div class="metric-value">5.3% better</div>
+            <p class="small">Improved from 123.4 s to 116.9 s across all replay requests.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Avg Lateness / Request</div>
+            <div class="metric-value">0.2 s less late</div>
+            <p class="small">Average replay lateness improved from 3.9 s to 3.7 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">P95 Lateness</div>
+            <div class="metric-value warn">0.1 s worse</div>
+            <p class="small">P95 lateness was roughly flat, moving from 7.3 s to 7.4 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Max Lateness</div>
+            <div class="metric-value">2.2 s better</div>
+            <p class="small">Max lateness improved from 10.5 s to 8.3 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Workload Window</div>
+            <div class="metric-value">about same</div>
+            <p class="small">Full workload window was essentially unchanged: 328.6 s to 328.5 s.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="evidence" aria-label="Scenario 2 mechanism evidence">
+        <p class="evidence-title">Mechanism Evidence</p>
+        <div class="evidence-grid">
+          <div class="evidence-item">
+            <div class="evidence-label">Controller mode</div>
+            <div class="evidence-value">controller_proactive_kv_management</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Authorized KV load path</div>
+            <div class="evidence-value">prepared_prefix_control only</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Prefetch requests</div>
+            <div class="evidence-value">21</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Backend acted</div>
+            <div class="evidence-value">21 / 21</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Direct hook available</div>
+            <div class="evidence-value">21 / 21</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">SGLang prepare plans</div>
+            <div class="evidence-value">9 would load, 12 already resident</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Selective skips</div>
+            <div class="evidence-value">12 already resident, 3 too small</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Guarantee contract</div>
+            <div class="evidence-value">requires completion before replay</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Allowed wait class</div>
+            <div class="evidence-value">long windows only</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Movement before replay compute</div>
+            <div class="evidence-value">6 / 21 opportunities</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Main-run wait classes</div>
+            <div class="evidence-value">all long, 60-120s</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Prepared tokens</div>
+            <div class="evidence-value">48,889 tokens via load_back</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Replay reuse audit</div>
+            <div class="evidence-value">7 useful, 12 none, 2 rebuilt</div>
+          </div>
+        </div>
+        <p class="evidence-note">This run shows the new selective admission gate working. The controller asked SGLang for a <code>plan_only</code> answer first, skipped 12 already-resident prefixes, skipped 3 host-resident prefixes that were too small to justify loading, and attempted direct load on 6 prefixes. Five reached <code>ready</code>, one was not admitted by SGLang, and the proof table observed 111 load-back events plus 560 H2D copy events before replay compute. Request-triggered cache warmup remains removed and is not an approved load path.</p>
+      </div>
+
+      <div class="callout">
+        <strong>What we learned:</strong> selective admission fixed the biggest problem from the previous run. The controller no longer spends work on already-GPU-resident prefixes, and aggregate TTFT/lateness improved. The win is still modest because only 11 of 32 paired requests improved individually, so the next tuning step is to make admission better at predicting which prepared prefixes will actually be reused by replay.
+      </div>
+      <div class="callout">
+        <strong>Repro details:</strong> 32 all-request replay rows, two modes, long-only tool waits from 60-120s, seed <code>20260917</code>, <code>CONTROLLER_DIRECT_LOAD_SELECTIVE_ADMISSION=1</code>, <code>CONTROLLER_DIRECT_LOAD_MIN_SAVED_TOKENS=1024</code>, and <code>prepared_prefix_control</code> as the only authorized direct KV load path.
+      </div>
+
+      <div class="callout warning">
+        <strong>Next tuning direction:</strong> improve the admission policy with replay-reuse prediction. The controller should not only ask whether host-backed KV can be loaded; it should also estimate whether the later replay will use that exact prepared prefix instead of rebuilding substantial KV.
+      </div>
+
+      <div class="links">
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_selective_admission_20260917_062007/master_report.html">Selective-admission full run report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_selective_admission_20260917_062007/global_kv_readiness_by_mode.csv">Selective-admission timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_selective_admission_20260917_062007/proactive_kv_correctness_audit.csv">Selective-admission correctness audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_selective_admission_20260917_062007/targeted_kv_prefetch_proof.csv">Selective-admission targeted KV proof CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_long_waits_20260917_053423/master_report.html">Long-wait full run report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_long_waits_20260917_053423/global_kv_readiness_by_mode.csv">Long-wait timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_long_waits_20260917_053423/proactive_kv_correctness_audit.csv">Long-wait correctness audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_long_waits_20260917_053423/targeted_kv_prefetch_proof.csv">Long-wait targeted KV proof CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_prepared_prefix_control_20260917_045425/master_report.html">Prepared-prefix full run report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_prepared_prefix_control_20260917_045425/global_kv_readiness_by_mode.csv">Prepared-prefix full run timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_prepared_prefix_control_20260917_045425/proactive_kv_correctness_audit.csv">Prepared-prefix full run audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/prepared_prefix_control_smoke4_20260917_044411/master_report.html">Prepared-prefix positive-path smoke report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/prepared_prefix_control_smoke4_20260917_044411/proactive_kv_correctness_audit.csv">Prepared-prefix positive-path audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_guaranteed_direct_load_20260917_030847/master_report.html">Guaranteed direct-load main report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_guaranteed_direct_load_20260917_030847/global_kv_readiness_by_mode.csv">Guaranteed direct-load timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_guaranteed_direct_load_20260917_030847/proactive_kv_correctness_audit.csv">Guaranteed direct-load audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_guarantee_admission_smoke_20260917_032609/master_report.html">Long-window guarantee smoke report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_guarantee_admission_smoke_20260917_032609/proactive_kv_correctness_audit.csv">Long-window clean reuse audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_deadline_kv_lane_fixed_20260917_021039/master_report.html">Deadline-priority KV lane report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_deadline_kv_lane_fixed_20260917_021039/global_kv_readiness_by_mode.csv">Deadline-priority timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_deadline_kv_lane_fixed_20260917_021039/targeted_kv_prefetch_proof.csv">Deadline-priority direct KV proof CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_deadline_kv_lane_fixed_20260917_021039/proactive_kv_correctness_audit.csv">Replay reuse correctness audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_bg_lane_20260917_012034/master_report.html">Background-lane proactive KV report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_bg_lane_20260917_012034/global_kv_readiness_by_mode.csv">Background-lane timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_bg_lane_20260917_012034/targeted_kv_prefetch_proof.csv">Background-lane direct KV proof CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_early_start_20260917_010018/master_report.html">Early-start proactive KV report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_early_start_20260917_010018/global_kv_readiness_by_mode.csv">Early-start timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_early_start_20260917_010018/targeted_kv_prefetch_proof.csv">Early-start direct KV proof CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_slack_guard_20260917_003153/master_report.html">Slack-guard proactive KV report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_slack_guard_20260917_003153/global_kv_readiness_by_mode.csv">All replay timing CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_slack_guard_20260917_003153/targeted_kv_prefetch_proof.csv">Direct KV proof CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/proactive_kv_management_allreplay_20260916_225904/master_report.html">Prior eager proactive KV report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/harness_deadline_pressure_20260915_040038/master_report.html">Earlier target-scoped KV report</a>
+        <a href="sglang_direct_kv/README.md">Backend milestone notes</a>
+      </div>
+    </section>
+
+    <section class="section scenario">
+      <div class="scenario-head">
+        <h2>Scenario 3: Better Cache Eviction Decisions</h2>
+        <span class="status">Request Win + Trade-off</span>
+      </div>
+      <p class="lede">All replay-capable requests compete for limited KV capacity. The harness exposes which prefixes are likely to be reused, how expensive they are to rebuild, and when replay is expected, so the backend can tell SGLang which KV is more valuable before eviction pressure hits.</p>
+      <div class="callout">
+        <strong>In simple words:</strong> this scenario checks whether SGLang can make better eviction choices when the controller gives it value information for every replay-capable request, not just one special target request.
+      </div>
+      <div class="setup">
+        <p class="setup-title">How the experiment is set up</p>
+        <p>The same 32 replay requests are run in both modes using the same generated timeline. The load generator creates enough concurrent long-context sessions to force KV eviction decisions. In baseline mode, requests run without value-aware eviction signals. In controller mode, every replay-capable prefix is scored as high, normal, or low value from harness signals, and that value is lowered into SGLang priority. SGLang's own priority radix eviction path performs the real eviction.</p>
+      </div>
+      <details class="explain-panel">
+        <summary>What the controller does and why this scenario wins</summary>
+        <div class="explain-body">
+          <p><strong>What this setup tests:</strong> whether cache eviction gets better when the backend knows which cached prefixes are likely to matter soon and which ones are cheaper to lose.</p>
+          <p><strong>What the controller does:</strong> it translates <code>session_id</code>, <code>prefix_id</code>, replay timing, reuse probability, and recompute cost into <code>controller_eviction_value_class</code>, <code>controller_eviction_value_score</code>, and <code>controller_sglang_priority</code>. High-value prefixes get priority <code>100</code>, normal prefixes get <code>0</code>, and low-value prefixes get <code>-100</code>.</p>
+          <p><strong>Important eviction-path guarantee:</strong> the controller does not manually evict KV blocks. It gives SGLang better priority information, and SGLang's native priority radix eviction policy performs the eviction. That keeps SGLang's cache state authoritative.</p>
+          <p><strong>Why this creates a win:</strong> under memory pressure, baseline eviction can discard useful prefixes without knowing their future value. With the controller, SGLang has value-ranked KV, so replay requests spend less total time waiting for first tokens and less time late after tool return. The trade-off in this run is that the total workload window became longer.</p>
+        </div>
+      </details>
+      <div class="signals">
+        <p class="signals-title">Harness signals exposed to the backend in controller mode</p>
+        <div class="chip-row">
+          <span class="chip">session_id</span>
+          <span class="chip">prefix_id</span>
+          <span class="chip">phase = tool_wait</span>
+          <span class="chip">expected_tool_return_ms / next_ready_eta_ms</span>
+          <span class="chip">reuse_probability</span>
+          <span class="chip">recompute_cost_tokens</span>
+          <span class="chip">deadline_after_ready_ms</span>
+          <span class="chip">work_value / criticality</span>
+          <span class="chip">cancelable</span>
+        </div>
+      </div>
+
+      <div class="chart" aria-label="Scenario 3 manager summary cards">
+        <h3>Manager Summary</h3>
+        <p class="small"><strong>Latest all-request run:</strong> <code>value_aware_eviction_all_requests_fixed_20260917_163518</code> compared <code>no_prefetch</code> against <code>controller_value_aware_eviction</code>. The controller improved aggregate replay responsiveness, while increasing the overall workload window.</p>
+        <div class="metric-grid">
+          <div class="metric-tile">
+            <div class="metric-name">Total TTFT</div>
+            <div class="metric-value">51.6% better</div>
+            <p class="small">Improved from 482.3 s to 233.5 s across all 32 replay requests.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Avg TTFT / Request</div>
+            <div class="metric-value">7.8 s faster</div>
+            <p class="small">Average replay TTFT improved from 15.1 s to 7.3 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Total Lateness</div>
+            <div class="metric-value">34.9% better</div>
+            <p class="small">Improved from 1014.0 s to 659.9 s across all replay requests.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Avg Lateness / Request</div>
+            <div class="metric-value">11.1 s less late</div>
+            <p class="small">Average replay lateness improved from 31.7 s to 20.6 s.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Priority Alignment</div>
+            <div class="metric-value">0 mismatches</div>
+            <p class="small">High, normal, and low value classes reached SGLang as 100, 0, and -100.</p>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-name">Workload Window</div>
+            <div class="metric-value warn">63.1 s longer</div>
+            <p class="small">Overall run window increased from 205.6 s to 268.8 s.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="evidence" aria-label="Scenario 3 mechanism evidence">
+        <p class="evidence-title">Mechanism Evidence</p>
+        <div class="evidence-grid">
+          <div class="evidence-item">
+            <div class="evidence-label">Controller mode</div>
+            <div class="evidence-value">controller_value_aware_eviction</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">SGLang policy</div>
+            <div class="evidence-value">radix priority eviction</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Preflight smoke</div>
+            <div class="evidence-value">PriorityStrategy passed</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Value classes</div>
+            <div class="evidence-value">high, normal, low</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Forwarded priorities</div>
+            <div class="evidence-value">23 high, 16 normal, 9 low</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Priority mismatch count</div>
+            <div class="evidence-value">0</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Native device evictions</div>
+            <div class="evidence-value">324 events</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Native host evictions</div>
+            <div class="evidence-value">77 events</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Device eviction indices</div>
+            <div class="evidence-value">441,735</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Host eviction indices</div>
+            <div class="evidence-value">50,086</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Replay requests</div>
+            <div class="evidence-value">32 measured</div>
+          </div>
+          <div class="evidence-item">
+            <div class="evidence-label">Same timeline</div>
+            <div class="evidence-value">mode-independent seed</div>
+          </div>
+        </div>
+        <p class="evidence-note">The important proof point is not that the controller evicted blocks itself. It did not. The proof is that value classes reached SGLang as priorities with zero mismatches, the server ran with <code>--radix-eviction-policy priority</code>, and native SGLang/HiCache eviction events were observed while aggregate replay TTFT and lateness improved.</p>
+      </div>
+
+      <div class="callout">
+        <strong>What we learned:</strong> the all-request Scenario 3 setup is now wired correctly. It produced a strong replay responsiveness win, but not a no-cost system win, because total workload duration increased. The next tuning question is how to keep the TTFT/lateness benefit while reducing the workload-window cost.
+      </div>
+
+      <div class="callout">
+        <strong>Repro details:</strong> 32 all-request replay rows, two modes, 15 pressure sessions, two replay steps per session, concurrency 6, seed <code>20260917</code>, wait buckets <code>100-500 ms</code>, <code>1-5 s</code>, <code>10-30 s</code>, and <code>60-120 s</code>, <code>MAX_TOTAL_TOKENS=12288</code>, <code>WORKLOAD_SHAPE_MODE_INDEPENDENT=1</code>, <code>AGENTIC_KV_ENABLE_PRIORITY_RADIX_EVICTION_CHOICE=1</code>, and <code>CONTROLLER_VALUE_AWARE_RADIX_EVICTION_POLICY=priority</code>.
+      </div>
+
+      <div class="links">
+        <a href="sglang_direct_kv/artifacts/results/reports/value_aware_eviction_all_requests_fixed_20260917_163518/master_report.html">Value-aware eviction report</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/value_aware_eviction_all_requests_fixed_20260917_163518/cost_accounting_summary.csv">All-request TTFT/lateness CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/value_aware_eviction_all_requests_fixed_20260917_163518/value_aware_eviction_audit.csv">Value-aware eviction audit CSV</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/value_aware_eviction_all_requests_fixed_20260917_163518/value_aware_eviction_audit.html">Value-aware eviction audit HTML</a>
+        <a href="sglang_direct_kv/artifacts/results/reports/value_aware_eviction_all_requests_fixed_20260917_163518/priority_radix_eviction_smoke.json">Priority radix smoke JSON</a>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Upcoming Scenarios</h2>
+      <p class="lede">These are not run yet in the simplified two-mode format. Each should use the same pattern: baseline without the harness signal, then controller behavior enabled by the exposed harness signal.</p>
+      <div class="todo-list">
+        <div class="todo">
+          <strong>Scenario 4: Just-in-Time GPU Headroom.</strong>
+          <p>In simple words: if the harness says a user-facing replay is about to return, the backend should leave enough GPU room for it at the right time, without wasting GPU capacity too early.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>A target session enters tool wait with a known expected return time. Background/filler work is allowed to run during most of the wait. In baseline mode, background work can keep filling capacity until the target replay arrives. In controller mode, the backend opens a small headroom window shortly before the target is expected to return.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">phase = tool_wait</span><span class="chip">expected_tool_return_ms / next_ready_eta_ms</span><span class="chip">eta_uncertainty_ms</span><span class="chip">deadline_after_ready_ms</span><span class="chip">priority / urgency</span><span class="chip">user_waiting</span></div></div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 5: Smarter Prefill Chunking.</strong>
+          <p>In simple words: if a big background prefill is running and an urgent replay is coming soon, the backend should break the background work into smaller pieces so the urgent replay does not get stuck waiting.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Start a large background prefill and schedule a target replay to become ready soon. In baseline mode, the background prefill uses large chunks, so the target may wait for a chunk boundary. In controller mode, the backend sees the replay ETA and shrinks background chunks near that time, creating faster interruption points for the target.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">phase = tool_wait</span><span class="chip">expected_tool_return_ms / next_ready_eta_ms</span><span class="chip">deadline_after_ready_ms</span><span class="chip">priority / urgency</span><span class="chip">user_waiting</span></div></div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 6: More Accurate Memory Admission.</strong>
+          <p>In simple words: the backend should not admit new work just because capacity looks free right now, if the harness says a near-future wave of replay-capable sessions is about to need that capacity.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Run the same replay-capable sessions as the baseline, with realistic tool-wait return times and enough concurrent long-context work to create memory pressure. Baseline mode admits candidate work normally. Controller mode uses the predicted near-future replay wave plus estimated KV demand to delay risky candidate work before it enters SGLang. There is no special target request; all replay requests are measured together.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">prefix_id</span><span class="chip">phase = tool_wait</span><span class="chip">expected_tool_return_ms / next_ready_eta_ms</span><span class="chip">eta_uncertainty_ms</span><span class="chip">deadline_after_ready_ms</span><span class="chip">reuse_probability</span><span class="chip">recompute_cost_tokens</span><span class="chip">work_value / criticality</span><span class="chip">cancelable</span></div></div>
+          <div class="chart" aria-label="Scenario 6 initial manager summary">
+            <h3>Initial Result: Not Yet A Clear Win</h3>
+            <p class="small"><strong>Latest run:</strong> <code>memory_admission_all_requests_v4_20260917_182215</code> compared <code>no_prefetch</code> against <code>controller_memory_admission</code>. The controller correctly delayed risky candidate admissions, but the aggregate result was mixed rather than a clean win.</p>
+            <div class="metric-grid">
+              <div class="metric-tile">
+                <div class="metric-name">Total TTFT</div>
+                <div class="metric-value warn">8.4% worse</div>
+                <p class="small">Increased from 67.9 s to 73.6 s across 16 replay requests.</p>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-name">Avg TTFT / Request</div>
+                <div class="metric-value warn">0.4 s slower</div>
+                <p class="small">Average replay TTFT increased from 4.2 s to 4.6 s.</p>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-name">Total Lateness</div>
+                <div class="metric-value">about same</div>
+                <p class="small">Slightly improved from 312.3 s to 312.1 s.</p>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-name">Avg Lateness / Request</div>
+                <div class="metric-value">about same</div>
+                <p class="small">Average lateness moved from 19.5 s to 19.5 s.</p>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-name">Workload Window</div>
+                <div class="metric-value warn">4.7 s longer</div>
+                <p class="small">Full workload time increased from 95.1 s to 99.8 s.</p>
+              </div>
+            </div>
+          </div>
+          <div class="evidence" aria-label="Scenario 6 memory admission evidence">
+            <p class="evidence-title">Mechanism Evidence</p>
+            <div class="evidence-grid">
+              <div class="evidence-item">
+                <div class="evidence-label">Replay predictions</div>
+                <div class="evidence-value">16 registered</div>
+              </div>
+              <div class="evidence-item">
+                <div class="evidence-label">Admission decisions</div>
+                <div class="evidence-value">8 candidates checked</div>
+              </div>
+              <div class="evidence-item">
+                <div class="evidence-label">Delayed candidates</div>
+                <div class="evidence-value">4 / 8</div>
+              </div>
+              <div class="evidence-item">
+                <div class="evidence-label">Delay window</div>
+                <div class="evidence-value">about 5.0 s each</div>
+              </div>
+              <div class="evidence-item">
+                <div class="evidence-label">Scenario isolation</div>
+                <div class="evidence-value">priority / prefetch / eviction off</div>
+              </div>
+            </div>
+            <p class="evidence-note">This proves the admission plumbing is active and isolated, but the current policy is too blunt: it delays candidate work without creating enough replay benefit. The next version should use measured queue depth, in-flight prefill state, and predicted runtime so it only holds work when the hold can actually move replay earlier.</p>
+          </div>
+          <div class="callout">
+            <strong>Repro details:</strong> two modes, 4 primary replay sessions, 1 candidate session per primary session, 2 replay steps, fixed 5.0 s tool waits, concurrency 2, seed <code>20260917</code>, <code>MAX_TOTAL_TOKENS=12288</code>, <code>CONTROLLER_MEMORY_ADMISSION_LOOKAHEAD_MS=8000</code>, and <code>WORKLOAD_SHAPE_MODE_INDEPENDENT=1</code>.
+          </div>
+          <div class="links">
+            <a href="sglang_direct_kv/artifacts/results/reports/memory_admission_all_requests_v4_20260917_182215/master_report.html">Memory admission report</a>
+            <a href="sglang_direct_kv/artifacts/results/reports/memory_admission_all_requests_v4_20260917_182215/cost_accounting_summary.csv">All-request TTFT/lateness CSV</a>
+            <a href="sglang_direct_kv/artifacts/results/reports/memory_admission_all_requests_v4_20260917_182215/memory_admission_audit.csv">Memory admission audit CSV</a>
+            <a href="sglang_direct_kv/artifacts/results/reports/memory_admission_all_requests_v4_20260917_182215/memory_admission_audit.html">Memory admission audit HTML</a>
+          </div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 7: Critical-Path Scheduling.</strong>
+          <p>In simple words: if one request unlocks several other steps in the workflow, the backend should run that request before unrelated work, so the whole job finishes sooner.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Make two similar-size requests ready at the same time. One request is on the workflow's critical path and unlocks downstream work; the other is independent. In baseline mode, they are treated equally or run in arrival order. In controller mode, the harness marks the critical-path request, so the backend runs it first and downstream work can start earlier.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">prefix_id</span><span class="chip">phase = replay_ready</span><span class="chip">work_value / criticality</span><span class="chip">priority / urgency</span><span class="chip">deadline_after_ready_ms</span></div></div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 8: Cancellation of Low-Value Work.</strong>
+          <p>In simple words: if the harness knows some speculative work is no longer useful, the backend should stop spending compute and memory on it.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Launch several speculative branches. One branch finishes or becomes the chosen path, making the other branches unnecessary. In baseline mode, the losing branches continue to consume compute and KV. In controller mode, the harness marks them as cancelable or finished, so the backend stops or drops that low-value work.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">prefix_id</span><span class="chip">phase = speculative / finished</span><span class="chip">work_value / criticality</span><span class="chip">cancelable</span><span class="chip">user_waiting</span></div></div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 9: Better Batching.</strong>
+          <p>In simple words: urgent user-facing work should not always be batched together with slow background work if that makes the user wait longer.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Send urgent interactive requests and flexible background requests at the same time. In baseline mode, the backend batches mostly for throughput and may mix them together. In controller mode, the harness marks which requests are user-facing and urgent, so the backend can separate or prioritize those requests to reduce user-visible tail latency.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">phase = replay_ready / background</span><span class="chip">priority / urgency</span><span class="chip">user_waiting</span><span class="chip">deadline_after_ready_ms</span><span class="chip">work_value / criticality</span></div></div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 10: Better Model and Execution-Path Selection.</strong>
+          <p>In simple words: important interactive work should use the stronger or faster path, while low-value background work can use a cheaper path.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Create a mix of critical user-facing work and lower-value background work. In baseline mode, everything uses the same model or execution path. In controller mode, the harness tells the backend which work is critical and which work is flexible, so the backend can reserve the stronger path for important requests and send cheaper work elsewhere.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">phase</span><span class="chip">priority / urgency</span><span class="chip">user_waiting</span><span class="chip">work_value / criticality</span><span class="chip">cancelable</span></div></div>
+        </div>
+        <div class="todo">
+          <strong>Scenario 11: Predictive Rather Than Reactive Behavior.</strong>
+          <p>In simple words: the backend should prepare before a replay arrives, using what the harness already knows, instead of waiting until the user is already waiting.</p>
+          <div class="setup"><p class="setup-title">How the experiment is set up</p><p>Combine the key lifecycle facts in one small workflow: a target session enters tool wait, has valuable reusable KV, and has a known replay deadline. Add background pressure during the wait. In baseline mode, the backend reacts only after replay arrives. In controller mode, the backend uses the harness signals to prepare KV, priority, and capacity before the replay shows up.</p></div>
+          <div class="signals"><p class="signals-title">Signals</p><div class="chip-row"><span class="chip">session_id</span><span class="chip">prefix_id</span><span class="chip">phase = tool_wait</span><span class="chip">expected_tool_return_ms / next_ready_eta_ms</span><span class="chip">eta_uncertainty_ms</span><span class="chip">deadline_after_ready_ms</span><span class="chip">priority / urgency</span><span class="chip">user_waiting</span><span class="chip">reuse_probability</span><span class="chip">recompute_cost_tokens</span></div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

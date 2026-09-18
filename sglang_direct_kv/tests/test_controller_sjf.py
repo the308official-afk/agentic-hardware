@@ -6,7 +6,10 @@ from pathlib import Path
 
 from agentic_kv.controller.modes import (
     CONTROLLER_DEADLINE_FAIR_MODE,
+    CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE,
+    CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE,
     controller_mode,
+    controller_targeted_kv_prefetch_mode,
     controller_safe_sjf_degree,
     controller_scheduler_priority_mode,
 )
@@ -83,3 +86,14 @@ def test_sjf_mode_degrees_are_stable() -> None:
 def test_deadline_fair_is_scheduler_controller_mode() -> None:
     assert controller_mode(CONTROLLER_DEADLINE_FAIR_MODE)
     assert controller_scheduler_priority_mode(CONTROLLER_DEADLINE_FAIR_MODE)
+
+
+def test_predictive_deadline_queue_is_scheduler_controller_mode() -> None:
+    assert controller_mode(CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE)
+    assert controller_scheduler_priority_mode(CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE)
+
+
+def test_proactive_kv_management_is_controller_prefetch_mode() -> None:
+    assert controller_mode(CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE)
+    assert controller_targeted_kv_prefetch_mode(CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE)
+    assert not controller_scheduler_priority_mode(CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE)

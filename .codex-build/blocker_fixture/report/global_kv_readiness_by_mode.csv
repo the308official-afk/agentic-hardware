@@ -1,0 +1,5 @@
+case_id,mode,request_id,session_id,request_group,phase,has_replay_deadline,tool_wait_step,tool_wait_class,tool_wait_ms,replay_due_ts_ns,request_start_ts_ns,sglang_receive_ts_ns,first_token_ts_ns,request_end_ts_ns,due_to_request_start_ms,due_to_sglang_receive_ms,sglang_receive_to_first_token_ms,ttft_ms,replay_debt_ms,first_token_lateness_ms,prefill_full_input_tokens,prefill_cached_prefix_tokens,prefill_uncached_token_count
+case,controller_predictive_deadline_queue,victim,s1,filler,pressure_filler,true,1,short,1000,1000000000,2000000000,2100000000,3000000000,4000000000,1000,1100,900,1000,2000,2000,100,50,50
+case,controller_predictive_deadline_queue,early,s2,filler,pressure_filler,true,1,short,500,500000000,600000000,700000000,1500000000,2500000000,100,200,800,900,1000,1000,100,50,50
+case,controller_predictive_deadline_queue,later,s3,filler,pressure_filler,true,1,long,5000,5000000000,1200000000,1300000000,2500000000,3500000000,-3800,-3700,1200,1300,0,0,100,50,50
+case,controller_predictive_deadline_queue,nodue,s4,initial,initial_turn,false,,,,,1100000000,1200000000,2300000000,3300000000,,,,1200,,0,100,50,50

@@ -1,0 +1,143 @@
+{"kind":"deck","id":"pr/1bfmut","name":"Deck"}
+{"kind":"layout","layoutId":"cb1f1087-ed6b-455d-88d5-c915048a5336","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"053bb73d-3183-4ce0-a054-5b69fec8ffc8","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/fsbqk1","slide":1,"title":"Scenario 1: Deadline-Aware Replay Ordering","textShapes":30}
+{"kind":"textbox","id":"sh/g7y1476d","slide":1,"text":"Scenario 1: Deadline-Aware Replay Ordering","textPreview":"Scenario 1: Deadline-Aware Replay Ordering","textChars":42,"textLines":1,"bbox":[56,36,840,48]}
+{"kind":"textbox","id":"sh/f6pkbm5s","slide":1,"text":"Harness timing estimates when agents resume, then releases replay work in deadline order.","textPreview":"Harness timing estimates when agents resume, then releases replay work in deadline order.","textChars":89,"textLines":1,"bbox":[58,88,900,28]}
+{"kind":"textbox","id":"sh/elgj2ho7","slide":1,"text":"Clear win","textPreview":"Clear win","textChars":9,"textLines":1,"bbox":[1080,50,120,26]}
+{"kind":"shape","id":"sh/tk729cn2","slide":1,"bbox":[56,126,1168,1.4]}
+{"kind":"textbox","id":"sh/sjy1076h","slide":1,"text":"What the setup tests","textPreview":"What the setup tests","textChars":20,"textLines":1,"bbox":[66,160,455,28]}
+{"kind":"shape","id":"sh/ripk725w","slide":1,"bbox":[66,209,8,8]}
+{"kind":"textbox","id":"sh/6hgjyxob","slide":1,"text":"32 replay requests run in both modes.","textPreview":"32 replay requests run in both modes.","textChars":37,"textLines":1,"bbox":[86,200,435,34]}
+{"kind":"shape","id":"sh/dgb25wn6","slide":1,"bbox":[66,247,8,8]}
+{"kind":"textbox","id":"sh/cfilcbml","slide":1,"text":"Both modes use the same tool-wait timeline.","textPreview":"Both modes use the same tool-wait timeline.","textChars":43,"textLines":1,"bbox":[86,238,435,34]}
+{"kind":"shape","id":"sh/ytc3yhsf","slide":1,"bbox":[66,285,8,8]}
+{"kind":"textbox","id":"sh/zul4r29k","slide":1,"text":"Tool waits range from very short to long.","textPreview":"Tool waits range from very short to long.","textChars":41,"textLines":1,"bbox":[86,276,435,34]}
+{"kind":"shape","id":"sh/kvul07a5","slide":1,"bbox":[66,323,8,8]}
+{"kind":"textbox","id":"sh/lw3mtcrq","slide":1,"text":"Baseline submits replay work in arrival order.","textPreview":"Baseline submits replay work in arrival order.","textChars":46,"textLines":1,"bbox":[86,314,435,34]}
+{"kind":"shape","id":"sh/a5s3uxs3","slide":1,"bbox":[66,374,455,154]}
+{"kind":"textbox","id":"sh/b614n29o","slide":1,"text":"What the controller does","textPreview":"What the controller does","textChars":24,"textLines":1,"bbox":[88,394,390,26]}
+{"kind":"textbox","id":"sh/crulw7a9","slide":1,"text":"It estimates when each agent will resume, then releases ready replay requests in deadline order. The request payload stays the same; only the release sequence changes.","textPreview":"It estimates when each agent will resume, then releases ready replay requests in deadline order. The request payload stays the same; only...","textChars":167,"textLines":1,"bbox":[88,428,390,76]}
+{"kind":"textbox","id":"sh/xs3mpcru","slide":1,"text":"Results across all replay requests","textPreview":"Results across all replay requests","textChars":34,"textLines":1,"bbox":[590,160,560,28]}
+{"kind":"textbox","id":"sh/u1w361s7","slide":1,"text":"Latest clear-win run: deadline_predictive_queue_submitprio_20260916_221604","textPreview":"Latest clear-win run: deadline_predictive_queue_submitprio_20260916_221604","textChars":74,"textLines":1,"bbox":[590,192,560,24]}
+{"kind":"shape","id":"sh/v254zm9s","slide":1,"bbox":[590,228,270,92]}
+{"kind":"textbox","id":"sh/r6x0rypk","slide":1,"text":"Total TTFT","textPreview":"Total TTFT","textChars":10,"textLines":1,"bbox":[606,240,238,22]}
+{"kind":"textbox","id":"sh/65ojyt8z","slide":1,"text":"15.1% better","textPreview":"15.1% better","textChars":12,"textLines":1,"bbox":[606,264,238,28]}
+{"kind":"textbox","id":"sh/t8zito7a","slide":1,"text":"101.5 s to 86.2 s","textPreview":"101.5 s to 86.2 s","textChars":17,"textLines":1,"bbox":[606,294,238,18]}
+{"kind":"shape","id":"sh/s7q10jqp","slide":1,"bbox":[882,228,270,92]}
+{"kind":"textbox","id":"sh/fah0vypg","slide":1,"text":"Avg TTFT per request","textPreview":"Avg TTFT per request","textChars":20,"textLines":1,"bbox":[898,240,238,22]}
+{"kind":"textbox","id":"sh/e98j2t8v","slide":1,"text":"0.5 s faster","textPreview":"0.5 s faster","textChars":12,"textLines":1,"bbox":[898,264,238,28]}
+{"kind":"textbox","id":"sh/1czix87m","slide":1,"text":"3.2 s to 2.7 s","textPreview":"3.2 s to 2.7 s","textChars":14,"textLines":1,"bbox":[898,294,238,18]}
+{"kind":"shape","id":"sh/0bq143q1","slide":1,"bbox":[590,340,270,92]}
+{"kind":"textbox","id":"sh/nyh0zipc","slide":1,"text":"Total lateness","textPreview":"Total lateness","textChars":14,"textLines":1,"bbox":[606,352,238,22]}
+{"kind":"textbox","id":"sh/2x8j6d87","slide":1,"text":"22.1% better","textPreview":"22.1% better","textChars":12,"textLines":1,"bbox":[606,376,238,28]}
+{"kind":"textbox","id":"sh/k3ahgnm5","slide":1,"text":"278.7 s to 217.1 s","textPreview":"278.7 s to 217.1 s","textChars":18,"textLines":1,"bbox":[606,406,238,18]}
+{"kind":"shape","id":"sh/l4jip8nq","slide":1,"bbox":[882,340,270,92]}
+{"kind":"textbox","id":"sh/y1szud4z","slide":1,"text":"P95 lateness","textPreview":"P95 lateness","textChars":12,"textLines":1,"bbox":[898,352,238,22]}
+{"kind":"textbox","id":"sh/z210ni5k","slide":1,"text":"37.6% better","textPreview":"37.6% better","textChars":12,"textLines":1,"bbox":[898,376,238,28]}
+{"kind":"textbox","id":"sh/czahs3m9","slide":1,"text":"31.3 s to 19.5 s","textPreview":"31.3 s to 19.5 s","textChars":16,"textLines":1,"bbox":[898,406,238,18]}
+{"kind":"shape","id":"sh/x0jil8ne","slide":1,"bbox":[590,452,562,92]}
+{"kind":"textbox","id":"sh/ad8zqt43","slide":1,"text":"Trade-off","textPreview":"Trade-off","textChars":9,"textLines":1,"bbox":[606,464,530,22]}
+{"kind":"textbox","id":"sh/be10jy5o","slide":1,"text":"23.0 s longer","textPreview":"23.0 s longer","textChars":13,"textLines":1,"bbox":[606,488,530,28]}
+{"kind":"textbox","id":"sh/obqho3mx","slide":1,"text":"Workload window: 234.7 s to 257.7 s","textPreview":"Workload window: 234.7 s to 257.7 s","textChars":35,"textLines":1,"bbox":[606,518,530,18]}
+{"kind":"shape","id":"sh/pczihoni","slide":1,"bbox":[56,580,1168,1.4]}
+{"kind":"textbox","id":"sh/tgfep43a","slide":1,"text":"Takeaway","textPreview":"Takeaway","textChars":8,"textLines":1,"bbox":[66,608,140,28]}
+{"kind":"textbox","id":"sh/sf6xgz2p","slide":1,"text":"Using harness timing to order replay work reduced replay delay across the full workload.","textPreview":"Using harness timing to order replay work reduced replay delay across the full workload.","textChars":88,"textLines":1,"bbox":[206,608,900,38]}
+{"kind":"textbox","id":"sh/redwnul4","slide":1,"text":"Source: Harness-Aware Scenario Tracker","textPreview":"Source: Harness-Aware Scenario Tracker","textChars":38,"textLines":1,"bbox":[58,674,440,20]}
+{"kind":"notes","id":"nt/fsbqk1","slide":1,"text":"Scenario 1 source: harness_aware_scenario_tracker.html.\n\nSetup: same 32 measured replay requests in baseline and controller modes, using the same generated timeline. Baseline submits replay work in arrival order. Controller mode estimates expected replay timing during tool wait, then releases ready replay requests in deadline order before they enter SGLang. The request payload stays the same; only the release sequence changes.\n\nSignals: session_id, phase=tool_wait, expected_tool_return_ms, next_ready_eta_ms, deadline_after_ready_ms, tool_wait_class, task_replay_steps.\n\nResults: Total TTFT improved from 101.5 s to 86.2 s, or 15.1%. Average TTFT improved from 3.2 s to 2.7 s per replay request. Total lateness improved from 278.7 s to 217.1 s, or 22.1%. Average replay lateness improved from 8.7 s to 6.8 s. P95 lateness improved from 31.3 s to 19.5 s, or 37.6%. Max lateness improved from 31.6 s to 19.6 s, or 38.0%. Trade-off: full workload window increased from 234.7 s to 257.7 s, or 23.0 s longer.\n\n[Sources]\nLocal file: /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware/harness_aware_scenario_tracker.html"}
+{"kind":"slide","id":"sl/pdgdnl","slide":2,"title":"Scenario 2: Proactive KV Preparation","textShapes":33}
+{"kind":"textbox","id":"sh/toza1gjy","slide":2,"text":"Scenario 2: Proactive KV Preparation","textPreview":"Scenario 2: Proactive KV Preparation","textChars":36,"textLines":1,"bbox":[56,36,820,48]}
+{"kind":"textbox","id":"sh/6lor610n","slide":2,"text":"During tool wait, the backend prepares useful host-backed KV before replay arrives.","textPreview":"During tool wait, the backend prepares useful host-backed KV before replay arrives.","textChars":83,"textLines":1,"bbox":[58,88,940,28]}
+{"kind":"textbox","id":"sh/rmhsz618","slide":2,"text":"Modest win","textPreview":"Modest win","textChars":10,"textLines":1,"bbox":[1080,50,120,26]}
+{"kind":"shape","id":"sh/grqtcvip","slide":2,"bbox":[56,126,1168,1.4]}
+{"kind":"textbox","id":"sh/1sza50ja","slide":2,"text":"What the setup tests","textPreview":"What the setup tests","textChars":20,"textLines":1,"bbox":[66,160,455,28]}
+{"kind":"shape","id":"sh/ep8bal0j","slide":2,"bbox":[66,209,8,8]}
+{"kind":"textbox","id":"sh/fqhs3q14","slide":2,"text":"32 replay requests run in both modes.","textPreview":"32 replay requests run in both modes.","textChars":37,"textLines":1,"bbox":[86,200,435,34]}
+{"kind":"shape","id":"sh/ovatgvil","slide":2,"bbox":[66,247,8,8]}
+{"kind":"textbox","id":"sh/pgja90j6","slide":2,"text":"Both modes use the same long tool-wait timeline.","textPreview":"Both modes use the same long tool-wait timeline.","textChars":48,"textLines":1,"bbox":[86,238,435,34]}
+{"kind":"shape","id":"sh/x4ji507u","slide":2,"bbox":[66,285,8,8]}
+{"kind":"textbox","id":"sh/w3a1cvq9","slide":2,"text":"Baseline waits until replay arrives.","textPreview":"Baseline waits until replay arrives.","textChars":36,"textLines":1,"bbox":[86,276,435,34]}
+{"kind":"shape","id":"sh/b2103qpo","slide":2,"bbox":[66,323,8,8]}
+{"kind":"textbox","id":"sh/a1sjal83","slide":2,"text":"Controller mode prepares only useful KV.","textPreview":"Controller mode prepares only useful KV.","textChars":40,"textLines":1,"bbox":[86,314,435,34]}
+{"kind":"shape","id":"sh/lsji9k7q","slide":2,"bbox":[66,374,455,154]}
+{"kind":"textbox","id":"sh/k7a1gfq5","slide":2,"text":"What the controller does","textPreview":"What the controller does","textChars":24,"textLines":1,"bbox":[88,394,390,26]}
+{"kind":"textbox","id":"sh/j6107ap0","slide":2,"text":"It checks SGLang's live cache state before moving anything. Already-on-GPU prefixes are skipped. Small or unsafe loads are skipped. Useful host-backed KV is prepared through SGLang's own path.","textPreview":"It checks SGLang's live cache state before moving anything. Already-on-GPU prefixes are skipped. Small or unsafe loads are skipped. Usefu...","textChars":192,"textLines":1,"bbox":[88,428,390,84]}
+{"kind":"textbox","id":"sh/y5sje58f","slide":2,"text":"Results across all replay requests","textPreview":"Results across all replay requests","textChars":34,"textLines":1,"bbox":[590,160,560,28]}
+{"kind":"textbox","id":"sh/1wzixg7m","slide":2,"text":"Latest all-request run: proactive_kv_management_selective_admission_20260917_062007","textPreview":"Latest all-request run: proactive_kv_management_selective_admission_20260917_062007","textChars":83,"textLines":1,"bbox":[590,192,600,24]}
+{"kind":"shape","id":"sh/0bq14bq1","slide":2,"bbox":[590,228,270,88]}
+{"kind":"textbox","id":"sh/sfu1kbyx","slide":2,"text":"Total TTFT","textPreview":"Total TTFT","textChars":10,"textLines":1,"bbox":[606,240,238,22]}
+{"kind":"textbox","id":"sh/tg3itgfi","slide":2,"text":"5.3% better","textPreview":"5.3% better","textChars":11,"textLines":1,"bbox":[606,264,238,28]}
+{"kind":"textbox","id":"sh/6dsjilgr","slide":2,"text":"123.1 s to 116.5 s","textPreview":"123.1 s to 116.5 s","textChars":18,"textLines":1,"bbox":[606,294,238,18]}
+{"kind":"shape","id":"sh/re10r6xc","slide":2,"bbox":[882,228,270,88]}
+{"kind":"textbox","id":"sh/gju1ovyt","slide":2,"text":"Avg TTFT per request","textPreview":"Avg TTFT per request","textChars":20,"textLines":1,"bbox":[898,240,238,22]}
+{"kind":"textbox","id":"sh/1k32x0fe","slide":2,"text":"0.2 s faster","textPreview":"0.2 s faster","textChars":12,"textLines":1,"bbox":[898,264,238,28]}
+{"kind":"textbox","id":"sh/ehcjmlg3","slide":2,"text":"3.8 s to 3.6 s","textPreview":"3.8 s to 3.6 s","textChars":14,"textLines":1,"bbox":[898,294,238,18]}
+{"kind":"shape","id":"sh/fil0vqxo","slide":2,"bbox":[590,334,270,88]}
+{"kind":"textbox","id":"sh/o7e1svy5","slide":2,"text":"Total lateness","textPreview":"Total lateness","textChars":14,"textLines":1,"bbox":[606,346,238,22]}
+{"kind":"textbox","id":"sh/p8n210fq","slide":2,"text":"5.3% better","textPreview":"5.3% better","textChars":11,"textLines":1,"bbox":[606,370,238,28]}
+{"kind":"textbox","id":"sh/je9c7yl4","slide":2,"text":"123.4 s to 116.9 s","textPreview":"123.4 s to 116.9 s","textChars":18,"textLines":1,"bbox":[606,400,238,18]}
+{"kind":"shape","id":"sh/yd0vet4j","slide":2,"bbox":[882,334,270,88]}
+{"kind":"textbox","id":"sh/lgru983u","slide":2,"text":"Max lateness","textPreview":"Max lateness","textChars":12,"textLines":1,"bbox":[898,346,238,22]}
+{"kind":"textbox","id":"sh/kfidg3mp","slide":2,"text":"2.2 s better","textPreview":"2.2 s better","textChars":12,"textLines":1,"bbox":[898,370,238,28]}
+{"kind":"textbox","id":"sh/bqpc3els","slide":2,"text":"10.5 s to 8.3 s","textPreview":"10.5 s to 8.3 s","textChars":15,"textLines":1,"bbox":[898,400,238,18]}
+{"kind":"shape","id":"sh/apgvat47","slide":2,"bbox":[590,440,270,88]}
+{"kind":"textbox","id":"sh/xcru5o3y","slide":2,"text":"P95 lateness","textPreview":"P95 lateness","textChars":12,"textLines":1,"bbox":[606,452,238,22]}
+{"kind":"textbox","id":"sh/wridcjmd","slide":2,"text":"0.1 s worse","textPreview":"0.1 s worse","textChars":11,"textLines":1,"bbox":[606,476,238,28]}
+{"kind":"textbox","id":"sh/vmtwfilc","slide":2,"text":"Roughly flat: 7.3 s to 7.4 s","textPreview":"Roughly flat: 7.3 s to 7.4 s","textChars":28,"textLines":1,"bbox":[606,506,238,18]}
+{"kind":"shape","id":"sh/ulkv6d4r","slide":2,"bbox":[882,440,270,88]}
+{"kind":"textbox","id":"sh/2t0zah0v","slide":2,"text":"Workload window","textPreview":"Workload window","textChars":15,"textLines":1,"bbox":[898,452,238,22]}
+{"kind":"textbox","id":"sh/3u9g3m1g","slide":2,"text":"about same","textPreview":"about same","textChars":10,"textLines":1,"bbox":[898,476,238,28]}
+{"kind":"textbox","id":"sh/4vihc7i1","slide":2,"text":"328.6 s to 328.5 s","textPreview":"328.6 s to 328.5 s","textChars":18,"textLines":1,"bbox":[898,506,238,18]}
+{"kind":"shape","id":"sh/pwry5cjm","slide":2,"bbox":[56,580,1168,1.4]}
+{"kind":"textbox","id":"sh/upgz6x0z","slide":2,"text":"Mechanism proof","textPreview":"Mechanism proof","textChars":15,"textLines":1,"bbox":[66,604,190,28]}
+{"kind":"textbox","id":"sh/fq9gz21k","slide":2,"text":"21 cache checks, 6 admitted direct loads, 48,889 prepared tokens, and 560 H2D copy events before replay compute.","textPreview":"21 cache checks, 6 admitted direct loads, 48,889 prepared tokens, and 560 H2D copy events before replay compute.","textChars":112,"textLines":1,"bbox":[256,604,860,42]}
+{"kind":"textbox","id":"sh/grih87ip","slide":2,"text":"Source: Harness-Aware Scenario Tracker","textPreview":"Source: Harness-Aware Scenario Tracker","textChars":38,"textLines":1,"bbox":[58,674,440,20]}
+{"kind":"notes","id":"nt/pdgdnl","slide":2,"text":"Scenario 2 source: harness_aware_scenario_tracker.html.\n\nSetup: same 32 replay requests in both modes using the same generated timeline. Each replay session has its own session_id and prefix_id. Baseline waits until replay arrives. Controller mode uses ETA, reuse probability, and recompute cost during tool wait, then requests SGLang-side KV preparation only when the window is safe enough for the load to finish before replay.\n\nRun: proactive_kv_management_selective_admission_20260917_062007 compared no_prefetch against controller_proactive_kv_management.\n\nResults: Total TTFT improved from 123.1 s to 116.5 s, or 5.3%. Average replay TTFT improved from 3.8 s to 3.6 s. Total lateness improved from 123.4 s to 116.9 s, or 5.3%. Average replay lateness improved from 3.9 s to 3.7 s. P95 lateness was roughly flat, moving from 7.3 s to 7.4 s. Max lateness improved from 10.5 s to 8.3 s. Full workload window was essentially unchanged, moving from 328.6 s to 328.5 s.\n\nMechanism evidence: 21 prefetch requests, 21 backend actions, direct hook available for 21 of 21, 9 prepare plans would load and 12 were already resident. Selective admission skipped 12 already-resident prefixes and 3 host-resident prefixes that were too small to justify loading. It attempted direct load on 6 prefixes. The proof table observed 111 load-back events plus 560 H2D copy events before replay compute, with 48,889 prepared tokens via load_back.\n\nImportant caveat: the aggregate timing win is modest. Only 11 of 32 paired requests improved individually, so the next tuning direction is better replay-reuse prediction.\n\n[Sources]\nLocal file: /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware/harness_aware_scenario_tracker.html"}
+{"kind":"slide","id":"sl/rusgco","slide":3,"title":"Scenario 3: Value-Aware KV Eviction","textShapes":33}
+{"kind":"textbox","id":"sh/l4v61wju","slide":3,"text":"Scenario 3: Value-Aware KV Eviction","textPreview":"Scenario 3: Value-Aware KV Eviction","textChars":35,"textLines":1,"bbox":[56,36,820,48]}
+{"kind":"textbox","id":"sh/yhknqhk3","slide":3,"text":"When memory pressure forces evictions, SGLang keeps KV that is more likely to matter soon.","textPreview":"When memory pressure forces evictions, SGLang keeps KV that is more likely to matter soon.","textChars":90,"textLines":1,"bbox":[58,88,940,28]}
+{"kind":"textbox","id":"sh/zitozm1o","slide":3,"text":"Request win + trade-off","textPreview":"Request win + trade-off","textChars":23,"textLines":1,"bbox":[990,50,210,26]}
+{"kind":"shape","id":"sh/87mpwr2l","slide":3,"bbox":[56,126,1168,1.4]}
+{"kind":"textbox","id":"sh/98v65wjq","slide":3,"text":"What the setup tests","textPreview":"What the setup tests","textChars":20,"textLines":1,"bbox":[66,160,455,28]}
+{"kind":"shape","id":"sh/m54nu1kf","slide":3,"bbox":[66,209,8,8]}
+{"kind":"textbox","id":"sh/76do3m10","slide":3,"text":"32 replay requests run in both modes.","textPreview":"32 replay requests run in both modes.","textChars":37,"textLines":1,"bbox":[86,200,435,34]}
+{"kind":"shape","id":"sh/obi5k721","slide":3,"bbox":[66,247,8,8]}
+{"kind":"textbox","id":"sh/pcb6tcjm","slide":3,"text":"Concurrent long-context sessions force KV eviction.","textPreview":"Concurrent long-context sessions force KV eviction.","textChars":51,"textLines":1,"bbox":[86,238,435,34]}
+{"kind":"shape","id":"sh/lkbup4va","slide":3,"bbox":[66,285,8,8]}
+{"kind":"textbox","id":"sh/kj2dwzep","slide":3,"text":"Baseline uses ordinary eviction behavior.","textPreview":"Baseline uses ordinary eviction behavior.","textChars":41,"textLines":1,"bbox":[86,276,435,34]}
+{"kind":"shape","id":"sh/jitcnud4","slide":3,"bbox":[66,323,8,8]}
+{"kind":"textbox","id":"sh/yx0vupwj","slide":3,"text":"Controller mode marks cached prefixes by value.","textPreview":"Controller mode marks cached prefixes by value.","textChars":47,"textLines":1,"bbox":[86,314,435,34]}
+{"kind":"shape","id":"sh/tobut4v6","slide":3,"bbox":[66,374,455,154]}
+{"kind":"textbox","id":"sh/8n2d0zel","slide":3,"text":"What the controller does","textPreview":"What the controller does","textChars":24,"textLines":1,"bbox":[88,394,390,26]}
+{"kind":"textbox","id":"sh/7mtcred0","slide":3,"text":"It scores cached prefixes using reuse likelihood, rebuild cost, and expected replay timing. SGLang's native radix eviction path then chooses what to evict.","textPreview":"It scores cached prefixes using reuse likelihood, rebuild cost, and expected replay timing. SGLang's native radix eviction path then choo...","textChars":155,"textLines":1,"bbox":[88,428,390,76]}
+{"kind":"textbox","id":"sh/6lkvy9wv","slide":3,"text":"Results across all replay requests","textPreview":"Results across all replay requests","textChars":34,"textLines":1,"bbox":[590,160,560,28]}
+{"kind":"textbox","id":"sh/hsvuxovi","slide":3,"text":"Latest all-request run: value_aware_eviction_all_requests_fixed_20260917_163518","textPreview":"Latest all-request run: value_aware_eviction_all_requests_fixed_20260917_163518","textChars":79,"textLines":1,"bbox":[590,192,600,24]}
+{"kind":"shape","id":"sh/grmd4jex","slide":3,"bbox":[590,228,270,88]}
+{"kind":"textbox","id":"sh/07e5gr65","slide":3,"text":"Total TTFT","textPreview":"Total TTFT","textChars":10,"textLines":1,"bbox":[606,240,238,22]}
+{"kind":"textbox","id":"sh/18n6pw7q","slide":3,"text":"51.6% better","textPreview":"51.6% better","textChars":12,"textLines":1,"bbox":[606,264,238,28]}
+{"kind":"textbox","id":"sh/e5cnehof","slide":3,"text":"482.3 s to 233.5 s","textPreview":"482.3 s to 233.5 s","textChars":18,"textLines":1,"bbox":[606,294,238,18]}
+{"kind":"shape","id":"sh/z6lonmpk","slide":3,"bbox":[882,228,270,88]}
+{"kind":"textbox","id":"sh/obe5kr6h","slide":3,"text":"Avg TTFT per request","textPreview":"Avg TTFT per request","textChars":20,"textLines":1,"bbox":[898,240,238,22]}
+{"kind":"textbox","id":"sh/9wn6tw72","slide":3,"text":"7.8 s faster","textPreview":"7.8 s faster","textChars":12,"textLines":1,"bbox":[898,264,238,28]}
+{"kind":"textbox","id":"sh/m9wni1ob","slide":3,"text":"15.1 s to 7.3 s","textPreview":"15.1 s to 7.3 s","textChars":15,"textLines":1,"bbox":[898,294,238,18]}
+{"kind":"shape","id":"sh/na5ormpw","slide":3,"bbox":[590,334,270,88]}
+{"kind":"textbox","id":"sh/4fu587qx","slide":3,"text":"Total lateness","textPreview":"Total lateness","textChars":14,"textLines":1,"bbox":[606,346,238,22]}
+{"kind":"textbox","id":"sh/p036hc7i","slide":3,"text":"34.9% better","textPreview":"34.9% better","textChars":12,"textLines":1,"bbox":[606,370,238,28]}
+{"kind":"textbox","id":"sh/7u98na90","slide":3,"text":"1014.0 s to 659.9 s","textPreview":"1014.0 s to 659.9 s","textChars":19,"textLines":1,"bbox":[606,400,238,18]}
+{"kind":"shape","id":"sh/6t0ru58f","slide":3,"bbox":[882,334,270,88]}
+{"kind":"textbox","id":"sh/twrqpkr6","slide":3,"text":"Avg lateness","textPreview":"Avg lateness","textChars":12,"textLines":1,"bbox":[898,346,238,22]}
+{"kind":"textbox","id":"sh/8vi9wfql","slide":3,"text":"11.1 s less late","textPreview":"11.1 s less late","textChars":16,"textLines":1,"bbox":[898,370,238,28]}
+{"kind":"textbox","id":"sh/jq98jq94","slide":3,"text":"31.7 s to 20.6 s","textPreview":"31.7 s to 20.6 s","textChars":16,"textLines":1,"bbox":[898,400,238,18]}
+{"kind":"shape","id":"sh/y5grql8j","slide":3,"bbox":[590,440,270,88]}
+{"kind":"textbox","id":"sh/lsrql0ra","slide":3,"text":"Value alignment","textPreview":"Value alignment","textChars":15,"textLines":1,"bbox":[606,452,238,22]}
+{"kind":"textbox","id":"sh/kri9svqp","slide":3,"text":"0 mismatches","textPreview":"0 mismatches","textChars":12,"textLines":1,"bbox":[606,476,238,28]}
+{"kind":"textbox","id":"sh/b2p8fq9s","slide":3,"text":"23 high, 16 normal, 9 low","textPreview":"23 high, 16 normal, 9 low","textChars":25,"textLines":1,"bbox":[606,506,238,18]}
+{"kind":"shape","id":"sh/a1g7ml8n","slide":3,"bbox":[882,440,270,88]}
+{"kind":"textbox","id":"sh/q90vqto7","slide":3,"text":"Workload window","textPreview":"Workload window","textChars":15,"textLines":1,"bbox":[898,452,238,22]}
+{"kind":"textbox","id":"sh/ba9cje5c","slide":3,"text":"63.1 s longer","textPreview":"63.1 s longer","textChars":13,"textLines":1,"bbox":[898,476,238,28]}
+{"kind":"textbox","id":"sh/cbidsjmx","slide":3,"text":"205.6 s to 268.8 s","textPreview":"205.6 s to 268.8 s","textChars":18,"textLines":1,"bbox":[898,506,238,18]}
+{"kind":"shape","id":"sh/dcbuloni","slide":3,"bbox":[56,580,1168,1.4]}
+{"kind":"textbox","id":"sh/250bm9ov","slide":3,"text":"Mechanism proof","textPreview":"Mechanism proof","textChars":15,"textLines":1,"bbox":[66,604,190,28]}
+{"kind":"textbox","id":"sh/369cfe5g","slide":3,"text":"Value classes reached SGLang with zero mismatches, and native HiCache eviction events were observed.","textPreview":"Value classes reached SGLang with zero mismatches, and native HiCache eviction events were observed.","textChars":100,"textLines":1,"bbox":[256,604,860,42]}
+{"kind":"textbox","id":"sh/47idoj61","slide":3,"text":"Source: Harness-Aware Scenario Tracker","textPreview":"Source: Harness-Aware Scenario Tracker","textChars":38,"textLines":1,"bbox":[58,674,440,20]}
+{"kind":"notes","id":"nt/rusgco","slide":3,"text":"Scenario 3 source: harness_aware_scenario_tracker.html.\n\nSetup: same 32 replay requests in both modes using the same generated timeline. The load generator creates enough concurrent long-context sessions to force KV eviction decisions. Baseline mode runs without value-aware eviction signals. Controller mode scores every replay-capable prefix as high, normal, or low value from harness signals, and SGLang's native priority radix eviction path performs the real eviction.\n\nRun: value_aware_eviction_all_requests_fixed_20260917_163518 compared no_prefetch against controller_value_aware_eviction.\n\nResults: Total TTFT improved from 482.3 s to 233.5 s, or 51.6%. Average replay TTFT improved from 15.1 s to 7.3 s. Total lateness improved from 1014.0 s to 659.9 s, or 34.9%. Average replay lateness improved from 31.7 s to 20.6 s. The trade-off is that the overall workload window increased from 205.6 s to 268.8 s, or 63.1 s longer.\n\nMechanism evidence: value classes reached SGLang as 23 high, 16 normal, and 9 low values with zero mismatches. SGLang ran with radix priority eviction. Native SGLang and HiCache eviction events were observed: 324 device eviction events and 77 host eviction events.\n\nImportant caveat: this produced a strong replay responsiveness win, but not a no-cost system win. The next tuning question is how to keep the TTFT and lateness benefit while reducing the workload-window cost.\n\n[Sources]\nLocal file: /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware/harness_aware_scenario_tracker.html"}

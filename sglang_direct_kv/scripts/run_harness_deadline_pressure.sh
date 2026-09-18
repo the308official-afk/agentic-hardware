@@ -4,6 +4,7 @@ set -euo pipefail
 MODEL="${1:-Qwen/Qwen2.5-Coder-7B-Instruct}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIRECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${DIRECT_ROOT}/.." && pwd)"
 cd "${DIRECT_ROOT}"
 
 HARDWARE_PROFILE="${HARDWARE_PROFILE:-ec2_a10g}"
@@ -97,6 +98,10 @@ GPU_UTIL_SAMPLE_INTERVAL_MS="${GPU_UTIL_SAMPLE_INTERVAL_MS:-100}"
 TRACE_CONTROLLER_DECISIONS="${TRACE_CONTROLLER_DECISIONS:-${TRACE_CONTROLLER_DECISIONS_DEFAULT}}"
 TRACE_CONTROLLER_COMPLETION_LINKAGE="${TRACE_CONTROLLER_COMPLETION_LINKAGE:-0}"
 TRACE_IDLE_GAP_AUDIT="${TRACE_IDLE_GAP_AUDIT:-${TRACE_IDLE_GAP_AUDIT_DEFAULT}}"
+TRACE_REPLAY_FRICTION_DEEP_DIVE="${TRACE_REPLAY_FRICTION_DEEP_DIVE:-0}"
+TRACE_REPLAY_BLOCKERS="${TRACE_REPLAY_BLOCKERS:-0}"
+TRACE_REPLAY_BLOCKERS_MAX_IDS="${TRACE_REPLAY_BLOCKERS_MAX_IDS:-16}"
+TRACE_REPLAY_BLOCKERS_EVENTS="${TRACE_REPLAY_BLOCKERS_EVENTS:-before_acquire,submit}"
 FILLER_REPLAY_DEADLINES="${FILLER_REPLAY_DEADLINES:-0}"
 FILLER_REPLAY_DEADLINE_MS="${FILLER_REPLAY_DEADLINE_MS:-}"
 FILLER_BACKLOG_MODE="${FILLER_BACKLOG_MODE:-once}"
@@ -124,6 +129,7 @@ CONTROLLER_ORACLE_EXACT_FALLBACK_MS="${CONTROLLER_ORACLE_EXACT_FALLBACK_MS:-}"
 WORKLOAD_SHAPE_MODE_INDEPENDENT="${WORKLOAD_SHAPE_MODE_INDEPENDENT:-0}"
 CONTROLLER_SHORTHAND_CODEC_CONFIG="${CONTROLLER_SHORTHAND_CODEC_CONFIG:-configs/prompt_codecs/agent_trace_relations_v1.json}"
 CONTROLLER_SHORTHAND_ENCODING_SCOPE="${CONTROLLER_SHORTHAND_ENCODING_SCOPE:-target_requests}"
+CONTROLLER_VALUE_AWARE_RADIX_EVICTION_POLICY="${CONTROLLER_VALUE_AWARE_RADIX_EVICTION_POLICY:-priority}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -324,6 +330,10 @@ write_run_config() {
     echo "TRACE_CONTROLLER_DECISIONS=${TRACE_CONTROLLER_DECISIONS}"
     echo "TRACE_CONTROLLER_COMPLETION_LINKAGE=${TRACE_CONTROLLER_COMPLETION_LINKAGE}"
     echo "TRACE_IDLE_GAP_AUDIT=${TRACE_IDLE_GAP_AUDIT}"
+    echo "TRACE_REPLAY_FRICTION_DEEP_DIVE=${TRACE_REPLAY_FRICTION_DEEP_DIVE}"
+    echo "TRACE_REPLAY_BLOCKERS=${TRACE_REPLAY_BLOCKERS}"
+    echo "TRACE_REPLAY_BLOCKERS_MAX_IDS=${TRACE_REPLAY_BLOCKERS_MAX_IDS}"
+    echo "TRACE_REPLAY_BLOCKERS_EVENTS=${TRACE_REPLAY_BLOCKERS_EVENTS}"
     echo "AGENTIC_KV_TRACE_SCHEDULER=${AGENTIC_KV_TRACE_SCHEDULER}"
     echo "AGENTIC_KV_TRACE_KV_POOL=${AGENTIC_KV_TRACE_KV_POOL}"
     echo "AGENTIC_KV_COPY_TELEMETRY_ENABLE=${AGENTIC_KV_COPY_TELEMETRY_ENABLE}"
@@ -448,10 +458,14 @@ run_case() {
   export HICACHE_STORAGE_PATH="${case_hicache_storage_path}"
   export MEM_FRACTION_STATIC
   export EXTRA_SERVER_ARGS="${BASE_EXTRA_SERVER_ARGS} --max-total-tokens ${MAX_TOTAL_TOKENS}"
-  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_priority_demotion_admission_soft" || "${mode}" == "controller_priority_demotion_admission_medium" || "${mode}" == "controller_priority_demotion_admission_hard" || "${mode}" == "controller_priority_demotion_admission_earlyprepare" || "${mode}" == "controller_priority_demotion_admission_shorthand" || "${mode}" == "controller_oracle_timeline" || "${mode}" == "controller_oracle_safe_sjf" || "${mode}" == "controller_oracle_safe_sjf_balanced" || "${mode}" == "controller_oracle_safe_sjf_aggressive" || "${mode}" == "controller_oracle_safe_sjf_maxfill" || "${mode}" == "controller_priority_demotion_calibrated_admission" || "${mode}" == "controller_oracle_exact_runtime_admission" || "${mode}" == "controller_deadline_fair" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" ]]; then
+  if [[ "${mode}" == "e2e_priority_hints" || "${mode}" == "pre_harness_priority_hints" || "${mode}" == "nat_inferred_priority_hints" || "${mode}" == "e2e_priority_hints_speculative_prefill" || "${mode}" == "harness_emitted_signals" || "${mode}" == "controller_scheduler_priority" || "${mode}" == "controller_demote_restore" || "${mode}" == "controller_priority_demote" || "${mode}" == "controller_priority_demotion_admission" || "${mode}" == "controller_priority_demotion_admission_soft" || "${mode}" == "controller_priority_demotion_admission_medium" || "${mode}" == "controller_priority_demotion_admission_hard" || "${mode}" == "controller_priority_demotion_admission_earlyprepare" || "${mode}" == "controller_priority_demotion_admission_shorthand" || "${mode}" == "controller_oracle_timeline" || "${mode}" == "controller_oracle_safe_sjf" || "${mode}" == "controller_oracle_safe_sjf_balanced" || "${mode}" == "controller_oracle_safe_sjf_aggressive" || "${mode}" == "controller_oracle_safe_sjf_maxfill" || "${mode}" == "controller_priority_demotion_calibrated_admission" || "${mode}" == "controller_oracle_exact_runtime_admission" || "${mode}" == "controller_deadline_fair" || "${mode}" == "controller_predictive_deadline_queue" || "${mode}" == "controller_memory_admission" || "${mode}" == "controller_admission_control" || "${mode}" == "controller_full" || "${mode}" == "controller_full_chunked_prefill" || "${mode}" == "controller_value_aware_eviction" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report --enable-priority-scheduling --default-priority-value 0 --schedule-policy fcfs"
-  elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" || "${mode}" == "storage_hicache_baseline" || "${mode}" == "storage_hicache_controller_prefetch" ]]; then
+  elif [[ "${mode}" == "no_cache_signal" || "${mode}" == "harness_native_cache_lowered" || "${mode}" == "controller_speculative_preload" || "${mode}" == "controller_targeted_kv_prefetch" || "${mode}" == "controller_proactive_kv_management" || "${mode}" == "storage_hicache_baseline" || "${mode}" == "storage_hicache_controller_prefetch" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --enable-cache-report"
+  fi
+  if [[ "${mode}" == "controller_value_aware_eviction" ]]; then
+    export AGENTIC_KV_ENABLE_PRIORITY_RADIX_EVICTION_CHOICE="${AGENTIC_KV_ENABLE_PRIORITY_RADIX_EVICTION_CHOICE:-1}"
+    export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --radix-eviction-policy ${CONTROLLER_VALUE_AWARE_RADIX_EVICTION_POLICY}"
   fi
   if [[ "${mode}" == "controller_full_chunked_prefill" ]]; then
     export EXTRA_SERVER_ARGS="${EXTRA_SERVER_ARGS} --chunked-prefill-size ${CONTROLLER_CHUNKED_PREFILL_SIZE}"
@@ -473,7 +487,11 @@ for port in (30000, 31080):
             raise SystemExit(f"Port {port} is occupied; leave the active experiment running and retry later.")
 PYPORT
   fi
-  setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
+  else
+    bash scripts/run_sglang_hicache_server.sh "${MODEL}" >"${server_log}" 2>&1 &
+  fi
   SERVER_PID="$!"
   wait_for_server "${server_log}"
 
@@ -526,6 +544,9 @@ PYPORT
     --trace-profile "${TRACE_PROFILE}" \
     --trace-controller-decisions "${TRACE_CONTROLLER_DECISIONS}" \
     --trace-controller-completion-linkage "${TRACE_CONTROLLER_COMPLETION_LINKAGE}" \
+    --trace-replay-blockers "${TRACE_REPLAY_BLOCKERS}" \
+    --trace-replay-blockers-max-ids "${TRACE_REPLAY_BLOCKERS_MAX_IDS}" \
+    --trace-replay-blockers-events "${TRACE_REPLAY_BLOCKERS_EVENTS}" \
     "${driver_extra_args[@]}" | tee "${case_root}/driver.log"
 
   cleanup_case
@@ -566,6 +587,18 @@ build_final_report() {
       --run-config "${RUN_CONFIG_ENV}" \
       --run-environment-json "${RUN_ENV_JSON}" \
       "${latest_args[@]}"
+    if [[ "${TRACE_REPLAY_FRICTION_DEEP_DIVE}" == "1" ]]; then
+      local friction_latest_args=()
+      if [[ "${UPDATE_LATEST}" == "1" ]]; then
+        friction_latest_args=(--update-latest-root "${RESULTS_ROOT}")
+      fi
+      "${PYTHON_BIN}" scripts/build_replay_friction_deep_dive.py \
+        --report-dir "${REPORT_DIR}" \
+        --run-root "${RUN_ROOT}" \
+        --report-label "${REPORT_LABEL}" \
+        --top-level-copy-dir "${PROJECT_ROOT}" \
+        "${friction_latest_args[@]}"
+    fi
     return
   fi
   "${PYTHON_BIN}" scripts/build_milestone27_controlled_replay_report.py \
@@ -581,6 +614,18 @@ build_final_report() {
       cp -f "${REPORT_DIR}/report/${artifact}" "${REPORT_DIR}/${artifact}"
     fi
   done
+  if [[ "${TRACE_REPLAY_FRICTION_DEEP_DIVE}" == "1" ]]; then
+    local friction_latest_args=()
+    if [[ "${UPDATE_LATEST}" == "1" ]]; then
+      friction_latest_args=(--update-latest-root "${RESULTS_ROOT}")
+    fi
+    "${PYTHON_BIN}" scripts/build_replay_friction_deep_dive.py \
+      --report-dir "${REPORT_DIR}" \
+      --run-root "${RUN_ROOT}" \
+      --report-label "${REPORT_LABEL}" \
+      --top-level-copy-dir "${PROJECT_ROOT}" \
+      "${friction_latest_args[@]}"
+  fi
   REPORT_LABEL="${REPORT_LABEL}" MODEL="${MODEL}" RESULTS_ROOT="${RESULTS_ROOT}" RUN_ROOT="${RUN_ROOT}" REPORT_DIR="${REPORT_DIR}" UPDATE_LATEST="${UPDATE_LATEST}" HARDWARE_PROFILE="${HARDWARE_PROFILE}" HARDWARE_PROFILE_PATH="${HARDWARE_PROFILE_PATH}" HARNESSES="${HARNESSES}" MODES="${MODES}" PRESSURE_LEVELS="${PRESSURE_LEVELS}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os

@@ -1,0 +1,54 @@
+{"kind":"deck","id":"pr/gkkhyh","name":"Deck"}
+{"kind":"layout","layoutId":"8a2e919a-39c1-4c30-8292-a1ad8b8da4cb","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"12909734-f3a9-4eac-b671-c4bb0484873b","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/46ep4x","slide":1,"title":"Scenario 1: Better Deadline Scheduling","textShapes":31}
+{"kind":"textbox","id":"sh/zeh4nyto","slide":1,"text":"Scenario 1: Better Deadline Scheduling","textPreview":"Scenario 1: Better Deadline Scheduling","textChars":38,"textLines":1,"bbox":[56,36,780,48]}
+{"kind":"textbox","id":"sh/0fqlw3u9","slide":1,"text":"Harness timing signals help the backend serve soon-due replay work first.","textPreview":"Harness timing signals help the backend serve soon-due replay work first.","textChars":73,"textLines":1,"bbox":[58,88,900,28]}
+{"kind":"textbox","id":"sh/lgzmp8bu","slide":1,"text":"Clear win","textPreview":"Clear win","textChars":9,"textLines":1,"bbox":[1080,50,120,26]}
+{"kind":"shape","id":"sh/mh83ydcf","slide":1,"bbox":[56,126,1168,1.4]}
+{"kind":"textbox","id":"sh/nih4rit0","slide":1,"text":"What the setup tests","textPreview":"What the setup tests","textChars":20,"textLines":1,"bbox":[66,160,455,28]}
+{"kind":"shape","id":"sh/8jql03ul","slide":1,"bbox":[66,208,8,8]}
+{"kind":"shape","id":"sh/94zmt8bq","slide":1,"bbox":[66,209,8,8]}
+{"kind":"textbox","id":"sh/2l43m9cv","slide":1,"text":"32 replay requests run in both modes.","textPreview":"32 replay requests run in both modes.","textChars":37,"textLines":1,"bbox":[86,200,435,34]}
+{"kind":"shape","id":"sh/3mxkfetg","slide":1,"bbox":[66,246,8,8]}
+{"kind":"shape","id":"sh/ni9kfitc","slide":1,"bbox":[66,247,8,8]}
+{"kind":"textbox","id":"sh/mh03mdsr","slide":1,"text":"Both modes use the same tool-wait timeline.","textPreview":"Both modes use the same tool-wait timeline.","textChars":43,"textLines":1,"bbox":[86,238,435,34]}
+{"kind":"shape","id":"sh/9kr2hsb2","slide":1,"bbox":[66,284,8,8]}
+{"kind":"shape","id":"sh/ojilonax","slide":1,"bbox":[66,285,8,8]}
+{"kind":"textbox","id":"sh/zupkbit0","slide":1,"text":"Tool waits range from very short to long.","textPreview":"Tool waits range from very short to long.","textChars":41,"textLines":1,"bbox":[86,276,435,34]}
+{"kind":"shape","id":"sh/etg3idcf","slide":1,"bbox":[66,322,8,8]}
+{"kind":"shape","id":"sh/1g72d8b6","slide":1,"bbox":[66,323,8,8]}
+{"kind":"textbox","id":"sh/0fylknul","slide":1,"text":"Baseline uses FIFO replay submission.","textPreview":"Baseline uses FIFO replay submission.","textChars":37,"textLines":1,"bbox":[86,314,435,34]}
+{"kind":"shape","id":"sh/rqpk7yt4","slide":1,"bbox":[66,360,8,8]}
+{"kind":"shape","id":"sh/qpwjetcj","slide":1,"bbox":[66,361,8,8]}
+{"kind":"textbox","id":"sh/ulw3qtwb","slide":1,"text":"The controller uses expected tool-return time during tool wait.","textPreview":"The controller uses expected tool-return time during tool wait.","textChars":63,"textLines":1,"bbox":[86,352,435,34]}
+{"kind":"shape","id":"sh/fm54jydw","slide":1,"bbox":[66,374,455,154]}
+{"kind":"textbox","id":"sh/gnels3eh","slide":1,"text":"What the controller does","textPreview":"What the controller does","textChars":24,"textLines":1,"bbox":[88,394,390,26]}
+{"kind":"textbox","id":"sh/honml8v2","slide":1,"text":"It gives the soonest-due replay the highest priority, applies that order before SGLang through the local submission gate, then passes the same priority into SGLang scheduling.","textPreview":"It gives the soonest-due replay the highest priority, applies that order before SGLang through the local submission gate, then passes the...","textChars":175,"textLines":1,"bbox":[88,428,390,76]}
+{"kind":"textbox","id":"sh/2pw3udwn","slide":1,"text":"Results across all replay requests","textPreview":"Results across all replay requests","textChars":34,"textLines":1,"bbox":[590,160,560,28]}
+{"kind":"textbox","id":"sh/3qp4nyd8","slide":1,"text":"Latest clear-win run: deadline_predictive_queue_submitprio_20260916_221604","textPreview":"Latest clear-win run: deadline_predictive_queue_submitprio_20260916_221604","textChars":74,"textLines":1,"bbox":[590,192,560,24]}
+{"kind":"shape","id":"sh/4rylw3ed","slide":1,"bbox":[590,228,270,92]}
+{"kind":"textbox","id":"sh/ps7mp8vy","slide":1,"text":"Total TTFT","textPreview":"Total TTFT","textChars":10,"textLines":1,"bbox":[606,242,238,22]}
+{"kind":"textbox","id":"sh/qdg3ydwj","slide":1,"text":"15.1% better","textPreview":"15.1% better","textChars":12,"textLines":1,"bbox":[606,266,238,28]}
+{"kind":"textbox","id":"sh/rep4rid4","slide":1,"text":"101.5 s to 86.2 s","textPreview":"101.5 s to 86.2 s","textChars":17,"textLines":1,"bbox":[606,296,238,18]}
+{"kind":"shape","id":"sh/18r6xcf6","slide":1,"bbox":[882,228,270,92]}
+{"kind":"textbox","id":"sh/07ipo7yl","slide":1,"text":"Avg TTFT per request","textPreview":"Avg TTFT per request","textChars":20,"textLines":1,"bbox":[898,242,238,22]}
+{"kind":"textbox","id":"sh/zm9ov2xg","slide":1,"text":"0.5 s faster","textPreview":"0.5 s faster","textChars":12,"textLines":1,"bbox":[898,266,238,28]}
+{"kind":"textbox","id":"sh/el07mhgv","slide":1,"text":"3.2 s to 2.7 s","textPreview":"3.2 s to 2.7 s","textChars":14,"textLines":1,"bbox":[898,296,238,18]}
+{"kind":"shape","id":"sh/9cb61wfi","slide":1,"bbox":[590,340,270,92]}
+{"kind":"textbox","id":"sh/ob2psryx","slide":1,"text":"Total lateness","textPreview":"Total lateness","textChars":14,"textLines":1,"bbox":[606,354,238,22]}
+{"kind":"textbox","id":"sh/natozmxc","slide":1,"text":"22.1% better","textPreview":"22.1% better","textChars":12,"textLines":1,"bbox":[606,378,238,28]}
+{"kind":"textbox","id":"sh/m907qhgr","slide":1,"text":"278.7 s to 217.1 s","textPreview":"278.7 s to 217.1 s","textChars":18,"textLines":1,"bbox":[606,408,238,18]}
+{"kind":"shape","id":"sh/xgb65wfe","slide":1,"bbox":[882,340,270,92]}
+{"kind":"textbox","id":"sh/wf2pwryt","slide":1,"text":"P95 lateness","textPreview":"P95 lateness","textChars":12,"textLines":1,"bbox":[898,354,238,22]}
+{"kind":"textbox","id":"sh/sb69ovi1","slide":1,"text":"37.6% better","textPreview":"37.6% better","textChars":12,"textLines":1,"bbox":[898,378,238,28]}
+{"kind":"textbox","id":"sh/tcfax0zm","slide":1,"text":"31.3 s to 19.5 s","textPreview":"31.3 s to 19.5 s","textChars":16,"textLines":1,"bbox":[898,408,238,18]}
+{"kind":"shape","id":"sh/69orml0b","slide":1,"bbox":[590,452,562,92]}
+{"kind":"textbox","id":"sh/7axsvqhg","slide":1,"text":"Trade-off","textPreview":"Trade-off","textChars":9,"textLines":1,"bbox":[606,466,530,22]}
+{"kind":"textbox","id":"sh/k7m9kvi5","slide":1,"text":"23.0 s longer","textPreview":"23.0 s longer","textChars":13,"textLines":1,"bbox":[606,490,530,28]}
+{"kind":"textbox","id":"sh/l8vat0zq","slide":1,"text":"Workload window: 234.7 s to 257.7 s","textPreview":"Workload window: 234.7 s to 257.7 s","textChars":35,"textLines":1,"bbox":[606,520,530,18]}
+{"kind":"shape","id":"sh/y54ril0z","slide":1,"bbox":[56,580,1168,1.4]}
+{"kind":"textbox","id":"sh/j6d8rqhk","slide":1,"text":"Takeaway","textPreview":"Takeaway","textChars":8,"textLines":1,"bbox":[66,608,140,28]}
+{"kind":"textbox","id":"sh/43q9wfi9","slide":1,"text":"Harness-aware scheduling reduced replay delay across the full workload, not just one target request.","textPreview":"Harness-aware scheduling reduced replay delay across the full workload, not just one target request.","textChars":100,"textLines":1,"bbox":[206,608,900,38]}
+{"kind":"textbox","id":"sh/p4za5kzu","slide":1,"text":"Source: Harness-Aware Scenario Tracker","textPreview":"Source: Harness-Aware Scenario Tracker","textChars":38,"textLines":1,"bbox":[58,674,440,20]}
+{"kind":"notes","id":"nt/46ep4x","slide":1,"text":"Scenario 1 source: harness_aware_scenario_tracker.html.\n\nSetup: same 32 measured replay requests in baseline and controller modes, using the same generated timeline. Baseline uses ordinary FIFO replay submission. Controller mode exposes expected replay timing during tool wait, assigns due-time priority before replay, uses that priority in the local submission gate, and lowers the same priority into SGLang.\n\nSignals: session_id, phase=tool_wait, expected_tool_return_ms, next_ready_eta_ms, deadline_after_ready_ms, tool_wait_class, task_replay_steps.\n\nResults: Total TTFT improved from 101.5 s to 86.2 s, or 15.1%. Average TTFT improved from 3.2 s to 2.7 s per replay request. Total lateness improved from 278.7 s to 217.1 s, or 22.1%. Average replay lateness improved from 8.7 s to 6.8 s. P95 lateness improved from 31.3 s to 19.5 s, or 37.6%. Max lateness improved from 31.6 s to 19.6 s, or 38.0%. Trade-off: full workload window increased from 234.7 s to 257.7 s, or 23.0 s longer.\n\n[Sources]\nLocal file: /Users/oluwolejaiyeoba/Documents/GitHub/agentic_hardware/harness_aware_scenario_tracker.html"}

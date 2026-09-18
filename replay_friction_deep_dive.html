@@ -1,0 +1,393 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Replay Friction Deep Dive</title>
+  <style>
+    :root { --text: #172033; --muted: #526174; --line: #dbe3ef; --soft: #f8fafc; --accent: #155eef; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: var(--text); background: #ffffff; }
+    main { max-width: 1120px; margin: 0 auto; padding: 34px 24px 48px; }
+    h1, h2, h3 { color: #101827; line-height: 1.15; }
+    h1 { margin: 0 0 10px; font-size: 34px; }
+    h2 { margin-top: 30px; font-size: 22px; }
+    h3 { margin: 8px 0 10px; font-size: 16px; overflow-wrap: anywhere; }
+    p, li { line-height: 1.5; }
+    .lede { color: var(--muted); max-width: 920px; }
+    .note { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 18px 0; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 18px 0; }
+    .metric { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: #fff; }
+    .metric-name { color: var(--muted); font-size: 13px; font-weight: 750; }
+    .metric-value { font-size: 24px; font-weight: 850; margin-top: 6px; }
+    .examples { display: grid; gap: 14px; }
+    .example-card { border: 1px solid var(--line); border-radius: 8px; padding: 15px 16px; background: #fff; }
+    .example-label { color: var(--accent); font-weight: 850; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; }
+    .example-card p { margin: 8px 0; }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+    .chart-panel { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 14px 0; overflow-x: auto; }
+    .blocker-bars { min-width: 760px; height: 220px; display: flex; align-items: flex-end; gap: 5px; padding: 8px 0 4px; border-bottom: 1px solid var(--line); }
+    .blocker-bar { width: 18px; height: 100%; display: flex; flex-direction: column-reverse; justify-content: flex-start; background: #f8fafc; border-radius: 4px 4px 0 0; overflow: hidden; outline: 1px solid #e5ebf3; }
+    .seg { display: block; width: 100%; }
+    .reasonable { background: #2e7d55; }
+    .questionable { background: #d48a19; }
+    .avoidable { background: #c24132; }
+    .unknown { background: #94a3b8; }
+    .fraction-line { min-width: 760px; width: 100%; height: 260px; }
+    .fraction-line .axis { stroke: #94a3b8; stroke-width: 1.2; }
+    .fraction-line .grid { stroke: #e5ebf3; stroke-width: 1; }
+    .fraction-line polyline { fill: none; stroke: #c24132; stroke-width: 3; }
+    .fraction-line circle { fill: #c24132; }
+    .axis-label, .chart-caption { fill: var(--muted); color: var(--muted); font-size: 12px; }
+    a { color: var(--accent); font-weight: 750; }
+    code { background: #edf2f7; padding: 1px 4px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<main>
+  <h1>Replay Friction Deep Dive</h1>
+  <p class="lede">Report label: <code>scenario1_blocker_deep_dive_20260917_204455</code>. This page is generated automatically from the experiment traces. It explains, in simple words, why replay requests were still late or slow even when the controller helped.</p>
+  <div class="note"><strong>Guardrail:</strong> this is a reader summary. The full per-request table and raw CSV remain in the run report folder.</div>
+
+  <h2>Headline Result</h2>
+  <div class="metric-grid">
+    <div class="metric">
+      <div class="metric-name">Average TTFT</div>
+      <div class="metric-value">3.1s -> 2.6s</div>
+      <p>Lower is better. This is how long requests waited for their first token after submission.</p>
+    </div>
+    <div class="metric">
+      <div class="metric-name">Average Lateness</div>
+      <div class="metric-value">8.9s -> 7.0s</div>
+      <p>Lower is better. This is how late requests were after their replay became due.</p>
+    </div>
+    <div class="metric">
+      <div class="metric-name">Requests Explained</div>
+      <div class="metric-value">32</div>
+      <p>The examples below are selected by fixed rules from the controller and baseline rows.</p>
+    </div>
+  </div>
+
+  
+  <h2>Blocker Quality Across Requests</h2>
+  <p class="lede">These charts look across controller-mode replay requests in replay-due order. Green blockers were reasonable. Amber/red blockers are where the controller may still have room to improve.</p>
+  <div class="note"><strong>How to read this:</strong> if the avoidable fraction line drops to 0.0, that request was only blocked by work that was already due or reasonably in flight. Higher values mean more room for better admission or scheduling.</div>
+  <div class="legend">
+    <span><i class="legend-swatch reasonable"></i>Reasonable</span>
+    <span><i class="legend-swatch questionable"></i>Questionable</span>
+    <span><i class="legend-swatch avoidable"></i>Avoidable</span>
+    <span><i class="legend-swatch unknown"></i>Unknown</span>
+  </div>
+  <div class="chart-panel">
+    <h3>Per-Request Blocker Quality</h3>
+    <div class="blocker-bars">
+            <div class="blocker-bar" title="#1 hatcher_p3_high_session_000_pressure_003_replay_01: 0 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 19.8s" aria-label="#1 hatcher_p3_high_session_000_pressure_003_replay_01: 0 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 19.8s">
+              
+              <span class="seg avoidable" style="height:60.00%"></span>
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#2 hatcher_p3_high_session_000_pressure_000_replay_01: 1 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 19.7s" aria-label="#2 hatcher_p3_high_session_000_pressure_000_replay_01: 1 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 19.7s">
+              
+              <span class="seg avoidable" style="height:60.00%"></span>
+              
+              <span class="seg reasonable" style="height:10.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#3 hatcher_p3_high_session_000_pressure_004_replay_01: 2 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 19.6s" aria-label="#3 hatcher_p3_high_session_000_pressure_004_replay_01: 2 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 19.6s">
+              
+              <span class="seg avoidable" style="height:60.00%"></span>
+              
+              <span class="seg reasonable" style="height:20.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#4 hatcher_p3_high_session_000_pressure_001_replay_01: 3 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 15.2s" aria-label="#4 hatcher_p3_high_session_000_pressure_001_replay_01: 3 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 15.2s">
+              
+              <span class="seg avoidable" style="height:60.00%"></span>
+              
+              <span class="seg reasonable" style="height:30.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#5 hatcher_p3_high_session_000_replay_01: 4 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 6.5s" aria-label="#5 hatcher_p3_high_session_000_replay_01: 4 reasonable, 0 questionable, 6 avoidable, 0 unknown; lateness 6.5s">
+              
+              <span class="seg avoidable" style="height:60.00%"></span>
+              
+              <span class="seg reasonable" style="height:40.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#6 hatcher_p3_high_session_000_pressure_006_replay_01: 5 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 8.4s" aria-label="#6 hatcher_p3_high_session_000_pressure_006_replay_01: 5 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 8.4s">
+              
+              <span class="seg avoidable" style="height:10.00%"></span>
+              
+              <span class="seg reasonable" style="height:50.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#7 hatcher_p3_high_session_000_pressure_005_replay_01: 6 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 5.7s" aria-label="#7 hatcher_p3_high_session_000_pressure_005_replay_01: 6 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 5.7s">
+              
+              <span class="seg avoidable" style="height:10.00%"></span>
+              
+              <span class="seg reasonable" style="height:60.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#8 hatcher_p3_high_session_000_pressure_000_replay_02: 3 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 11.9s" aria-label="#8 hatcher_p3_high_session_000_pressure_000_replay_02: 3 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 11.9s">
+              
+              <span class="seg avoidable" style="height:30.00%"></span>
+              
+              <span class="seg reasonable" style="height:30.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#9 hatcher_p3_high_session_000_pressure_002_replay_01: 4 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 10.7s" aria-label="#9 hatcher_p3_high_session_000_pressure_002_replay_01: 4 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 10.7s">
+              
+              <span class="seg avoidable" style="height:30.00%"></span>
+              
+              <span class="seg reasonable" style="height:40.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#10 hatcher_p3_high_session_000_pressure_003_replay_02: 5 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 8.4s" aria-label="#10 hatcher_p3_high_session_000_pressure_003_replay_02: 5 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 8.4s">
+              
+              <span class="seg avoidable" style="height:30.00%"></span>
+              
+              <span class="seg reasonable" style="height:50.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#11 hatcher_p3_high_session_000_pressure_001_replay_02: 6 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 7.3s" aria-label="#11 hatcher_p3_high_session_000_pressure_001_replay_02: 6 reasonable, 0 questionable, 3 avoidable, 0 unknown; lateness 7.3s">
+              
+              <span class="seg avoidable" style="height:30.00%"></span>
+              
+              <span class="seg reasonable" style="height:60.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#12 hatcher_p3_high_session_000_pressure_010_replay_01: 5 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 8.1s" aria-label="#12 hatcher_p3_high_session_000_pressure_010_replay_01: 5 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 8.1s">
+              
+              <span class="seg avoidable" style="height:10.00%"></span>
+              
+              <span class="seg reasonable" style="height:50.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#13 hatcher_p3_high_session_000_pressure_005_replay_02: 6 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 5.2s" aria-label="#13 hatcher_p3_high_session_000_pressure_005_replay_02: 6 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 5.2s">
+              
+              <span class="seg avoidable" style="height:10.00%"></span>
+              
+              <span class="seg reasonable" style="height:60.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#14 hatcher_p3_high_session_000_pressure_008_replay_01: 7 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 4.9s" aria-label="#14 hatcher_p3_high_session_000_pressure_008_replay_01: 7 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 4.9s">
+              
+              <span class="seg avoidable" style="height:10.00%"></span>
+              
+              <span class="seg reasonable" style="height:70.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#15 hatcher_p3_high_session_000_pressure_004_replay_02: 4 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 11.5s" aria-label="#15 hatcher_p3_high_session_000_pressure_004_replay_02: 4 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 11.5s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:40.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#16 hatcher_p3_high_session_000_pressure_002_replay_02: 5 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 11.1s" aria-label="#16 hatcher_p3_high_session_000_pressure_002_replay_02: 5 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 11.1s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:50.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#17 hatcher_p3_high_session_000_pressure_011_replay_01: 3 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 3.9s" aria-label="#17 hatcher_p3_high_session_000_pressure_011_replay_01: 3 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 3.9s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:30.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#18 hatcher_p3_high_session_000_pressure_007_replay_01: 4 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 10.4s" aria-label="#18 hatcher_p3_high_session_000_pressure_007_replay_01: 4 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 10.4s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:40.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#19 hatcher_p3_high_session_000_pressure_006_replay_02: 5 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 9.9s" aria-label="#19 hatcher_p3_high_session_000_pressure_006_replay_02: 5 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 9.9s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:50.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#20 hatcher_p3_high_session_000_pressure_012_replay_01: 6 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 9.7s" aria-label="#20 hatcher_p3_high_session_000_pressure_012_replay_01: 6 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 9.7s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:60.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#21 hatcher_p3_high_session_000_pressure_009_replay_01: 7 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 8.0s" aria-label="#21 hatcher_p3_high_session_000_pressure_009_replay_01: 7 reasonable, 0 questionable, 2 avoidable, 0 unknown; lateness 8.0s">
+              
+              <span class="seg avoidable" style="height:20.00%"></span>
+              
+              <span class="seg reasonable" style="height:70.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#22 hatcher_p3_high_session_000_pressure_009_replay_02: 1 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 2.2s" aria-label="#22 hatcher_p3_high_session_000_pressure_009_replay_02: 1 reasonable, 0 questionable, 1 avoidable, 0 unknown; lateness 2.2s">
+              
+              <span class="seg avoidable" style="height:10.00%"></span>
+              
+              <span class="seg reasonable" style="height:10.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#23 hatcher_p3_high_session_000_pressure_010_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s" aria-label="#23 hatcher_p3_high_session_000_pressure_010_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#24 hatcher_p3_high_session_000_replay_02: 1 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.7s" aria-label="#24 hatcher_p3_high_session_000_replay_02: 1 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.7s">
+              
+              
+              
+              <span class="seg reasonable" style="height:10.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#25 hatcher_p3_high_session_000_pressure_011_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s" aria-label="#25 hatcher_p3_high_session_000_pressure_011_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#26 hatcher_p3_high_session_000_pressure_008_replay_02: 1 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 1.0s" aria-label="#26 hatcher_p3_high_session_000_pressure_008_replay_02: 1 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 1.0s">
+              
+              
+              
+              <span class="seg reasonable" style="height:10.00%"></span>
+            </div>
+            
+            <div class="blocker-bar" title="#27 hatcher_p3_high_session_000_pressure_007_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s" aria-label="#27 hatcher_p3_high_session_000_pressure_007_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#28 hatcher_p3_high_session_000_pressure_012_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s" aria-label="#28 hatcher_p3_high_session_000_pressure_012_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#29 hatcher_p3_high_session_000_pressure_014_replay_01: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s" aria-label="#29 hatcher_p3_high_session_000_pressure_014_replay_01: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#30 hatcher_p3_high_session_000_pressure_013_replay_01: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s" aria-label="#30 hatcher_p3_high_session_000_pressure_013_replay_01: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.5s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#31 hatcher_p3_high_session_000_pressure_014_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.3s" aria-label="#31 hatcher_p3_high_session_000_pressure_014_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.3s">
+              
+              
+              
+              
+            </div>
+            
+            <div class="blocker-bar" title="#32 hatcher_p3_high_session_000_pressure_013_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.3s" aria-label="#32 hatcher_p3_high_session_000_pressure_013_replay_02: 0 reasonable, 0 questionable, 0 avoidable, 0 unknown; lateness 0.3s">
+              
+              
+              
+              
+            </div>
+            </div>
+    <p class="chart-caption">Each vertical bar is one replay request. Bar height is blocker count; color shows blocker quality.</p>
+  </div>
+  <div class="chart-panel">
+    <h3>Avoidable / Questionable Blocker Fraction</h3>
+    
+      <svg class="fraction-line" viewBox="0 0 900 220" role="img" aria-label="Avoidable blocker fraction by replay request">
+        <line x1="36" y1="16" x2="36" y2="190" class="axis" />
+        <line x1="36" y1="190" x2="882" y2="190" class="axis" />
+        <line x1="36" y1="16" x2="882" y2="16" class="grid" />
+        <line x1="36" y1="103.0" x2="882" y2="103.0" class="grid" />
+        <text x="4" y="20" class="axis-label">1.0</text>
+        <text x="4" y="107.0" class="axis-label">0.5</text>
+        <text x="4" y="194" class="axis-label">0.0</text>
+        <polyline points="36.0,16.0 63.3,40.9 90.6,59.5 117.9,74.0 145.2,85.6 172.5,161.0 199.7,165.1 227.0,103.0 254.3,115.4 281.6,124.8 308.9,132.0 336.2,161.0 363.5,165.1 390.8,168.2 418.1,132.0 445.4,140.3 472.6,120.4 499.9,132.0 527.2,140.3 554.5,146.5 581.8,151.3 609.1,103.0 636.4,190.0 663.7,190.0 691.0,190.0 718.3,190.0 745.5,190.0 772.8,190.0 800.1,190.0 827.4,190.0 854.7,190.0 882.0,190.0" />
+        <circle cx="36.0" cy="16.0" r="3.2"><title>Request 1: avoidable/questionable fraction 1.00</title></circle><circle cx="63.3" cy="40.9" r="3.2"><title>Request 2: avoidable/questionable fraction 0.86</title></circle><circle cx="90.6" cy="59.5" r="3.2"><title>Request 3: avoidable/questionable fraction 0.75</title></circle><circle cx="117.9" cy="74.0" r="3.2"><title>Request 4: avoidable/questionable fraction 0.67</title></circle><circle cx="145.2" cy="85.6" r="3.2"><title>Request 5: avoidable/questionable fraction 0.60</title></circle><circle cx="172.5" cy="161.0" r="3.2"><title>Request 6: avoidable/questionable fraction 0.17</title></circle><circle cx="199.7" cy="165.1" r="3.2"><title>Request 7: avoidable/questionable fraction 0.14</title></circle><circle cx="227.0" cy="103.0" r="3.2"><title>Request 8: avoidable/questionable fraction 0.50</title></circle><circle cx="254.3" cy="115.4" r="3.2"><title>Request 9: avoidable/questionable fraction 0.43</title></circle><circle cx="281.6" cy="124.8" r="3.2"><title>Request 10: avoidable/questionable fraction 0.38</title></circle><circle cx="308.9" cy="132.0" r="3.2"><title>Request 11: avoidable/questionable fraction 0.33</title></circle><circle cx="336.2" cy="161.0" r="3.2"><title>Request 12: avoidable/questionable fraction 0.17</title></circle><circle cx="363.5" cy="165.1" r="3.2"><title>Request 13: avoidable/questionable fraction 0.14</title></circle><circle cx="390.8" cy="168.2" r="3.2"><title>Request 14: avoidable/questionable fraction 0.12</title></circle><circle cx="418.1" cy="132.0" r="3.2"><title>Request 15: avoidable/questionable fraction 0.33</title></circle><circle cx="445.4" cy="140.3" r="3.2"><title>Request 16: avoidable/questionable fraction 0.29</title></circle><circle cx="472.6" cy="120.4" r="3.2"><title>Request 17: avoidable/questionable fraction 0.40</title></circle><circle cx="499.9" cy="132.0" r="3.2"><title>Request 18: avoidable/questionable fraction 0.33</title></circle><circle cx="527.2" cy="140.3" r="3.2"><title>Request 19: avoidable/questionable fraction 0.29</title></circle><circle cx="554.5" cy="146.5" r="3.2"><title>Request 20: avoidable/questionable fraction 0.25</title></circle><circle cx="581.8" cy="151.3" r="3.2"><title>Request 21: avoidable/questionable fraction 0.22</title></circle><circle cx="609.1" cy="103.0" r="3.2"><title>Request 22: avoidable/questionable fraction 0.50</title></circle><circle cx="636.4" cy="190.0" r="3.2"><title>Request 23: avoidable/questionable fraction 0.00</title></circle><circle cx="663.7" cy="190.0" r="3.2"><title>Request 24: avoidable/questionable fraction 0.00</title></circle><circle cx="691.0" cy="190.0" r="3.2"><title>Request 25: avoidable/questionable fraction 0.00</title></circle><circle cx="718.3" cy="190.0" r="3.2"><title>Request 26: avoidable/questionable fraction 0.00</title></circle><circle cx="745.5" cy="190.0" r="3.2"><title>Request 27: avoidable/questionable fraction 0.00</title></circle><circle cx="772.8" cy="190.0" r="3.2"><title>Request 28: avoidable/questionable fraction 0.00</title></circle><circle cx="800.1" cy="190.0" r="3.2"><title>Request 29: avoidable/questionable fraction 0.00</title></circle><circle cx="827.4" cy="190.0" r="3.2"><title>Request 30: avoidable/questionable fraction 0.00</title></circle><circle cx="854.7" cy="190.0" r="3.2"><title>Request 31: avoidable/questionable fraction 0.00</title></circle><circle cx="882.0" cy="190.0" r="3.2"><title>Request 32: avoidable/questionable fraction 0.00</title></circle>
+      </svg>
+    
+    <p class="chart-caption">0.0 means the captured blockers were all reasonable. Higher values mean a larger share looked avoidable or questionable.</p>
+  </div>
+
+
+  <h2>Concrete Request Examples</h2>
+  <div class="examples">
+    
+      <article class="example-card">
+        <div class="example-label">Biggest TTFT improvement</div>
+        <h3>hatcher_p3_high_session_000_pressure_001_replay_01</h3>
+        <p>In baseline, TTFT was <strong>10.9s</strong> and lateness was <strong>32.0s</strong>.</p>
+        <p>With the controller, TTFT was <strong>4.0s</strong> and lateness was <strong>15.2s</strong>.</p>
+        <p><strong>What changed:</strong> TTFT improved by 6.9s; lateness improved by 16.8s.</p>
+        <p><strong>Why it was still not perfect:</strong> When replay became due, the trace identified 3 pending request(s) ahead and 6 in-flight request(s). Among the captured blocker IDs, 3 looked reasonable, 0 looked questionable, 6 looked avoidable, and 0 could not be classified.</p>
+        <p><strong>Avoidable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_005_initial | hatcher_p3_high_session_000_pressure_006_initial | hatcher_p3_high_session_000_pressure_007_initial | hatcher_p3_high_session_000_pressure_008_initial | hatcher_p3_high_session_000_pressure_009_initial | hatcher_p3_high_session_000_pressure_010_initial</p>
+        <p><strong>Reasonable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_003_replay_01 | hatcher_p3_high_session_000_pressure_000_replay_01 | hatcher_p3_high_session_000_pressure_004_replay_01</p>
+        <p><strong>Simple meaning:</strong> The controller moved this replay forward, but the system still had scheduling pressure. In simple terms, it was still waiting behind other work.</p>
+      </article>
+    
+      <article class="example-card">
+        <div class="example-label">Biggest lateness improvement</div>
+        <h3>hatcher_p3_high_session_000_pressure_005_replay_01</h3>
+        <p>In baseline, TTFT was <strong>7.7s</strong> and lateness was <strong>24.4s</strong>.</p>
+        <p>With the controller, TTFT was <strong>3.5s</strong> and lateness was <strong>5.7s</strong>.</p>
+        <p><strong>What changed:</strong> TTFT improved by 4.2s; lateness improved by 18.6s.</p>
+        <p><strong>Why it was still not perfect:</strong> When replay became due, the trace identified 1 pending request(s) ahead and 6 in-flight request(s). Among the captured blocker IDs, 6 looked reasonable, 0 looked questionable, 1 looked avoidable, and 0 could not be classified.</p>
+        <p><strong>Avoidable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_010_initial</p>
+        <p><strong>Reasonable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_006_replay_01 | hatcher_p3_high_session_000_pressure_003_replay_01 | hatcher_p3_high_session_000_pressure_000_replay_01 | hatcher_p3_high_session_000_pressure_004_replay_01 | hatcher_p3_high_session_000_pressure_001_replay_01 | hatcher_p3_high_session_000_replay_01</p>
+        <p><strong>Simple meaning:</strong> The controller helped, but two things were still happening at once: queue pressure and memory work. In simple terms, the request was moved forward, but the kitchen was still crowded and ingredients were still being fetched.</p>
+      </article>
+    
+      <article class="example-card">
+        <div class="example-label">Worst remaining lateness under controller</div>
+        <h3>hatcher_p3_high_session_000_pressure_003_replay_01</h3>
+        <p>In baseline, TTFT was <strong>6.0s</strong> and lateness was <strong>31.7s</strong>.</p>
+        <p>With the controller, TTFT was <strong>4.0s</strong> and lateness was <strong>19.8s</strong>.</p>
+        <p><strong>What changed:</strong> TTFT improved by 2.0s; lateness improved by 11.9s.</p>
+        <p><strong>Why it was still not perfect:</strong> When replay became due, the trace identified 0 pending request(s) ahead and 6 in-flight request(s). Among the captured blocker IDs, 0 looked reasonable, 0 looked questionable, 6 looked avoidable, and 0 could not be classified.</p>
+        <p><strong>Avoidable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_005_initial | hatcher_p3_high_session_000_pressure_006_initial | hatcher_p3_high_session_000_pressure_007_initial | hatcher_p3_high_session_000_pressure_008_initial | hatcher_p3_high_session_000_pressure_009_initial | hatcher_p3_high_session_000_pressure_010_initial</p>
+        <p><strong>Simple meaning:</strong> The controller helped, but two things were still happening at once: queue pressure and memory work. In simple terms, the request was moved forward, but the kitchen was still crowded and ingredients were still being fetched.</p>
+      </article>
+    
+      <article class="example-card">
+        <div class="example-label">Highest scheduler friction under controller</div>
+        <h3>hatcher_p3_high_session_000_pressure_000_replay_01</h3>
+        <p>In baseline, TTFT was <strong>6.8s</strong> and lateness was <strong>20.3s</strong>.</p>
+        <p>With the controller, TTFT was <strong>4.0s</strong> and lateness was <strong>19.7s</strong>.</p>
+        <p><strong>What changed:</strong> TTFT improved by 2.8s; lateness improved by 593ms.</p>
+        <p><strong>Why it was still not perfect:</strong> When replay became due, the trace identified 1 pending request(s) ahead and 6 in-flight request(s). Among the captured blocker IDs, 1 looked reasonable, 0 looked questionable, 6 looked avoidable, and 0 could not be classified.</p>
+        <p><strong>Avoidable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_005_initial | hatcher_p3_high_session_000_pressure_006_initial | hatcher_p3_high_session_000_pressure_007_initial | hatcher_p3_high_session_000_pressure_008_initial | hatcher_p3_high_session_000_pressure_009_initial | hatcher_p3_high_session_000_pressure_010_initial</p>
+        <p><strong>Reasonable blocker IDs:</strong> hatcher_p3_high_session_000_pressure_003_replay_01</p>
+        <p><strong>Simple meaning:</strong> The controller moved this replay forward, but the system still had scheduling pressure. In simple terms, it was still waiting behind other work.</p>
+      </article>
+    
+  </div>
+
+  <h2>Common Causes Seen In Controller Mode</h2>
+  <ul><li><strong>Local queue pressure:</strong> 32 request(s) had local pending, in-flight, or local queue wait.</li><li><strong>In-flight work:</strong> 24 request(s) entered while other work was already in flight.</li><li><strong>Uncached prefill:</strong> 32 request(s) still had tokens to prefill.</li><li><strong>H2D/load-back movement:</strong> 29 request(s) saw memory movement before first token.</li><li><strong>Recent eviction:</strong> 28 request(s) had eviction activity shortly before replay was due.</li></ul>
+
+  
+  <h2>Instrumentation Guardrail</h2>
+  <p>This blocker analysis was generated from bounded request-ID snapshots. The controller-mode summary recorded 32 request(s) with blocker snapshots, 83959 total snapshot bytes, average snapshot build time 0.038ms and max snapshot build time 0.035ms.</p>
+
+
+  <h2>Full Evidence</h2>
+  <p><a href="sglang_direct_kv/artifacts/results/reports/scenario1_blocker_deep_dive_20260917_204455/replay_friction_deep_dive.html">Open the full detailed table</a>. The CSV and JSON versions sit beside that file in the same run report folder.</p>
+</main>
+</body>
+</html>

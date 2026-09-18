@@ -10,6 +10,15 @@ from __future__ import annotations
 import os
 
 
+if os.environ.get("AGENTIC_KV_ENABLE_PRIORITY_RADIX_EVICTION_CHOICE", "0") == "1":
+    try:
+        from agentic_kv.sglang_compat import maybe_enable_priority_radix_eviction_choice
+
+        maybe_enable_priority_radix_eviction_choice()
+    except Exception as exc:  # pragma: no cover - defensive startup hook
+        if os.environ.get("AGENTIC_KV_TRACE_DEBUG", "0") == "1":
+            print(f"[agentic-kv-compat] failed to install: {exc}", flush=True)
+
 if (
     os.environ.get("AGENTIC_KV_TRACE_ENABLE", "0") == "1"
     or os.environ.get("AGENTIC_RUNTIME_TELEMETRY", "0") == "1"

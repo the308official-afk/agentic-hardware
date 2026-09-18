@@ -17,9 +17,6 @@ import httpx
 from agentic_kv.nvtx import mark, range_scope
 
 
-DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
-
-
 @dataclass(frozen=True)
 class AgentSession:
     session_id: str
@@ -362,66 +359,9 @@ async def main_async() -> None:
         async def issue_hint(session: AgentSession, base_prompt: str, replay_due_offset_ms: int) -> None:
             if args.mode == "no_prefetch":
                 return
-            p_hash = prompt_hash(base_prompt)
-            action = "direct_load"
-            trace_and_mark(
-                {
-                    "event": "agent.hint_prefetch_start",
-                    "session_id": session.session_id,
-                    "mode": args.mode,
-                    "priority": session.priority,
-                    "timing": "oracle_near_resume" if args.mode == "oracle_direct_load" else "frontend_predicted",
-                    "prefetch_action": action,
-                    "prompt_hash": p_hash,
-                    "replay_due_offset_ms": replay_due_offset_ms,
-                }
-            )
-            trigger_prompt = (
-                base_prompt
-                + "\n\n"
-                + f"{DIRECT_LOAD_TRIGGER} session_id={session.session_id} prompt_hash={p_hash}"
-            )
-            trace_and_mark(
-                {
-                    "event": "agent.direct_kv_load_attempt",
-                    "session_id": session.session_id,
-                    "mode": args.mode,
-                    "priority": session.priority,
-                    "prefetch_action": action,
-                    "prompt_hash": p_hash,
-                    "trigger_prompt_hash": prompt_hash(trigger_prompt),
-                    "trigger_marker": DIRECT_LOAD_TRIGGER,
-                    "intended_action": "exercise_sglang_init_load_back_path",
-                }
-            )
-            row = await run_request(
-                session,
-                trigger_prompt,
-                "hint_prefetch",
-                f"{session.session_id}_direct_load_hint",
-                args.prefetch_max_tokens,
-            )
-            trace_and_mark(
-                {
-                    "event": "agent.direct_kv_load_request.end",
-                    "session_id": session.session_id,
-                    "mode": args.mode,
-                    "priority": session.priority,
-                    "prefetch_action": action,
-                    "prompt_hash": p_hash,
-                    "ttft_ms": row["ttft_ms"],
-                    "total_latency_ms": row["total_latency_ms"],
-                }
-            )
-            trace_and_mark(
-                {
-                    "event": "agent.hint_prefetch_end",
-                    "session_id": session.session_id,
-                    "mode": args.mode,
-                    "priority": session.priority,
-                    "prefetch_action": action,
-                    "prompt_hash": p_hash,
-                }
+            raise RuntimeError(
+                "Legacy request-triggered KV prefetch has been removed. "
+                "Use the multi-harness Scenario 2 prepared_prefix_control path instead."
             )
 
         async def run_session(session: AgentSession) -> None:

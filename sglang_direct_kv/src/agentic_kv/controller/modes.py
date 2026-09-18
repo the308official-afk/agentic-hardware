@@ -10,6 +10,7 @@ CONTROLLER_OBSERVE_ONLY_MODE = "controller_observe_only"
 CONTROLLER_SCHEDULER_PRIORITY_MODE = "controller_scheduler_priority"
 CONTROLLER_SPECULATIVE_PRELOAD_MODE = "controller_speculative_preload"
 CONTROLLER_TARGETED_KV_PREFETCH_MODE = "controller_targeted_kv_prefetch"
+CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE = "controller_proactive_kv_management"
 CONTROLLER_DEMOTE_RESTORE_MODE = "controller_demote_restore"
 CONTROLLER_PRIORITY_DEMOTE_MODE = "controller_priority_demote"
 CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE = "controller_priority_demotion_admission"
@@ -26,6 +27,9 @@ CONTROLLER_ORACLE_SAFE_SJF_MAXFILL_MODE = "controller_oracle_safe_sjf_maxfill"
 CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE = "controller_priority_demotion_calibrated_admission"
 CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE = "controller_oracle_exact_runtime_admission"
 CONTROLLER_DEADLINE_FAIR_MODE = "controller_deadline_fair"
+CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE = "controller_predictive_deadline_queue"
+CONTROLLER_VALUE_AWARE_EVICTION_MODE = "controller_value_aware_eviction"
+CONTROLLER_MEMORY_ADMISSION_MODE = "controller_memory_admission"
 CONTROLLER_ADMISSION_CONTROL_MODE = "controller_admission_control"
 CONTROLLER_FULL_MODE = "controller_full"
 CONTROLLER_FULL_CHUNKED_PREFILL_MODE = "controller_full_chunked_prefill"
@@ -65,6 +69,7 @@ SUPPORTED_MODES = (
     CONTROLLER_SCHEDULER_PRIORITY_MODE,
     CONTROLLER_SPECULATIVE_PRELOAD_MODE,
     CONTROLLER_TARGETED_KV_PREFETCH_MODE,
+    CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE,
     CONTROLLER_DEMOTE_RESTORE_MODE,
     CONTROLLER_PRIORITY_DEMOTE_MODE,
     CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODE,
@@ -81,6 +86,9 @@ SUPPORTED_MODES = (
     CONTROLLER_PRIORITY_DEMOTION_CALIBRATED_ADMISSION_MODE,
     CONTROLLER_ORACLE_EXACT_RUNTIME_ADMISSION_MODE,
     CONTROLLER_DEADLINE_FAIR_MODE,
+    CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE,
+    CONTROLLER_VALUE_AWARE_EVICTION_MODE,
+    CONTROLLER_MEMORY_ADMISSION_MODE,
     CONTROLLER_ADMISSION_CONTROL_MODE,
     CONTROLLER_FULL_MODE,
     CONTROLLER_FULL_CHUNKED_PREFILL_MODE,
@@ -94,7 +102,11 @@ def controller_observe_only_mode(mode: str) -> bool:
 
 
 def controller_scheduler_priority_mode(mode: str) -> bool:
-    return mode in {CONTROLLER_SCHEDULER_PRIORITY_MODE, CONTROLLER_DEADLINE_FAIR_MODE}
+    return mode in {
+        CONTROLLER_SCHEDULER_PRIORITY_MODE,
+        CONTROLLER_DEADLINE_FAIR_MODE,
+        CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE,
+    }
 
 
 def controller_speculative_preload_mode(mode: str) -> bool:
@@ -102,7 +114,19 @@ def controller_speculative_preload_mode(mode: str) -> bool:
 
 
 def controller_targeted_kv_prefetch_mode(mode: str) -> bool:
-    return mode == CONTROLLER_TARGETED_KV_PREFETCH_MODE
+    return mode in {CONTROLLER_TARGETED_KV_PREFETCH_MODE, CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE}
+
+
+def controller_proactive_kv_management_mode(mode: str) -> bool:
+    return mode == CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE
+
+
+def controller_value_aware_eviction_mode(mode: str) -> bool:
+    return mode == CONTROLLER_VALUE_AWARE_EVICTION_MODE
+
+
+def controller_memory_admission_mode(mode: str) -> bool:
+    return mode == CONTROLLER_MEMORY_ADMISSION_MODE
 
 
 def controller_demote_restore_mode(mode: str) -> bool:
@@ -196,10 +220,14 @@ def controller_mode(mode: str) -> bool:
         CONTROLLER_SCHEDULER_PRIORITY_MODE,
         CONTROLLER_SPECULATIVE_PRELOAD_MODE,
         CONTROLLER_TARGETED_KV_PREFETCH_MODE,
+        CONTROLLER_PROACTIVE_KV_MANAGEMENT_MODE,
         CONTROLLER_DEMOTE_RESTORE_MODE,
         CONTROLLER_PRIORITY_DEMOTE_MODE,
         *CONTROLLER_PRIORITY_DEMOTION_ADMISSION_MODES,
         CONTROLLER_DEADLINE_FAIR_MODE,
+        CONTROLLER_PREDICTIVE_DEADLINE_QUEUE_MODE,
+        CONTROLLER_VALUE_AWARE_EVICTION_MODE,
+        CONTROLLER_MEMORY_ADMISSION_MODE,
         CONTROLLER_ADMISSION_CONTROL_MODE,
         CONTROLLER_FULL_MODE,
         CONTROLLER_FULL_CHUNKED_PREFILL_MODE,

@@ -11,7 +11,6 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
-DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 STOP = False
 
 
@@ -51,85 +50,10 @@ def as_dict(value: Any) -> dict[str, Any]:
 
 
 def append_marker_to_payload(payload: dict[str, Any], hint: dict[str, Any], max_tokens: int, action: str) -> dict[str, Any]:
-    out = json.loads(json.dumps(payload))
-    source_session = str(hint.get("source_agent_session_id") or hint.get("source_request_id") or hint.get("hint_id"))
-    if action != "direct_load":
-        raise ValueError(f"unsupported live prefetch action: {action}. Use direct_load.")
-
-    marker = (
-        f"\n\n{DIRECT_LOAD_TRIGGER} "
-        f"hint_id={hint.get('hint_id')} "
-        f"session_id={source_session} "
-        f"source_proxy_ordinal={hint.get('source_proxy_ordinal')}"
+    raise RuntimeError(
+        "Legacy request-triggered live KV prefetch has been removed. "
+        "Use prepared_prefix_control so SGLang/HiCache performs the host-to-device load directly."
     )
-    messages = out.get("messages")
-    if isinstance(messages, list) and messages:
-        last = messages[-1]
-        if isinstance(last, dict) and isinstance(last.get("content"), str):
-            last["content"] = last["content"] + marker
-        else:
-            messages.append({"role": "user", "content": marker.strip()})
-    else:
-        out["messages"] = [{"role": "user", "content": marker.strip()}]
-
-    out["stream"] = False
-    out["temperature"] = 0
-    out.pop("max_tokens", None)
-    out["max_completion_tokens"] = max_tokens
-
-    custom_params = as_dict(out.get("custom_params"))
-    request_context = dict(as_dict(custom_params.get("request_context")))
-    agentic_kv = dict(as_dict(custom_params.get("agentic_kv")))
-    agent_hints = dict(as_dict(custom_params.get("agent_hints")))
-
-    parent_run_id = hint.get("source_parent_run_id") or request_context.get("parent_run_id") or "live_agentbench"
-    task_instance_id = hint.get("source_task_instance_id") or request_context.get("task_instance_id") or ""
-    phase = hint.get("source_phase") or request_context.get("phase") or "live_hint_prefetch"
-    prefetch_request_id = f"{hint.get('source_request_id') or parent_run_id}::live_prefetch::{hint.get('hint_id')}"
-
-    request_context.update(
-        {
-            "request_id": prefetch_request_id,
-            "parent_run_id": parent_run_id,
-            "task_instance_id": task_instance_id,
-            "phase": "live_hint_prefetch",
-            "source_phase": phase,
-            "source_request_id": hint.get("source_request_id") or "",
-            "source_proxy_ordinal": hint.get("source_proxy_ordinal"),
-            "hint_id": hint.get("hint_id"),
-        }
-    )
-    agentic_kv.update(
-        {
-            "session_id": f"{source_session}::live_prefetch::{hint.get('hint_id')}",
-            "source_session_id": source_session,
-            "phase": "live_hint_prefetch",
-            "label": f"{parent_run_id}:live_hint_prefetch",
-            "mode": "live_direct_load",
-            "priority": hint.get("hint_priority") or agentic_kv.get("priority") or "high",
-            "task_id": task_instance_id,
-            "parent_run_id": parent_run_id,
-            "hint_id": hint.get("hint_id"),
-            "source_proxy_ordinal": hint.get("source_proxy_ordinal"),
-            "trigger_marker": DIRECT_LOAD_TRIGGER,
-        }
-    )
-    agent_hints.update(
-        {
-            "priority": hint.get("hint_priority") or agent_hints.get("priority") or "high",
-            "reuse_likelihood": hint.get("reuse_likelihood") or agent_hints.get("reuse_likelihood") or 1.0,
-            "hint_id": hint.get("hint_id"),
-            "hint_source": "live_prefetch_controller",
-            "intended_action": "direct_host_to_gpu_kv_load",
-        }
-    )
-    out["custom_params"] = {
-        **custom_params,
-        "request_context": request_context,
-        "agentic_kv": agentic_kv,
-        "agent_hints": agent_hints,
-    }
-    return out
 
 
 def post_prefetch(target_base: str, payload: dict[str, Any], timeout_s: float) -> tuple[int, str, str]:

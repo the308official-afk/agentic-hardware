@@ -4,6 +4,8 @@ import os
 import random
 from dataclasses import dataclass
 
+ToolWaitBucket = tuple[str, float, int, int]
+
 
 @dataclass(frozen=True)
 class ToolWaitSpec:
@@ -23,16 +25,16 @@ class WorkloadShape:
 
 TOOL_WAIT_PROFILE_DISTRIBUTIONS = {
     "agentic_mixed": (
-        ("quick", 70.0, 200),
-        ("moderate", 25.0, 2_000),
-        ("slow", 5.0, 20_000),
+        ("quick", 70.0, 200, 200),
+        ("moderate", 25.0, 2_000, 2_000),
+        ("slow", 5.0, 20_000, 20_000),
     ),
     "realistic_agentic_mix": (
-        ("quick_file", 45.0, 250),
-        ("repo_search", 25.0, 800),
-        ("small_command", 15.0, 2_000),
-        ("test_or_build", 10.0, 7_000),
-        ("slow_external", 5.0, 18_000),
+        ("quick_file", 45.0, 250, 250),
+        ("repo_search", 25.0, 800, 800),
+        ("small_command", 15.0, 2_000, 2_000),
+        ("test_or_build", 10.0, 7_000, 7_000),
+        ("slow_external", 5.0, 18_000, 18_000),
     ),
 }
 
@@ -60,8 +62,21 @@ REALISTIC_REPLAY_SHAPES_BY_WAIT = {
 }
 
 
-def parse_tool_wait_profile_spec(spec: str) -> tuple[tuple[str, float, int], ...]:
-    out: list[tuple[str, float, int]] = []
+def _parse_wait_range(raw_wait: str) -> tuple[int, int]:
+    raw_wait = raw_wait.strip()
+    if "-" not in raw_wait:
+        wait_ms = int(float(raw_wait))
+        return wait_ms, wait_ms
+    lower_raw, upper_raw = raw_wait.split("-", 1)
+    lower = int(float(lower_raw.strip()))
+    upper = int(float(upper_raw.strip()))
+    if upper < lower:
+        raise ValueError("tool wait range upper bound must be >= lower bound")
+    return lower, upper
+
+
+def parse_tool_wait_profile_spec(spec: str) -> tuple[ToolWaitBucket, ...]:
+    out: list[ToolWaitBucket] = []
     for item in spec.split(","):
         raw = item.strip()
         if not raw:
@@ -78,24 +93,26 @@ def parse_tool_wait_profile_spec(spec: str) -> tuple[tuple[str, float, int], ...
             wait_class, weight_raw, wait_raw = parts
         else:
             raise ValueError(
-                "TOOL_WAIT_PROFILE_SPEC entries must be wait_ms, class:weight:wait_ms, or weight:wait_ms"
+                "TOOL_WAIT_PROFILE_SPEC entries must be wait_ms, wait_min-wait_max, "
+                "class:weight:wait_ms, class:weight:wait_min-wait_max, "
+                "weight:wait_ms, or weight:wait_min-wait_max"
             )
         weight = float(weight_raw)
-        wait_ms = int(float(wait_raw))
-        if weight <= 0 or wait_ms < 0:
+        wait_min_ms, wait_max_ms = _parse_wait_range(wait_raw)
+        if weight <= 0 or wait_min_ms < 0:
             raise ValueError("tool wait profile weights must be positive and waits must be non-negative")
-        out.append((wait_class.strip() or f"bucket_{len(out) + 1}", weight, wait_ms))
+        out.append((wait_class.strip() or f"bucket_{len(out) + 1}", weight, wait_min_ms, wait_max_ms))
     if not out:
         raise ValueError("TOOL_WAIT_PROFILE_SPEC did not contain any buckets")
     return tuple(out)
 
 
-def tool_wait_distribution(profile: str, base_wait_ms: int, custom_spec: str = "") -> tuple[tuple[str, float, int], ...]:
+def tool_wait_distribution(profile: str, base_wait_ms: int, custom_spec: str = "") -> tuple[ToolWaitBucket, ...]:
     normalized = profile.strip().lower() if profile else "fixed"
     if custom_spec.strip():
         return parse_tool_wait_profile_spec(custom_spec)
     if normalized in {"fixed", "pressure_fixed"}:
-        return (("pressure_fixed", 1.0, int(base_wait_ms)),)
+        return (("pressure_fixed", 1.0, int(base_wait_ms), int(base_wait_ms)),)
     try:
         return TOOL_WAIT_PROFILE_DISTRIBUTIONS[normalized]
     except KeyError as exc:
@@ -116,11 +133,19 @@ def sample_tool_wait_specs(
         raise ValueError("TASK_REPLAY_STEPS must be at least 1")
     distribution = tool_wait_distribution(profile, base_wait_ms, custom_spec)
     if len(distribution) == 1:
-        wait_class, _, wait_ms = distribution[0]
-        return [ToolWaitSpec(step_index=idx, wait_ms=wait_ms, wait_class=wait_class) for idx in range(1, steps + 1)]
+        wait_class, _, wait_min_ms, wait_max_ms = distribution[0]
+        rng = random.Random(f"{seed}:{stream_key}:{profile}:{custom_spec}")
+        return [
+            ToolWaitSpec(
+                step_index=idx,
+                wait_ms=rng.randint(wait_min_ms, wait_max_ms) if wait_max_ms > wait_min_ms else wait_min_ms,
+                wait_class=wait_class,
+            )
+            for idx in range(1, steps + 1)
+        ]
 
     rng = random.Random(f"{seed}:{stream_key}:{profile}:{custom_spec}")
-    total_weight = sum(weight for _, weight, _ in distribution)
+    total_weight = sum(weight for _, weight, _, _ in distribution)
     specs: list[ToolWaitSpec] = []
     for idx in range(1, steps + 1):
         pick = rng.random() * total_weight
@@ -131,7 +156,10 @@ def sample_tool_wait_specs(
             if pick <= cumulative:
                 selected = bucket
                 break
-        specs.append(ToolWaitSpec(step_index=idx, wait_ms=int(selected[2]), wait_class=str(selected[0])))
+        wait_min_ms = int(selected[2])
+        wait_max_ms = int(selected[3])
+        wait_ms = rng.randint(wait_min_ms, wait_max_ms) if wait_max_ms > wait_min_ms else wait_min_ms
+        specs.append(ToolWaitSpec(step_index=idx, wait_ms=wait_ms, wait_class=str(selected[0])))
     return specs
 
 

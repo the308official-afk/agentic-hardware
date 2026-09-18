@@ -14,7 +14,6 @@ from typing import Any
 
 import httpx
 
-DIRECT_LOAD_TRIGGER = "AGENTIC_KV_DIRECT_LOAD_TRIGGER"
 DYNAMO_PRIORITY_MODE = "dynamo_priority_hints"
 E2E_PRIORITY_MODE = "e2e_priority_hints"
 DYNAMO_PRIORITY_MODES = {DYNAMO_PRIORITY_MODE, E2E_PRIORITY_MODE}
@@ -823,39 +822,9 @@ async def main_async() -> None:
             await run_request(filler, prompt, "pressure_filler", f"{filler.session_id}_request", args.filler_max_tokens)
 
         async def issue_prefetch(pair: ReplayPair, replay_due_ms: float) -> None:
-            base_prompt = pair.prompt
-            base_hash = prompt_hash(base_prompt)
-            trigger_prompt = base_prompt + "\n\n" + f"{DIRECT_LOAD_TRIGGER} session_id={pair.session_id} prompt_hash={base_hash}"
-            write_trace_event(
-                {
-                    "event": "m27.prefetch.start",
-                    "session_id": pair.session_id,
-                    "mode": args.mode,
-                    "prefetch_action": "direct_load",
-                    "prompt_hash": base_hash,
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                    "priority_policy": priority_policy_name(),
-                }
-            )
-            await run_request(
-                pair,
-                trigger_prompt,
-                "hint_prefetch",
-                f"{pair.session_id}_direct_prefetch",
-                args.prefetch_max_tokens,
-                use_concurrency_limit=not priority_direct_enabled(),
-                deadline_ms=replay_due_ms,
-            )
-            write_trace_event(
-                {
-                    "event": "m27.prefetch.end",
-                    "session_id": pair.session_id,
-                    "mode": args.mode,
-                    "prefetch_action": "direct_load",
-                    "prompt_hash": base_hash,
-                    "replay_due_offset_ms": round(replay_due_ms, 3),
-                    "priority_policy": priority_policy_name(),
-                }
+            raise RuntimeError(
+                "Legacy request-triggered KV prefetch has been removed. "
+                "Use the multi-harness Scenario 2 prepared_prefix_control path instead."
             )
 
         async def run_pair(pair: ReplayPair, index: int) -> None:

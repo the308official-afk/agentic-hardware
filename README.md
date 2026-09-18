@@ -14,6 +14,68 @@ current experiments focus on replay-deadline readiness with real SGLang serving,
 HiCache, live timestamped telemetry, SGLang priority scheduling, controlled
 pressure levels, and multiple coding-agent harness shapes.
 
+## Harness-Aware Scenario Realism Roadmap
+
+The harness-aware experiments should start simple, but each run should be clear
+about how realistic the workload is. The table below tracks the realism ideas we
+have discussed, whether they are part of the next first-pass realistic run, and
+which ideas are intentionally deferred.
+
+For the deadline-fair scheduling scenario, avoid treating requests as "target"
+versus "filler" in the manager-facing interpretation. The clean framing is:
+there is a set of replay requests, every replay request wants its next token as
+soon as possible after its tool returns, and the controller should use
+harness-exposed timing information to improve the replay set as a whole.
+
+| Realism idea | What it means | Start with this in the first realistic run? |
+| --- | --- | --- |
+| Variable tool waits | Tool calls take different amounts of time instead of every replay using a fixed `50 ms` wait. | Yes |
+| Mixed tool-wait buckets | Sample waits from simple buckets such as very short, short, medium, and long waits. | Yes, keep the bucket set small |
+| Staggered session starts | Sessions begin at different times instead of all launching at once. | Yes |
+| Staggered replay readiness | Tool returns happen at different points across the request timeline. This follows from variable waits plus staggered starts. | Yes |
+| Same generated timeline for both modes | Baseline and controller see the exact same replay schedule using the same deterministic seed. | Yes |
+| Simple token-ASAP objective | Every replay request wants its next token as soon as possible after tool return. Do not introduce different urgency classes yet. | Yes |
+| Manager-readable timing units | Show large timing values in seconds with one decimal place instead of thousands of milliseconds. | Yes |
+| Total replay TTFT | Sum, average, median, p95, and max TTFT across all replay requests. | Yes |
+| Replay delay after ready | Measure how long requests wait after becoming replay-ready before first token. | Yes |
+| Controller action proof | Show that the controller actually received harness timing signals and assigned deadline-derived scheduling decisions. | Yes |
+| Mixed replay sizes | Some replay requests are small while others are larger. | Not yet |
+| Bursty arrivals | Some tool returns naturally cluster, creating temporary pressure. | Not yet |
+| Intentionally overloaded window | Force one period where more replays are ready than the backend can serve immediately. | Not yet |
+| Separate business priority | Give some requests higher external value or business importance. | No |
+| Different deadline tightness | Give some requests more slack after tool return than others. | No for now |
+| Deadline-met rate | Count whether requests met a fixed deadline threshold. | Later, after the deadline model is explicit |
+| Detailed fairness metrics | Measure whether some requests improve while others suffer heavily. | Later |
+
+The first realistic deadline-fair run should therefore ask a narrow question:
+
+> Given the same replay timeline in both modes, with variable tool waits and
+> staggered replay readiness, does exposing harness timing information let the
+> controller improve TTFT and wait-after-ready across all replay requests?
+
+One lesson from the predictive-deadline-queue follow-up is that the controller
+must act in both scheduling stages. First, it should order replay submissions
+before they enter SGLang when local concurrency is saturated. Second, it should
+lower the same due-time priority into SGLang so the backend scheduler also sees
+the intended order. Acting only inside SGLang can improve TTFT while still
+leaving replay requests waiting too long before they reach SGLang.
+
+The first-run tool-wait profile is:
+
+| Bucket | Range | Weight |
+| --- | ---: | ---: |
+| `very_short` | `100-500 ms` | 20% |
+| `short` | `1-5 s` | 35% |
+| `medium` | `10-30 s` | 30% |
+| `long` | `60-120 s` | 15% |
+
+The repeatable run wrapper is:
+
+```bash
+cd sglang_direct_kv
+bash scripts/run_deadline_fair_realistic.sh Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
 ## What We Mean By Shorthand
 
 In this project, **shorthand means representing a relationship with a reusable
@@ -338,7 +400,7 @@ The current manager-facing comparisons use these modes:
 | `controller_observe_only` | Portable controller phase 1. The controller consumes lifecycle state and records the actions it would take, but does not mutate SGLang. |
 | `controller_scheduler_priority` | Portable controller phase 2. The controller observes replay readiness and lowers only its ready-phase priority decision to SGLang scheduler priority. |
 | `controller_speculative_preload` | Portable controller phase 3. The controller observes the tool-wait window and lowers an accepted KV prefetch decision to gateway speculative KV preload. |
-| `controller_targeted_kv_prefetch` | Portable controller phase 4. The controller requests explicit target-prefix KV movement through a capability-gated SGLang adapter. If the active SGLang version exposes no stable direct hook, the report records that instead of using a warmup fallback. |
+| `controller_targeted_kv_prefetch` | Portable controller phase 4. The controller requests explicit target-prefix KV movement through a capability-gated SGLang adapter. The only authorized direct-load mechanism is `prepared_prefix_control`, which calls SGLang/HiCache prepare-prefix control directly. The controller now asks SGLang for a no-side-effect prepare plan first and only performs H2D work for useful host-backed, GPU-evicted prefixes; if the hook is unavailable, the run must report that honestly instead of using any indirect request warmup. |
 | `controller_demote_restore` | Portable controller phase 5. The controller lowers matching background/filler traffic during the replay-critical window, raises replay priority, and records restore/release afterward. |
 | `controller_priority_demote` | Minimal controller probe. The controller does only two active things: lower filler/background requests to priority `-100` during the tool-wait window, and raise the target replay to priority `100`. |
 | `controller_priority_demotion_admission` | Minimal three-action controller probe. The controller raises target replay priority, lowers filler/background priority, and temporarily holds filler/background admission during the replay-critical window. |
@@ -765,7 +827,7 @@ smallest possible boundary adapter.
 | Phase 1: Passive lifecycle controller | Validated on EC2 | Observe agent lifecycle events without changing scheduling or KV behavior. | `controller_observe_only` emitted tool-start, prepare-checkpoint, tool-complete, and session-finish decisions for Hatcher/DeepAgents and NAT at P0/P3; all backend results were observe-only. |
 | Phase 2: Scheduler-only controller | Mechanically validated on EC2; outcome mixed | Convert controller decisions into scheduler priority only, with no speculative KV work yet. | Proof shows `tool_completed` produces `set_priority=100`, gateway source is `controller_ready_decision`, and SGLang scheduler receives the replay with priority `100`. A Hatcher/DeepAgents P3/P5 comparison showed P3 worse in one run and P5 median slightly better, so repeated samples are needed before claiming a performance win. |
 | Phase 3: Gateway speculative KV preload | Mechanically validated on EC2; timing mixed | When a likely replay becomes predictable, send background preload/prefill work before the real replay arrives. | `controller_speculative_preload` accepts a controller `kv_action=prefetch` decision and lowers it to a gateway background warmup request. A Hatcher/DeepAgents P1/P2 validation showed controller warmup launch from the driver, warmup completion before SGLang received replay, and cached-prefix evidence on replay. P2 still missed the stricter warmup-before-deadline proof, so the next phase needs earlier prediction or admission control. |
-| Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, and any matching SGLang load-back or host-to-device copy before replay compute. If no stable direct hook exists, the evidence table says so explicitly. |
+| Phase 4: Targeted KV prefetch hook | Implemented as portable capability/proof scaffold | Add the thinnest possible backend hook for explicit host-to-device KV movement when SGLang exposes a stable path. | `controller_targeted_kv_prefetch` records controller prefetch request, backend acceptance, direct-hook availability, the SGLang prepare plan, selective admission reason, and any matching SGLang load-back or host-to-device copy before replay compute. The approved path is `prepared_prefix_control`; request-triggered warmup is removed and must not be used as a substitute. |
 | Phase 5: Demote and restore | Validated on EC2 | Temporarily lower background/filler priority while preserving correctness and restoring normal priority afterward. | `controller_demote_restore` records a controller demote command during tool wait, lowers matching filler requests to background priority at the gateway boundary, raises the replay request, then records restore/release after replay. The EC2 P1 validation demoted 8/8 matching filler requests to priority `-100`, raised replay to priority `100`, and wrote `controller_demote_restore_proof.csv`. |
 | Phase 6: Admission and overload control | Validated on EC2 | Decide when the system is too busy to accept more speculative work or urgent bursts. | `controller_admission_control` admits warmup only when the tool-wait window, filler count, concurrency, and per-case warmup budget stay under configured limits. The EC2 validation admitted P1 warmup and skipped P4 with explicit reasons: `tool_wait_ms 25 below minimum 75`, `filler_sessions 48 above limit 16`, and `concurrency 10 above limit 8`. Replay priority was still lowered to SGLang priority `100` in both cases. |
 | Phase 6.5: Single-harness full-controller optimization | Implemented; EC2 performance rerun pending | Combine the EC2-winning pieces into `controller_full` and tune them on DeepAgents/Hatcher before expanding to other harnesses. | Unit tests prove timed prepare-window transition, short-wait no-demote behavior, metadata preservation, background demotion guardrails, replay priority, budget command, and release. Next EC2 run should check whether `controller_full` matches or beats the best individual controller mode across `p1_mild`, `p3_high`, `p4_cliff`, and `p5_boss_queue`. |

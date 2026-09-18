@@ -67,6 +67,8 @@ MODE_LABELS = {
     "controller_scheduler_priority": "CP = Controller scheduler priority",
     "controller_speculative_preload": "CL = Controller speculative KV preload",
     "controller_targeted_kv_prefetch": "CT = Controller targeted KV prefetch",
+    "controller_proactive_kv_management": "PKV = Controller proactive KV management",
+    "controller_value_aware_eviction": "VAE = Controller value-aware eviction",
     "controller_demote_restore": "CD = Controller demote/restore",
     "controller_priority_demote": "PD = Controller priority + demote",
     "controller_priority_demotion_admission": "PDA = Controller priority + demotion + admission",
@@ -83,6 +85,8 @@ MODE_LABELS = {
     "controller_priority_demotion_calibrated_admission": "CFA = Controller priority + demotion + calibrated filler admission",
     "controller_oracle_exact_runtime_admission": "OEA = Controller priority + demotion + oracle exact-runtime admission",
     "controller_deadline_fair": "CDF = Controller deadline-fair scheduling",
+    "controller_predictive_deadline_queue": "PDQ = Controller predictive deadline queue",
+    "controller_memory_admission": "CMA = Controller memory admission",
     "controller_admission_control": "CA = Controller admission control",
     "controller_full": "CF = Full controller",
     "controller_full_chunked_prefill": "CC = Full controller + chunked prefill",
@@ -103,6 +107,8 @@ MODE_COLORS = {
     "controller_scheduler_priority": "#be123c",
     "controller_speculative_preload": "#9333ea",
     "controller_targeted_kv_prefetch": "#f59e0b",
+    "controller_proactive_kv_management": "#0f766e",
+    "controller_value_aware_eviction": "#b45309",
     "controller_demote_restore": "#0d9488",
     "controller_priority_demote": "#0891b2",
     "controller_priority_demotion_admission": "#0369a1",
@@ -119,6 +125,8 @@ MODE_COLORS = {
     "controller_priority_demotion_calibrated_admission": "#166534",
     "controller_oracle_exact_runtime_admission": "#14b8a6",
     "controller_deadline_fair": "#0f766e",
+    "controller_predictive_deadline_queue": "#059669",
+    "controller_memory_admission": "#0d9488",
     "controller_admission_control": "#2563eb",
     "controller_full": "#581c87",
     "controller_full_chunked_prefill": "#be185d",
@@ -200,6 +208,18 @@ CHART_SIGNAL_BUCKETS = {
         "description": "Portable controller requested direct targeted host-to-device KV prefetch when the SGLang adapter exposes a stable hook",
         "color": "#f59e0b",
         "modes": {"controller_targeted_kv_prefetch"},
+    },
+    "controller_proactive_kv_management": {
+        "label": "Controller Proactive KV Management",
+        "description": "Portable controller requested host-to-device KV prefetch for every replay session whose harness signals made reuse likely and recompute costly",
+        "color": "#0f766e",
+        "modes": {"controller_proactive_kv_management"},
+    },
+    "controller_value_aware_eviction": {
+        "label": "Controller Value-Aware Eviction",
+        "description": "Portable controller translated harness cache-value signals into SGLang priorities; SGLang's own priority radix eviction chose victims",
+        "color": "#b45309",
+        "modes": {"controller_value_aware_eviction"},
     },
     "controller_demote_restore": {
         "label": "Controller Demote/Restore",
@@ -297,11 +317,23 @@ CHART_SIGNAL_BUCKETS = {
         "color": "#0f766e",
         "modes": {"controller_deadline_fair"},
     },
+    "controller_predictive_deadline_queue": {
+        "label": "Controller Predictive Deadline Queue",
+        "description": "Controller assigns replay priority during tool wait from the expected replay due time, then carries that priority into the replay request",
+        "color": "#059669",
+        "modes": {"controller_predictive_deadline_queue"},
+    },
     "controller_admission": {
         "label": "Controller Admission Control",
         "description": "Portable controller admits or skips speculative KV warmup based on pressure limits, with explicit skip reasons",
         "color": "#2563eb",
         "modes": {"controller_admission_control"},
+    },
+    "controller_memory_admission": {
+        "label": "Controller Memory Admission",
+        "description": "Controller delays new candidate work when harness timing predicts near-future replay demand would make admission risky",
+        "color": "#0d9488",
+        "modes": {"controller_memory_admission"},
     },
     "controller_full": {
         "label": "Full Controller",
@@ -342,6 +374,7 @@ CHART_SIGNAL_ORDER = (
     "controller_scheduler",
     "controller_preload",
     "controller_targeted_prefetch",
+    "controller_proactive_kv_management",
     "controller_demote_restore",
     "controller_priority_demote",
     "controller_priority_demotion_admission",
@@ -473,6 +506,10 @@ COST_ACCOUNTING_COLORS = {
         "target": "#0f766e",
         "filler": "#99f6e4",
     },
+    "controller_predictive_deadline_queue": {
+        "target": "#059669",
+        "filler": "#bbf7d0",
+    },
 }
 COST_ACCOUNTING_DELTA_BETTER = "#16a34a"
 COST_ACCOUNTING_DELTA_WORSE = "#dc2626"
@@ -544,6 +581,10 @@ COST_ACCOUNTING_DELTA_COLORS = {
     },
     "controller_deadline_fair": {
         "better": "#0f766e",
+        "worse": "#dc2626",
+    },
+    "controller_predictive_deadline_queue": {
+        "better": "#059669",
         "worse": "#dc2626",
     },
 }
@@ -658,8 +699,14 @@ SIGNAL_FAMILY_DEFINITIONS = [
     {
         "family": "Controller targeted KV prefetch",
         "where_signal_is_added": "Portable controller sidecar, lowered by backend adapter when supported",
-        "what_it_means": "The controller requests explicit host-to-device KV movement for the target prefix. If the active SGLang version has no stable direct hook, the report records that honestly instead of using a warmup fallback.",
+        "what_it_means": "The controller requests explicit host-to-device KV movement for the target prefix. The approved path is prepared_prefix_control, where SGLang/HiCache performs the prepare-prefix load directly. If that hook is unavailable, the report records that honestly instead of using any request-triggered warmup.",
         "raw_modes": "controller_targeted_kv_prefetch",
+    },
+    {
+        "family": "Controller proactive KV management",
+        "where_signal_is_added": "Portable controller sidecar, lowered by backend adapter when supported",
+        "what_it_means": "The controller receives ETA, reuse probability, prefix identity, and recompute-cost signals for every replay session, then requests host-to-device KV movement for sessions likely to resume soon.",
+        "raw_modes": "controller_proactive_kv_management",
     },
     {
         "family": "Controller oracle timeline",
@@ -1190,10 +1237,20 @@ def collect_speculative_prefill_proof(root: Path, replay_rows: list[dict[str, An
 
 
 def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    targeted_prefetch_modes = {"controller_targeted_kv_prefetch", "controller_proactive_kv_management"}
+    replay_by_request = {
+        (
+            str(row.get("case_dir") or ""),
+            str(row.get("session_id") or ""),
+            str(row.get("request_id") or ""),
+        ): row
+        for row in replay_rows
+        if row.get("mode") in targeted_prefetch_modes
+    }
     replay_by_session = {
         (str(row.get("case_dir") or ""), str(row.get("session_id") or "")): row
         for row in replay_rows
-        if row.get("mode") == "controller_targeted_kv_prefetch"
+        if row.get("mode") in targeted_prefetch_modes
     }
     proof_rows: list[dict[str, Any]] = []
     for case_dir in sorted(path for path in root.iterdir() if path.is_dir()):
@@ -1206,8 +1263,12 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
 
         for requested in by_event.get("m27.targeted_kv_prefetch.requested", []):
             session_id = str(requested.get("session_id") or "")
-            replay_row = replay_by_session.get((str(case_dir), session_id), {})
-            expected_replay = str(requested.get("expected_replay_request_id") or replay_row.get("request_id") or "")
+            expected_replay = str(requested.get("expected_replay_request_id") or "")
+            replay_row = replay_by_request.get((str(case_dir), session_id, expected_replay), {})
+            if not replay_row:
+                replay_row = replay_by_session.get((str(case_dir), session_id), {})
+            if not expected_replay:
+                expected_replay = str(replay_row.get("request_id") or "")
             requested_ts_ns = int(float_value(requested.get("ts_ns")))
             replay_start_ts_ns = int(float_value(replay_row.get("request_start_ts_ns")))
             replay_receive_ts_ns = int(float_value(replay_row.get("sglang_receive_ts_ns")))
@@ -1223,17 +1284,86 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
                 ),
                 {},
             )
+            direct_start = next(
+                (
+                    row
+                    for row in trace_rows
+                    if str(row.get("event") or "") == "m27.targeted_kv_prefetch.direct_load_start"
+                    and str(row.get("controller_command_id") or "")
+                    == str(requested.get("controller_command_id") or "")
+                ),
+                {},
+            )
+            direct_skipped = next(
+                (
+                    row
+                    for row in trace_rows
+                    if str(row.get("event") or "") == "m27.targeted_kv_prefetch.skipped"
+                    and str(row.get("controller_command_id") or "")
+                    == str(requested.get("controller_command_id") or "")
+                ),
+                {},
+            )
+            source_request_id = str(requested.get("request_id") or "")
+            prepare_result = next(
+                (
+                    row
+                    for row in trace_rows
+                    if str(row.get("event") or "") == "agentic_kv.prepare_prefix.result"
+                    and not is_truthy_text((row.get("command") or {}).get("plan_only"))
+                    and str((row.get("command") or {}).get("request_id") or "") == source_request_id
+                    and (
+                        not expected_replay
+                        or str((row.get("command") or {}).get("expected_replay_request_id") or "") == expected_replay
+                    )
+                ),
+                {},
+            )
+            if not prepare_result:
+                prepare_control = next(
+                    (
+                        row
+                        for row in trace_rows
+                        if str(row.get("event") or "") == "m27.targeted_kv_prefetch.prepare_prefix_control_result"
+                        and not is_truthy_text(row.get("plan_only"))
+                        and str(row.get("request_id") or "") == source_request_id
+                        and (not expected_replay or str(row.get("expected_replay_request_id") or "") == expected_replay)
+                    ),
+                    {},
+                )
+                nested_result = prepare_control.get("result")
+                if isinstance(nested_result, dict):
+                    prepare_result = nested_result
+            prepare_plan = next(
+                (
+                    row
+                    for row in trace_rows
+                    if str(row.get("event") or "") == "m27.targeted_kv_prefetch.prepare_prefix_control_plan_result"
+                    and str(row.get("request_id") or "") == source_request_id
+                    and (not expected_replay or str(row.get("expected_replay_request_id") or "") == expected_replay)
+                ),
+                {},
+            )
+            prepare_plan_result = prepare_plan.get("result") if isinstance(prepare_plan.get("result"), dict) else {}
 
             load_back_events = 0
             h2d_copy_events = 0
             first_movement_ts_ns = 0
+            direct_start_ts_ns = int(float_value(direct_start.get("ts_ns")))
             for trace_row in trace_rows:
+                if not direct_start_ts_ns:
+                    continue
                 event = str(trace_row.get("event") or "")
                 category = str(trace_row.get("category") or "")
                 method = str(trace_row.get("method") or "")
                 source_event = str(trace_row.get("source_event") or "")
                 action_text = " ".join((event, category, method, source_event)).lower()
-                same_session = str(trace_row.get("session_id") or "") == session_id
+                same_session = session_id in {
+                    str(trace_row.get("session_id") or ""),
+                    str(trace_row.get("agent_session_id") or ""),
+                    str(trace_row.get("agent_parent_run_id") or ""),
+                    str(trace_row.get("agent_case_id") or ""),
+                }
                 target_match = row_matches_request(trace_row, expected_replay)
                 if not same_session and not target_match:
                     continue
@@ -1246,7 +1376,7 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
                 if not (is_load_back or is_h2d or "load_back" in action_text):
                     continue
                 ts_ns = int(float_value(trace_row.get("ts_ns")))
-                if requested_ts_ns and ts_ns and ts_ns < requested_ts_ns:
+                if direct_start_ts_ns and ts_ns and ts_ns < direct_start_ts_ns:
                     continue
                 if replay_compute_ts_ns and ts_ns and ts_ns > replay_compute_ts_ns:
                     continue
@@ -1256,6 +1386,22 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
                     h2d_copy_events += 1
                 if ts_ns and (not first_movement_ts_ns or ts_ns < first_movement_ts_ns):
                     first_movement_ts_ns = ts_ns
+            prepared_status = str(prepare_result.get("status") or "")
+            prepared_control_path = str(prepare_result.get("control_path") or "")
+            prepared_loaded_tokens = int(float_value(prepare_result.get("loaded_tokens")))
+            prepare_plan_status = str(prepare_plan_result.get("status") or "")
+            prepare_plan_admission = str(prepare_plan_result.get("admission") or "")
+            prepare_plan_reason = str(prepare_plan_result.get("admission_reason") or "")
+            prepare_plan_host_tokens = int(float_value(prepare_plan_result.get("host_tokens")))
+            prepare_ts_ns = int(float_value(prepare_result.get("ts_ns")))
+            if prepared_status == "ready" and prepared_loaded_tokens > 0 and replay_compute_ts_ns:
+                if not prepare_ts_ns or prepare_ts_ns <= replay_compute_ts_ns:
+                    if not load_back_events:
+                        load_back_events = 1
+                    if not h2d_copy_events:
+                        h2d_copy_events = 1
+                    if prepare_ts_ns and (not first_movement_ts_ns or prepare_ts_ns < first_movement_ts_ns):
+                        first_movement_ts_ns = prepare_ts_ns
 
             backend_acted = is_truthy_text(requested.get("backend_acted") or outcome.get("backend_acted"))
             backend_accepted = is_truthy_text(requested.get("backend_accepted") or outcome.get("backend_accepted"))
@@ -1273,8 +1419,20 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
                 first_movement_ts_ns and replay_compute_ts_ns and first_movement_ts_ns <= replay_compute_ts_ns
             )
 
-            if backend_acted and movement_before_compute:
-                verdict = "targeted prefetch acted and KV movement was observed before replay compute"
+            selective_admission_reason = str(direct_skipped.get("selective_admission_reason") or "")
+            selective_admission_status = str(direct_skipped.get("selective_admission_status") or "")
+            selective_admission_host_tokens = str(direct_skipped.get("selective_admission_host_tokens") or "")
+            selective_admission_min_saved_tokens = str(direct_skipped.get("selective_admission_min_saved_tokens") or "")
+
+            if direct_skipped and selective_admission_reason:
+                verdict = f"targeted prefetch skipped by selective backend admission: {selective_admission_reason}"
+            elif direct_skipped:
+                verdict = "targeted prefetch skipped by safety contract before direct KV movement"
+            elif backend_acted and movement_before_compute:
+                if prepared_status == "ready" and prepared_loaded_tokens > 0:
+                    verdict = "targeted prefetch prepared KV through SGLang load_back before replay compute"
+                else:
+                    verdict = "targeted prefetch acted and KV movement was observed before replay compute"
             elif backend_acted:
                 verdict = "targeted prefetch hook acted, but KV movement telemetry was not observed before replay compute"
             elif backend_accepted and not direct_hook_available:
@@ -1301,6 +1459,18 @@ def collect_targeted_kv_prefetch_proof(root: Path, replay_rows: list[dict[str, A
                     "backend_accepted": "yes" if backend_accepted else "no",
                     "backend_acted": "yes" if backend_acted else "no",
                     "direct_hook_available": "yes" if direct_hook_available else "no",
+                    "direct_load_mechanism": requested.get("direct_load_mechanism", outcome.get("direct_load_mechanism", "")),
+                    "prepare_plan_status": prepare_plan_status,
+                    "prepare_plan_admission": prepare_plan_admission,
+                    "prepare_plan_reason": prepare_plan_reason,
+                    "prepare_plan_host_tokens": prepare_plan_host_tokens if prepare_plan_host_tokens else "",
+                    "selective_admission_reason": selective_admission_reason,
+                    "selective_admission_status": selective_admission_status,
+                    "selective_admission_host_tokens": selective_admission_host_tokens,
+                    "selective_admission_min_saved_tokens": selective_admission_min_saved_tokens,
+                    "prepared_control_status": prepared_status,
+                    "prepared_control_path": prepared_control_path,
+                    "prepared_loaded_tokens": prepared_loaded_tokens if prepared_loaded_tokens else "",
                     "requested_before_replay_due": "yes" if requested_before_due else "no",
                     "requested_before_replay_start": "yes" if requested_before_replay else "no",
                     "requested_to_replay_due_ms": (
@@ -3528,6 +3698,18 @@ TARGETED_KV_PREFETCH_COLUMNS = [
     "backend_accepted",
     "backend_acted",
     "direct_hook_available",
+    "direct_load_mechanism",
+    "prepare_plan_status",
+    "prepare_plan_admission",
+    "prepare_plan_reason",
+    "prepare_plan_host_tokens",
+    "selective_admission_reason",
+    "selective_admission_status",
+    "selective_admission_host_tokens",
+    "selective_admission_min_saved_tokens",
+    "prepared_control_status",
+    "prepared_control_path",
+    "prepared_loaded_tokens",
     "requested_before_replay_due",
     "requested_before_replay_start",
     "requested_to_replay_due_ms",
@@ -7042,7 +7224,7 @@ a {{ color: #2563eb; }}
 <p>This table adds request-level context around the largest idle gaps: tool waits, request starts, gateway receive/forward events, and adjacent SGLang batch shape.</p>
 <div class="card">{idle_gap_case_study_table if idle_gap_case_study_rows else "<p>No idle-gap case-study rows found in this run.</p>"}</div>
 <h2>Targeted KV Prefetch Proof</h2>
-<p>This table appears when the run includes <code>controller_targeted_kv_prefetch</code>. It proves whether the controller requested explicit target-prefix KV movement, whether the active SGLang adapter exposed a direct hook, and whether load-back or host-to-device movement was observed before replay compute.</p>
+<p>This table appears when the run includes <code>controller_targeted_kv_prefetch</code> or <code>controller_proactive_kv_management</code>. It proves whether the controller requested explicit prefix KV movement, whether the active SGLang adapter exposed a direct hook, and whether load-back or host-to-device movement was observed before replay compute.</p>
 <div class="card">{targeted_kv_prefetch_table if targeted_kv_prefetch_rows else "<p>No targeted KV prefetch rows found in this run.</p>"}</div>
 <h2>Controller Demote/Restore Proof</h2>
 <p>This table appears when the run includes <code>controller_demote_restore</code>. It proves whether background/filler traffic was lowered during the target replay window, whether the replay itself was raised to SGLang priority, and whether normal behavior was restored afterward.</p>
@@ -7176,7 +7358,9 @@ def main() -> None:
             args.out_dir / "controller_decision_quality_summary.csv"
         ) or summarize_controller_decision_quality(controller_decision_quality_rows)
         speculative_prefill_rows = read_csv_table(args.out_dir / "speculative_prefill_proof.csv")
-        targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv")
+        targeted_kv_prefetch_rows = read_csv_table(args.out_dir / "targeted_kv_prefetch_proof.csv") or (
+            collect_targeted_kv_prefetch_proof(args.root, rows) if raw_root_available else []
+        )
         controller_demote_restore_rows = read_csv_table(args.out_dir / "controller_demote_restore_proof.csv")
         controller_harness_exposure_rows = read_csv_table(args.out_dir / "controller_harness_exposure.csv")
         controller_admission_rows = read_csv_table(args.out_dir / "controller_admission_proof.csv")
@@ -7202,7 +7386,7 @@ def main() -> None:
             controller_decision_quality_rows
         )
         speculative_prefill_rows = collect_speculative_prefill_proof(args.root, target_rows)
-        targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, target_rows)
+        targeted_kv_prefetch_rows = collect_targeted_kv_prefetch_proof(args.root, rows)
         controller_demote_restore_rows = collect_controller_demote_restore_proof(args.root, target_rows)
         controller_harness_exposure_rows = collect_controller_harness_exposure(args.root, target_rows)
         controller_admission_rows = collect_controller_admission_proof(args.root, target_rows)

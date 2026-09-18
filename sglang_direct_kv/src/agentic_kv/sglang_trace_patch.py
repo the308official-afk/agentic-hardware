@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import functools
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import queue
 import re
+import threading
 import time
 from contextvars import ContextVar
 from pathlib import Path
@@ -27,6 +30,11 @@ _NODE_RESIDENCY_BY_ID: dict[str, dict[str, Any]] = {}
 _REQUEST_INTAKE_BY_RID: dict[str, dict[str, Any]] = {}
 _PRIORITY_REQUESTS_BY_ALIAS: dict[str, dict[str, Any]] = {}
 _PRIORITY_ADMISSION_SEQ = 0
+_PREPARABLE_PREFIXES: dict[str, dict[str, Any]] = {}
+_PREPARABLE_PREFIXES_LOCK = threading.Lock()
+_PREPARE_COMMAND_QUEUE: queue.Queue[dict[str, Any]] = queue.Queue()
+_PREPARE_CONTROL_SERVER_STARTED = False
+_PREPARE_CONTROL_SERVER_LOCK = threading.Lock()
 
 
 def _first_int(value: Any, *keys: str) -> int | None:
@@ -1399,6 +1407,434 @@ def _node_id(value: Any) -> Any:
         return None
 
 
+def _truthy_env(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _prefix_registry_max_entries() -> int:
+    try:
+        return max(16, int(os.environ.get("AGENTIC_KV_PREPARE_REGISTRY_MAX", "4096") or "4096"))
+    except ValueError:
+        return 4096
+
+
+def _prefix_lookup_keys(context: dict[str, Any]) -> list[str]:
+    req = context.get("request") if isinstance(context.get("request"), dict) else context
+    session_id = str(req.get("agent_session_id") or context.get("agent_session_id") or "")
+    prefix_id = str(req.get("agent_prefix_id") or context.get("agent_prefix_id") or "")
+    prompt_hash = str(req.get("agent_prompt_hash") or context.get("agent_prompt_hash") or "")
+    request_id = str(req.get("agent_request_id") or req.get("request_id") or context.get("request_id") or "")
+    keys: list[str] = []
+    if session_id and prompt_hash:
+        keys.append(f"session_prompt:{session_id}:{prompt_hash}")
+    if prefix_id and prompt_hash:
+        keys.append(f"prefix_prompt:{prefix_id}:{prompt_hash}")
+    if session_id and prefix_id and prompt_hash:
+        keys.append(f"session_prefix_prompt:{session_id}:{prefix_id}:{prompt_hash}")
+    if request_id:
+        keys.append(f"request:{request_id}")
+    return keys
+
+
+def _prepare_command_lookup_keys(command: dict[str, Any]) -> list[str]:
+    session_id = str(command.get("session_id") or "")
+    prefix_id = str(command.get("prefix_id") or "")
+    prompt_hash = str(command.get("prompt_hash") or "")
+    request_id = str(command.get("request_id") or command.get("parent_request_id") or "")
+    keys: list[str] = []
+    if session_id and prompt_hash:
+        keys.append(f"session_prompt:{session_id}:{prompt_hash}")
+    if prefix_id and prompt_hash:
+        keys.append(f"prefix_prompt:{prefix_id}:{prompt_hash}")
+    if session_id and prefix_id and prompt_hash:
+        keys.append(f"session_prefix_prompt:{session_id}:{prefix_id}:{prompt_hash}")
+    if request_id:
+        keys.append(f"request:{request_id}")
+    return keys
+
+
+def _register_preparable_prefix(
+    *,
+    tree_cache: Any,
+    req: Any,
+    context: dict[str, Any],
+    source_method: str,
+) -> None:
+    if not _truthy_env("AGENTIC_KV_PREPARE_CONTROL_ENABLE"):
+        return
+    if req is None or tree_cache is None:
+        return
+    req_context = _req_context(req)
+    if not req_context:
+        return
+    merged_context = dict(context)
+    merged_context["request"] = req_context
+    keys = _prefix_lookup_keys(merged_context)
+    if not keys:
+        return
+    try:
+        last_host_node = getattr(req, "last_host_node", None)
+    except Exception:
+        last_host_node = None
+    try:
+        last_node = getattr(req, "last_node", None)
+    except Exception:
+        last_node = None
+    if last_host_node is None and last_node is None:
+        return
+    entry = {
+        "tree_cache": tree_cache,
+        "last_host_node": last_host_node,
+        "last_node": last_node,
+        "registered_ns": time.time_ns(),
+        "source_method": source_method,
+        "request": req_context,
+        "keys": list(keys),
+        "last_host_node_id": _safe_summary(_node_id(last_host_node)),
+        "last_node_id": _safe_summary(_node_id(last_node)),
+    }
+    with _PREPARABLE_PREFIXES_LOCK:
+        for key in keys:
+            _PREPARABLE_PREFIXES[key] = entry
+        overflow = len(_PREPARABLE_PREFIXES) - _prefix_registry_max_entries()
+        if overflow > 0:
+            for key, _value in sorted(
+                _PREPARABLE_PREFIXES.items(),
+                key=lambda item: int(item[1].get("registered_ns") or 0),
+            )[:overflow]:
+                _PREPARABLE_PREFIXES.pop(key, None)
+    _write_event(
+        {
+            "event": "agentic_kv.prepare_prefix.registered",
+            "source_method": source_method,
+            "lookup_keys": keys,
+            "last_host_node_id": entry["last_host_node_id"],
+            "last_node_id": entry["last_node_id"],
+            **_copy_agent_context(req_context),
+        }
+    )
+
+
+def _node_is_evicted(node: Any) -> bool:
+    try:
+        return bool(getattr(node, "evicted"))
+    except Exception:
+        return False
+
+
+def _node_is_backuped(node: Any) -> bool:
+    try:
+        return bool(getattr(node, "backuped"))
+    except Exception:
+        return False
+
+
+def _node_host_token_count(node: Any) -> int:
+    try:
+        host_value = getattr(node, "host_value", None)
+        if host_value is not None:
+            return int(len(host_value))
+    except Exception:
+        pass
+    return 0
+
+
+def _wait_for_prepared_load(tree_cache: Any, node_id: str, timeout_ms: int) -> str:
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    while True:
+        try:
+            tree_cache.loading_check()
+        except Exception as exc:  # noqa: BLE001
+            return f"loading_check_error:{type(exc).__name__}:{exc}"
+        try:
+            if node_id not in getattr(tree_cache, "ongoing_load_back", {}):
+                return "ready"
+        except Exception:
+            return "ready_unknown_ongoing_state"
+        if time.monotonic() >= deadline:
+            return "timeout_waiting_for_h2d_ack"
+        time.sleep(0.002)
+
+
+def _execute_prepare_prefix_command(command: dict[str, Any]) -> dict[str, Any]:
+    lookup_keys = _prepare_command_lookup_keys(command)
+    raw_plan_only = command.get("plan_only")
+    plan_only = _truthy_env("AGENTIC_KV_PREPARE_PLAN_ONLY", default=False) or (
+        raw_plan_only.strip().lower() in {"1", "true", "yes", "y", "on"}
+        if isinstance(raw_plan_only, str)
+        else bool(raw_plan_only)
+    )
+    entry: dict[str, Any] | None = None
+    matched_key = ""
+    with _PREPARABLE_PREFIXES_LOCK:
+        for key in lookup_keys:
+            if key in _PREPARABLE_PREFIXES:
+                matched_key = key
+                entry = _PREPARABLE_PREFIXES[key]
+                break
+    if entry is None:
+        return {
+            "ok": False,
+            "status": "prefix_not_registered",
+            "lookup_keys": lookup_keys,
+            "reason": "No matching SGLang radix/cache prefix has been registered yet.",
+        }
+
+    tree_cache = entry.get("tree_cache")
+    host_node = entry.get("last_host_node")
+    device_node = entry.get("last_node")
+    host_node_id = _node_id(host_node)
+    node = host_node if host_node is not None and host_node_id not in (None, "", 0, "0") else device_node
+    raw_node_id = _node_id(node)
+    node_id = "" if raw_node_id is None else str(raw_node_id)
+    if tree_cache is None or node is None or not node_id:
+        return {
+            "ok": False,
+            "status": "missing_tree_or_node",
+            "matched_key": matched_key,
+            "lookup_keys": lookup_keys,
+        }
+
+    if not _node_is_evicted(node):
+        return {
+            "ok": True,
+            "status": "already_device_resident",
+            "plan_only": plan_only,
+            "admission": "skip",
+            "admission_reason": "skip_already_device_resident",
+            "matched_key": matched_key,
+            "node_id": node_id,
+            "loaded_tokens": 0,
+            "host_tokens": _node_host_token_count(node),
+            "producer_id": -1,
+            "reason": "Matched prefix node is already GPU/device resident.",
+        }
+
+    if not _node_is_backuped(node):
+        return {
+            "ok": False,
+            "status": "host_backup_unavailable",
+            "plan_only": plan_only,
+            "admission": "skip",
+            "admission_reason": "skip_host_backup_unavailable",
+            "matched_key": matched_key,
+            "node_id": node_id,
+            "reason": "Matched prefix node is evicted but has no host backup.",
+        }
+
+    host_tokens = _node_host_token_count(node)
+    if plan_only:
+        return {
+            "ok": True,
+            "status": "would_load_back",
+            "plan_only": True,
+            "admission": "admit",
+            "admission_reason": "admit_host_resident_evicted_prefix",
+            "matched_key": matched_key,
+            "node_id": node_id,
+            "host_tokens": host_tokens,
+            "loaded_tokens": 0,
+            "producer_id": -1,
+            "control_path": "hiradix.load_back+hicache.start_loading",
+            "reason": "Matched prefix is evicted from device and has a host backup; direct load_back is admissible.",
+        }
+
+    try:
+        mem_quota = command.get("mem_quota")
+        mem_quota = int(mem_quota) if mem_quota not in (None, "") else None
+    except (TypeError, ValueError):
+        mem_quota = None
+
+    start_ns = time.time_ns()
+    try:
+        device_indices = tree_cache.load_back(node, mem_quota)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "status": "load_back_error",
+            "matched_key": matched_key,
+            "node_id": node_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    if device_indices is None:
+        return {
+            "ok": False,
+            "status": "load_back_not_admitted",
+            "matched_key": matched_key,
+            "node_id": node_id,
+            "host_tokens": host_tokens,
+            "reason": "SGLang load_back skipped this node because of threshold, quota, or memory pressure.",
+        }
+
+    try:
+        producer_id = int(tree_cache.ready_to_load_host_cache())
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "status": "start_loading_error",
+            "matched_key": matched_key,
+            "node_id": node_id,
+            "loaded_tokens": int(len(device_indices)),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    wait = bool(command.get("wait", True))
+    wait_timeout_ms = int(command.get("wait_timeout_ms") or os.environ.get("AGENTIC_KV_PREPARE_WAIT_TIMEOUT_MS", "5000") or "5000")
+    h2d_status = _wait_for_prepared_load(tree_cache, node_id, wait_timeout_ms) if wait else "queued"
+    duration_ms = (time.time_ns() - start_ns) / 1_000_000
+    ok = h2d_status == "ready"
+    return {
+        "ok": ok,
+        "status": "ready" if ok else h2d_status,
+        "matched_key": matched_key,
+        "node_id": node_id,
+        "loaded_tokens": int(len(device_indices)),
+        "producer_id": producer_id,
+        "duration_ms": round(duration_ms, 3),
+        "control_path": "hiradix.load_back+hicache.start_loading",
+        "reason": "Prepared by SGLang's own load_back path.",
+    }
+
+
+def _process_prepare_prefix_commands(scheduler_or_cache: Any) -> None:
+    if not _truthy_env("AGENTIC_KV_PREPARE_CONTROL_ENABLE"):
+        return
+    if not hasattr(scheduler_or_cache, "tree_cache") and not hasattr(scheduler_or_cache, "load_back"):
+        return
+    if hasattr(scheduler_or_cache, "tree_cache"):
+        _start_prepare_prefix_control_server()
+    for _ in range(16):
+        try:
+            command = _PREPARE_COMMAND_QUEUE.get_nowait()
+        except queue.Empty:
+            return
+        event = command.get("_event")
+        result_holder = command.get("_result_holder")
+        public_command = {key: value for key, value in command.items() if not key.startswith("_")}
+        _write_event({"event": "agentic_kv.prepare_prefix.dequeue", "command": public_command})
+        result = _execute_prepare_prefix_command(public_command)
+        _write_event({"event": "agentic_kv.prepare_prefix.result", **result, "command": public_command})
+        if isinstance(result_holder, dict):
+            result_holder["result"] = result
+        if event is not None:
+            try:
+                event.set()
+            except Exception:
+                pass
+
+
+class _PreparePrefixControlHandler(BaseHTTPRequestHandler):
+    server_version = "AgenticKVPrepareControl/0.1"
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        if _truthy_env("AGENTIC_KV_PREPARE_CONTROL_HTTP_LOG"):
+            super().log_message(format, *args)
+
+    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path != "/health":
+            self._send_json(404, {"ok": False, "error": "not_found"})
+            return
+        with _PREPARABLE_PREFIXES_LOCK:
+            prefix_count = len(_PREPARABLE_PREFIXES)
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "prefix_registry_entries": prefix_count,
+                "queued_prepare_commands": _PREPARE_COMMAND_QUEUE.qsize(),
+            },
+        )
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/prepare_prefix_kv":
+            self._send_json(404, {"ok": False, "error": "not_found"})
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            content_length = 0
+        if content_length <= 0 or content_length > 1_000_000:
+            self._send_json(400, {"ok": False, "error": "invalid_content_length"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            self._send_json(400, {"ok": False, "error": f"invalid_json:{type(exc).__name__}:{exc}"})
+            return
+        if not isinstance(payload, dict):
+            self._send_json(400, {"ok": False, "error": "payload_must_be_object"})
+            return
+        event = threading.Event()
+        result_holder: dict[str, Any] = {}
+        command = dict(payload)
+        command["_event"] = event
+        command["_result_holder"] = result_holder
+        _PREPARE_COMMAND_QUEUE.put(command)
+        try:
+            timeout_ms = int(payload.get("control_timeout_ms") or os.environ.get("AGENTIC_KV_PREPARE_CONTROL_TIMEOUT_MS", "10000") or "10000")
+        except (TypeError, ValueError):
+            timeout_ms = 10_000
+        finished = event.wait(max(0, timeout_ms) / 1000.0)
+        if not finished:
+            self._send_json(
+                202,
+                {
+                    "ok": False,
+                    "status": "queued_wait_timeout",
+                    "reason": "Prepare command was queued but not processed before the control timeout.",
+                    "queued_prepare_commands": _PREPARE_COMMAND_QUEUE.qsize(),
+                },
+            )
+            return
+        result = result_holder.get("result")
+        if isinstance(result, dict):
+            self._send_json(200 if result.get("ok") else 409, result)
+            return
+        self._send_json(500, {"ok": False, "status": "missing_prepare_result"})
+
+
+def _start_prepare_prefix_control_server() -> None:
+    global _PREPARE_CONTROL_SERVER_STARTED
+    if not _truthy_env("AGENTIC_KV_PREPARE_CONTROL_ENABLE"):
+        return
+    with _PREPARE_CONTROL_SERVER_LOCK:
+        if _PREPARE_CONTROL_SERVER_STARTED:
+            return
+        host = os.environ.get("AGENTIC_KV_PREPARE_CONTROL_HOST", "127.0.0.1")
+        try:
+            port = int(os.environ.get("AGENTIC_KV_PREPARE_CONTROL_PORT", "31991") or "31991")
+        except ValueError:
+            port = 31991
+        try:
+            server = ThreadingHTTPServer((host, port), _PreparePrefixControlHandler)
+        except Exception as exc:  # noqa: BLE001
+            _write_event(
+                {
+                    "event": "agentic_kv.prepare_prefix.control_server_error",
+                    "host": host,
+                    "port": port,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return
+        thread = threading.Thread(target=server.serve_forever, name="agentic-kv-prepare-control", daemon=True)
+        thread.start()
+        _PREPARE_CONTROL_SERVER_STARTED = True
+        _write_event({"event": "agentic_kv.prepare_prefix.control_server_started", "host": host, "port": port})
+
+
 def _req_context(req: Any) -> dict[str, Any]:
     if req is None:
         return {}
@@ -1428,6 +1864,7 @@ def _req_context(req: Any) -> dict[str, Any]:
             agentic = custom_params.get("agentic_kv")
             if isinstance(agentic, dict):
                 context["agent_session_id"] = _safe_summary(agentic.get("session_id"))
+                context["agent_prefix_id"] = _safe_summary(agentic.get("prefix_id"))
                 context["agent_phase"] = _safe_summary(agentic.get("phase"))
                 context["agent_label"] = _safe_summary(agentic.get("label"))
                 context["agent_mode"] = _safe_summary(agentic.get("mode"))
@@ -2841,6 +3278,7 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         if _should_start_torch_profiler(event_name, start_kv_context):
             maybe_start_torch_profiler(nvtx_name)
         try:
+            _process_prepare_prefix_commands(self)
             with range_scope(nvtx_name):
                 result = original(self, *args, **kwargs)
         except Exception as exc:
@@ -2899,6 +3337,13 @@ def _wrap_method(cls: type, method_name: str, event_name: str) -> None:
         try:
             end_context = _kv_context(event_name, method_name, self, args, kwargs, result)
             duration_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
+            if method_name in {"cache_finished_req", "cache_unfinished_req"}:
+                _register_preparable_prefix(
+                    tree_cache=self,
+                    req=_arg_value(args, kwargs, 0, "req"),
+                    context=end_context,
+                    source_method=method_name,
+                )
             _update_residency_state(event_name, method_name, end_context)
             _write_event(
                 {
